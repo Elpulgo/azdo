@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run tests
+        id: test
+        run: |
+          set +e
+          go test -json -count=1 ./... > test-output.json 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Generate test report
+        if: always() && steps.test.outcome != 'skipped'
+        run: |
+          # Filter to valid JSON lines only
+          grep '^{' test-output.json > test-clean.json || true
+
+          # Generate markdown report from JSON test output
+          jq -s '
+            [.[] | select(.Test != null and (.Action == "pass" or .Action == "fail" or .Action == "skip"))]
+            | group_by(.Package)
+            | map({
+                package: .[0].Package,
+                passed:  ([.[] | select(.Action == "pass")]  | length),
+                failed:  ([.[] | select(.Action == "fail")]  | length),
+                skipped: ([.[] | select(.Action == "skip")]  | length),
+                total:   length
+              })
+            | sort_by(.package)
+          ' test-clean.json > test-stats.json
+
+          PASSED=$(jq  '[.[].passed]  | add // 0' test-stats.json)
+          FAILED=$(jq  '[.[].failed]  | add // 0' test-stats.json)
+          SKIPPED=$(jq '[.[].skipped] | add // 0' test-stats.json)
+          TOTAL=$(jq   '[.[].total]   | add // 0' test-stats.json)
+
+          if [ "$FAILED" -gt 0 ]; then
+            ICON="❌"
+          else
+            ICON="✅"
+          fi
+
+          {
+            echo "<!-- ci-test-report -->"
+            echo "## ${ICON} Test Results"
+            echo ""
+            echo "| Package | Passed | Failed | Skipped | Total |"
+            echo "|---------|-------:|-------:|--------:|------:|"
+            jq -r '.[] | "| `\(.package)` | \(.passed) | \(.failed) | \(.skipped) | \(.total) |"' test-stats.json
+            echo "| **Total** | **${PASSED}** | **${FAILED}** | **${SKIPPED}** | **${TOTAL}** |"
+          } > test-report.md
+
+          cat test-report.md
+
+      - name: Post or update PR comment
+        if: always() && steps.test.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          MARKER="<!-- ci-test-report -->"
+
+          # Check for existing report comment to update in place
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" | head -1)
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" \
+              -X PATCH -F "body=@test-report.md"
+          else
+            gh pr comment "${PR_NUMBER}" --body-file test-report.md
+          fi
+
+      - name: Fail if tests failed
+        if: always() && steps.test.outputs.exit_code != '0'
+        run: exit 1
