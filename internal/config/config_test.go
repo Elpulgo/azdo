@@ -66,7 +66,9 @@ func TestLoad_WithConfigFile(t *testing.T) {
 
 	// Write a test config file
 	configFile := filepath.Join(configDir, "config.yaml")
-	configContent := `polling_interval: 120
+	configContent := `organization: test-org
+project: test-project
+polling_interval: 120
 theme: dark
 `
 	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
@@ -84,6 +86,14 @@ theme: dark
 	}
 
 	// Test loaded values
+	if cfg.Organization != "test-org" {
+		t.Errorf("Expected Organization to be 'test-org', got %s", cfg.Organization)
+	}
+
+	if cfg.Project != "test-project" {
+		t.Errorf("Expected Project to be 'test-project', got %s", cfg.Project)
+	}
+
 	if cfg.PollingInterval != 120 {
 		t.Errorf("Expected PollingInterval to be 120, got %d", cfg.PollingInterval)
 	}
@@ -122,6 +132,8 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			config: Config{
+				Organization:    "test-org",
+				Project:         "test-project",
 				PollingInterval: 60,
 				Theme:           "light",
 			},
@@ -130,6 +142,8 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "invalid polling interval - zero",
 			config: Config{
+				Organization:    "test-org",
+				Project:         "test-project",
 				PollingInterval: 0,
 				Theme:           "light",
 			},
@@ -138,6 +152,8 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "invalid polling interval - negative",
 			config: Config{
+				Organization:    "test-org",
+				Project:         "test-project",
 				PollingInterval: -10,
 				Theme:           "light",
 			},
@@ -146,6 +162,8 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "empty theme",
 			config: Config{
+				Organization:    "test-org",
+				Project:         "test-project",
 				PollingInterval: 60,
 				Theme:           "",
 			},

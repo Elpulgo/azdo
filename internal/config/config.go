@@ -10,6 +10,8 @@ import (
 
 // Config holds the application configuration
 type Config struct {
+	Organization    string `mapstructure:"organization"`
+	Project         string `mapstructure:"project"`
 	PollingInterval int    `mapstructure:"polling_interval"`
 	Theme           string `mapstructure:"theme"`
 }

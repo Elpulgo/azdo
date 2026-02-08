@@ -1,0 +1,15 @@
+# Azure DevOps TUI Configuration
+# Copy this file to ~/.config/azdo-tui/config.yaml and edit the values
+
+# Azure DevOps organization name (required)
+organization: your-org-name
+
+# Azure DevOps project name (required)
+project: your-project-name
+
+# Polling interval in seconds (optional, default: 60)
+polling_interval: 60
+
+# Theme (optional, default: dark)
+# Options: dark, light
+theme: dark
