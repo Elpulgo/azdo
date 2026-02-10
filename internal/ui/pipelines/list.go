@@ -10,9 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("240"))
+// baseStyle is used for consistent styling (no border - table handles its own)
+var baseStyle = lipgloss.NewStyle()
 
 // Model represents the pipeline list view
 type Model struct {
@@ -75,8 +74,14 @@ func NewModel(client *azdevops.Client) Model {
 
 // makeColumns creates table columns sized for the given width
 func makeColumns(width int) []table.Column {
-	// Account for table borders and padding (roughly 4 chars for borders + separators)
-	available := width - 6
+	// Account for table structure:
+	// - 4 chars for column separators (between 5 columns)
+	// - Some padding for cell content
+	// Total overhead: ~8 chars
+	available := width - 8
+	if available < 60 {
+		available = 60 // Minimum usable width
+	}
 
 	// Calculate widths based on percentages
 	statusW := max(minStatusWidth, available*statusWidthPct/100)
