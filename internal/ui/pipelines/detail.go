@@ -116,6 +116,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.MoveUp()
 		case "down", "j":
 			m.MoveDown()
+		case "pgup":
+			m.PageUp()
+		case "pgdown":
+			m.PageDown()
 		case "r":
 			m.loading = true
 			return m, m.fetchTimeline()
@@ -175,7 +179,7 @@ func (m *DetailModel) View() string {
 	if m.ready {
 		scrollPercent = m.viewport.ScrollPercent() * 100
 	}
-	helpText := fmt.Sprintf("  ↑↓: navigate • Enter: view logs 📄 • Esc: back • r: refresh • %.0f%%", scrollPercent)
+	helpText := fmt.Sprintf("  ↑↓/pgup/pgdn: navigate • Enter: view logs 📄 • Esc: back • r: refresh • %.0f%%", scrollPercent)
 	sb.WriteString(helpText)
 
 	return sb.String()
@@ -238,6 +242,40 @@ func (m *DetailModel) MoveDown() {
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
 	}
+}
+
+// PageUp moves selection up by one page (viewport height)
+func (m *DetailModel) PageUp() {
+	if !m.ready || len(m.flatItems) == 0 {
+		return
+	}
+	pageSize := m.viewport.Height
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	m.selectedIndex -= pageSize
+	if m.selectedIndex < 0 {
+		m.selectedIndex = 0
+	}
+	m.updateViewportContent()
+	m.ensureSelectedVisible()
+}
+
+// PageDown moves selection down by one page (viewport height)
+func (m *DetailModel) PageDown() {
+	if !m.ready || len(m.flatItems) == 0 {
+		return
+	}
+	pageSize := m.viewport.Height
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	m.selectedIndex += pageSize
+	if m.selectedIndex >= len(m.flatItems) {
+		m.selectedIndex = len(m.flatItems) - 1
+	}
+	m.updateViewportContent()
+	m.ensureSelectedVisible()
 }
 
 // ensureSelectedVisible scrolls the viewport to keep the selected item visible

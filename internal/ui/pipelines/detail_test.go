@@ -335,6 +335,47 @@ func TestDetailModel_ViewportScrolling(t *testing.T) {
 	}
 }
 
+func TestDetailModel_PageUpDown(t *testing.T) {
+	// Create a timeline with many items
+	records := make([]azdevops.TimelineRecord, 50)
+	for i := 0; i < 50; i++ {
+		records[i] = azdevops.TimelineRecord{
+			ID:       fmt.Sprintf("task-%d", i),
+			ParentID: nil,
+			Type:     "Task",
+			Name:     fmt.Sprintf("Task %d", i),
+			Order:    i,
+		}
+	}
+
+	timeline := &azdevops.Timeline{ID: "test", Records: records}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 20) // viewport height = 20 - 6 = 14
+	model.SetTimeline(timeline)
+
+	// Initial position should be 0
+	if model.SelectedIndex() != 0 {
+		t.Errorf("Initial SelectedIndex() = %d, want 0", model.SelectedIndex())
+	}
+
+	// PageDown should move selection by viewport height
+	model.PageDown()
+	// Should move roughly one page (viewport height is 14)
+	if model.SelectedIndex() < 10 {
+		t.Errorf("After PageDown, SelectedIndex() = %d, want >= 10", model.SelectedIndex())
+	}
+
+	prevIndex := model.SelectedIndex()
+
+	// PageUp should move selection back up
+	model.PageUp()
+	if model.SelectedIndex() >= prevIndex {
+		t.Errorf("After PageUp, SelectedIndex() = %d, should be less than %d", model.SelectedIndex(), prevIndex)
+	}
+}
+
 func TestDetailModel_StatusMessage(t *testing.T) {
 	// Create timeline with items that have and don't have logs
 	timeline := &azdevops.Timeline{
