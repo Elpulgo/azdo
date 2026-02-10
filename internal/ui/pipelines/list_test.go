@@ -43,10 +43,10 @@ func TestStatusIcon(t *testing.T) {
 
 		// Canceling status
 		{
-			name:         "canceling status shows Canceling",
+			name:         "canceling status shows Cancel",
 			status:       "canceling",
 			result:       "",
-			wantContains: "Canceling",
+			wantContains: "Cancel",
 		},
 
 		// Result-based status (completed builds)
@@ -75,19 +75,18 @@ func TestStatusIcon(t *testing.T) {
 			wantContains: "Partial",
 		},
 
-		// Unknown/default cases
+		// Unknown/default cases - now shows status/result for debugging
 		{
-			name:           "empty status and result shows Unknown",
-			status:         "",
-			result:         "",
-			wantContains:   "Unknown",
-			wantNotContain: "",
+			name:         "empty status and result shows debug format",
+			status:       "",
+			result:       "",
+			wantContains: "/",
 		},
 		{
-			name:         "unrecognized status falls to Unknown",
+			name:         "unrecognized status shows debug format",
 			status:       "somethingElse",
 			result:       "",
-			wantContains: "Unknown",
+			wantContains: "somethingElse",
 		},
 	}
 

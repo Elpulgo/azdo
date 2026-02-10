@@ -25,15 +25,28 @@ type Model struct {
 	height  int
 }
 
+// Column width ratios (percentages of available width)
+const (
+	statusWidthPct   = 12 // Status column percentage
+	pipelineWidthPct = 30 // Pipeline column percentage
+	branchWidthPct   = 28 // Branch column percentage
+	buildWidthPct    = 15 // Build column percentage
+	durationWidthPct = 15 // Duration column percentage
+)
+
+// Minimum column widths
+const (
+	minStatusWidth   = 10
+	minPipelineWidth = 15
+	minBranchWidth   = 10
+	minBuildWidth    = 8
+	minDurationWidth = 8
+)
+
 // NewModel creates a new pipeline list model
 func NewModel(client *azdevops.Client) Model {
-	columns := []table.Column{
-		{Title: "Status", Width: 8},
-		{Title: "Pipeline", Width: 30},
-		{Title: "Branch", Width: 25},
-		{Title: "Build", Width: 15},
-		{Title: "Duration", Width: 10},
-	}
+	// Start with minimum widths, will be resized on first WindowSizeMsg
+	columns := makeColumns(80)
 
 	t := table.New(
 		table.WithColumns(columns),
@@ -60,6 +73,27 @@ func NewModel(client *azdevops.Client) Model {
 	}
 }
 
+// makeColumns creates table columns sized for the given width
+func makeColumns(width int) []table.Column {
+	// Account for table borders and padding (roughly 4 chars for borders + separators)
+	available := width - 6
+
+	// Calculate widths based on percentages
+	statusW := max(minStatusWidth, available*statusWidthPct/100)
+	pipelineW := max(minPipelineWidth, available*pipelineWidthPct/100)
+	branchW := max(minBranchWidth, available*branchWidthPct/100)
+	buildW := max(minBuildWidth, available*buildWidthPct/100)
+	durationW := max(minDurationWidth, available*durationWidthPct/100)
+
+	return []table.Column{
+		{Title: "Status", Width: statusW},
+		{Title: "Pipeline", Width: pipelineW},
+		{Title: "Branch", Width: branchW},
+		{Title: "Build", Width: buildW},
+		{Title: "Duration", Width: durationW},
+	}
+}
+
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
 	return fetchPipelineRuns(m.client)
@@ -74,6 +108,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.table.SetHeight(msg.Height - 5)
+		m.table.SetColumns(makeColumns(msg.Width))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -137,23 +172,32 @@ func statusIcon(status, result string) string {
 	statusLower := strings.ToLower(status)
 	resultLower := strings.ToLower(result)
 
+	// Define styles
+	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
+	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
 	switch {
 	case statusLower == "inprogress":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render("⟳ Running")
+		return blueStyle.Render("● Running")
 	case statusLower == "notstarted":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render("◷ Queued")
+		return blueStyle.Render("○ Queued")
 	case statusLower == "canceling":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("⊘ Canceling")
+		return orangeStyle.Render("⊘ Cancel")
 	case resultLower == "succeeded":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓ Success")
+		return greenStyle.Render("✓ Success")
 	case resultLower == "failed":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗ Failed")
+		return redStyle.Render("✗ Failed")
 	case resultLower == "canceled":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○ Canceled")
+		return grayStyle.Render("○ Canceled")
 	case resultLower == "partiallysucceeded":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("⚠ Partial")
+		return yellowStyle.Render("⚠ Partial")
 	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○ Unknown")
+		// Debug: show what we received
+		return grayStyle.Render(fmt.Sprintf("%s/%s", status, result))
 	}
 }
 
