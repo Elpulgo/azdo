@@ -169,6 +169,14 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 		m.runs = msg.runs
 		m.table.SetRows(m.runsToRows())
 		return m, nil
+
+	case SetRunsMsg:
+		// Direct update from polling - clear loading and error states
+		m.loading = false
+		m.err = nil
+		m.runs = msg.Runs
+		m.table.SetRows(m.runsToRows())
+		return m, nil
 	}
 
 	m.table, cmd = m.table.Update(msg)
@@ -362,6 +370,11 @@ func (m Model) GetViewMode() ViewMode {
 type pipelineRunsMsg struct {
 	runs []azdevops.PipelineRun
 	err  error
+}
+
+// SetRunsMsg is a message to directly set the pipeline runs (from polling)
+type SetRunsMsg struct {
+	Runs []azdevops.PipelineRun
 }
 
 // fetchPipelineRuns fetches pipeline runs from Azure DevOps

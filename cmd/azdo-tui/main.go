@@ -56,7 +56,7 @@ func run() error {
 	}
 
 	// Create and run the TUI application
-	model := app.NewModel(client)
+	model := app.NewModel(client, cfg)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
