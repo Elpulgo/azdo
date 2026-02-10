@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -31,7 +32,7 @@ func setTestHome(t *testing.T, dir string) func() {
 	}
 }
 
-func TestLoad_WithDefaultValues(t *testing.T) {
+func TestLoad_ConfigFileNotFound(t *testing.T) {
 	// Create a temporary config directory
 	tempDir := t.TempDir()
 
@@ -39,20 +40,25 @@ func TestLoad_WithDefaultValues(t *testing.T) {
 	cleanup := setTestHome(t, tempDir)
 	defer cleanup()
 
-	// Load config (no config file exists, should use defaults)
+	// Load config (no config file exists, should return error)
 	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+	if err == nil {
+		t.Fatal("Load() should fail when config file is not found")
 	}
 
-	// Test default polling interval
-	if cfg.PollingInterval == 0 {
-		t.Error("Expected default PollingInterval to be set, got 0")
+	if cfg != nil {
+		t.Error("Expected cfg to be nil when config file is not found")
 	}
 
-	// Test default theme
-	if cfg.Theme == "" {
-		t.Error("Expected default Theme to be set, got empty string")
+	// Verify error message is not empty and contains useful information
+	errMsg := err.Error()
+	if errMsg == "" {
+		t.Error("Expected error message to contain information about missing config")
+	}
+
+	// The error should mention "config.yaml"
+	if !strings.Contains(errMsg, "config.yaml") {
+		t.Errorf("Expected error message to mention 'config.yaml', got: %s", errMsg)
 	}
 }
 
@@ -111,15 +117,14 @@ func TestLoad_MissingConfigDirectory(t *testing.T) {
 	cleanup := setTestHome(t, tempDir)
 	defer cleanup()
 
-	// Load config (should create directory and use defaults)
+	// Load config (should return error since config file doesn't exist)
 	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() should not fail with missing config directory: %v", err)
+	if err == nil {
+		t.Fatal("Load() should fail when config file is not found")
 	}
 
-	// Verify defaults are set
-	if cfg.PollingInterval == 0 {
-		t.Error("Expected default PollingInterval to be set")
+	if cfg != nil {
+		t.Error("Expected cfg to be nil when config file is not found")
 	}
 }
 

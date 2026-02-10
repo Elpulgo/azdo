@@ -23,7 +23,7 @@ const (
 )
 
 // Load reads the configuration from ~/.config/azdo-tui/config.yaml
-// If the file doesn't exist, it returns a config with default values
+// Returns an error if the file doesn't exist, showing the expected path
 func Load() (*Config, error) {
 	// Get user's home directory
 	homeDir, err := os.UserHomeDir()
@@ -33,6 +33,7 @@ func Load() (*Config, error) {
 
 	// Set config file location
 	configDir := filepath.Join(homeDir, ".config", "azdo-tui")
+	configPath := filepath.Join(configDir, "config.yaml")
 
 	// Create config directory if it doesn't exist
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -51,12 +52,12 @@ func Load() (*Config, error) {
 	v.SetDefault("polling_interval", DefaultPollingInterval)
 	v.SetDefault("theme", DefaultTheme)
 
-	// Read config file (it's okay if it doesn't exist)
+	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("failed to read config file: %w", err)
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			return nil, fmt.Errorf("config file not found at: %s\nPlease create a config.yaml file with 'organization' and 'project' settings", configPath)
 		}
-		// Config file not found, use defaults (which is fine)
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	// Unmarshal config into struct
