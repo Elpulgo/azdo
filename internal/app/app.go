@@ -17,6 +17,7 @@ type Model struct {
 	config        *config.Config
 	pipelinesView pipelines.Model
 	statusBar     *components.StatusBar
+	contextBar    *components.ContextBar
 	helpModal     *components.HelpModal
 	poller        *polling.Poller
 	errorHandler  *polling.ErrorHandler
@@ -31,6 +32,9 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	statusBar := components.NewStatusBar()
 	statusBar.SetOrganization(cfg.Organization)
 	statusBar.SetProject(cfg.Project)
+
+	// Create context bar for view-specific info
+	contextBar := components.NewContextBar()
 
 	// Create help modal
 	helpModal := components.NewHelpModal()
@@ -47,6 +51,7 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 		config:        cfg,
 		pipelinesView: pipelines.NewModel(client),
 		statusBar:     statusBar,
+		contextBar:    contextBar,
 		helpModal:     helpModal,
 		poller:        poller,
 		errorHandler:  polling.NewErrorHandler(),
@@ -97,6 +102,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
+		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
 
 	case polling.TickMsg:
@@ -144,15 +150,27 @@ func (m Model) View() string {
 		return m.helpModal.View()
 	}
 
-	// Reserve space for status bar (1 line)
-	contentHeight := m.height - 1
-	if contentHeight < 1 {
-		contentHeight = 1
+	// Render content
+	content := m.pipelinesView.View()
+
+	// Build footer section
+	var footer string
+
+	// Show context bar above footer when in detail/log views
+	if m.pipelinesView.HasContextBar() {
+		m.contextBar.Clear()
+		m.contextBar.SetItems(m.pipelinesView.GetContextItems())
+		m.contextBar.ShowScrollPercent(true)
+		m.contextBar.SetScrollPercent(m.pipelinesView.GetScrollPercent())
+
+		if statusMsg := m.pipelinesView.GetStatusMessage(); statusMsg != "" {
+			m.contextBar.SetStatus(statusMsg)
+		}
+
+		footer = m.contextBar.View() + "\n" + m.statusBar.View()
+	} else {
+		footer = m.statusBar.View()
 	}
 
-	// Render content and status bar
-	content := m.pipelinesView.View()
-	statusBar := m.statusBar.View()
-
-	return content + "\n" + statusBar
+	return content + "\n" + footer
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -362,6 +363,53 @@ func statusIcon(status, result string) string {
 // GetViewMode returns the current view mode (for testing)
 func (m Model) GetViewMode() ViewMode {
 	return m.viewMode
+}
+
+// GetContextItems returns context bar items for the current view
+func (m Model) GetContextItems() []components.ContextItem {
+	switch m.viewMode {
+	case ViewDetail:
+		if m.detail != nil {
+			return m.detail.GetContextItems()
+		}
+	case ViewLogs:
+		if m.logViewer != nil {
+			return m.logViewer.GetContextItems()
+		}
+	}
+	// List view has no specific context items (uses main footer)
+	return nil
+}
+
+// GetScrollPercent returns the scroll percentage for the current view
+func (m Model) GetScrollPercent() float64 {
+	switch m.viewMode {
+	case ViewDetail:
+		if m.detail != nil {
+			return m.detail.GetScrollPercent()
+		}
+	case ViewLogs:
+		if m.logViewer != nil {
+			return m.logViewer.GetScrollPercent()
+		}
+	}
+	return 0
+}
+
+// GetStatusMessage returns the status message for the current view
+func (m Model) GetStatusMessage() string {
+	switch m.viewMode {
+	case ViewDetail:
+		if m.detail != nil {
+			return m.detail.GetStatusMessage()
+		}
+	}
+	return ""
+}
+
+// HasContextBar returns true if the current view should show a context bar
+func (m Model) HasContextBar() bool {
+	return m.viewMode == ViewDetail || m.viewMode == ViewLogs
 }
 
 // Messages

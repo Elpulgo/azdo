@@ -313,10 +313,10 @@ func TestDetailModel_ViewportScrolling(t *testing.T) {
 	model.SetSize(80, 20) // Set a small height to trigger scrolling
 	model.SetTimeline(timeline)
 
-	// View should contain scroll percentage indicator
+	// View should render without panic
 	view := model.View()
-	if !strings.Contains(view, "%") {
-		t.Error("View should contain scroll percentage indicator")
+	if view == "" {
+		t.Error("View should not be empty")
 	}
 
 	// Move down many times - selection should change
@@ -332,6 +332,12 @@ func TestDetailModel_ViewportScrolling(t *testing.T) {
 	view = model.View()
 	if view == "" {
 		t.Error("View should not be empty after scrolling")
+	}
+
+	// Scroll percentage should be accessible via GetScrollPercent
+	percent := model.GetScrollPercent()
+	if percent < 0 || percent > 100 {
+		t.Errorf("GetScrollPercent() = %f, should be between 0 and 100", percent)
 	}
 }
 
@@ -437,6 +443,65 @@ func TestDetailModel_CanViewLogs(t *testing.T) {
 	model.MoveDown()
 	if !model.CanViewLogs() {
 		t.Error("CanViewLogs() should return true for task with logs")
+	}
+}
+
+func TestDetailModel_GetContextItems(t *testing.T) {
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+
+	items := model.GetContextItems()
+
+	// Should have keybinding items
+	if len(items) == 0 {
+		t.Error("GetContextItems() should return items")
+	}
+
+	// Should include navigation keys
+	found := false
+	for _, item := range items {
+		if strings.Contains(item.Key, "↑↓") || strings.Contains(item.Description, "navigate") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include navigation keybinding")
+	}
+}
+
+func TestDetailModel_GetScrollPercent(t *testing.T) {
+	records := make([]azdevops.TimelineRecord, 50)
+	for i := 0; i < 50; i++ {
+		records[i] = azdevops.TimelineRecord{
+			ID:       fmt.Sprintf("task-%d", i),
+			ParentID: nil,
+			Type:     "Task",
+			Name:     fmt.Sprintf("Task %d", i),
+			Order:    i,
+		}
+	}
+
+	timeline := &azdevops.Timeline{ID: "test", Records: records}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 20)
+	model.SetTimeline(timeline)
+
+	// Initially should be at top (0%)
+	percent := model.GetScrollPercent()
+	if percent < 0 || percent > 100 {
+		t.Errorf("GetScrollPercent() = %f, should be between 0 and 100", percent)
+	}
+
+	// After scrolling down, percent should increase
+	for i := 0; i < 30; i++ {
+		model.MoveDown()
+	}
+	newPercent := model.GetScrollPercent()
+	if newPercent <= percent {
+		t.Errorf("GetScrollPercent() should increase after scrolling down, was %f now %f", percent, newPercent)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -183,11 +184,6 @@ func (m *LogViewerModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	// Footer with scroll info
-	sb.WriteString("\n")
-	scrollPercent := m.viewport.ScrollPercent() * 100
-	sb.WriteString(fmt.Sprintf("  ↑↓/pgup/pgdn: scroll • g/G: top/bottom • %.0f%% • Esc: back • r: refresh", scrollPercent))
-
 	return sb.String()
 }
 
@@ -199,6 +195,24 @@ func (m *LogViewerModel) formatContent() string {
 
 	lines := formatLogLines(m.content)
 	return strings.Join(lines, "\n")
+}
+
+// GetContextItems returns context bar items for this view
+func (m *LogViewerModel) GetContextItems() []components.ContextItem {
+	return []components.ContextItem{
+		{Key: "↑↓/pgup/pgdn", Description: "scroll"},
+		{Key: "g/G", Description: "top/bottom"},
+		{Key: "esc", Description: "back"},
+		{Key: "r", Description: "refresh"},
+	}
+}
+
+// GetScrollPercent returns the current scroll percentage (0-100)
+func (m *LogViewerModel) GetScrollPercent() float64 {
+	if !m.ready {
+		return 0
+	}
+	return m.viewport.ScrollPercent() * 100
 }
 
 // Messages
