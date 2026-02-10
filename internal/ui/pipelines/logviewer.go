@@ -202,8 +202,6 @@ func (m *LogViewerModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓/pgup/pgdn", Description: "scroll"},
 		{Key: "g/G", Description: "top/bottom"},
-		{Key: "esc", Description: "back"},
-		{Key: "r", Description: "refresh"},
 	}
 }
 

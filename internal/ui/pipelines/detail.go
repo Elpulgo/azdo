@@ -308,8 +308,6 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓/pgup/pgdn", Description: "navigate"},
 		{Key: "enter", Description: "view logs"},
-		{Key: "esc", Description: "back"},
-		{Key: "r", Description: "refresh"},
 	}
 }
 
