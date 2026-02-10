@@ -56,8 +56,8 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 // Init initializes the application
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		m.pipelinesView.Init(),
-		m.poller.StartPolling(),
+		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
+		m.poller.StartPolling(),      // Start polling timer
 	)
 }
 

@@ -110,57 +110,32 @@ func (s *StatusBar) Update(msg tea.Msg) (*StatusBar, tea.Cmd) {
 	return s, nil
 }
 
-// View renders the status bar as a full-width footer with top border.
+// View renders the status bar as a full-width footer with box border.
 func (s *StatusBar) View() string {
-	// Build the left section: keybindings
-	left := s.renderKeybindings()
-
-	// Build the center section: org/project
-	center := s.renderOrgProject()
-
-	// Build the right section: connection state
-	right := s.renderConnectionState()
-
-	// Calculate widths
-	leftLen := lipgloss.Width(left)
-	centerLen := lipgloss.Width(center)
-	rightLen := lipgloss.Width(right)
-
 	// Use terminal width or default
 	width := s.width
 	if width < 40 {
 		width = 80
 	}
 
-	// Calculate spacing to distribute content
-	totalContent := leftLen + centerLen + rightLen
-	remainingSpace := width - totalContent - 2 // -2 for edge padding
+	// Build sections with pipe separators
+	sep := sepStyle.Render(" │ ")
 
-	if remainingSpace < 2 {
-		remainingSpace = 2
+	parts := []string{s.renderKeybindings()}
+
+	if orgProj := s.renderOrgProject(); orgProj != "" {
+		parts = append(parts, orgProj)
 	}
 
-	// Distribute space: more on right side to push center toward middle
-	leftSpace := remainingSpace / 3
-	rightSpace := remainingSpace - leftSpace
+	parts = append(parts, s.renderConnectionState())
 
-	// Build the bar content
-	content := " " + left +
-		strings.Repeat(" ", leftSpace) +
-		center +
-		strings.Repeat(" ", rightSpace) +
-		right + " "
+	// Join with separators, left-aligned
+	content := strings.Join(parts, sep)
 
 	// Calculate box inner width (subtract 2 for border sides)
 	boxInnerWidth := width - 2
 	if boxInnerWidth < 20 {
 		boxInnerWidth = 20
-	}
-
-	// Pad content to fill box width
-	contentLen := lipgloss.Width(content)
-	if contentLen < boxInnerWidth {
-		content = content + strings.Repeat(" ", boxInnerWidth-contentLen)
 	}
 
 	return boxStyle.Width(boxInnerWidth).Render(content)
