@@ -2,6 +2,7 @@ package pipelines
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/charmbracelet/bubbles/table"
@@ -132,16 +133,24 @@ func (m Model) runsToRows() []table.Row {
 
 // statusIcon returns a colored status icon for the pipeline run
 func statusIcon(status, result string) string {
+	// Use case-insensitive comparison for status values
+	statusLower := strings.ToLower(status)
+	resultLower := strings.ToLower(result)
+
 	switch {
-	case status == "inProgress":
+	case statusLower == "inprogress":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render("⟳ Running")
-	case result == "succeeded":
+	case statusLower == "notstarted":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render("◷ Queued")
+	case statusLower == "canceling":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("⊘ Canceling")
+	case resultLower == "succeeded":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓ Success")
-	case result == "failed":
+	case resultLower == "failed":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗ Failed")
-	case result == "canceled":
+	case resultLower == "canceled":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○ Canceled")
-	case result == "partiallySucceeded":
+	case resultLower == "partiallysucceeded":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("⚠ Partial")
 	default:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○ Unknown")
