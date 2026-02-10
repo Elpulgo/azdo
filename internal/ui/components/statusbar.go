@@ -22,12 +22,10 @@ type StatusBar struct {
 
 // Styles for the status bar
 var (
-	// Border line style
-	borderStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("62"))
-
-	// Main bar style - full width background
-	statusBarStyle = lipgloss.NewStyle().
+	// Box style with rounded border
+	boxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
 			Background(lipgloss.Color("236")).
 			Foreground(lipgloss.Color("252"))
 
@@ -153,16 +151,19 @@ func (s *StatusBar) View() string {
 		strings.Repeat(" ", rightSpace) +
 		right + " "
 
-	// Pad to full width
-	contentLen := lipgloss.Width(content)
-	if contentLen < width {
-		content = content + strings.Repeat(" ", width-contentLen)
+	// Calculate box inner width (subtract 2 for border sides)
+	boxInnerWidth := width - 2
+	if boxInnerWidth < 20 {
+		boxInnerWidth = 20
 	}
 
-	// Create top border line
-	border := borderStyle.Render(strings.Repeat("─", width))
+	// Pad content to fill box width
+	contentLen := lipgloss.Width(content)
+	if contentLen < boxInnerWidth {
+		content = content + strings.Repeat(" ", boxInnerWidth-contentLen)
+	}
 
-	return border + "\n" + statusBarStyle.Render(content)
+	return boxStyle.Width(boxInnerWidth).Render(content)
 }
 
 // renderKeybindings renders the keybindings section.
