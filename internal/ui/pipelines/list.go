@@ -10,18 +10,30 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// ViewMode represents the current view in the pipelines UI
+type ViewMode int
+
+const (
+	ViewList   ViewMode = iota // Pipeline list view
+	ViewDetail                 // Pipeline detail/timeline view
+	ViewLogs                   // Log viewer
+)
+
 // baseStyle is used for consistent styling (no border - table handles its own)
 var baseStyle = lipgloss.NewStyle()
 
-// Model represents the pipeline list view
+// Model represents the pipeline list view with sub-views
 type Model struct {
-	table   table.Model
-	client  *azdevops.Client
-	runs    []azdevops.PipelineRun
-	loading bool
-	err     error
-	width   int
-	height  int
+	table     table.Model
+	client    *azdevops.Client
+	runs      []azdevops.PipelineRun
+	loading   bool
+	err       error
+	width     int
+	height    int
+	viewMode  ViewMode
+	detail    *DetailModel
+	logViewer *LogViewerModel
 }
 
 // Column width ratios (percentages of available width)
@@ -66,9 +78,10 @@ func NewModel(client *azdevops.Client) Model {
 	t.SetStyles(s)
 
 	return Model{
-		table:  t,
-		client: client,
-		runs:   []azdevops.PipelineRun{},
+		table:    t,
+		client:   client,
+		runs:     []azdevops.PipelineRun{},
+		viewMode: ViewList,
 	}
 }
 
@@ -108,10 +121,31 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// Handle window resize for all views
+	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = wmsg.Width
+		m.height = wmsg.Height
+	}
+
+	// Route to the appropriate view
+	switch m.viewMode {
+	case ViewDetail:
+		return m.updateDetail(msg)
+	case ViewLogs:
+		return m.updateLogViewer(msg)
+	default:
+		return m.updateList(msg)
+	}
+
+	return m, cmd
+}
+
+// updateList handles updates for the list view
+func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
 		m.table.SetHeight(msg.Height - 5)
 		m.table.SetColumns(makeColumns(msg.Width))
 
@@ -121,6 +155,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			// Manual refresh
 			m.loading = true
 			return m, fetchPipelineRuns(m.client)
+		case "enter":
+			// Navigate to detail view
+			return m.enterDetailView()
 		}
 
 	case pipelineRunsMsg:
@@ -138,8 +175,117 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateDetail handles updates for the detail view
+func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
+	if m.detail == nil {
+		m.viewMode = ViewList
+		return m, nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// Detail model handles its own sizing
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			// Go back to list
+			m.viewMode = ViewList
+			m.detail = nil
+			return m, nil
+		case "enter":
+			// Navigate to log viewer if selected item has a log
+			return m.enterLogView()
+		}
+	}
+
+	var cmd tea.Cmd
+	m.detail, cmd = m.detail.Update(msg)
+	return m, cmd
+}
+
+// updateLogViewer handles updates for the log viewer
+func (m Model) updateLogViewer(msg tea.Msg) (Model, tea.Cmd) {
+	if m.logViewer == nil {
+		m.viewMode = ViewDetail
+		return m, nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			// Go back to detail
+			m.viewMode = ViewDetail
+			m.logViewer = nil
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.logViewer, cmd = m.logViewer.Update(msg)
+	return m, cmd
+}
+
+// enterDetailView navigates to the detail view for the selected pipeline
+func (m Model) enterDetailView() (Model, tea.Cmd) {
+	idx := m.table.Cursor()
+	if idx < 0 || idx >= len(m.runs) {
+		return m, nil
+	}
+
+	selectedRun := m.runs[idx]
+	m.detail = NewDetailModel(m.client, selectedRun)
+	m.detail.SetSize(m.width, m.height)
+	m.viewMode = ViewDetail
+
+	return m, m.detail.Init()
+}
+
+// enterLogView navigates to the log viewer for the selected timeline item
+func (m Model) enterLogView() (Model, tea.Cmd) {
+	if m.detail == nil {
+		return m, nil
+	}
+
+	selected := m.detail.SelectedItem()
+	if selected == nil || selected.Record.Log == nil {
+		// No log available for this item
+		return m, nil
+	}
+
+	run := m.detail.GetRun()
+	m.logViewer = NewLogViewerModel(
+		m.client,
+		run.ID,
+		selected.Record.Log.ID,
+		selected.Record.Name,
+	)
+	m.logViewer.SetSize(m.width, m.height)
+	m.viewMode = ViewLogs
+
+	return m, m.logViewer.Init()
+}
+
 // View renders the view
 func (m Model) View() string {
+	switch m.viewMode {
+	case ViewDetail:
+		if m.detail != nil {
+			return m.detail.View()
+		}
+	case ViewLogs:
+		if m.logViewer != nil {
+			return m.logViewer.View()
+		}
+	}
+
+	// Default: list view
+	return m.viewList()
+}
+
+// viewList renders the pipeline list view
+func (m Model) viewList() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error loading pipeline runs: %v\n\nPress r to retry, q to quit", m.err)
 	}
@@ -152,7 +298,7 @@ func (m Model) View() string {
 		return "No pipeline runs found.\n\nPress r to refresh, q to quit"
 	}
 
-	help := "\n  r: refresh • ↑↓: navigate • q: quit"
+	help := "\n  r: refresh • ↑↓: navigate • Enter: view details • q: quit"
 	return baseStyle.Render(m.table.View()) + help
 }
 
@@ -204,6 +350,11 @@ func statusIcon(status, result string) string {
 		// Debug: show what we received
 		return grayStyle.Render(fmt.Sprintf("%s/%s", status, result))
 	}
+}
+
+// GetViewMode returns the current view mode (for testing)
+func (m Model) GetViewMode() ViewMode {
+	return m.viewMode
 }
 
 // Messages

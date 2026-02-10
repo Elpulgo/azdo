@@ -3,6 +3,9 @@ package pipelines
 import (
 	"strings"
 	"testing"
+
+	"github.com/Elpulgo/azdo/internal/azdevops"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestStatusIcon(t *testing.T) {
@@ -104,5 +107,141 @@ func TestStatusIcon(t *testing.T) {
 					tt.status, tt.result, got, tt.wantNotContain)
 			}
 		})
+	}
+}
+
+func TestViewModeNavigation(t *testing.T) {
+	// Create a model with no client (we won't make API calls)
+	model := NewModel(nil)
+
+	// Initial state should be ViewList
+	if model.GetViewMode() != ViewList {
+		t.Errorf("Initial ViewMode = %d, want ViewList (%d)", model.GetViewMode(), ViewList)
+	}
+
+	// Simulate having some runs loaded
+	model.runs = []azdevops.PipelineRun{
+		{
+			ID:          123,
+			BuildNumber: "20240206.1",
+			Status:      "completed",
+			Result:      "succeeded",
+			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "CI Pipeline"},
+		},
+	}
+	model.table.SetRows(model.runsToRows())
+
+	// Enter should transition to detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewDetail {
+		t.Errorf("After Enter, ViewMode = %d, want ViewDetail (%d)", model.GetViewMode(), ViewDetail)
+	}
+
+	// Detail model should be set
+	if model.detail == nil {
+		t.Error("After Enter, detail model should not be nil")
+	}
+
+	// Esc should go back to list
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.GetViewMode() != ViewList {
+		t.Errorf("After Esc, ViewMode = %d, want ViewList (%d)", model.GetViewMode(), ViewList)
+	}
+}
+
+func TestViewModeNavigationToLogs(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 80
+	model.height = 24
+
+	// Load runs and enter detail view
+	model.runs = []azdevops.PipelineRun{
+		{
+			ID:          456,
+			BuildNumber: "20240206.2",
+			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Build Pipeline"},
+		},
+	}
+	model.table.SetRows(model.runsToRows())
+
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Simulate timeline with a log reference
+	timeline := &azdevops.Timeline{
+		ID: "test-timeline",
+		Records: []azdevops.TimelineRecord{
+			{
+				ID:    "task-1",
+				Type:  "Task",
+				Name:  "npm install",
+				State: "completed",
+				Log:   &azdevops.LogReference{ID: 10},
+			},
+		},
+	}
+	model.detail.SetTimeline(timeline)
+
+	// Enter should transition to log view (since selected item has a log)
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewLogs {
+		t.Errorf("After Enter on item with log, ViewMode = %d, want ViewLogs (%d)", model.GetViewMode(), ViewLogs)
+	}
+
+	// Log viewer should be set
+	if model.logViewer == nil {
+		t.Error("After Enter on log item, logViewer should not be nil")
+	}
+
+	// Esc should go back to detail
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.GetViewMode() != ViewDetail {
+		t.Errorf("After Esc from logs, ViewMode = %d, want ViewDetail (%d)", model.GetViewMode(), ViewDetail)
+	}
+
+	// Esc again should go back to list
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.GetViewMode() != ViewList {
+		t.Errorf("After Esc from detail, ViewMode = %d, want ViewList (%d)", model.GetViewMode(), ViewList)
+	}
+}
+
+func TestViewModeNoLogDoesNotTransition(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 80
+	model.height = 24
+
+	// Load runs and enter detail view
+	model.runs = []azdevops.PipelineRun{
+		{
+			ID:          789,
+			BuildNumber: "20240206.3",
+			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Test Pipeline"},
+		},
+	}
+	model.table.SetRows(model.runsToRows())
+
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Simulate timeline without log reference
+	timeline := &azdevops.Timeline{
+		ID: "test-timeline",
+		Records: []azdevops.TimelineRecord{
+			{
+				ID:    "stage-1",
+				Type:  "Stage",
+				Name:  "Build Stage",
+				State: "completed",
+				Log:   nil, // No log
+			},
+		},
+	}
+	model.detail.SetTimeline(timeline)
+
+	// Enter should NOT transition to log view (no log available)
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewDetail {
+		t.Errorf("Enter on item without log should stay in ViewDetail, got %d", model.GetViewMode())
 	}
 }
