@@ -152,6 +152,7 @@ func (s *StatusBar) renderKeybindings() string {
 	return keyStyle.Render("r") + descStyle.Render(" refresh") + sep +
 		keyStyle.Render("↑↓") + descStyle.Render(" navigate") + sep +
 		keyStyle.Render("enter") + descStyle.Render(" details") + sep +
+		keyStyle.Render("esc") + descStyle.Render(" back") + sep +
 		keyStyle.Render("?") + descStyle.Render(" help") + sep +
 		keyStyle.Render("q") + descStyle.Render(" quit")
 }

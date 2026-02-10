@@ -491,8 +491,8 @@ func TestDetailModel_GetScrollPercent(t *testing.T) {
 
 	// Initially should be at top (0%)
 	percent := model.GetScrollPercent()
-	if percent < 0 || percent > 100 {
-		t.Errorf("GetScrollPercent() = %f, should be between 0 and 100", percent)
+	if percent != 0 {
+		t.Errorf("GetScrollPercent() at top = %f, want 0", percent)
 	}
 
 	// After scrolling down, percent should increase
@@ -502,6 +502,21 @@ func TestDetailModel_GetScrollPercent(t *testing.T) {
 	newPercent := model.GetScrollPercent()
 	if newPercent <= percent {
 		t.Errorf("GetScrollPercent() should increase after scrolling down, was %f now %f", percent, newPercent)
+	}
+
+	// At selection 30 out of 49 (0-indexed), percent should be ~61%
+	expectedPercent := float64(30) / float64(49) * 100
+	if newPercent < expectedPercent-1 || newPercent > expectedPercent+1 {
+		t.Errorf("GetScrollPercent() at index 30/49 = %f, want ~%f", newPercent, expectedPercent)
+	}
+
+	// Move to the end - should be 100%
+	for i := 0; i < 20; i++ {
+		model.MoveDown()
+	}
+	endPercent := model.GetScrollPercent()
+	if endPercent != 100 {
+		t.Errorf("GetScrollPercent() at end = %f, want 100", endPercent)
 	}
 }
 

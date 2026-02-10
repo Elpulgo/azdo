@@ -314,11 +314,12 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 }
 
 // GetScrollPercent returns the current scroll percentage (0-100)
+// Based on selection position relative to total items
 func (m *DetailModel) GetScrollPercent() float64 {
-	if !m.ready {
+	if !m.ready || len(m.flatItems) <= 1 {
 		return 0
 	}
-	return m.viewport.ScrollPercent() * 100
+	return float64(m.selectedIndex) / float64(len(m.flatItems)-1) * 100
 }
 
 // Messages

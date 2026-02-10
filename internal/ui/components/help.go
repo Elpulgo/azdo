@@ -64,6 +64,7 @@ func NewHelpModal() *HelpModal {
 				Bindings: []HelpBinding{
 					{Key: "↑/k", Description: "Move up"},
 					{Key: "↓/j", Description: "Move down"},
+					{Key: "pgup/pgdn", Description: "Page up / down"},
 					{Key: "enter", Description: "View details / expand"},
 					{Key: "esc", Description: "Go back"},
 				},
