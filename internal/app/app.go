@@ -17,6 +17,7 @@ type Model struct {
 	config        *config.Config
 	pipelinesView pipelines.Model
 	statusBar     *components.StatusBar
+	helpModal     *components.HelpModal
 	poller        *polling.Poller
 	errorHandler  *polling.ErrorHandler
 	width         int
@@ -31,6 +32,9 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	statusBar.SetOrganization(cfg.Organization)
 	statusBar.SetProject(cfg.Project)
 
+	// Create help modal
+	helpModal := components.NewHelpModal()
+
 	// Create poller with configured interval
 	interval := time.Duration(cfg.PollingInterval) * time.Second
 	if interval <= 0 {
@@ -43,6 +47,7 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 		config:        cfg,
 		pipelinesView: pipelines.NewModel(client),
 		statusBar:     statusBar,
+		helpModal:     helpModal,
 		poller:        poller,
 		errorHandler:  polling.NewErrorHandler(),
 	}
@@ -60,18 +65,39 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// If help modal is visible, handle its input first
+	if m.helpModal.IsVisible() {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			m.helpModal, _ = m.helpModal.Update(msg)
+			return m, nil
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.helpModal.SetSize(msg.Width, msg.Height)
+			m.statusBar.SetWidth(msg.Width)
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.poller.Stop()
 			return m, tea.Quit
+		case "?":
+			m.helpModal.SetSize(m.width, m.height)
+			m.helpModal.Show()
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
+		m.helpModal.SetSize(msg.Width, msg.Height)
 
 	case polling.TickMsg:
 		// Time to poll for updates
@@ -111,6 +137,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	if m.err != nil {
 		return "Error: " + m.err.Error() + "\n\nPress q to quit."
+	}
+
+	// If help modal is visible, show it as overlay
+	if m.helpModal.IsVisible() {
+		return m.helpModal.View()
 	}
 
 	// Reserve space for status bar (1 line)

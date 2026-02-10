@@ -306,8 +306,7 @@ func (m Model) viewList() string {
 		return "No pipeline runs found.\n\nPress r to refresh, q to quit"
 	}
 
-	help := "\n  r: refresh • ↑↓: navigate • Enter: view details • q: quit"
-	return baseStyle.Render(m.table.View()) + help
+	return baseStyle.Render(m.table.View())
 }
 
 // runsToRows converts pipeline runs to table rows

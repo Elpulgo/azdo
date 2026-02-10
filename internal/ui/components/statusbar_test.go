@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/polling"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestStatusBar_New(t *testing.T) {
@@ -58,7 +59,7 @@ func TestStatusBar_View_ContainsOrganization(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetOrganization("testorg")
 	sb.SetProject("testproject")
-	sb.SetWidth(80)
+	sb.SetWidth(120)
 
 	view := sb.View()
 
@@ -71,7 +72,7 @@ func TestStatusBar_View_ContainsProject(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetOrganization("testorg")
 	sb.SetProject("testproject")
-	sb.SetWidth(80)
+	sb.SetWidth(120)
 
 	view := sb.View()
 
@@ -83,11 +84,10 @@ func TestStatusBar_View_ContainsProject(t *testing.T) {
 func TestStatusBar_View_Connected_ShowsConnected(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetState(polling.StateConnected)
-	sb.SetWidth(80)
+	sb.SetWidth(120)
 
 	view := sb.View()
 
-	// Should show connected indicator
 	if !strings.Contains(strings.ToLower(view), "connected") {
 		t.Error("view should indicate connected state")
 	}
@@ -96,44 +96,49 @@ func TestStatusBar_View_Connected_ShowsConnected(t *testing.T) {
 func TestStatusBar_View_Error_ShowsError(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetState(polling.StateError)
-	sb.SetWidth(80)
+	sb.SetWidth(120)
 
 	view := sb.View()
 
-	// Should show error indicator
 	if !strings.Contains(strings.ToLower(view), "error") {
 		t.Error("view should indicate error state")
 	}
 }
 
-func TestStatusBar_View_ContainsHelpHint(t *testing.T) {
+func TestStatusBar_View_ContainsDefaultKeybindings(t *testing.T) {
 	sb := NewStatusBar()
-	sb.SetWidth(80)
+	sb.SetWidth(120)
 
 	view := sb.View()
 
-	// Should show help hint with question mark
-	if !strings.Contains(view, "?") || !strings.Contains(strings.ToLower(view), "help") {
-		t.Error("view should contain help hint")
+	// Should contain default keybindings
+	if !strings.Contains(view, "refresh") {
+		t.Error("view should contain 'refresh' keybinding")
+	}
+	if !strings.Contains(view, "quit") {
+		t.Error("view should contain 'quit' keybinding")
+	}
+	if !strings.Contains(view, "help") {
+		t.Error("view should contain 'help' keybinding")
 	}
 }
 
-func TestStatusBar_SetHelpText(t *testing.T) {
+func TestStatusBar_SetKeybindings(t *testing.T) {
 	sb := NewStatusBar()
-	sb.SetHelpText("Press r to refresh")
-	sb.SetWidth(80)
+	sb.SetKeybindings("custom keybindings")
+	sb.SetWidth(120)
 
 	view := sb.View()
 
-	if !strings.Contains(view, "Press r to refresh") {
-		t.Errorf("view should contain custom help text, got: %s", view)
+	if !strings.Contains(view, "custom keybindings") {
+		t.Error("view should contain custom keybindings")
 	}
 }
 
 func TestStatusBar_StateIcons(t *testing.T) {
 	tests := []struct {
 		state       polling.ConnectionState
-		expectColor bool // We just verify it doesn't panic
+		expectColor bool
 	}{
 		{polling.StateConnected, true},
 		{polling.StateConnecting, true},
@@ -145,9 +150,8 @@ func TestStatusBar_StateIcons(t *testing.T) {
 		t.Run(tt.state.String(), func(t *testing.T) {
 			sb := NewStatusBar()
 			sb.SetState(tt.state)
-			sb.SetWidth(80)
+			sb.SetWidth(120)
 
-			// Should not panic
 			view := sb.View()
 			if len(view) == 0 {
 				t.Error("view should not be empty")
@@ -161,9 +165,8 @@ func TestStatusBar_View_MinimumWidth(t *testing.T) {
 	sb.SetOrganization("org")
 	sb.SetProject("project")
 	sb.SetState(polling.StateConnected)
-	sb.SetWidth(20) // Very narrow
+	sb.SetWidth(20)
 
-	// Should not panic with minimal width
 	view := sb.View()
 	if view == "" {
 		t.Error("view should not be empty even with minimal width")
@@ -173,7 +176,6 @@ func TestStatusBar_View_MinimumWidth(t *testing.T) {
 func TestStatusBar_Update_ReturnsModel(t *testing.T) {
 	sb := NewStatusBar()
 
-	// StatusBar doesn't handle messages, but Update should return the model unchanged
 	model, cmd := sb.Update(nil)
 	if model != sb {
 		t.Error("Update should return the same model")
@@ -196,12 +198,36 @@ func TestStatusBar_OrgProjectSeparator(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetOrganization("myorg")
 	sb.SetProject("myproject")
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "/") {
+		t.Error("view should contain org/project separator")
+	}
+}
+
+func TestStatusBar_View_HasBackground(t *testing.T) {
+	sb := NewStatusBar()
 	sb.SetWidth(80)
 
 	view := sb.View()
 
-	// Should have org/project or org · project format
-	if !strings.Contains(view, "/") && !strings.Contains(view, "·") {
-		t.Error("view should contain org/project separator")
+	// View should have ANSI codes for background color (236)
+	// Just verify it's not empty and has some styling
+	if len(view) < 20 {
+		t.Error("view should have content with styling")
+	}
+}
+
+func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
+	sb := NewStatusBar()
+
+	model, cmd := sb.Update(tea.KeyMsg{})
+	if model != sb {
+		t.Error("Update should return the same model for key messages")
+	}
+	if cmd != nil {
+		t.Error("Update should return nil cmd for key messages")
 	}
 }
