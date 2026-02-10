@@ -22,6 +22,10 @@ type StatusBar struct {
 
 // Styles for the status bar
 var (
+	// Border line style
+	borderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("62"))
+
 	// Main bar style - full width background
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("236")).
@@ -108,7 +112,7 @@ func (s *StatusBar) Update(msg tea.Msg) (*StatusBar, tea.Cmd) {
 	return s, nil
 }
 
-// View renders the status bar as a full-width footer.
+// View renders the status bar as a full-width footer with top border.
 func (s *StatusBar) View() string {
 	// Build the left section: keybindings
 	left := s.renderKeybindings()
@@ -155,7 +159,10 @@ func (s *StatusBar) View() string {
 		content = content + strings.Repeat(" ", width-contentLen)
 	}
 
-	return statusBarStyle.Render(content)
+	// Create top border line
+	border := borderStyle.Render(strings.Repeat("─", width))
+
+	return border + "\n" + statusBarStyle.Render(content)
 }
 
 // renderKeybindings renders the keybindings section.
