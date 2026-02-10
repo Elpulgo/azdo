@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bd create:*)",
+      "Bash(bd dep add:*)",
+      "Bash(bd ready:*)",
+      "Bash(bd stats:*)",
+      "Bash(bd list:*)",
+      "Bash(bd update:*)",
+      "Bash(bd show:*)",
+      "Bash(test:*)",
+      "Bash(go mod init:*)",
+      "Bash(bd close:*)",
+      "Bash(go get:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go list:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(git add:*)",
+      "Bash(bd sync:*)"
+    ]
+  }
+}
