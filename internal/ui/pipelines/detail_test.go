@@ -1,6 +1,7 @@
 package pipelines
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -289,6 +290,112 @@ func TestDetailModel_SelectedItem(t *testing.T) {
 	}
 	if selected.Record.Log.ID != 5 {
 		t.Errorf("Selected log ID = %d, want 5", selected.Record.Log.ID)
+	}
+}
+
+func TestDetailModel_ViewportScrolling(t *testing.T) {
+	// Create a timeline with many items to test scrolling
+	records := make([]azdevops.TimelineRecord, 50)
+	for i := 0; i < 50; i++ {
+		records[i] = azdevops.TimelineRecord{
+			ID:       fmt.Sprintf("task-%d", i),
+			ParentID: nil,
+			Type:     "Task",
+			Name:     fmt.Sprintf("Task %d", i),
+			Order:    i,
+		}
+	}
+
+	timeline := &azdevops.Timeline{ID: "test", Records: records}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 20) // Set a small height to trigger scrolling
+	model.SetTimeline(timeline)
+
+	// View should contain scroll percentage indicator
+	view := model.View()
+	if !strings.Contains(view, "%") {
+		t.Error("View should contain scroll percentage indicator")
+	}
+
+	// Move down many times - selection should change
+	for i := 0; i < 30; i++ {
+		model.MoveDown()
+	}
+
+	if model.SelectedIndex() != 30 {
+		t.Errorf("After 30 MoveDown, SelectedIndex() = %d, want 30", model.SelectedIndex())
+	}
+
+	// View should still be renderable without panic
+	view = model.View()
+	if view == "" {
+		t.Error("View should not be empty after scrolling")
+	}
+}
+
+func TestDetailModel_StatusMessage(t *testing.T) {
+	// Create timeline with items that have and don't have logs
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build Stage", Order: 1},
+			{ID: "task-1", ParentID: strPtr("stage-1"), Type: "Task", Name: "npm install", Order: 1, Log: &azdevops.LogReference{ID: 5}},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 20)
+	model.SetTimeline(timeline)
+
+	// Initially selected item (stage) has no log - status message should indicate this
+	if model.SelectedItem().Record.Log != nil {
+		t.Error("First item (stage) should not have a log")
+	}
+
+	// GetStatusMessage should indicate no logs available
+	msg := model.GetStatusMessage()
+	if msg == "" {
+		t.Error("GetStatusMessage should return a message for items without logs")
+	}
+
+	// Move to task with log
+	model.MoveDown()
+	if model.SelectedItem().Record.Log == nil {
+		t.Error("Second item (task) should have a log")
+	}
+
+	// Status message should be empty or indicate logs are available
+	msg = model.GetStatusMessage()
+	if strings.Contains(msg, "no log") {
+		t.Error("GetStatusMessage should not say 'no log' for items with logs")
+	}
+}
+
+func TestDetailModel_CanViewLogs(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build Stage", Order: 1},
+			{ID: "task-1", ParentID: strPtr("stage-1"), Type: "Task", Name: "npm install", Order: 1, Log: &azdevops.LogReference{ID: 5}},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Stage should not be viewable
+	if model.CanViewLogs() {
+		t.Error("CanViewLogs() should return false for stage without logs")
+	}
+
+	// Task with log should be viewable
+	model.MoveDown()
+	if !model.CanViewLogs() {
+		t.Error("CanViewLogs() should return true for task with logs")
 	}
 }
 

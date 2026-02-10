@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -30,6 +31,8 @@ type DetailModel struct {
 	err           error
 	width         int
 	height        int
+	viewport      viewport.Model
+	ready         bool
 }
 
 // NewDetailModel creates a new detail model for a pipeline run
@@ -52,12 +55,52 @@ func (m *DetailModel) SetTimeline(timeline *azdevops.Timeline) {
 	m.tree = buildTimelineTree(timeline)
 	m.flatItems = flattenTree(m.tree)
 	m.selectedIndex = 0
+	if m.ready {
+		m.updateViewportContent()
+	}
+}
+
+// updateViewportContent updates the viewport content based on current items and selection
+func (m *DetailModel) updateViewportContent() {
+	if len(m.flatItems) == 0 {
+		return
+	}
+
+	var sb strings.Builder
+	for i, node := range m.flatItems {
+		line := m.renderRecord(node, i == m.selectedIndex)
+		sb.WriteString(line)
+		if i < len(m.flatItems)-1 {
+			sb.WriteString("\n")
+		}
+	}
+	m.viewport.SetContent(sb.String())
 }
 
 // SetSize sets the view dimensions
 func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+
+	// Account for header (2 lines) and footer (2 lines)
+	viewportHeight := height - 6
+	if viewportHeight < 1 {
+		viewportHeight = 1
+	}
+
+	if !m.ready {
+		m.viewport = viewport.New(width, viewportHeight)
+		m.viewport.HighPerformanceRendering = false
+		m.ready = true
+	} else {
+		m.viewport.Width = width
+		m.viewport.Height = viewportHeight
+	}
+
+	// Update viewport content if we have items
+	if len(m.flatItems) > 0 {
+		m.updateViewportContent()
+	}
 }
 
 // Update handles messages
@@ -111,18 +154,29 @@ func (m *DetailModel) View() string {
 	sb.WriteString(headerStyle.Render(fmt.Sprintf("%s #%s", m.run.Definition.Name, m.run.BuildNumber)))
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", min(m.width-2, 60)))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
 
-	// Timeline records
-	for i, node := range m.flatItems {
-		line := m.renderRecord(node, i == m.selectedIndex)
-		sb.WriteString(line)
+	// Viewport with timeline records
+	if m.ready {
+		sb.WriteString(m.viewport.View())
+	}
+
+	// Status message for selected item
+	sb.WriteString("\n")
+	statusMsg := m.GetStatusMessage()
+	if statusMsg != "" {
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("  %s", statusMsg)))
 		sb.WriteString("\n")
 	}
 
-	// Help
-	sb.WriteString("\n")
-	sb.WriteString("  ↑↓: navigate • Enter: view logs • Esc: back • r: refresh")
+	// Footer with scroll info and help
+	scrollPercent := 0.0
+	if m.ready {
+		scrollPercent = m.viewport.ScrollPercent() * 100
+	}
+	helpText := fmt.Sprintf("  ↑↓: navigate • Enter: view logs 📄 • Esc: back • r: refresh • %.0f%%", scrollPercent)
+	sb.WriteString(helpText)
 
 	return sb.String()
 }
@@ -172,6 +226,8 @@ func (m *DetailModel) SelectedItem() *TimelineNode {
 func (m *DetailModel) MoveUp() {
 	if m.selectedIndex > 0 {
 		m.selectedIndex--
+		m.updateViewportContent()
+		m.ensureSelectedVisible()
 	}
 }
 
@@ -179,7 +235,45 @@ func (m *DetailModel) MoveUp() {
 func (m *DetailModel) MoveDown() {
 	if m.selectedIndex < len(m.flatItems)-1 {
 		m.selectedIndex++
+		m.updateViewportContent()
+		m.ensureSelectedVisible()
 	}
+}
+
+// ensureSelectedVisible scrolls the viewport to keep the selected item visible
+func (m *DetailModel) ensureSelectedVisible() {
+	if !m.ready || len(m.flatItems) == 0 {
+		return
+	}
+
+	// Each item is one line, so line number = selectedIndex
+	visibleStart := m.viewport.YOffset
+	visibleEnd := visibleStart + m.viewport.Height - 1
+
+	if m.selectedIndex < visibleStart {
+		m.viewport.SetYOffset(m.selectedIndex)
+	} else if m.selectedIndex > visibleEnd {
+		m.viewport.SetYOffset(m.selectedIndex - m.viewport.Height + 1)
+	}
+}
+
+// CanViewLogs returns true if the selected item has logs that can be viewed
+func (m *DetailModel) CanViewLogs() bool {
+	selected := m.SelectedItem()
+	return selected != nil && selected.Record.Log != nil
+}
+
+// GetStatusMessage returns a status message based on the selected item
+func (m *DetailModel) GetStatusMessage() string {
+	selected := m.SelectedItem()
+	if selected == nil {
+		return ""
+	}
+
+	if selected.Record.Log == nil {
+		return fmt.Sprintf("%s has no logs", selected.Record.Type)
+	}
+	return ""
 }
 
 // GetRun returns the pipeline run
