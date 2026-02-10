@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -165,23 +166,6 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	// Status message for selected item
-	sb.WriteString("\n")
-	statusMsg := m.GetStatusMessage()
-	if statusMsg != "" {
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		sb.WriteString(dimStyle.Render(fmt.Sprintf("  %s", statusMsg)))
-		sb.WriteString("\n")
-	}
-
-	// Footer with scroll info and help
-	scrollPercent := 0.0
-	if m.ready {
-		scrollPercent = m.viewport.ScrollPercent() * 100
-	}
-	helpText := fmt.Sprintf("  ↑↓/pgup/pgdn: navigate • Enter: view logs 📄 • Esc: back • r: refresh • %.0f%%", scrollPercent)
-	sb.WriteString(helpText)
-
 	return sb.String()
 }
 
@@ -317,6 +301,23 @@ func (m *DetailModel) GetStatusMessage() string {
 // GetRun returns the pipeline run
 func (m *DetailModel) GetRun() azdevops.PipelineRun {
 	return m.run
+}
+
+// GetContextItems returns context bar items for this view
+func (m *DetailModel) GetContextItems() []components.ContextItem {
+	return []components.ContextItem{
+		{Key: "↑↓/pgup/pgdn", Description: "navigate"},
+		{Key: "enter", Description: "view logs"},
+	}
+}
+
+// GetScrollPercent returns the current scroll percentage (0-100)
+// Based on selection position relative to total items
+func (m *DetailModel) GetScrollPercent() float64 {
+	if !m.ready || len(m.flatItems) <= 1 {
+		return 0
+	}
+	return float64(m.selectedIndex) / float64(len(m.flatItems)-1) * 100
 }
 
 // Messages

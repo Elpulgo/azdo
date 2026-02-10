@@ -173,3 +173,56 @@ func TestStripAnsiTimestamps(t *testing.T) {
 		})
 	}
 }
+
+func TestLogViewerModel_GetContextItems(t *testing.T) {
+	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+
+	items := model.GetContextItems()
+
+	// Should have keybinding items
+	if len(items) == 0 {
+		t.Error("GetContextItems() should return items")
+	}
+
+	// Should include scroll keys
+	found := false
+	for _, item := range items {
+		if strings.Contains(item.Key, "↑↓") || strings.Contains(item.Description, "scroll") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include scroll keybinding")
+	}
+
+	// Should include g/G for top/bottom
+	foundGG := false
+	for _, item := range items {
+		if strings.Contains(item.Key, "g/G") || strings.Contains(item.Description, "top/bottom") {
+			foundGG = true
+			break
+		}
+	}
+	if !foundGG {
+		t.Error("GetContextItems() should include g/G keybinding")
+	}
+}
+
+func TestLogViewerModel_GetScrollPercent(t *testing.T) {
+	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+	model.SetSize(80, 20)
+
+	// Generate content with many lines
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, "Log line "+string(rune('0'+i%10)))
+	}
+	model.SetContent(strings.Join(lines, "\n"))
+
+	// Initially should be at top (0%)
+	percent := model.GetScrollPercent()
+	if percent < 0 || percent > 100 {
+		t.Errorf("GetScrollPercent() = %f, should be between 0 and 100", percent)
+	}
+}
