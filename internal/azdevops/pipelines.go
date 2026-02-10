@@ -7,8 +7,9 @@ import (
 
 // ListPipelineRuns retrieves the most recent pipeline runs (builds) for the project
 // top: maximum number of runs to return (typically 25-100)
+// Results are ordered by queue time descending (most recent first)
 func (c *Client) ListPipelineRuns(top int) ([]PipelineRun, error) {
-	path := fmt.Sprintf("/build/builds?api-version=7.1&$top=%d", top)
+	path := fmt.Sprintf("/build/builds?api-version=7.1&$top=%d&queryOrder=queueTimeDescending", top)
 
 	body, err := c.get(path)
 	if err != nil {

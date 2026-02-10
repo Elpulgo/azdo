@@ -5,6 +5,59 @@ import (
 	"time"
 )
 
+// Timeline represents a build timeline containing stages, jobs, and tasks
+type Timeline struct {
+	ID           string           `json:"id"`
+	ChangeID     int              `json:"changeId"`
+	LastChangedBy string          `json:"lastChangedBy"`
+	LastChangedOn *time.Time      `json:"lastChangedOn"`
+	Records      []TimelineRecord `json:"records"`
+}
+
+// TimelineRecord represents a single record in the timeline (stage, job, or task)
+type TimelineRecord struct {
+	ID         string        `json:"id"`
+	ParentID   *string       `json:"parentId"`
+	Type       string        `json:"type"`   // "Stage", "Job", "Task", "Phase", "Checkpoint"
+	Name       string        `json:"name"`
+	State      string        `json:"state"`  // "pending", "inProgress", "completed"
+	Result     string        `json:"result"` // "succeeded", "succeededWithIssues", "failed", "canceled", "skipped", "abandoned"
+	Order      int           `json:"order"`
+	StartTime  *time.Time    `json:"startTime"`
+	FinishTime *time.Time    `json:"finishTime"`
+	Log        *LogReference `json:"log"`
+	Issues     []Issue       `json:"issues"`
+}
+
+// LogReference contains metadata about a build log
+type LogReference struct {
+	ID   int    `json:"id"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+}
+
+// Issue represents an error or warning in a timeline record
+type Issue struct {
+	Type    string `json:"type"`    // "error", "warning"
+	Message string `json:"message"`
+}
+
+// BuildLog represents metadata about a build log
+type BuildLog struct {
+	ID            int        `json:"id"`
+	Type          string     `json:"type"`
+	URL           string     `json:"url"`
+	LineCount     int        `json:"lineCount"`
+	CreatedOn     *time.Time `json:"createdOn"`
+	LastChangedOn *time.Time `json:"lastChangedOn"`
+}
+
+// BuildLogsResponse represents the API response for listing build logs
+type BuildLogsResponse struct {
+	Count int        `json:"count"`
+	Value []BuildLog `json:"value"`
+}
+
 // PipelineRun represents a build/pipeline run in Azure DevOps
 type PipelineRun struct {
 	ID            int                `json:"id"`

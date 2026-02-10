@@ -2,6 +2,7 @@ package pipelines
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/charmbracelet/bubbles/table"
@@ -9,30 +10,54 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("240"))
+// ViewMode represents the current view in the pipelines UI
+type ViewMode int
 
-// Model represents the pipeline list view
+const (
+	ViewList   ViewMode = iota // Pipeline list view
+	ViewDetail                 // Pipeline detail/timeline view
+	ViewLogs                   // Log viewer
+)
+
+// baseStyle is used for consistent styling (no border - table handles its own)
+var baseStyle = lipgloss.NewStyle()
+
+// Model represents the pipeline list view with sub-views
 type Model struct {
-	table   table.Model
-	client  *azdevops.Client
-	runs    []azdevops.PipelineRun
-	loading bool
-	err     error
-	width   int
-	height  int
+	table     table.Model
+	client    *azdevops.Client
+	runs      []azdevops.PipelineRun
+	loading   bool
+	err       error
+	width     int
+	height    int
+	viewMode  ViewMode
+	detail    *DetailModel
+	logViewer *LogViewerModel
 }
+
+// Column width ratios (percentages of available width)
+const (
+	statusWidthPct   = 12 // Status column percentage
+	pipelineWidthPct = 30 // Pipeline column percentage
+	branchWidthPct   = 28 // Branch column percentage
+	buildWidthPct    = 15 // Build column percentage
+	durationWidthPct = 15 // Duration column percentage
+)
+
+// Minimum column widths
+const (
+	minStatusWidth   = 10
+	minPipelineWidth = 15
+	minBranchWidth   = 10
+	minBuildWidth    = 8
+	minDurationWidth = 8
+)
 
 // NewModel creates a new pipeline list model
 func NewModel(client *azdevops.Client) Model {
-	columns := []table.Column{
-		{Title: "Status", Width: 8},
-		{Title: "Pipeline", Width: 30},
-		{Title: "Branch", Width: 25},
-		{Title: "Build", Width: 15},
-		{Title: "Duration", Width: 10},
-	}
+	// Start with minimum widths, will be resized on first WindowSizeMsg
+	columns := makeColumns(80)
 
 	t := table.New(
 		table.WithColumns(columns),
@@ -53,9 +78,37 @@ func NewModel(client *azdevops.Client) Model {
 	t.SetStyles(s)
 
 	return Model{
-		table:  t,
-		client: client,
-		runs:   []azdevops.PipelineRun{},
+		table:    t,
+		client:   client,
+		runs:     []azdevops.PipelineRun{},
+		viewMode: ViewList,
+	}
+}
+
+// makeColumns creates table columns sized for the given width
+func makeColumns(width int) []table.Column {
+	// Account for table structure:
+	// - 4 chars for column separators (between 5 columns)
+	// - Some padding for cell content
+	// Total overhead: ~8 chars
+	available := width - 8
+	if available < 60 {
+		available = 60 // Minimum usable width
+	}
+
+	// Calculate widths based on percentages
+	statusW := max(minStatusWidth, available*statusWidthPct/100)
+	pipelineW := max(minPipelineWidth, available*pipelineWidthPct/100)
+	branchW := max(minBranchWidth, available*branchWidthPct/100)
+	buildW := max(minBuildWidth, available*buildWidthPct/100)
+	durationW := max(minDurationWidth, available*durationWidthPct/100)
+
+	return []table.Column{
+		{Title: "Status", Width: statusW},
+		{Title: "Pipeline", Width: pipelineW},
+		{Title: "Branch", Width: branchW},
+		{Title: "Build", Width: buildW},
+		{Title: "Duration", Width: durationW},
 	}
 }
 
@@ -68,11 +121,33 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// Handle window resize for all views
+	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = wmsg.Width
+		m.height = wmsg.Height
+	}
+
+	// Route to the appropriate view
+	switch m.viewMode {
+	case ViewDetail:
+		return m.updateDetail(msg)
+	case ViewLogs:
+		return m.updateLogViewer(msg)
+	default:
+		return m.updateList(msg)
+	}
+
+	return m, cmd
+}
+
+// updateList handles updates for the list view
+func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
 		m.table.SetHeight(msg.Height - 5)
+		m.table.SetColumns(makeColumns(msg.Width))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -80,6 +155,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			// Manual refresh
 			m.loading = true
 			return m, fetchPipelineRuns(m.client)
+		case "enter":
+			// Navigate to detail view
+			return m.enterDetailView()
 		}
 
 	case pipelineRunsMsg:
@@ -97,8 +175,117 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateDetail handles updates for the detail view
+func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
+	if m.detail == nil {
+		m.viewMode = ViewList
+		return m, nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// Detail model handles its own sizing
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			// Go back to list
+			m.viewMode = ViewList
+			m.detail = nil
+			return m, nil
+		case "enter":
+			// Navigate to log viewer if selected item has a log
+			return m.enterLogView()
+		}
+	}
+
+	var cmd tea.Cmd
+	m.detail, cmd = m.detail.Update(msg)
+	return m, cmd
+}
+
+// updateLogViewer handles updates for the log viewer
+func (m Model) updateLogViewer(msg tea.Msg) (Model, tea.Cmd) {
+	if m.logViewer == nil {
+		m.viewMode = ViewDetail
+		return m, nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			// Go back to detail
+			m.viewMode = ViewDetail
+			m.logViewer = nil
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.logViewer, cmd = m.logViewer.Update(msg)
+	return m, cmd
+}
+
+// enterDetailView navigates to the detail view for the selected pipeline
+func (m Model) enterDetailView() (Model, tea.Cmd) {
+	idx := m.table.Cursor()
+	if idx < 0 || idx >= len(m.runs) {
+		return m, nil
+	}
+
+	selectedRun := m.runs[idx]
+	m.detail = NewDetailModel(m.client, selectedRun)
+	m.detail.SetSize(m.width, m.height)
+	m.viewMode = ViewDetail
+
+	return m, m.detail.Init()
+}
+
+// enterLogView navigates to the log viewer for the selected timeline item
+func (m Model) enterLogView() (Model, tea.Cmd) {
+	if m.detail == nil {
+		return m, nil
+	}
+
+	selected := m.detail.SelectedItem()
+	if selected == nil || selected.Record.Log == nil {
+		// No log available for this item
+		return m, nil
+	}
+
+	run := m.detail.GetRun()
+	m.logViewer = NewLogViewerModel(
+		m.client,
+		run.ID,
+		selected.Record.Log.ID,
+		selected.Record.Name,
+	)
+	m.logViewer.SetSize(m.width, m.height)
+	m.viewMode = ViewLogs
+
+	return m, m.logViewer.Init()
+}
+
 // View renders the view
 func (m Model) View() string {
+	switch m.viewMode {
+	case ViewDetail:
+		if m.detail != nil {
+			return m.detail.View()
+		}
+	case ViewLogs:
+		if m.logViewer != nil {
+			return m.logViewer.View()
+		}
+	}
+
+	// Default: list view
+	return m.viewList()
+}
+
+// viewList renders the pipeline list view
+func (m Model) viewList() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error loading pipeline runs: %v\n\nPress r to retry, q to quit", m.err)
 	}
@@ -111,7 +298,7 @@ func (m Model) View() string {
 		return "No pipeline runs found.\n\nPress r to refresh, q to quit"
 	}
 
-	help := "\n  r: refresh • ↑↓: navigate • q: quit"
+	help := "\n  r: refresh • ↑↓: navigate • Enter: view details • q: quit"
 	return baseStyle.Render(m.table.View()) + help
 }
 
@@ -132,20 +319,42 @@ func (m Model) runsToRows() []table.Row {
 
 // statusIcon returns a colored status icon for the pipeline run
 func statusIcon(status, result string) string {
+	// Use case-insensitive comparison for status values
+	statusLower := strings.ToLower(status)
+	resultLower := strings.ToLower(result)
+
+	// Define styles
+	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
+	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
 	switch {
-	case status == "inProgress":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render("⟳ Running")
-	case result == "succeeded":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓ Success")
-	case result == "failed":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗ Failed")
-	case result == "canceled":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○ Canceled")
-	case result == "partiallySucceeded":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("⚠ Partial")
+	case statusLower == "inprogress":
+		return blueStyle.Render("● Running")
+	case statusLower == "notstarted":
+		return blueStyle.Render("○ Queued")
+	case statusLower == "canceling":
+		return orangeStyle.Render("⊘ Cancel")
+	case resultLower == "succeeded":
+		return greenStyle.Render("✓ Success")
+	case resultLower == "failed":
+		return redStyle.Render("✗ Failed")
+	case resultLower == "canceled":
+		return grayStyle.Render("○ Canceled")
+	case resultLower == "partiallysucceeded":
+		return yellowStyle.Render("⚠ Partial")
 	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○ Unknown")
+		// Debug: show what we received
+		return grayStyle.Render(fmt.Sprintf("%s/%s", status, result))
 	}
+}
+
+// GetViewMode returns the current view mode (for testing)
+func (m Model) GetViewMode() ViewMode {
+	return m.viewMode
 }
 
 // Messages
