@@ -20,7 +20,8 @@
       "Bash(git add:*)",
       "Bash(bd sync:*)",
       "Bash(go fmt:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(tree:*)"
     ],
     "deny": [
       "Read(**/.env)",

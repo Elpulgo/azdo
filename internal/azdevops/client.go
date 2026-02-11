@@ -17,6 +17,16 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// GetOrg returns the organization name
+func (c *Client) GetOrg() string {
+	return c.org
+}
+
+// GetProject returns the project name
+func (c *Client) GetProject() string {
+	return c.project
+}
+
 // NewClient creates a new Azure DevOps API client
 func NewClient(org, project, pat string) (*Client, error) {
 	if org == "" {
@@ -86,4 +96,44 @@ func (c *Client) setAuthHeader(req *http.Request) {
 	auth := ":" + c.pat
 	encodedAuth := base64.StdEncoding.EncodeToString([]byte(auth))
 	req.Header.Set("Authorization", "Basic "+encodedAuth)
+}
+
+// put performs a PUT request to the Azure DevOps API
+func (c *Client) put(path string, body io.Reader) ([]byte, error) {
+	return c.doRequest("PUT", path, body)
+}
+
+// post performs a POST request to the Azure DevOps API
+func (c *Client) post(path string, body io.Reader) ([]byte, error) {
+	return c.doRequest("POST", path, body)
+}
+
+// doRequest performs an HTTP request with the given method
+func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, error) {
+	url := c.baseURL + path
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return respBody, nil
 }
