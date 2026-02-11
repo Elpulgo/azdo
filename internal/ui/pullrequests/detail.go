@@ -146,20 +146,23 @@ func (m *DetailModel) View() string {
 func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string {
 	var sb strings.Builder
 
+	// Card width - use available terminal width minus small margins
+	cardWidth := m.width - 4 // small margin for safety
+	if cardWidth < 40 {
+		cardWidth = 40
+	}
+	innerWidth := cardWidth - 4 // account for "│ " prefix and " │" suffix equivalent
+
 	// Card top border
 	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	borderWidth := min(m.width-4, 70)
-	if borderWidth < 20 {
-		borderWidth = 40
-	}
-	sb.WriteString(borderStyle.Render("  ┌" + strings.Repeat("─", borderWidth) + "┐"))
+	sb.WriteString(borderStyle.Render("  ┌" + strings.Repeat("─", cardWidth-2) + "┐"))
 	sb.WriteString("\n")
 
 	icon := threadStatusIcon(thread.Status)
 	statusStyle := lipgloss.NewStyle().Bold(true)
 
 	// Header line with status icon and file location
-	headerParts := []string{icon, statusStyle.Render(thread.StatusDescription())}
+	headerContent := icon + " " + statusStyle.Render(thread.StatusDescription())
 
 	// Add file path and line number for code comments
 	if thread.IsCodeComment() {
@@ -184,11 +187,11 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 
 		// Render as hyperlink (falls back to plain text if no URL)
 		styledLocation := fileStyle.Render(location)
-		headerParts = append(headerParts, hyperlink(styledLocation, threadURL))
+		headerContent += " " + hyperlink(styledLocation, threadURL)
 	}
 
 	// Build header line with selection indicator
-	headerLine := "  │ " + strings.Join(headerParts, " ")
+	headerLine := "  │ " + headerContent
 	if selected {
 		selectedStyle := lipgloss.NewStyle().
 			Background(lipgloss.Color("57")).
@@ -200,10 +203,11 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 
 	// Render all comments in the thread
 	for _, comment := range thread.Comments {
-		indent := "  │   "
+		prefix := "  │   "
 		if comment.ParentCommentID != 0 {
-			indent = "  │     └ " // Reply indicator
+			prefix = "  │     └ " // Reply indicator
 		}
+		prefixLen := len(prefix) - 2 // -2 because "  │" is the card border part
 
 		authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
 		contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -218,12 +222,11 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		}
 		content = strings.TrimSpace(content)
 
-		// Calculate available width for content (account for indent and author)
+		// Calculate available width for content within the card
 		authorLen := len(comment.Author.DisplayName) + 2 // +2 for ": "
-		indentLen := len(indent)
-		availableWidth := m.width - indentLen - authorLen - 6 // -6 for margin + border
+		availableWidth := innerWidth - prefixLen - authorLen
 		if availableWidth < 20 {
-			availableWidth = 60 // fallback
+			availableWidth = 20
 		}
 
 		// Truncate if longer than available width
@@ -232,7 +235,7 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		}
 
 		commentLine := fmt.Sprintf("%s%s: %s",
-			indent,
+			prefix,
 			authorStyle.Render(comment.Author.DisplayName),
 			contentStyle.Render(content))
 
@@ -241,7 +244,7 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 	}
 
 	// Card bottom border
-	sb.WriteString(borderStyle.Render("  └" + strings.Repeat("─", borderWidth) + "┘"))
+	sb.WriteString(borderStyle.Render("  └" + strings.Repeat("─", cardWidth-2) + "┘"))
 
 	return sb.String()
 }
