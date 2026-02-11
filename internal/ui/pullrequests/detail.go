@@ -256,21 +256,7 @@ func (m *DetailModel) ensureSelectedVisible() {
 		return
 	}
 
-	// Calculate the line offset for the selected thread
-	// Account for: description (if present, 2+ lines), reviewers section, comments header
-	lineOffset := 0
-	if m.pr.Description != "" {
-		// Count lines in description + blank line
-		lineOffset += strings.Count(m.pr.Description, "\n") + 2
-	}
-	if len(m.pr.Reviewers) > 0 {
-		// Reviewers header + reviewer lines + blank line
-		lineOffset += 1 + len(m.pr.Reviewers) + 1
-	}
-	// Comments header line
-	lineOffset += 1
-
-	// The selected thread line is lineOffset + selectedIndex
+	lineOffset := m.getThreadsLineOffset()
 	selectedLine := lineOffset + m.selectedIndex
 
 	visibleStart := m.viewport.YOffset
@@ -292,56 +278,95 @@ func (m *DetailModel) SetThreads(threads []azdevops.Thread) {
 	}
 }
 
-// MoveUp moves selection up
+// MoveUp moves selection up or scrolls viewport if at top
 func (m *DetailModel) MoveUp() {
+	if !m.ready {
+		return
+	}
 	if m.selectedIndex > 0 {
 		m.selectedIndex--
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
+	} else {
+		// At first thread, scroll viewport up to show description/reviewers
+		m.viewport.LineUp(1)
 	}
 }
 
-// MoveDown moves selection down
+// MoveDown moves selection down or scrolls viewport if at bottom
 func (m *DetailModel) MoveDown() {
+	if !m.ready {
+		return
+	}
 	if len(m.threads) > 0 && m.selectedIndex < len(m.threads)-1 {
 		m.selectedIndex++
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
+	} else {
+		// At last thread, scroll viewport down to show more content
+		m.viewport.LineDown(1)
 	}
 }
 
-// PageUp moves selection up by one page
+// PageUp scrolls the viewport up by one page
 func (m *DetailModel) PageUp() {
-	if !m.ready || len(m.threads) == 0 {
+	if !m.ready {
 		return
 	}
-	pageSize := m.viewport.Height
-	if pageSize < 1 {
-		pageSize = 5
-	}
-	m.selectedIndex -= pageSize
-	if m.selectedIndex < 0 {
-		m.selectedIndex = 0
-	}
-	m.updateViewportContent()
-	m.ensureSelectedVisible()
+	// Scroll viewport directly
+	m.viewport.HalfViewUp()
+	// Update thread selection based on what's visible
+	m.updateSelectionFromViewport()
 }
 
-// PageDown moves selection down by one page
+// PageDown scrolls the viewport down by one page
 func (m *DetailModel) PageDown() {
-	if !m.ready || len(m.threads) == 0 {
+	if !m.ready {
 		return
 	}
-	pageSize := m.viewport.Height
-	if pageSize < 1 {
-		pageSize = 5
+	// Scroll viewport directly
+	m.viewport.HalfViewDown()
+	// Update thread selection based on what's visible
+	m.updateSelectionFromViewport()
+}
+
+// updateSelectionFromViewport updates the selected thread based on viewport position
+func (m *DetailModel) updateSelectionFromViewport() {
+	if len(m.threads) == 0 {
+		return
 	}
-	m.selectedIndex += pageSize
-	if m.selectedIndex >= len(m.threads) {
+
+	// Calculate line offset where threads start
+	lineOffset := m.getThreadsLineOffset()
+
+	// Find which thread is most visible in the center of the viewport
+	viewportCenter := m.viewport.YOffset + m.viewport.Height/2
+
+	// Calculate which thread index corresponds to viewport center
+	threadLine := viewportCenter - lineOffset
+	if threadLine < 0 {
+		m.selectedIndex = 0
+	} else if threadLine >= len(m.threads) {
 		m.selectedIndex = len(m.threads) - 1
+	} else {
+		m.selectedIndex = threadLine
 	}
+
 	m.updateViewportContent()
-	m.ensureSelectedVisible()
+}
+
+// getThreadsLineOffset returns the line number where threads section starts
+func (m *DetailModel) getThreadsLineOffset() int {
+	lineOffset := 0
+	if m.pr.Description != "" {
+		lineOffset += strings.Count(m.pr.Description, "\n") + 2
+	}
+	if len(m.pr.Reviewers) > 0 {
+		lineOffset += 1 + len(m.pr.Reviewers) + 1
+	}
+	// Comments header line
+	lineOffset += 1
+	return lineOffset
 }
 
 // SelectedIndex returns the current selection index
@@ -367,12 +392,12 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 	}
 }
 
-// GetScrollPercent returns the scroll percentage
+// GetScrollPercent returns the scroll percentage based on viewport position
 func (m *DetailModel) GetScrollPercent() float64 {
-	if len(m.threads) <= 1 {
+	if !m.ready {
 		return 0
 	}
-	return float64(m.selectedIndex) / float64(len(m.threads)-1) * 100
+	return m.viewport.ScrollPercent() * 100
 }
 
 // GetStatusMessage returns the status message

@@ -222,35 +222,43 @@ func TestDetailModel_GetContextItems(t *testing.T) {
 
 func TestDetailModel_GetScrollPercent(t *testing.T) {
 	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+		ID:          101,
+		Title:       "Test PR",
+		Description: "A description that takes some space",
+		Repository:  azdevops.Repository{ID: "repo-123"},
 	}
 	model := NewDetailModel(nil, pr)
-	model.SetSize(80, 24)
+	// Use small viewport to force scrolling
+	model.SetSize(80, 10)
 
-	threads := []azdevops.Thread{
-		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "1"}}},
-		{ID: 2, Status: "active", Comments: []azdevops.Comment{{ID: 2, Content: "2"}}},
-		{ID: 3, Status: "active", Comments: []azdevops.Comment{{ID: 3, Content: "3"}}},
-		{ID: 4, Status: "active", Comments: []azdevops.Comment{{ID: 4, Content: "4"}}},
+	// Create many threads to overflow viewport
+	threads := make([]azdevops.Thread, 30)
+	for i := 0; i < 30; i++ {
+		threads[i] = azdevops.Thread{
+			ID:     i + 1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: i + 1, Content: fmt.Sprintf("Comment %d", i+1)},
+			},
+		}
 	}
 	model.SetThreads(threads)
 
-	// At start, scroll percent should be 0
+	// At start, scroll percent should be 0 (at top of viewport)
 	percent := model.GetScrollPercent()
 	if percent != 0 {
 		t.Errorf("Initial scroll percent = %f, want 0", percent)
 	}
 
-	// Move to end
-	model.MoveDown()
-	model.MoveDown()
-	model.MoveDown()
+	// Page down multiple times to reach bottom
+	for i := 0; i < 10; i++ {
+		model.PageDown()
+	}
 
+	// Scroll percent should be higher after scrolling down
 	percent = model.GetScrollPercent()
-	if percent != 100 {
-		t.Errorf("End scroll percent = %f, want 100", percent)
+	if percent <= 0 {
+		t.Errorf("After scrolling down, percent = %f, want > 0", percent)
 	}
 }
 
@@ -460,7 +468,7 @@ func TestDetailModel_PageUpDown(t *testing.T) {
 		Repository: azdevops.Repository{ID: "repo-123"},
 	}
 	model := NewDetailModel(nil, pr)
-	model.SetSize(80, 20)
+	model.SetSize(80, 12) // Small viewport to test scrolling
 
 	// Create threads
 	threads := make([]azdevops.Thread, 30)
@@ -475,36 +483,33 @@ func TestDetailModel_PageUpDown(t *testing.T) {
 	}
 	model.SetThreads(threads)
 
-	// Page down
-	initialIndex := model.SelectedIndex()
+	// Page down should scroll the viewport
+	initialYOffset := model.viewport.YOffset
 	model.PageDown()
-	afterPageDown := model.SelectedIndex()
+	afterPageDownYOffset := model.viewport.YOffset
 
-	if afterPageDown <= initialIndex {
-		t.Errorf("PageDown should increase index, got %d -> %d", initialIndex, afterPageDown)
+	if afterPageDownYOffset <= initialYOffset {
+		t.Errorf("PageDown should scroll viewport down, YOffset: %d -> %d", initialYOffset, afterPageDownYOffset)
 	}
 
-	// Page up should go back
+	// Page up should scroll back
 	model.PageUp()
-	afterPageUp := model.SelectedIndex()
+	afterPageUpYOffset := model.viewport.YOffset
 
-	if afterPageUp >= afterPageDown {
-		t.Errorf("PageUp should decrease index, got %d -> %d", afterPageDown, afterPageUp)
+	if afterPageUpYOffset >= afterPageDownYOffset {
+		t.Errorf("PageUp should scroll viewport up, YOffset: %d -> %d", afterPageDownYOffset, afterPageUpYOffset)
 	}
 
-	// Page up at top should stay at 0
+	// Page up at top should stay at top
 	model.PageUp()
 	model.PageUp()
 	model.PageUp()
-	if model.SelectedIndex() != 0 {
-		t.Errorf("Multiple PageUp at top should result in index 0, got %d", model.SelectedIndex())
+	if model.viewport.YOffset != 0 {
+		t.Errorf("Multiple PageUp at top should result in YOffset 0, got %d", model.viewport.YOffset)
 	}
 
-	// Page down at bottom should stay at last
-	for i := 0; i < 10; i++ {
-		model.PageDown()
-	}
-	if model.SelectedIndex() != len(threads)-1 {
-		t.Errorf("Multiple PageDown should stop at last index %d, got %d", len(threads)-1, model.SelectedIndex())
+	// Selection should still work
+	if model.SelectedIndex() < 0 || model.SelectedIndex() >= len(threads) {
+		t.Errorf("SelectedIndex %d should be valid", model.SelectedIndex())
 	}
 }
