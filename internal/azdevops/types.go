@@ -139,6 +139,11 @@ func (pr *PipelineRun) Duration() string {
 	return formatDuration(duration)
 }
 
+// Timestamp returns a formatted timestamp for display in the pipeline table
+func (pr *PipelineRun) Timestamp() string {
+	return pr.QueueTime.Format("2006-01-02 15:04")
+}
+
 // formatDuration formats a duration in a human-readable way without milliseconds
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {

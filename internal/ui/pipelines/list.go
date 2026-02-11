@@ -39,20 +39,22 @@ type Model struct {
 
 // Column width ratios (percentages of available width)
 const (
-	statusWidthPct   = 12 // Status column percentage
-	pipelineWidthPct = 30 // Pipeline column percentage
-	branchWidthPct   = 28 // Branch column percentage
-	buildWidthPct    = 15 // Build column percentage
-	durationWidthPct = 15 // Duration column percentage
+	statusWidthPct    = 10 // Status column percentage
+	pipelineWidthPct  = 25 // Pipeline column percentage
+	branchWidthPct    = 22 // Branch column percentage
+	buildWidthPct     = 13 // Build column percentage
+	timestampWidthPct = 15 // Timestamp column percentage
+	durationWidthPct  = 15 // Duration column percentage
 )
 
 // Minimum column widths
 const (
-	minStatusWidth   = 10
-	minPipelineWidth = 15
-	minBranchWidth   = 10
-	minBuildWidth    = 8
-	minDurationWidth = 8
+	minStatusWidth    = 10
+	minPipelineWidth  = 15
+	minBranchWidth    = 10
+	minBuildWidth     = 8
+	minTimestampWidth = 16
+	minDurationWidth  = 8
 )
 
 // NewModel creates a new pipeline list model
@@ -89,12 +91,12 @@ func NewModel(client *azdevops.Client) Model {
 // makeColumns creates table columns sized for the given width
 func makeColumns(width int) []table.Column {
 	// Account for table structure:
-	// - 4 chars for column separators (between 5 columns)
+	// - 5 chars for column separators (between 6 columns)
 	// - Some padding for cell content
-	// Total overhead: ~8 chars
-	available := width - 8
-	if available < 60 {
-		available = 60 // Minimum usable width
+	// Total overhead: ~10 chars
+	available := width - 10
+	if available < 80 {
+		available = 80 // Minimum usable width
 	}
 
 	// Calculate widths based on percentages
@@ -102,6 +104,7 @@ func makeColumns(width int) []table.Column {
 	pipelineW := max(minPipelineWidth, available*pipelineWidthPct/100)
 	branchW := max(minBranchWidth, available*branchWidthPct/100)
 	buildW := max(minBuildWidth, available*buildWidthPct/100)
+	timestampW := max(minTimestampWidth, available*timestampWidthPct/100)
 	durationW := max(minDurationWidth, available*durationWidthPct/100)
 
 	return []table.Column{
@@ -109,6 +112,7 @@ func makeColumns(width int) []table.Column {
 		{Title: "Pipeline", Width: pipelineW},
 		{Title: "Branch", Width: branchW},
 		{Title: "Build", Width: buildW},
+		{Title: "Timestamp", Width: timestampW},
 		{Title: "Duration", Width: durationW},
 	}
 }
@@ -319,6 +323,7 @@ func (m Model) runsToRows() []table.Row {
 			run.Definition.Name,
 			run.BranchShortName(),
 			run.BuildNumber,
+			run.Timestamp(),
 			run.Duration(),
 		}
 	}
