@@ -9,17 +9,17 @@ import (
 
 // PullRequest represents a pull request in Azure DevOps
 type PullRequest struct {
-	ID            int          `json:"pullRequestId"`
-	Title         string       `json:"title"`
-	Description   string       `json:"description"`
-	Status        string       `json:"status"` // "active", "completed", "abandoned"
-	CreationDate  time.Time    `json:"creationDate"`
-	SourceRefName string       `json:"sourceRefName"` // e.g., "refs/heads/feature/my-feature"
-	TargetRefName string       `json:"targetRefName"` // e.g., "refs/heads/main"
-	IsDraft       bool         `json:"isDraft"`
-	CreatedBy     Identity     `json:"createdBy"`
-	Repository    Repository   `json:"repository"`
-	Reviewers     []Reviewer   `json:"reviewers"`
+	ID            int        `json:"pullRequestId"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	Status        string     `json:"status"` // "active", "completed", "abandoned"
+	CreationDate  time.Time  `json:"creationDate"`
+	SourceRefName string     `json:"sourceRefName"` // e.g., "refs/heads/feature/my-feature"
+	TargetRefName string     `json:"targetRefName"` // e.g., "refs/heads/main"
+	IsDraft       bool       `json:"isDraft"`
+	CreatedBy     Identity   `json:"createdBy"`
+	Repository    Repository `json:"repository"`
+	Reviewers     []Reviewer `json:"reviewers"`
 }
 
 // Identity represents a user identity in Azure DevOps
@@ -200,10 +200,10 @@ func (c *Client) GetPRThreads(repositoryID string, pullRequestID int) ([]Thread,
 
 // Vote values for pull request reviews
 const (
-	VoteApprove                = 10 // Approved
-	VoteApproveWithSuggestions = 5  // Approved with suggestions
-	VoteNoVote                 = 0  // No vote
-	VoteWaitForAuthor          = -5 // Waiting for author
+	VoteApprove                = 10  // Approved
+	VoteApproveWithSuggestions = 5   // Approved with suggestions
+	VoteNoVote                 = 0   // No vote
+	VoteWaitForAuthor          = -5  // Waiting for author
 	VoteReject                 = -10 // Rejected
 )
 
