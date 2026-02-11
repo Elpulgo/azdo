@@ -719,68 +719,68 @@ func TestHyperlink(t *testing.T) {
 	}
 }
 
-func TestBuildPRFileURL(t *testing.T) {
+func TestBuildPRThreadURL(t *testing.T) {
 	tests := []struct {
 		name     string
 		org      string
 		project  string
-		repoName string
+		repoID   string
 		prID     int
-		filePath string
+		threadID int
 		expected string
 	}{
 		{
-			name:     "builds complete URL",
+			name:     "builds complete URL with discussionId",
 			org:      "myorg",
 			project:  "myproject",
-			repoName: "myrepo",
+			repoID:   "repo-guid-123",
 			prID:     123,
-			filePath: "/src/main.go",
-			expected: "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/123?path=%2Fsrc%2Fmain.go&_a=files",
-		},
-		{
-			name:     "URL encodes special characters in path",
-			org:      "myorg",
-			project:  "myproject",
-			repoName: "myrepo",
-			prID:     456,
-			filePath: "/src/My File.cs",
-			expected: "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/456?path=%2Fsrc%2FMy+File.cs&_a=files",
+			threadID: 456,
+			expected: "https://dev.azure.com/myorg/myproject/_git/repo-guid-123/pullrequest/123?discussionId=456",
 		},
 		{
 			name:     "returns empty when org is missing",
 			org:      "",
 			project:  "myproject",
-			repoName: "myrepo",
+			repoID:   "repo-guid",
 			prID:     123,
-			filePath: "/src/main.go",
+			threadID: 456,
 			expected: "",
 		},
 		{
 			name:     "returns empty when project is missing",
 			org:      "myorg",
 			project:  "",
-			repoName: "myrepo",
+			repoID:   "repo-guid",
 			prID:     123,
-			filePath: "/src/main.go",
+			threadID: 456,
 			expected: "",
 		},
 		{
-			name:     "returns empty when repo is missing",
+			name:     "returns empty when repoID is missing",
 			org:      "myorg",
 			project:  "myproject",
-			repoName: "",
+			repoID:   "",
 			prID:     123,
-			filePath: "/src/main.go",
+			threadID: 456,
+			expected: "",
+		},
+		{
+			name:     "returns empty when threadID is zero",
+			org:      "myorg",
+			project:  "myproject",
+			repoID:   "repo-guid",
+			prID:     123,
+			threadID: 0,
 			expected: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildPRFileURL(tt.org, tt.project, tt.repoName, tt.prID, tt.filePath)
+			got := buildPRThreadURL(tt.org, tt.project, tt.repoID, tt.prID, tt.threadID)
 			if got != tt.expected {
-				t.Errorf("buildPRFileURL() = %q, want %q", got, tt.expected)
+				t.Errorf("buildPRThreadURL() = %q, want %q", got, tt.expected)
 			}
 		})
 	}

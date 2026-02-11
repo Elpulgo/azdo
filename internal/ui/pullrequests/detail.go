@@ -2,7 +2,6 @@ package pullrequests
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -162,21 +161,21 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 			location = fmt.Sprintf("%s:%d", shortPath, thread.ThreadContext.RightFileStart.Line)
 		}
 
-		// Build hyperlink URL if we have client info
-		var fileURL string
+		// Build hyperlink URL to the thread/comment if we have client info
+		var threadURL string
 		if m.client != nil {
-			fileURL = buildPRFileURL(
+			threadURL = buildPRThreadURL(
 				m.client.GetOrg(),
 				m.client.GetProject(),
-				m.pr.Repository.Name,
+				m.pr.Repository.ID,
 				m.pr.ID,
-				thread.ThreadContext.FilePath,
+				thread.ID,
 			)
 		}
 
 		// Render as hyperlink (falls back to plain text if no URL)
 		styledLocation := fileStyle.Render(location)
-		headerParts = append(headerParts, hyperlink(styledLocation, fileURL))
+		headerParts = append(headerParts, hyperlink(styledLocation, threadURL))
 	}
 
 	// Build header line with selection indicator on this line only
@@ -522,15 +521,13 @@ func hyperlink(text, url string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
-// buildPRFileURL constructs the Azure DevOps URL to view a file in a PR
-func buildPRFileURL(org, project, repoName string, prID int, filePath string) string {
-	if org == "" || project == "" || repoName == "" {
+// buildPRThreadURL constructs the Azure DevOps URL to view a specific comment thread in a PR
+func buildPRThreadURL(org, project, repoID string, prID int, threadID int) string {
+	if org == "" || project == "" || repoID == "" || threadID == 0 {
 		return ""
 	}
-	// URL encode the file path
-	encodedPath := url.QueryEscape(filePath)
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?path=%s&_a=files",
-		org, project, repoName, prID, encodedPath)
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
+		org, project, repoID, prID, threadID)
 }
 
 // shortenFilePath shortens a file path to show only the last 2 segments
