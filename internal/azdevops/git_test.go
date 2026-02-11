@@ -796,10 +796,10 @@ func TestVoteValue(t *testing.T) {
 
 func TestFilterSystemThreads(t *testing.T) {
 	tests := []struct {
-		name     string
-		threads  []Thread
-		wantLen  int
-		wantIDs  []int
+		name    string
+		threads []Thread
+		wantLen int
+		wantIDs []int
 	}{
 		{
 			name: "filters out Microsoft.VisualStudio comments",

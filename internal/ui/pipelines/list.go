@@ -6,6 +6,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -35,24 +36,27 @@ type Model struct {
 	viewMode  ViewMode
 	detail    *DetailModel
 	logViewer *LogViewerModel
+	spinner   *components.LoadingIndicator
 }
 
 // Column width ratios (percentages of available width)
 const (
-	statusWidthPct   = 12 // Status column percentage
-	pipelineWidthPct = 30 // Pipeline column percentage
-	branchWidthPct   = 28 // Branch column percentage
-	buildWidthPct    = 15 // Build column percentage
-	durationWidthPct = 15 // Duration column percentage
+	statusWidthPct    = 10 // Status column percentage
+	pipelineWidthPct  = 25 // Pipeline column percentage
+	branchWidthPct    = 22 // Branch column percentage
+	buildWidthPct     = 13 // Build column percentage
+	timestampWidthPct = 15 // Timestamp column percentage
+	durationWidthPct  = 15 // Duration column percentage
 )
 
 // Minimum column widths
 const (
-	minStatusWidth   = 10
-	minPipelineWidth = 15
-	minBranchWidth   = 10
-	minBuildWidth    = 8
-	minDurationWidth = 8
+	minStatusWidth    = 10
+	minPipelineWidth  = 15
+	minBranchWidth    = 10
+	minBuildWidth     = 8
+	minTimestampWidth = 16
+	minDurationWidth  = 8
 )
 
 // NewModel creates a new pipeline list model
@@ -78,23 +82,27 @@ func NewModel(client *azdevops.Client) Model {
 		Bold(false)
 	t.SetStyles(s)
 
+	spinner := components.NewLoadingIndicator()
+	spinner.SetMessage("Loading pipeline runs...")
+
 	return Model{
 		table:    t,
 		client:   client,
 		runs:     []azdevops.PipelineRun{},
 		viewMode: ViewList,
+		spinner:  spinner,
 	}
 }
 
 // makeColumns creates table columns sized for the given width
 func makeColumns(width int) []table.Column {
 	// Account for table structure:
-	// - 4 chars for column separators (between 5 columns)
+	// - 5 chars for column separators (between 6 columns)
 	// - Some padding for cell content
-	// Total overhead: ~8 chars
-	available := width - 8
-	if available < 60 {
-		available = 60 // Minimum usable width
+	// Total overhead: ~10 chars
+	available := width - 10
+	if available < 80 {
+		available = 80 // Minimum usable width
 	}
 
 	// Calculate widths based on percentages
@@ -102,6 +110,7 @@ func makeColumns(width int) []table.Column {
 	pipelineW := max(minPipelineWidth, available*pipelineWidthPct/100)
 	branchW := max(minBranchWidth, available*branchWidthPct/100)
 	buildW := max(minBuildWidth, available*buildWidthPct/100)
+	timestampW := max(minTimestampWidth, available*timestampWidthPct/100)
 	durationW := max(minDurationWidth, available*durationWidthPct/100)
 
 	return []table.Column{
@@ -109,13 +118,15 @@ func makeColumns(width int) []table.Column {
 		{Title: "Pipeline", Width: pipelineW},
 		{Title: "Branch", Width: branchW},
 		{Title: "Build", Width: buildW},
+		{Title: "Timestamp", Width: timestampW},
 		{Title: "Duration", Width: durationW},
 	}
 }
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return fetchPipelineRuns(m.client)
+	m.spinner.SetVisible(true)
+	return tea.Batch(fetchPipelineRuns(m.client), m.spinner.Init())
 }
 
 // Update handles messages
@@ -150,12 +161,21 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 		m.table.SetHeight(msg.Height - 5)
 		m.table.SetColumns(makeColumns(msg.Width))
 
+	case spinner.TickMsg:
+		// Forward spinner tick messages
+		if m.loading {
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "r":
 			// Manual refresh
 			m.loading = true
-			return m, fetchPipelineRuns(m.client)
+			m.spinner.SetVisible(true)
+			return m, tea.Batch(fetchPipelineRuns(m.client), m.spinner.Tick())
 		case "enter":
 			// Navigate to detail view
 			return m.enterDetailView()
@@ -163,6 +183,7 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 
 	case pipelineRunsMsg:
 		m.loading = false
+		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -174,6 +195,7 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 	case SetRunsMsg:
 		// Direct update from polling - clear loading and error states
 		m.loading = false
+		m.spinner.SetVisible(false)
 		m.err = nil
 		m.runs = msg.Runs
 		m.table.SetRows(m.runsToRows())
@@ -300,7 +322,7 @@ func (m Model) viewList() string {
 	}
 
 	if m.loading {
-		return "Loading pipeline runs...\n\nPress q to quit"
+		return m.spinner.View() + "\n\nPress q to quit"
 	}
 
 	if len(m.runs) == 0 {
@@ -319,6 +341,7 @@ func (m Model) runsToRows() []table.Row {
 			run.Definition.Name,
 			run.BranchShortName(),
 			run.BuildNumber,
+			run.Timestamp(),
 			run.Duration(),
 		}
 	}
@@ -351,7 +374,7 @@ func statusIcon(status, result string) string {
 	case resultLower == "failed":
 		return redStyle.Render("✗ Failed")
 	case resultLower == "canceled":
-		return grayStyle.Render("○ Canceled")
+		return grayStyle.Render("○ Cancel")
 	case resultLower == "partiallysucceeded":
 		return yellowStyle.Render("⚠ Partial")
 	default:
@@ -427,7 +450,7 @@ type SetRunsMsg struct {
 // fetchPipelineRuns fetches pipeline runs from Azure DevOps
 func fetchPipelineRuns(client *azdevops.Client) tea.Cmd {
 	return func() tea.Msg {
-		runs, err := client.ListPipelineRuns(25)
+		runs, err := client.ListPipelineRuns(30)
 		return pipelineRunsMsg{runs: runs, err: err}
 	}
 }

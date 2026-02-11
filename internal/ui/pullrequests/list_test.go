@@ -278,6 +278,7 @@ func TestViewModeNavigation(t *testing.T) {
 func TestViewLoading(t *testing.T) {
 	model := NewModel(nil)
 	model.loading = true
+	model.spinner.SetVisible(true)
 
 	view := model.View()
 
@@ -375,7 +376,7 @@ func TestHasContextBar(t *testing.T) {
 		t.Error("List view should not have context bar")
 	}
 
-	// After entering detail view, should have context bar
+	// PR detail view also doesn't have context bar (scroll % is shown in status bar instead)
 	model.prs = []azdevops.PullRequest{
 		{
 			ID:            123,
@@ -390,10 +391,28 @@ func TestHasContextBar(t *testing.T) {
 	model.table.SetRows(model.prsToRows())
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if !model.HasContextBar() {
-		t.Error("Detail view should have context bar")
+	if model.HasContextBar() {
+		t.Error("Detail view should not have context bar (scroll % is in status bar)")
 	}
 }
 
 // errMock is a simple error for testing
 var errMock = fmt.Errorf("mock error")
+
+func TestSpinnerIntegration(t *testing.T) {
+	model := NewModel(nil)
+
+	// Spinner should be initialized
+	if model.spinner == nil {
+		t.Fatal("Spinner should be initialized in NewModel")
+	}
+
+	// When loading, view should use spinner (contains animated content)
+	model.loading = true
+	model.spinner.SetVisible(true)
+	view := model.View()
+
+	if !strings.Contains(view, "Loading") || !strings.Contains(view, "pull requests") {
+		t.Errorf("Loading view should contain loading message, got: %q", view)
+	}
+}

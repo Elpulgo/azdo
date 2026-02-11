@@ -231,3 +231,73 @@ func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
 		t.Error("Update should return nil cmd for key messages")
 	}
 }
+
+func TestStatusBar_SetConfigPath(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+
+	if sb.configPath != "/home/user/.config/azdo-tui/config.yaml" {
+		t.Errorf("expected configPath to be set, got '%s'", sb.configPath)
+	}
+}
+
+func TestStatusBar_View_ContainsConfigPath(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("view should contain config path")
+	}
+}
+
+func TestStatusBar_SetScrollPercent(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetScrollPercent(45.5)
+
+	if sb.scrollPercent != 45.5 {
+		t.Errorf("expected scrollPercent 45.5, got %f", sb.scrollPercent)
+	}
+}
+
+func TestStatusBar_ShowScrollPercent(t *testing.T) {
+	sb := NewStatusBar()
+	sb.ShowScrollPercent(true)
+
+	if !sb.showScroll {
+		t.Error("expected showScroll to be true")
+	}
+
+	sb.ShowScrollPercent(false)
+	if sb.showScroll {
+		t.Error("expected showScroll to be false")
+	}
+}
+
+func TestStatusBar_View_ContainsScrollPercent(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetScrollPercent(75)
+	sb.ShowScrollPercent(true)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "75%") {
+		t.Error("view should contain scroll percentage when enabled")
+	}
+}
+
+func TestStatusBar_View_NoScrollPercentWhenDisabled(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetScrollPercent(75)
+	sb.ShowScrollPercent(false)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if strings.Contains(view, "75%") {
+		t.Error("view should NOT contain scroll percentage when disabled")
+	}
+}

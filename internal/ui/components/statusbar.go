@@ -13,11 +13,14 @@ import (
 // StatusBar is a component that displays keybindings, org/project info,
 // and connection state at the bottom of the screen like lazygit.
 type StatusBar struct {
-	organization string
-	project      string
-	state        polling.ConnectionState
-	keybindings  string
-	width        int
+	organization  string
+	project       string
+	state         polling.ConnectionState
+	keybindings   string
+	configPath    string
+	scrollPercent float64
+	showScroll    bool
+	width         int
 }
 
 // Styles for the status bar
@@ -49,6 +52,11 @@ var (
 			Background(lipgloss.Color("236")).
 			Bold(true)
 
+		// Config path style
+	configPathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243")).
+			Background(lipgloss.Color("236"))
+
 	// Connection state styles
 	connectedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42")).
@@ -65,6 +73,11 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
 			Background(lipgloss.Color("236"))
+
+	// Scroll percentage style
+	scrollPercentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Background(lipgloss.Color("236"))
 )
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -100,6 +113,21 @@ func (s *StatusBar) SetWidth(width int) {
 	s.width = width
 }
 
+// SetConfigPath sets the config file path to display.
+func (s *StatusBar) SetConfigPath(path string) {
+	s.configPath = path
+}
+
+// SetScrollPercent sets the scroll percentage (0-100).
+func (s *StatusBar) SetScrollPercent(percent float64) {
+	s.scrollPercent = percent
+}
+
+// ShowScrollPercent enables or disables showing the scroll percentage.
+func (s *StatusBar) ShowScrollPercent(show bool) {
+	s.showScroll = show
+}
+
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
 	return nil
@@ -125,6 +153,14 @@ func (s *StatusBar) View() string {
 
 	if orgProj := s.renderOrgProject(); orgProj != "" {
 		parts = append(parts, orgProj)
+	}
+
+	if configPath := s.renderConfigPath(); configPath != "" {
+		parts = append(parts, configPath)
+	}
+
+	if scrollPercent := s.renderScrollPercent(); scrollPercent != "" {
+		parts = append(parts, scrollPercent)
 	}
 
 	parts = append(parts, s.renderConnectionState())
@@ -174,6 +210,22 @@ func (s *StatusBar) renderOrgProject() string {
 	}
 
 	return orgProjectStyle.Render(s.project)
+}
+
+// renderConfigPath renders the config file path.
+func (s *StatusBar) renderConfigPath() string {
+	if s.configPath == "" {
+		return ""
+	}
+	return configPathStyle.Render(s.configPath)
+}
+
+// renderScrollPercent renders the scroll percentage indicator.
+func (s *StatusBar) renderScrollPercent() string {
+	if !s.showScroll {
+		return ""
+	}
+	return scrollPercentStyle.Render(fmt.Sprintf("%.0f%%", s.scrollPercent))
 }
 
 // renderConnectionState renders the connection state indicator.

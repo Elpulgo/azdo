@@ -84,7 +84,7 @@ func (c *Client) get(path string) ([]byte, error) {
 
 	// Check for HTTP errors
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, formatHTTPError(resp.StatusCode, body)
 	}
 
 	return body, nil
@@ -132,8 +132,22 @@ func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, error) 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(respBody))
+		return nil, formatHTTPError(resp.StatusCode, respBody)
 	}
 
 	return respBody, nil
+}
+
+// formatHTTPError creates a user-friendly error message based on the HTTP status code
+func formatHTTPError(statusCode int, _ []byte) error {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("authentication failed (HTTP 401): your PAT may be expired or invalid. "+
+			"Please generate a new PAT in Azure DevOps and update your configuration")
+	case http.StatusForbidden:
+		return fmt.Errorf("access denied (HTTP 403): your PAT does not have sufficient permissions. "+
+			"Required scopes: Code (Read), Build (Read), Work Items (Read)")
+	default:
+		return fmt.Errorf("HTTP request failed with status %d", statusCode)
+	}
 }

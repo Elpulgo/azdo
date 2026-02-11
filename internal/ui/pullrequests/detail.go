@@ -7,6 +7,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -25,21 +26,28 @@ type DetailModel struct {
 	viewport      viewport.Model
 	ready         bool
 	statusMessage string
+	spinner       *components.LoadingIndicator
 }
 
 // NewDetailModel creates a new PR detail model
 func NewDetailModel(client *azdevops.Client, pr azdevops.PullRequest) *DetailModel {
+	s := components.NewLoadingIndicator()
+	s.SetMessage(fmt.Sprintf("Loading threads for PR #%d...", pr.ID))
+
 	return &DetailModel{
 		client:        client,
 		pr:            pr,
 		threads:       []azdevops.Thread{},
 		selectedIndex: 0,
+		spinner:       s,
 	}
 }
 
 // Init initializes the detail model
 func (m *DetailModel) Init() tea.Cmd {
-	return m.fetchThreads()
+	m.loading = true
+	m.spinner.SetVisible(true)
+	return tea.Batch(m.fetchThreads(), m.spinner.Init())
 }
 
 // Update handles messages for the detail view
@@ -48,6 +56,14 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+	case spinner.TickMsg:
+		// Forward spinner tick messages
+		if m.loading {
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -61,11 +77,13 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.PageDown()
 		case "r":
 			m.loading = true
-			return m, m.fetchThreads()
+			m.spinner.SetVisible(true)
+			return m, tea.Batch(m.fetchThreads(), m.spinner.Tick())
 		}
 
 	case threadsMsg:
 		m.loading = false
+		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -79,7 +97,9 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		}
 		m.statusMessage = msg.message
 		// Refresh threads after voting
-		return m, m.fetchThreads()
+		m.loading = true
+		m.spinner.SetVisible(true)
+		return m, tea.Batch(m.fetchThreads(), m.spinner.Tick())
 	}
 
 	return m, nil
@@ -104,7 +124,7 @@ func (m *DetailModel) View() string {
 	}
 
 	if m.loading {
-		return wrapContent(fmt.Sprintf("Loading threads for PR #%d...", m.pr.ID))
+		return wrapContent(m.spinner.View())
 	}
 
 	var sb strings.Builder

@@ -17,8 +17,8 @@ import (
 type Tab int
 
 const (
-	TabPipelines     Tab = iota // Pipelines tab (key '1')
-	TabPullRequests             // Pull Requests tab (key '2')
+	TabPipelines    Tab = iota // Pipelines tab (key '1')
+	TabPullRequests            // Pull Requests tab (key '2')
 )
 
 // Model is the root application model for the TUI
@@ -44,6 +44,11 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	statusBar := components.NewStatusBar()
 	statusBar.SetOrganization(cfg.Organization)
 	statusBar.SetProject(cfg.Project)
+
+	// Set config path if available
+	if configPath, err := config.GetPath(); err == nil {
+		statusBar.SetConfigPath(configPath)
+	}
 
 	// Create context bar for view-specific info
 	contextBar := components.NewContextBar()
@@ -200,7 +205,7 @@ func (m Model) renderTabBar() string {
 		tab2 = activeTabStyle.Render("2: Pull Requests")
 	}
 
-	return tabBarStyle.Render(tab1 + " " + tab2) + "\n"
+	return tabBarStyle.Render(tab1+" "+tab2) + "\n"
 }
 
 // View renders the application UI
@@ -253,8 +258,17 @@ func (m Model) View() string {
 			m.contextBar.SetStatus(statusMessage)
 		}
 
+		m.statusBar.ShowScrollPercent(false)
 		footer = m.contextBar.View() + "\n" + m.statusBar.View()
 	} else {
+		// Show scroll percent in status bar for views without context bar
+		// (e.g., PR detail view which has scrollable content)
+		if scrollPercent > 0 {
+			m.statusBar.ShowScrollPercent(true)
+			m.statusBar.SetScrollPercent(scrollPercent)
+		} else {
+			m.statusBar.ShowScrollPercent(false)
+		}
 		footer = m.statusBar.View()
 	}
 

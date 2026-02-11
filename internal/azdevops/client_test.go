@@ -217,6 +217,158 @@ func TestClient_Get_HTTPError(t *testing.T) {
 	}
 }
 
+func TestClient_Get_ExpiredOrInvalidPAT(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message": "TF401019: The Git repository with name or identifier xyz does not exist or you do not have permissions"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("myorg", "myproject", "test-pat")
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	client.baseURL = server.URL
+
+	_, err = client.get("/test")
+	if err == nil {
+		t.Error("Expected error for 401 response, got nil")
+	}
+
+	// Check for user-friendly error message about PAT
+	if !strings.Contains(err.Error(), "PAT") {
+		t.Errorf("Expected error to mention PAT, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "expired") || !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("Expected error to mention 'expired' or 'invalid', got %q", err.Error())
+	}
+}
+
+func TestClient_Get_InsufficientPermissions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message": "Access denied"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("myorg", "myproject", "test-pat")
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	client.baseURL = server.URL
+
+	_, err = client.get("/test")
+	if err == nil {
+		t.Error("Expected error for 403 response, got nil")
+	}
+
+	// Check for user-friendly error message about permissions
+	if !strings.Contains(err.Error(), "PAT") {
+		t.Errorf("Expected error to mention PAT, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "permission") {
+		t.Errorf("Expected error to mention 'permission', got %q", err.Error())
+	}
+}
+
+func TestClient_DoRequest_ExpiredOrInvalidPAT(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message": "Unauthorized"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("myorg", "myproject", "test-pat")
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	client.baseURL = server.URL
+
+	_, err = client.doRequest("POST", "/test", nil)
+	if err == nil {
+		t.Error("Expected error for 401 response, got nil")
+	}
+
+	// Check for user-friendly error message about PAT
+	if !strings.Contains(err.Error(), "PAT") {
+		t.Errorf("Expected error to mention PAT, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "expired") || !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("Expected error to mention 'expired' or 'invalid', got %q", err.Error())
+	}
+}
+
+func TestClient_DoRequest_InsufficientPermissions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message": "Access denied"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("myorg", "myproject", "test-pat")
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	client.baseURL = server.URL
+
+	_, err = client.doRequest("PUT", "/test", nil)
+	if err == nil {
+		t.Error("Expected error for 403 response, got nil")
+	}
+
+	// Check for user-friendly error message about permissions
+	if !strings.Contains(err.Error(), "PAT") {
+		t.Errorf("Expected error to mention PAT, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "permission") {
+		t.Errorf("Expected error to mention 'permission', got %q", err.Error())
+	}
+}
+
+func TestClient_ErrorMessages_DoNotLeakResponseBody(t *testing.T) {
+	sensitiveData := "SENSITIVE_SECRET_DATA_12345"
+
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{"401 Unauthorized", http.StatusUnauthorized},
+		{"403 Forbidden", http.StatusForbidden},
+		{"500 Internal Server Error", http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte(`{"secret": "` + sensitiveData + `"}`))
+			}))
+			defer server.Close()
+
+			client, err := NewClient("myorg", "myproject", "test-pat")
+			if err != nil {
+				t.Fatalf("NewClient() failed: %v", err)
+			}
+
+			client.baseURL = server.URL
+
+			_, err = client.get("/test")
+			if err == nil {
+				t.Error("Expected error, got nil")
+			}
+
+			// Verify sensitive data is NOT in the error message
+			if strings.Contains(err.Error(), sensitiveData) {
+				t.Errorf("Error message should NOT contain response body, but got %q", err.Error())
+			}
+		})
+	}
+}
+
 func TestClient_Get_InvalidURL(t *testing.T) {
 	client, err := NewClient("myorg", "myproject", "test-pat")
 	if err != nil {

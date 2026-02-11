@@ -3,6 +3,7 @@ package pipelines
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,10 +67,10 @@ func TestStatusIcon(t *testing.T) {
 			wantContains: "Failed",
 		},
 		{
-			name:         "canceled result shows Canceled",
+			name:         "canceled result shows Cancel",
 			status:       "completed",
 			result:       "canceled",
-			wantContains: "Canceled",
+			wantContains: "Cancel",
 		},
 		{
 			name:         "partiallySucceeded result shows Partial",
@@ -243,5 +244,67 @@ func TestViewModeNoLogDoesNotTransition(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if model.GetViewMode() != ViewDetail {
 		t.Errorf("Enter on item without log should stay in ViewDetail, got %d", model.GetViewMode())
+	}
+}
+
+func TestRunsToRowsIncludesTimestamp(t *testing.T) {
+	model := NewModel(nil)
+
+	queueTime := time.Date(2024, time.February, 10, 14, 30, 0, 0, time.UTC)
+	startTime := time.Date(2024, time.February, 10, 14, 31, 0, 0, time.UTC)
+	finishTime := time.Date(2024, time.February, 10, 14, 36, 0, 0, time.UTC)
+
+	model.runs = []azdevops.PipelineRun{
+		{
+			ID:           123,
+			BuildNumber:  "20240210.1",
+			Status:       "completed",
+			Result:       "succeeded",
+			SourceBranch: "refs/heads/main",
+			QueueTime:    queueTime,
+			StartTime:    &startTime,
+			FinishTime:   &finishTime,
+			Definition:   azdevops.PipelineDefinition{ID: 1, Name: "CI Pipeline"},
+		},
+	}
+
+	rows := model.runsToRows()
+
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+
+	row := rows[0]
+	// Row should have 6 columns: Status, Pipeline, Branch, Build, Timestamp, Duration
+	if len(row) != 6 {
+		t.Fatalf("Expected 6 columns, got %d", len(row))
+	}
+
+	// Check timestamp column (index 4)
+	expectedTimestamp := "2024-02-10 14:30"
+	if row[4] != expectedTimestamp {
+		t.Errorf("Timestamp column = %q, want %q", row[4], expectedTimestamp)
+	}
+
+	// Check duration column (index 5)
+	expectedDuration := "5m0s"
+	if row[5] != expectedDuration {
+		t.Errorf("Duration column = %q, want %q", row[5], expectedDuration)
+	}
+}
+
+func TestMakeColumnsHasSixColumns(t *testing.T) {
+	columns := makeColumns(120)
+
+	if len(columns) != 6 {
+		t.Fatalf("Expected 6 columns, got %d", len(columns))
+	}
+
+	// Verify column titles
+	expectedTitles := []string{"Status", "Pipeline", "Branch", "Build", "Timestamp", "Duration"}
+	for i, expected := range expectedTitles {
+		if columns[i].Title != expected {
+			t.Errorf("Column %d title = %q, want %q", i, columns[i].Title, expected)
+		}
 	}
 }

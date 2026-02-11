@@ -6,6 +6,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -33,6 +34,7 @@ type Model struct {
 	height   int
 	viewMode ViewMode
 	detail   *DetailModel
+	spinner  *components.LoadingIndicator
 }
 
 // Column width ratios (percentages of available width)
@@ -78,11 +80,15 @@ func NewModel(client *azdevops.Client) Model {
 		Bold(false)
 	t.SetStyles(s)
 
+	spinner := components.NewLoadingIndicator()
+	spinner.SetMessage("Loading pull requests...")
+
 	return Model{
 		table:    t,
 		client:   client,
 		prs:      []azdevops.PullRequest{},
 		viewMode: ViewList,
+		spinner:  spinner,
 	}
 }
 
@@ -117,7 +123,8 @@ func makeColumns(width int) []table.Column {
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return fetchPullRequests(m.client)
+	m.spinner.SetVisible(true)
+	return tea.Batch(fetchPullRequests(m.client), m.spinner.Init())
 }
 
 // Update handles messages
@@ -150,12 +157,21 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 		m.table.SetHeight(msg.Height - 5)
 		m.table.SetColumns(makeColumns(msg.Width))
 
+	case spinner.TickMsg:
+		// Forward spinner tick messages
+		if m.loading {
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "r":
 			// Manual refresh
 			m.loading = true
-			return m, fetchPullRequests(m.client)
+			m.spinner.SetVisible(true)
+			return m, tea.Batch(fetchPullRequests(m.client), m.spinner.Tick())
 		case "enter":
 			// Navigate to detail view
 			return m.enterDetailView()
@@ -163,6 +179,7 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 
 	case pullRequestsMsg:
 		m.loading = false
+		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -174,6 +191,7 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 	case SetPRsMsg:
 		// Direct update from polling - clear loading and error states
 		m.loading = false
+		m.spinner.SetVisible(false)
 		m.err = nil
 		m.prs = msg.PRs
 		m.table.SetRows(m.prsToRows())
@@ -245,7 +263,7 @@ func (m Model) viewList() string {
 	if m.err != nil {
 		content = fmt.Sprintf("Error loading pull requests: %v\n\nPress r to retry, q to quit", m.err)
 	} else if m.loading {
-		content = "Loading pull requests...\n\nPress q to quit"
+		content = m.spinner.View() + "\n\nPress q to quit"
 	} else if len(m.prs) == 0 {
 		content = "No pull requests found.\n\nPress r to refresh, q to quit"
 	} else {
@@ -402,8 +420,9 @@ func (m Model) GetStatusMessage() string {
 }
 
 // HasContextBar returns true if the current view should show a context bar
+// PR detail view no longer shows context bar - scroll % is shown in status bar instead
 func (m Model) HasContextBar() bool {
-	return m.viewMode == ViewDetail
+	return false
 }
 
 // Messages

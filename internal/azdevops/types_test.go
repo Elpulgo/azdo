@@ -454,6 +454,24 @@ func TestDuration(t *testing.T) {
 			},
 			want: "2h30m45s",
 		},
+		{
+			name: "duration with milliseconds should be truncated",
+			run: PipelineRun{
+				Status:     "completed",
+				StartTime:  parseTimePtr(t, "2024-02-06T10:00:00.000Z"),
+				FinishTime: parseTimePtr(t, "2024-02-06T10:23:14.567Z"),
+			},
+			want: "23m14s",
+		},
+		{
+			name: "short duration under a minute",
+			run: PipelineRun{
+				Status:     "completed",
+				StartTime:  parseTimePtr(t, "2024-02-06T10:00:00Z"),
+				FinishTime: parseTimePtr(t, "2024-02-06T10:00:45Z"),
+			},
+			want: "45s",
+		},
 	}
 
 	for _, tt := range tests {
@@ -461,6 +479,38 @@ func TestDuration(t *testing.T) {
 			got := tt.run.Duration()
 			if got != tt.want {
 				t.Errorf("Duration() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTimestamp(t *testing.T) {
+	tests := []struct {
+		name string
+		run  PipelineRun
+		want string
+	}{
+		{
+			name: "shows queue time formatted",
+			run: PipelineRun{
+				QueueTime: parseTime(t, "2024-02-10T14:30:00Z"),
+			},
+			want: "2024-02-10 14:30",
+		},
+		{
+			name: "different month and time",
+			run: PipelineRun{
+				QueueTime: parseTime(t, "2026-10-29T21:32:00Z"),
+			},
+			want: "2026-10-29 21:32",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.run.Timestamp()
+			if got != tt.want {
+				t.Errorf("Timestamp() = %v, want %v", got, tt.want)
 			}
 		})
 	}

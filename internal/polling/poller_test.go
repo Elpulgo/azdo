@@ -10,10 +10,10 @@ import (
 
 // MockClient implements a minimal interface for testing
 type MockClient struct {
-	Runs          []azdevops.PipelineRun
-	Err           error
-	CallCount     int
-	RequestedTop  int
+	Runs         []azdevops.PipelineRun
+	Err          error
+	CallCount    int
+	RequestedTop int
 }
 
 func (m *MockClient) ListPipelineRuns(top int) ([]azdevops.PipelineRun, error) {

@@ -1,24 +1,25 @@
 package azdevops
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
 
 // Timeline represents a build timeline containing stages, jobs, and tasks
 type Timeline struct {
-	ID           string           `json:"id"`
-	ChangeID     int              `json:"changeId"`
-	LastChangedBy string          `json:"lastChangedBy"`
-	LastChangedOn *time.Time      `json:"lastChangedOn"`
-	Records      []TimelineRecord `json:"records"`
+	ID            string           `json:"id"`
+	ChangeID      int              `json:"changeId"`
+	LastChangedBy string           `json:"lastChangedBy"`
+	LastChangedOn *time.Time       `json:"lastChangedOn"`
+	Records       []TimelineRecord `json:"records"`
 }
 
 // TimelineRecord represents a single record in the timeline (stage, job, or task)
 type TimelineRecord struct {
 	ID         string        `json:"id"`
 	ParentID   *string       `json:"parentId"`
-	Type       string        `json:"type"`   // "Stage", "Job", "Task", "Phase", "Checkpoint"
+	Type       string        `json:"type"` // "Stage", "Job", "Task", "Phase", "Checkpoint"
 	Name       string        `json:"name"`
 	State      string        `json:"state"`  // "pending", "inProgress", "completed"
 	Result     string        `json:"result"` // "succeeded", "succeededWithIssues", "failed", "canceled", "skipped", "abandoned"
@@ -38,7 +39,7 @@ type LogReference struct {
 
 // Issue represents an error or warning in a timeline record
 type Issue struct {
-	Type    string `json:"type"`    // "error", "warning"
+	Type    string `json:"type"` // "error", "warning"
 	Message string `json:"message"`
 }
 
@@ -135,5 +136,26 @@ func (pr *PipelineRun) Duration() string {
 	}
 
 	duration := pr.FinishTime.Sub(*pr.StartTime)
-	return duration.String()
+	return formatDuration(duration)
+}
+
+// Timestamp returns a formatted timestamp for display in the pipeline table
+func (pr *PipelineRun) Timestamp() string {
+	return pr.QueueTime.Format("2006-01-02 15:04")
+}
+
+// formatDuration formats a duration in a human-readable way without milliseconds
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		mins := int(d.Minutes())
+		secs := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm%ds", mins, secs)
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	secs := int(d.Seconds()) % 60
+	return fmt.Sprintf("%dh%dm%ds", hours, mins, secs)
 }

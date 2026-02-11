@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -29,22 +30,28 @@ type LogViewerModel struct {
 	width    int
 	height   int
 	ready    bool
+	spinner  *components.LoadingIndicator
 }
 
 // NewLogViewerModel creates a new log viewer model
 func NewLogViewerModel(client *azdevops.Client, buildID, logID int, title string) *LogViewerModel {
+	s := components.NewLoadingIndicator()
+	s.SetMessage(fmt.Sprintf("Loading log for %s...", title))
+
 	return &LogViewerModel{
 		client:  client,
 		buildID: buildID,
 		logID:   logID,
 		title:   title,
 		loading: true,
+		spinner: s,
 	}
 }
 
 // Init initializes the model and fetches log content
 func (m *LogViewerModel) Init() tea.Cmd {
-	return m.fetchLogContent()
+	m.spinner.SetVisible(true)
+	return tea.Batch(m.fetchLogContent(), m.spinner.Init())
 }
 
 // SetSize sets the viewport size
@@ -127,12 +134,21 @@ func (m *LogViewerModel) Update(msg tea.Msg) (*LogViewerModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
 
+	case spinner.TickMsg:
+		// Forward spinner tick messages
+		if m.loading {
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "r":
 			m.loading = true
+			m.spinner.SetVisible(true)
 			m.err = nil
-			return m, m.fetchLogContent()
+			return m, tea.Batch(m.fetchLogContent(), m.spinner.Tick())
 		case "g":
 			m.viewport.GotoTop()
 		case "G":
@@ -141,6 +157,7 @@ func (m *LogViewerModel) Update(msg tea.Msg) (*LogViewerModel, tea.Cmd) {
 
 	case logContentMsg:
 		m.loading = false
+		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -158,16 +175,28 @@ func (m *LogViewerModel) Update(msg tea.Msg) (*LogViewerModel, tea.Cmd) {
 
 // View renders the log viewer
 func (m *LogViewerModel) View() string {
+	// Helper to wrap content with proper height so footer stays at bottom
+	wrapContent := func(content string) string {
+		availableHeight := m.height - 4 // Account for header and footer
+		if availableHeight < 1 {
+			availableHeight = 10
+		}
+		contentStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Height(availableHeight)
+		return contentStyle.Render(content)
+	}
+
 	if m.err != nil {
-		return fmt.Sprintf("Error loading log: %v\n\nPress r to retry, Esc to go back", m.err)
+		return wrapContent(fmt.Sprintf("Error loading log: %v\n\nPress r to retry, Esc to go back", m.err))
 	}
 
 	if m.loading {
-		return fmt.Sprintf("Loading log for %s...", m.title)
+		return wrapContent(m.spinner.View())
 	}
 
 	if m.content == "" {
-		return fmt.Sprintf("Log: %s\n\nNo log content available.\n\nPress Esc to go back", m.title)
+		return wrapContent(fmt.Sprintf("Log: %s\n\nNo log content available.\n\nPress Esc to go back", m.title))
 	}
 
 	var sb strings.Builder
@@ -184,7 +213,7 @@ func (m *LogViewerModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	return sb.String()
+	return wrapContent(sb.String())
 }
 
 // formatContent formats the log content for display
