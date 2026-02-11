@@ -278,8 +278,13 @@ func isSystemThread(thread Thread) bool {
 	if len(thread.Comments) == 0 {
 		return false
 	}
-	// Check ALL comments in the thread - if any starts with "Microsoft.VisualStudio", filter the whole thread
+	// Check ALL comments in the thread
 	for _, comment := range thread.Comments {
+		// Filter by author name (e.g., "Microsoft.VisualStudio.Services.TFS")
+		if strings.HasPrefix(comment.Author.DisplayName, "Microsoft.VisualStudio") {
+			return true
+		}
+		// Also filter by content starting with "Microsoft.VisualStudio"
 		content := strings.TrimSpace(comment.Content)
 		if strings.HasPrefix(content, "Microsoft.VisualStudio") {
 			return true

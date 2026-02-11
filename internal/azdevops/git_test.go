@@ -945,6 +945,27 @@ func TestFilterSystemThreads(t *testing.T) {
 			wantLen: 1,
 			wantIDs: []int{2},
 		},
+		{
+			name: "filters thread by system author name",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "The reference refs/heads/feature/test was updated.", Author: Identity{DisplayName: "Microsoft.VisualStudio.Services.TFS"}},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "Looks good!", Author: Identity{DisplayName: "John Doe"}},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
 	}
 
 	for _, tt := range tests {
