@@ -67,10 +67,10 @@ func TestStatusIcon(t *testing.T) {
 			wantContains: "Failed",
 		},
 		{
-			name:         "canceled result shows Canceled",
+			name:         "canceled result shows Cancel",
 			status:       "completed",
 			result:       "canceled",
-			wantContains: "Canceled",
+			wantContains: "Cancel",
 		},
 		{
 			name:         "partiallySucceeded result shows Partial",

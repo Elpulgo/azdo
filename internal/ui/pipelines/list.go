@@ -356,7 +356,7 @@ func statusIcon(status, result string) string {
 	case resultLower == "failed":
 		return redStyle.Render("✗ Failed")
 	case resultLower == "canceled":
-		return grayStyle.Render("○ Canceled")
+		return grayStyle.Render("○ Cancel")
 	case resultLower == "partiallysucceeded":
 		return yellowStyle.Render("⚠ Partial")
 	default:
