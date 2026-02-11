@@ -142,27 +142,15 @@ func (m *DetailModel) View() string {
 	return contentStyle.Render(sb.String())
 }
 
-// renderThread renders a single thread with all its comments in a card-like style
+// renderThread renders a single thread with all its comments
 func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string {
 	var sb strings.Builder
-
-	// Card width - use available terminal width minus small margins
-	cardWidth := m.width - 4 // small margin for safety
-	if cardWidth < 40 {
-		cardWidth = 40
-	}
-	innerWidth := cardWidth - 4 // account for "│ " prefix and " │" suffix equivalent
-
-	// Card top border
-	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	sb.WriteString(borderStyle.Render("  ┌" + strings.Repeat("─", cardWidth-2) + "┐"))
-	sb.WriteString("\n")
 
 	icon := threadStatusIcon(thread.Status)
 	statusStyle := lipgloss.NewStyle().Bold(true)
 
 	// Header line with status icon and file location
-	headerContent := icon + " " + statusStyle.Render(thread.StatusDescription())
+	headerParts := []string{icon, statusStyle.Render(thread.StatusDescription())}
 
 	// Add file path and line number for code comments
 	if thread.IsCodeComment() {
@@ -187,11 +175,11 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 
 		// Render as hyperlink (falls back to plain text if no URL)
 		styledLocation := fileStyle.Render(location)
-		headerContent += " " + hyperlink(styledLocation, threadURL)
+		headerParts = append(headerParts, hyperlink(styledLocation, threadURL))
 	}
 
-	// Build header line with selection indicator
-	headerLine := "  │ " + headerContent
+	// Build header line with selection indicator on this line only
+	headerLine := "  " + strings.Join(headerParts, " ")
 	if selected {
 		selectedStyle := lipgloss.NewStyle().
 			Background(lipgloss.Color("57")).
@@ -202,12 +190,11 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 	sb.WriteString("\n")
 
 	// Render all comments in the thread
-	for _, comment := range thread.Comments {
-		prefix := "  │   "
+	for i, comment := range thread.Comments {
+		indent := "    "
 		if comment.ParentCommentID != 0 {
-			prefix = "  │     └ " // Reply indicator
+			indent = "      └ " // Reply indicator
 		}
-		prefixLen := len(prefix) - 2 // -2 because "  │" is the card border part
 
 		authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
 		contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -222,11 +209,12 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		}
 		content = strings.TrimSpace(content)
 
-		// Calculate available width for content within the card
+		// Calculate available width for content (account for indent and author)
 		authorLen := len(comment.Author.DisplayName) + 2 // +2 for ": "
-		availableWidth := innerWidth - prefixLen - authorLen
+		indentLen := len(indent)
+		availableWidth := m.width - indentLen - authorLen - 4 // -4 for margin
 		if availableWidth < 20 {
-			availableWidth = 20
+			availableWidth = 60 // fallback
 		}
 
 		// Truncate if longer than available width
@@ -235,16 +223,15 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		}
 
 		commentLine := fmt.Sprintf("%s%s: %s",
-			prefix,
+			indent,
 			authorStyle.Render(comment.Author.DisplayName),
 			contentStyle.Render(content))
 
 		sb.WriteString(commentLine)
-		sb.WriteString("\n")
+		if i < len(thread.Comments)-1 {
+			sb.WriteString("\n")
+		}
 	}
-
-	// Card bottom border
-	sb.WriteString(borderStyle.Render("  └" + strings.Repeat("─", cardWidth-2) + "┘"))
 
 	return sb.String()
 }
@@ -320,7 +307,7 @@ func (m *DetailModel) updateViewportContent() {
 		for i, thread := range m.threads {
 			line := m.renderThread(thread, i == m.selectedIndex)
 			sb.WriteString(line)
-			sb.WriteString("\n")
+			sb.WriteString("\n\n") // Extra blank line between threads for spacing
 		}
 	} else {
 		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
@@ -487,9 +474,9 @@ func (m *DetailModel) getThreadsLineOffset() int {
 }
 
 // getThreadLineCount returns the number of lines a thread takes to render
-// Each thread has: top border + header line + N comment lines + bottom border
+// Each thread has: header line + N comment lines + blank line separator
 func (m *DetailModel) getThreadLineCount(thread azdevops.Thread) int {
-	return 3 + len(thread.Comments) // top border + header + comments + bottom border
+	return 2 + len(thread.Comments) // header + comments + blank line
 }
 
 // getSelectedThreadLineOffset returns the line number where the selected thread starts

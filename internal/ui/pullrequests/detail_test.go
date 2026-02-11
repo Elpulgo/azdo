@@ -1036,7 +1036,7 @@ func TestDetailModel_GetThreadLineCount(t *testing.T) {
 					{ID: 1, Content: "Single comment"},
 				},
 			},
-			expectedLines: 4, // top border + header + 1 comment + bottom border
+			expectedLines: 3, // header + 1 comment + blank line
 		},
 		{
 			name: "thread with 3 comments",
@@ -1049,7 +1049,7 @@ func TestDetailModel_GetThreadLineCount(t *testing.T) {
 					{ID: 3, Content: "Comment 3"},
 				},
 			},
-			expectedLines: 6, // top border + header + 3 comments + bottom border
+			expectedLines: 5, // header + 3 comments + blank line
 		},
 		{
 			name: "thread with no comments",
@@ -1058,7 +1058,7 @@ func TestDetailModel_GetThreadLineCount(t *testing.T) {
 				Status:   "active",
 				Comments: []azdevops.Comment{},
 			},
-			expectedLines: 3, // top border + header + bottom border
+			expectedLines: 2, // header + blank line
 		},
 	}
 
@@ -1078,26 +1078,26 @@ func TestDetailModel_GetSelectedThreadLineOffset(t *testing.T) {
 	model.SetSize(80, 24)
 
 	// Create threads with varying comment counts
-	// Each thread now has: top border + header + comments + bottom border
+	// Each thread has: header + comments + blank line
 	threads := []azdevops.Thread{
-		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "Comment 1"}}},           // 4 lines (border + header + 1 comment + border)
-		{ID: 2, Status: "fixed", Comments: []azdevops.Comment{{ID: 2, Content: "Comment 2"}}},            // 4 lines
-		{ID: 3, Status: "active", Comments: []azdevops.Comment{{ID: 3, Content: "A"}, {ID: 4, Content: "B"}}}, // 5 lines (border + header + 2 comments + border)
+		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "Comment 1"}}},           // 3 lines (header + 1 comment + blank)
+		{ID: 2, Status: "fixed", Comments: []azdevops.Comment{{ID: 2, Content: "Comment 2"}}},            // 3 lines
+		{ID: 3, Status: "active", Comments: []azdevops.Comment{{ID: 3, Content: "A"}, {ID: 4, Content: "B"}}}, // 4 lines (header + 2 comments + blank)
 	}
 	model.SetThreads(threads)
 
 	// Thread section starts at line 1 (just the "Comments (3)" header since no description/reviewers)
-	// Thread 0: lines 1-4 (border + header + comment + border) + newline at line 5
-	// Thread 1: lines 6-9 (border + header + comment + border) + newline at line 10
-	// Thread 2: lines 11-15 (border + header + 2 comments + border)
+	// Thread 0: lines 1-3 (header + comment + blank) + newline
+	// Thread 1: lines 5-7 (header + comment + blank) + newline
+	// Thread 2: lines 9-12 (header + 2 comments + blank)
 
 	tests := []struct {
 		selectedIndex  int
 		expectedOffset int
 	}{
-		{0, 1},   // Thread 0 starts at line 1
-		{1, 6},   // Thread 1 starts at line 6 (after thread 0: 1 + 4 + 1 = 6)
-		{2, 11},  // Thread 2 starts at line 11 (after thread 1: 6 + 4 + 1 = 11)
+		{0, 1},  // Thread 0 starts at line 1
+		{1, 5},  // Thread 1 starts at line 5 (after thread 0: 1 + 3 + 1 = 5)
+		{2, 9},  // Thread 2 starts at line 9 (after thread 1: 5 + 3 + 1 = 9)
 	}
 
 	for _, tt := range tests {
