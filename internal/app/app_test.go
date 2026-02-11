@@ -141,3 +141,84 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 		t.Error("Init should return commands")
 	}
 }
+
+func TestModel_DefaultTab_IsPipelines(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+
+	if m.activeTab != TabPipelines {
+		t.Errorf("Default tab should be TabPipelines (0), got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabSwitching_To_PullRequests(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	// Press '2' to switch to pull requests tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabPullRequests {
+		t.Errorf("After pressing '2', activeTab should be TabPullRequests (1), got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	// Switch to pull requests tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	// Press '1' to switch back to pipelines tab
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabPipelines {
+		t.Errorf("After pressing '1', activeTab should be TabPipelines (0), got %d", m.activeTab)
+	}
+}
+
+func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	// Switch to pull requests tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Should show pull requests content (empty list message or similar)
+	if !strings.Contains(view, "pull request") && !strings.Contains(view, "No pull requests") {
+		t.Error("View should show pull requests content when on PR tab")
+	}
+}
