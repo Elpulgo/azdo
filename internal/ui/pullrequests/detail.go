@@ -297,20 +297,24 @@ func (m *DetailModel) ensureSelectedVisible() {
 	// Calculate actual line position of selected thread
 	selectedLineStart := m.getSelectedThreadLineOffset()
 	threadHeight := m.getThreadLineCount(m.threads[m.selectedIndex])
-	selectedLineEnd := selectedLineStart + threadHeight - 1
+
+	// Add a small margin so the selected item isn't right at the edge
+	const margin = 2
 
 	visibleStart := m.viewport.YOffset
 	visibleEnd := visibleStart + m.viewport.Height - 1
 
-	// If selected thread header is above the visible area, scroll up
-	// Position so the header is at the top of the viewport
-	if selectedLineStart < visibleStart {
-		m.viewport.SetYOffset(selectedLineStart)
-	} else if selectedLineEnd > visibleEnd {
-		// If selected thread extends below the visible area, scroll down
-		// But only scroll enough to show the thread - keep it at the bottom
-		// This prevents jarring jumps when moving down
-		newOffset := selectedLineEnd - m.viewport.Height + 1
+	// If selected thread header is above the visible area (with margin), scroll up
+	if selectedLineStart < visibleStart+margin {
+		newOffset := selectedLineStart - margin
+		if newOffset < 0 {
+			newOffset = 0
+		}
+		m.viewport.SetYOffset(newOffset)
+	} else if selectedLineStart+threadHeight > visibleEnd-margin {
+		// If selected thread extends below the visible area (with margin), scroll down
+		// Position so the header is visible with some margin from the bottom
+		newOffset := selectedLineStart - m.viewport.Height + threadHeight + margin + 1
 		if newOffset < 0 {
 			newOffset = 0
 		}
