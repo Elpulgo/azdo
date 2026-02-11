@@ -610,6 +610,82 @@ func TestDetailModel_View_ShowsThreadStatus(t *testing.T) {
 	}
 }
 
+func TestDetailModel_View_ShowsStatusTextForAllStatuses(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+
+	tests := []struct {
+		status     string
+		wantText   string
+	}{
+		{"active", "Active"},
+		{"fixed", "Resolved"},
+		{"closed", "Closed"},
+		{"wontFix", "Won't fix"},
+		{"pending", "Pending"},
+		{"", "Unknown"},
+		{"unknown_status", "Unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			model := NewDetailModel(nil, pr)
+			model.SetSize(100, 40)
+
+			threads := []azdevops.Thread{
+				{
+					ID:     1,
+					Status: tt.status,
+					Comments: []azdevops.Comment{
+						{ID: 1, Content: "Test comment", Author: azdevops.Identity{DisplayName: "User"}},
+					},
+				},
+			}
+			model.SetThreads(threads)
+
+			view := model.View()
+			if !strings.Contains(view, tt.wantText) {
+				t.Errorf("View should contain status text %q for status %q", tt.wantText, tt.status)
+			}
+		})
+	}
+}
+
+func TestDetailModel_View_HandlesLineBreaksInComments(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Line one\nLine two\nLine three", Author: azdevops.Identity{DisplayName: "User"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Line breaks should be replaced with spaces
+	if strings.Contains(view, "Line one\n") {
+		t.Error("View should not contain raw line breaks in comment content")
+	}
+	// Content should still be present
+	if !strings.Contains(view, "Line one") || !strings.Contains(view, "Line two") {
+		t.Error("View should contain comment content")
+	}
+}
+
 func TestDetailModel_PageUpDown(t *testing.T) {
 	pr := azdevops.PullRequest{
 		ID:         101,

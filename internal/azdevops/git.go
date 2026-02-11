@@ -171,8 +171,10 @@ func (t *Thread) StatusDescription() string {
 		return "Closed"
 	case "pending":
 		return "Pending"
+	case "":
+		return "Unknown"
 	default:
-		return t.Status
+		return "Unknown"
 	}
 }
 

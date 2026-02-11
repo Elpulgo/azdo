@@ -181,10 +181,27 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
 		contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 
-		content := comment.Content
-		// Truncate very long comments for list view
-		if len(content) > 80 {
-			content = content[:77] + "..."
+		// Replace line breaks with spaces for cleaner display
+		content := strings.ReplaceAll(comment.Content, "\r\n", " ")
+		content = strings.ReplaceAll(content, "\n", " ")
+		content = strings.ReplaceAll(content, "\r", " ")
+		// Collapse multiple spaces
+		for strings.Contains(content, "  ") {
+			content = strings.ReplaceAll(content, "  ", " ")
+		}
+		content = strings.TrimSpace(content)
+
+		// Calculate available width for content (account for indent and author)
+		authorLen := len(comment.Author.DisplayName) + 2 // +2 for ": "
+		indentLen := len(indent)
+		availableWidth := m.width - indentLen - authorLen - 4 // -4 for margin
+		if availableWidth < 20 {
+			availableWidth = 60 // fallback
+		}
+
+		// Truncate if longer than available width
+		if len(content) > availableWidth {
+			content = content[:availableWidth-3] + "..."
 		}
 
 		commentLine := fmt.Sprintf("%s%s: %s",

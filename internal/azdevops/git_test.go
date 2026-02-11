@@ -615,7 +615,8 @@ func TestThread_StatusDescription(t *testing.T) {
 		{name: "wontFix", status: "wontFix", want: "Won't fix"},
 		{name: "closed", status: "closed", want: "Closed"},
 		{name: "pending", status: "pending", want: "Pending"},
-		{name: "unknown", status: "unknown", want: "unknown"},
+		{name: "unknown", status: "unknown", want: "Unknown"},
+		{name: "empty", status: "", want: "Unknown"},
 	}
 
 	for _, tt := range tests {
