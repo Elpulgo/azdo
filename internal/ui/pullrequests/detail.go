@@ -289,6 +289,8 @@ func (m *DetailModel) updateViewportContent() {
 }
 
 // ensureSelectedVisible scrolls the viewport to keep the selected item visible
+// This mirrors the pipeline detail view behavior - only scroll when selection
+// is actually outside the visible area
 func (m *DetailModel) ensureSelectedVisible() {
 	if !m.ready || len(m.threads) == 0 {
 		return
@@ -297,24 +299,19 @@ func (m *DetailModel) ensureSelectedVisible() {
 	// Calculate actual line position of selected thread
 	selectedLineStart := m.getSelectedThreadLineOffset()
 	threadHeight := m.getThreadLineCount(m.threads[m.selectedIndex])
-
-	// Add a small margin so the selected item isn't right at the edge
-	const margin = 2
+	selectedLineEnd := selectedLineStart + threadHeight - 1
 
 	visibleStart := m.viewport.YOffset
 	visibleEnd := visibleStart + m.viewport.Height - 1
 
-	// If selected thread header is above the visible area (with margin), scroll up
-	if selectedLineStart < visibleStart+margin {
-		newOffset := selectedLineStart - margin
-		if newOffset < 0 {
-			newOffset = 0
-		}
-		m.viewport.SetYOffset(newOffset)
-	} else if selectedLineStart+threadHeight > visibleEnd-margin {
-		// If selected thread extends below the visible area (with margin), scroll down
-		// Position so the header is visible with some margin from the bottom
-		newOffset := selectedLineStart - m.viewport.Height + threadHeight + margin + 1
+	// Only scroll if selection is actually outside visible area
+	if selectedLineStart < visibleStart {
+		// Thread header is above visible area - scroll up to show it at top
+		m.viewport.SetYOffset(selectedLineStart)
+	} else if selectedLineEnd > visibleEnd {
+		// Thread end is below visible area - scroll down minimally
+		// Position so thread end is at the bottom of viewport
+		newOffset := selectedLineEnd - m.viewport.Height + 1
 		if newOffset < 0 {
 			newOffset = 0
 		}
