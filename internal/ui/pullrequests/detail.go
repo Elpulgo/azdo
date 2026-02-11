@@ -148,39 +148,66 @@ func (m *DetailModel) View() string {
 	return contentStyle.Render(sb.String())
 }
 
-// renderThread renders a single thread
+// renderThread renders a single thread with all its comments
 func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string {
-	icon := threadStatusIcon(thread.Status)
+	var sb strings.Builder
 
-	// Get first comment content (summary)
-	content := ""
-	author := ""
-	if len(thread.Comments) > 0 {
-		content = thread.Comments[0].Content
-		author = thread.Comments[0].Author.DisplayName
-		// Truncate long content
-		if len(content) > 50 {
-			content = content[:47] + "..."
+	icon := threadStatusIcon(thread.Status)
+	statusStyle := lipgloss.NewStyle().Bold(true)
+
+	// Header line with status icon and file location
+	headerParts := []string{icon, statusStyle.Render(thread.StatusDescription())}
+
+	// Add file path and line number for code comments
+	if thread.IsCodeComment() {
+		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
+		location := thread.ThreadContext.FilePath
+		if thread.ThreadContext.RightFileStart != nil {
+			location = fmt.Sprintf("%s:%d", thread.ThreadContext.FilePath, thread.ThreadContext.RightFileStart.Line)
+		}
+		headerParts = append(headerParts, fileStyle.Render(location))
+	}
+
+	sb.WriteString("  " + strings.Join(headerParts, " "))
+	sb.WriteString("\n")
+
+	// Render all comments in the thread
+	for i, comment := range thread.Comments {
+		indent := "    "
+		if comment.ParentCommentID != 0 {
+			indent = "      └ " // Reply indicator
+		}
+
+		authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
+		contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+
+		content := comment.Content
+		// Truncate very long comments for list view
+		if len(content) > 80 {
+			content = content[:77] + "..."
+		}
+
+		commentLine := fmt.Sprintf("%s%s: %s",
+			indent,
+			authorStyle.Render(comment.Author.DisplayName),
+			contentStyle.Render(content))
+
+		sb.WriteString(commentLine)
+		if i < len(thread.Comments)-1 {
+			sb.WriteString("\n")
 		}
 	}
 
-	// Format: [icon] [status] - [author]: [content]
-	line := fmt.Sprintf("  %s %s: %s", icon, author, content)
-
-	// Add file path if it's a code comment
-	if thread.IsCodeComment() {
-		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		line = fmt.Sprintf("%s %s", line, fileStyle.Render(fmt.Sprintf("(%s)", thread.ThreadContext.FilePath)))
-	}
+	result := sb.String()
 
 	if selected {
 		selectedStyle := lipgloss.NewStyle().
 			Background(lipgloss.Color("57")).
 			Foreground(lipgloss.Color("229"))
-		return selectedStyle.Render(line)
+		return selectedStyle.Render(result)
 	}
 
-	return line
+	return result
 }
 
 // SetSize sets the size of the detail view
@@ -270,8 +297,9 @@ func (m *DetailModel) ensureSelectedVisible() {
 }
 
 // SetThreads sets the threads (useful for testing)
+// Filters out system-generated threads (e.g., Microsoft.VisualStudio comments)
 func (m *DetailModel) SetThreads(threads []azdevops.Thread) {
-	m.threads = threads
+	m.threads = azdevops.FilterSystemThreads(threads)
 	m.selectedIndex = 0
 	if m.ready {
 		m.updateViewportContent()

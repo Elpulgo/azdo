@@ -77,6 +77,55 @@ func TestDetailModel_SetThreads(t *testing.T) {
 	}
 }
 
+func TestDetailModel_SetThreads_FiltersSystemComments(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "This looks good!", CommentType: "text"},
+			},
+		},
+		{
+			ID:     2,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: 2, Content: "Microsoft.VisualStudio.Services.CodeReview.PolicyViolation", CommentType: "system"},
+			},
+		},
+		{
+			ID:     3,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: 3, Content: "Please fix this issue", CommentType: "text"},
+			},
+		},
+	}
+
+	model.SetThreads(threads)
+
+	// Should filter out the Microsoft.VisualStudio system comment
+	if len(model.threads) != 2 {
+		t.Errorf("Threads length = %d, want 2 (system comments should be filtered)", len(model.threads))
+	}
+
+	// Verify the correct threads are kept
+	if model.threads[0].ID != 1 {
+		t.Errorf("threads[0].ID = %d, want 1", model.threads[0].ID)
+	}
+	if model.threads[1].ID != 3 {
+		t.Errorf("threads[1].ID = %d, want 3", model.threads[1].ID)
+	}
+}
+
 func TestDetailModel_Navigation(t *testing.T) {
 	pr := azdevops.PullRequest{
 		ID:         101,
@@ -458,6 +507,106 @@ func TestDetailModel_ViewportEnsuresSelectedVisible(t *testing.T) {
 		// If selected item is beyond viewport but YOffset is still 0,
 		// the scrolling isn't working
 		t.Error("Viewport YOffset should have changed to keep selected item visible")
+	}
+}
+
+func TestDetailModel_View_ShowsFilePathForCodeComments(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath: "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 42, Offset: 1},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "This looks good!", Author: azdevops.Identity{DisplayName: "Reviewer"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should show file path prominently
+	if !strings.Contains(view, "/src/main.go") {
+		t.Error("View should contain file path for code comments")
+	}
+	// Should show line number
+	if !strings.Contains(view, "42") {
+		t.Error("View should contain line number for code comments")
+	}
+}
+
+func TestDetailModel_View_ShowsAllCommentsInThread(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: 1, ParentCommentID: 0, Content: "Please fix this", Author: azdevops.Identity{DisplayName: "Reviewer"}},
+				{ID: 2, ParentCommentID: 1, Content: "Done, fixed it", Author: azdevops.Identity{DisplayName: "Author"}},
+				{ID: 3, ParentCommentID: 1, Content: "Thanks!", Author: azdevops.Identity{DisplayName: "Reviewer"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should show all comments, not just the first one
+	if !strings.Contains(view, "Please fix this") {
+		t.Error("View should contain first comment")
+	}
+	if !strings.Contains(view, "Done, fixed it") {
+		t.Error("View should contain reply comment")
+	}
+	if !strings.Contains(view, "Thanks!") {
+		t.Error("View should contain second reply comment")
+	}
+}
+
+func TestDetailModel_View_ShowsThreadStatus(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "fixed",
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Issue resolved", Author: azdevops.Identity{DisplayName: "Reviewer"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should show resolved status
+	if !strings.Contains(view, "✓") {
+		t.Error("View should contain resolved status icon for fixed threads")
 	}
 }
 

@@ -260,3 +260,25 @@ func escapeJSONString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// FilterSystemThreads filters out threads that are system-generated comments
+// (e.g., threads whose first comment starts with "Microsoft.VisualStudio")
+func FilterSystemThreads(threads []Thread) []Thread {
+	filtered := make([]Thread, 0, len(threads))
+	for _, thread := range threads {
+		if !isSystemThread(thread) {
+			filtered = append(filtered, thread)
+		}
+	}
+	return filtered
+}
+
+// isSystemThread returns true if the thread is a system-generated thread
+func isSystemThread(thread Thread) bool {
+	if len(thread.Comments) == 0 {
+		return false
+	}
+	firstComment := thread.Comments[0]
+	// Filter threads where first comment starts with "Microsoft.VisualStudio"
+	return strings.HasPrefix(firstComment.Content, "Microsoft.VisualStudio")
+}

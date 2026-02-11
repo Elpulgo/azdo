@@ -792,3 +792,118 @@ func TestVoteValue(t *testing.T) {
 		t.Errorf("VoteReject = %d, want -10", VoteReject)
 	}
 }
+
+func TestFilterSystemThreads(t *testing.T) {
+	tests := []struct {
+		name     string
+		threads  []Thread
+		wantLen  int
+		wantIDs  []int
+	}{
+		{
+			name: "filters out Microsoft.VisualStudio comments",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "This looks good!", CommentType: "text"},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "Microsoft.VisualStudio.Services.CodeReview.PolicyViolation", CommentType: "system"},
+					},
+				},
+				{
+					ID:     3,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 3, Content: "Please fix this", CommentType: "text"},
+					},
+				},
+			},
+			wantLen: 2,
+			wantIDs: []int{1, 3},
+		},
+		{
+			name: "filters threads where first comment starts with Microsoft.VisualStudio",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "Microsoft.VisualStudio.Discussion.Something", CommentType: "text"},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "Good work!", CommentType: "text"},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
+		{
+			name:    "returns empty slice for empty input",
+			threads: []Thread{},
+			wantLen: 0,
+			wantIDs: []int{},
+		},
+		{
+			name: "keeps threads with no comments",
+			threads: []Thread{
+				{
+					ID:       1,
+					Status:   "active",
+					Comments: []Comment{},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{1},
+		},
+		{
+			name: "filters all system threads",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "Microsoft.VisualStudio.Services.Something", CommentType: "system"},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "Microsoft.VisualStudio.Another.Thing", CommentType: "system"},
+					},
+				},
+			},
+			wantLen: 0,
+			wantIDs: []int{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FilterSystemThreads(tt.threads)
+			if len(got) != tt.wantLen {
+				t.Errorf("FilterSystemThreads() returned %d threads, want %d", len(got), tt.wantLen)
+			}
+			for i, wantID := range tt.wantIDs {
+				if i >= len(got) {
+					break
+				}
+				if got[i].ID != wantID {
+					t.Errorf("FilterSystemThreads()[%d].ID = %d, want %d", i, got[i].ID, wantID)
+				}
+			}
+		})
+	}
+}
