@@ -432,7 +432,7 @@ type SetRunsMsg struct {
 // fetchPipelineRuns fetches pipeline runs from Azure DevOps
 func fetchPipelineRuns(client *azdevops.Client) tea.Cmd {
 	return func() tea.Msg {
-		runs, err := client.ListPipelineRuns(25)
+		runs, err := client.ListPipelineRuns(30)
 		return pipelineRunsMsg{runs: runs, err: err}
 	}
 }

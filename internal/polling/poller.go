@@ -15,7 +15,7 @@ const (
 	// MinInterval is the minimum allowed polling interval
 	MinInterval = 5 * time.Second
 	// DefaultRunCount is the default number of pipeline runs to fetch
-	DefaultRunCount = 25
+	DefaultRunCount = 30
 )
 
 // PipelineClient defines the interface for fetching pipeline data.
