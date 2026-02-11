@@ -28,6 +28,7 @@ type ContextBar struct {
 var (
 	contextBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
+			BorderBottom(false).
 			BorderForeground(lipgloss.Color("240")).
 			Foreground(lipgloss.Color("252"))
 
