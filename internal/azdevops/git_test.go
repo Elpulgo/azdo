@@ -888,6 +888,41 @@ func TestFilterSystemThreads(t *testing.T) {
 			wantLen: 0,
 			wantIDs: []int{},
 		},
+		{
+			name: "filters TFS reference update comments",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "Microsoft.VisualStudio.Services.TFS: The reference refs/heads/feature/test was updated.", CommentType: "system"},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "Real comment here", CommentType: "text"},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
+		{
+			name: "filters comments with leading whitespace",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "  Microsoft.VisualStudio.Services.TFS: Something", CommentType: "system"},
+					},
+				},
+			},
+			wantLen: 0,
+			wantIDs: []int{},
+		},
 	}
 
 	for _, tt := range tests {
