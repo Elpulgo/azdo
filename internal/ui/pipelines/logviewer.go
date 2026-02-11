@@ -175,16 +175,28 @@ func (m *LogViewerModel) Update(msg tea.Msg) (*LogViewerModel, tea.Cmd) {
 
 // View renders the log viewer
 func (m *LogViewerModel) View() string {
+	// Helper to wrap content with proper height so footer stays at bottom
+	wrapContent := func(content string) string {
+		availableHeight := m.height - 4 // Account for header and footer
+		if availableHeight < 1 {
+			availableHeight = 10
+		}
+		contentStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Height(availableHeight)
+		return contentStyle.Render(content)
+	}
+
 	if m.err != nil {
-		return fmt.Sprintf("Error loading log: %v\n\nPress r to retry, Esc to go back", m.err)
+		return wrapContent(fmt.Sprintf("Error loading log: %v\n\nPress r to retry, Esc to go back", m.err))
 	}
 
 	if m.loading {
-		return m.spinner.View()
+		return wrapContent(m.spinner.View())
 	}
 
 	if m.content == "" {
-		return fmt.Sprintf("Log: %s\n\nNo log content available.\n\nPress Esc to go back", m.title)
+		return wrapContent(fmt.Sprintf("Log: %s\n\nNo log content available.\n\nPress Esc to go back", m.title))
 	}
 
 	var sb strings.Builder
@@ -201,7 +213,7 @@ func (m *LogViewerModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	return sb.String()
+	return wrapContent(sb.String())
 }
 
 // formatContent formats the log content for display

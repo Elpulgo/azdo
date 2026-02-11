@@ -158,16 +158,28 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 
 // View renders the detail view
 func (m *DetailModel) View() string {
+	// Helper to wrap content with proper height so footer stays at bottom
+	wrapContent := func(content string) string {
+		availableHeight := m.height - 4 // Account for header and footer
+		if availableHeight < 1 {
+			availableHeight = 10
+		}
+		contentStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Height(availableHeight)
+		return contentStyle.Render(content)
+	}
+
 	if m.err != nil {
-		return fmt.Sprintf("Error loading timeline: %v\n\nPress r to retry, Esc to go back", m.err)
+		return wrapContent(fmt.Sprintf("Error loading timeline: %v\n\nPress r to retry, Esc to go back", m.err))
 	}
 
 	if m.loading {
-		return m.spinner.View()
+		return wrapContent(m.spinner.View())
 	}
 
 	if m.timeline == nil || len(m.flatItems) == 0 {
-		return "No timeline data available.\n\nPress r to refresh, Esc to go back"
+		return wrapContent("No timeline data available.\n\nPress r to refresh, Esc to go back")
 	}
 
 	var sb strings.Builder
@@ -184,7 +196,7 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	return sb.String()
+	return wrapContent(sb.String())
 }
 
 // renderRecord renders a single timeline record
