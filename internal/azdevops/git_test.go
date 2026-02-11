@@ -967,6 +967,83 @@ func TestFilterSystemThreads(t *testing.T) {
 			wantLen: 1,
 			wantIDs: []int{2},
 		},
+		{
+			name: "filters policy status update comments",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "Policy status has been updated.", Author: Identity{DisplayName: "System"}},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "Please review this code", Author: Identity{DisplayName: "John Doe"}},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
+		{
+			name: "filters voted comments with negative numbers",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "John Doe voted -5", Author: Identity{DisplayName: "System"}},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "This is a real comment", Author: Identity{DisplayName: "Jane Smith"}},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
+		{
+			name: "filters voted comments with zero",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "Jane Smith voted 0", Author: Identity{DisplayName: "System"}},
+					},
+				},
+			},
+			wantLen: 0,
+			wantIDs: []int{},
+		},
+		{
+			name: "filters voted comments with positive numbers",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "Bob Wilson voted 10", Author: Identity{DisplayName: "System"}},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 2, Content: "LGTM!", Author: Identity{DisplayName: "Alice"}},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
 	}
 
 	for _, tt := range tests {

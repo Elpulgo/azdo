@@ -291,6 +291,38 @@ func isSystemThread(thread Thread) bool {
 		if strings.HasPrefix(content, "Microsoft.VisualStudio") {
 			return true
 		}
+		// Filter "Policy status has been updated" comments
+		if strings.Contains(content, "Policy status has been updated") {
+			return true
+		}
+		// Filter "voted" comments (e.g., "John Doe voted -5", "Jane voted 10")
+		if isVotedComment(content) {
+			return true
+		}
+	}
+	return false
+}
+
+// isVotedComment checks if the content is a vote notification comment
+// e.g., "John Doe voted -5", "Jane Smith voted 10", "Bob voted 0"
+func isVotedComment(content string) bool {
+	// Look for pattern: "voted" followed by optional space and a number (possibly negative)
+	idx := strings.Index(content, "voted")
+	if idx == -1 {
+		return false
+	}
+	// Get the text after "voted"
+	after := strings.TrimSpace(content[idx+5:])
+	if len(after) == 0 {
+		return false
+	}
+	// Check if it starts with a number (possibly negative)
+	if after[0] == '-' && len(after) > 1 {
+		after = after[1:]
+	}
+	// Check if the remaining starts with a digit
+	if len(after) > 0 && after[0] >= '0' && after[0] <= '9' {
+		return true
 	}
 	return false
 }
