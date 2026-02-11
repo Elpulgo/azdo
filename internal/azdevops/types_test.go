@@ -454,6 +454,24 @@ func TestDuration(t *testing.T) {
 			},
 			want: "2h30m45s",
 		},
+		{
+			name: "duration with milliseconds should be truncated",
+			run: PipelineRun{
+				Status:     "completed",
+				StartTime:  parseTimePtr(t, "2024-02-06T10:00:00.000Z"),
+				FinishTime: parseTimePtr(t, "2024-02-06T10:23:14.567Z"),
+			},
+			want: "23m14s",
+		},
+		{
+			name: "short duration under a minute",
+			run: PipelineRun{
+				Status:     "completed",
+				StartTime:  parseTimePtr(t, "2024-02-06T10:00:00Z"),
+				FinishTime: parseTimePtr(t, "2024-02-06T10:00:45Z"),
+			},
+			want: "45s",
+		},
 	}
 
 	for _, tt := range tests {
