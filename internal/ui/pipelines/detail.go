@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,20 +35,27 @@ type DetailModel struct {
 	height        int
 	viewport      viewport.Model
 	ready         bool
+	spinner       *components.LoadingIndicator
 }
 
 // NewDetailModel creates a new detail model for a pipeline run
 func NewDetailModel(client *azdevops.Client, run azdevops.PipelineRun) *DetailModel {
+	s := components.NewLoadingIndicator()
+	s.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
+
 	return &DetailModel{
 		client:        client,
 		run:           run,
 		selectedIndex: 0,
+		spinner:       s,
 	}
 }
 
 // Init initializes the model and fetches timeline
 func (m *DetailModel) Init() tea.Cmd {
-	return m.fetchTimeline()
+	m.loading = true
+	m.spinner.SetVisible(true)
+	return tea.Batch(m.fetchTimeline(), m.spinner.Init())
 }
 
 // SetTimeline sets the timeline data (useful for testing)
@@ -111,6 +119,14 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
+	case spinner.TickMsg:
+		// Forward spinner tick messages
+		if m.loading {
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
@@ -123,11 +139,13 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.PageDown()
 		case "r":
 			m.loading = true
-			return m, m.fetchTimeline()
+			m.spinner.SetVisible(true)
+			return m, tea.Batch(m.fetchTimeline(), m.spinner.Tick())
 		}
 
 	case timelineMsg:
 		m.loading = false
+		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -145,7 +163,7 @@ func (m *DetailModel) View() string {
 	}
 
 	if m.loading {
-		return fmt.Sprintf("Loading timeline for %s #%s...", m.run.Definition.Name, m.run.BuildNumber)
+		return m.spinner.View()
 	}
 
 	if m.timeline == nil || len(m.flatItems) == 0 {

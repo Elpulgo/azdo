@@ -72,6 +72,7 @@ func TestLogViewerModel_ErrorState(t *testing.T) {
 func TestLogViewerModel_View(t *testing.T) {
 	model := NewLogViewerModel(nil, 123, 5, "npm install")
 	model.SetSize(80, 24)
+	model.spinner.SetVisible(true)
 
 	// Test loading view
 	view := model.View()

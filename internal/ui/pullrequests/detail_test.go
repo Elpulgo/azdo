@@ -174,6 +174,7 @@ func TestDetailModel_View_Loading(t *testing.T) {
 	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.loading = true
+	model.spinner.SetVisible(true)
 
 	view := model.View()
 
@@ -558,7 +559,7 @@ func TestDetailModel_View_ShowsFilePathForCodeComments(t *testing.T) {
 			ID:     1,
 			Status: "active",
 			ThreadContext: &azdevops.ThreadContext{
-				FilePath: "/src/main.go",
+				FilePath:       "/src/main.go",
 				RightFileStart: &azdevops.FilePosition{Line: 42, Offset: 1},
 			},
 			Comments: []azdevops.Comment{
@@ -652,8 +653,8 @@ func TestDetailModel_View_ShowsStatusTextForAllStatuses(t *testing.T) {
 	}
 
 	tests := []struct {
-		status     string
-		wantText   string
+		status   string
+		wantText string
 	}{
 		{"active", "Active"},
 		{"fixed", "Resolved"},
@@ -1050,7 +1051,7 @@ func TestDetailModel_View_ShowsShortenedFilePath(t *testing.T) {
 			ID:     1,
 			Status: "active",
 			ThreadContext: &azdevops.ThreadContext{
-				FilePath: "/Services/UnitService/Extensions/UnitService.cs",
+				FilePath:       "/Services/UnitService/Extensions/UnitService.cs",
 				RightFileStart: &azdevops.FilePosition{Line: 91, Offset: 1},
 			},
 			Comments: []azdevops.Comment{
@@ -1113,9 +1114,9 @@ func TestDetailModel_GetThreadLineCount(t *testing.T) {
 	model := NewDetailModel(nil, pr)
 
 	tests := []struct {
-		name           string
-		thread         azdevops.Thread
-		expectedLines  int
+		name          string
+		thread        azdevops.Thread
+		expectedLines int
 	}{
 		{
 			name: "thread with 1 comment",
@@ -1170,8 +1171,8 @@ func TestDetailModel_GetSelectedThreadLineOffset(t *testing.T) {
 	// Create threads with varying comment counts
 	// Each thread has: header + comments + blank line
 	threads := []azdevops.Thread{
-		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "Comment 1"}}},           // 3 lines (header + 1 comment + blank)
-		{ID: 2, Status: "fixed", Comments: []azdevops.Comment{{ID: 2, Content: "Comment 2"}}},            // 3 lines
+		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "Comment 1"}}},                // 3 lines (header + 1 comment + blank)
+		{ID: 2, Status: "fixed", Comments: []azdevops.Comment{{ID: 2, Content: "Comment 2"}}},                 // 3 lines
 		{ID: 3, Status: "active", Comments: []azdevops.Comment{{ID: 3, Content: "A"}, {ID: 4, Content: "B"}}}, // 4 lines (header + 2 comments + blank)
 	}
 	model.SetThreads(threads)
@@ -1185,9 +1186,9 @@ func TestDetailModel_GetSelectedThreadLineOffset(t *testing.T) {
 		selectedIndex  int
 		expectedOffset int
 	}{
-		{0, 1},  // Thread 0 starts at line 1
-		{1, 4},  // Thread 1 starts at line 4 (after thread 0: 1 + 3 = 4)
-		{2, 7},  // Thread 2 starts at line 7 (after thread 1: 4 + 3 = 7)
+		{0, 1}, // Thread 0 starts at line 1
+		{1, 4}, // Thread 1 starts at line 4 (after thread 0: 1 + 3 = 4)
+		{2, 7}, // Thread 2 starts at line 7 (after thread 1: 4 + 3 = 7)
 	}
 
 	for _, tt := range tests {

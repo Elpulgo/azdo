@@ -6,6 +6,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -35,6 +36,7 @@ type Model struct {
 	viewMode  ViewMode
 	detail    *DetailModel
 	logViewer *LogViewerModel
+	spinner   *components.LoadingIndicator
 }
 
 // Column width ratios (percentages of available width)
@@ -80,11 +82,15 @@ func NewModel(client *azdevops.Client) Model {
 		Bold(false)
 	t.SetStyles(s)
 
+	spinner := components.NewLoadingIndicator()
+	spinner.SetMessage("Loading pipeline runs...")
+
 	return Model{
 		table:    t,
 		client:   client,
 		runs:     []azdevops.PipelineRun{},
 		viewMode: ViewList,
+		spinner:  spinner,
 	}
 }
 
@@ -119,7 +125,8 @@ func makeColumns(width int) []table.Column {
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return fetchPipelineRuns(m.client)
+	m.spinner.SetVisible(true)
+	return tea.Batch(fetchPipelineRuns(m.client), m.spinner.Init())
 }
 
 // Update handles messages
@@ -154,12 +161,21 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 		m.table.SetHeight(msg.Height - 5)
 		m.table.SetColumns(makeColumns(msg.Width))
 
+	case spinner.TickMsg:
+		// Forward spinner tick messages
+		if m.loading {
+			var spinnerCmd tea.Cmd
+			m.spinner, spinnerCmd = m.spinner.Update(msg)
+			return m, spinnerCmd
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "r":
 			// Manual refresh
 			m.loading = true
-			return m, fetchPipelineRuns(m.client)
+			m.spinner.SetVisible(true)
+			return m, tea.Batch(fetchPipelineRuns(m.client), m.spinner.Tick())
 		case "enter":
 			// Navigate to detail view
 			return m.enterDetailView()
@@ -167,6 +183,7 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 
 	case pipelineRunsMsg:
 		m.loading = false
+		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.err = msg.err
 			return m, nil
@@ -178,6 +195,7 @@ func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
 	case SetRunsMsg:
 		// Direct update from polling - clear loading and error states
 		m.loading = false
+		m.spinner.SetVisible(false)
 		m.err = nil
 		m.runs = msg.Runs
 		m.table.SetRows(m.runsToRows())
@@ -304,7 +322,7 @@ func (m Model) viewList() string {
 	}
 
 	if m.loading {
-		return "Loading pipeline runs...\n\nPress q to quit"
+		return m.spinner.View() + "\n\nPress q to quit"
 	}
 
 	if len(m.runs) == 0 {

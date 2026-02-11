@@ -278,6 +278,7 @@ func TestViewModeNavigation(t *testing.T) {
 func TestViewLoading(t *testing.T) {
 	model := NewModel(nil)
 	model.loading = true
+	model.spinner.SetVisible(true)
 
 	view := model.View()
 
@@ -397,3 +398,21 @@ func TestHasContextBar(t *testing.T) {
 
 // errMock is a simple error for testing
 var errMock = fmt.Errorf("mock error")
+
+func TestSpinnerIntegration(t *testing.T) {
+	model := NewModel(nil)
+
+	// Spinner should be initialized
+	if model.spinner == nil {
+		t.Fatal("Spinner should be initialized in NewModel")
+	}
+
+	// When loading, view should use spinner (contains animated content)
+	model.loading = true
+	model.spinner.SetVisible(true)
+	view := model.View()
+
+	if !strings.Contains(view, "Loading") || !strings.Contains(view, "pull requests") {
+		t.Errorf("Loading view should contain loading message, got: %q", view)
+	}
+}
