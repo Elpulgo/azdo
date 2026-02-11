@@ -923,6 +923,28 @@ func TestFilterSystemThreads(t *testing.T) {
 			wantLen: 0,
 			wantIDs: []int{},
 		},
+		{
+			name: "filters thread if ANY comment is system comment",
+			threads: []Thread{
+				{
+					ID:     1,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 1, Content: "", CommentType: "text"},
+						{ID: 2, Content: "Microsoft.VisualStudio.Services.TFS: Updated reference", CommentType: "system"},
+					},
+				},
+				{
+					ID:     2,
+					Status: "active",
+					Comments: []Comment{
+						{ID: 3, Content: "Real review comment", CommentType: "text"},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIDs: []int{2},
+		},
 	}
 
 	for _, tt := range tests {

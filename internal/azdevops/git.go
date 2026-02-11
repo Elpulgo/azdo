@@ -278,8 +278,12 @@ func isSystemThread(thread Thread) bool {
 	if len(thread.Comments) == 0 {
 		return false
 	}
-	firstComment := thread.Comments[0]
-	content := strings.TrimSpace(firstComment.Content)
-	// Filter threads where first comment starts with "Microsoft.VisualStudio"
-	return strings.HasPrefix(content, "Microsoft.VisualStudio")
+	// Check ALL comments in the thread - if any starts with "Microsoft.VisualStudio", filter the whole thread
+	for _, comment := range thread.Comments {
+		content := strings.TrimSpace(comment.Content)
+		if strings.HasPrefix(content, "Microsoft.VisualStudio") {
+			return true
+		}
+	}
+	return false
 }
