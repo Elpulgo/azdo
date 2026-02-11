@@ -483,7 +483,7 @@ func (m *DetailModel) getThreadLineCount(thread azdevops.Thread) int {
 func (m *DetailModel) getSelectedThreadLineOffset() int {
 	offset := m.getThreadsLineOffset()
 	for i := 0; i < m.selectedIndex && i < len(m.threads); i++ {
-		offset += m.getThreadLineCount(m.threads[i]) + 1 // +1 for the newline after each thread
+		offset += m.getThreadLineCount(m.threads[i]) // includes blank line separator
 	}
 	return offset
 }

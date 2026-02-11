@@ -1087,17 +1087,17 @@ func TestDetailModel_GetSelectedThreadLineOffset(t *testing.T) {
 	model.SetThreads(threads)
 
 	// Thread section starts at line 1 (just the "Comments (3)" header since no description/reviewers)
-	// Thread 0: lines 1-3 (header + comment + blank) + newline
-	// Thread 1: lines 5-7 (header + comment + blank) + newline
-	// Thread 2: lines 9-12 (header + 2 comments + blank)
+	// Thread 0: lines 1-3 (header + comment + blank)
+	// Thread 1: lines 4-6 (header + comment + blank)
+	// Thread 2: lines 7-10 (header + 2 comments + blank)
 
 	tests := []struct {
 		selectedIndex  int
 		expectedOffset int
 	}{
 		{0, 1},  // Thread 0 starts at line 1
-		{1, 5},  // Thread 1 starts at line 5 (after thread 0: 1 + 3 + 1 = 5)
-		{2, 9},  // Thread 2 starts at line 9 (after thread 1: 5 + 3 + 1 = 9)
+		{1, 4},  // Thread 1 starts at line 4 (after thread 0: 1 + 3 = 4)
+		{2, 7},  // Thread 2 starts at line 7 (after thread 1: 4 + 3 = 7)
 	}
 
 	for _, tt := range tests {
