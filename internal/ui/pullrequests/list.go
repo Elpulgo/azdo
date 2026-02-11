@@ -402,8 +402,9 @@ func (m Model) GetStatusMessage() string {
 }
 
 // HasContextBar returns true if the current view should show a context bar
+// PR detail view no longer shows context bar - scroll % is shown in status bar instead
 func (m Model) HasContextBar() bool {
-	return m.viewMode == ViewDetail
+	return false
 }
 
 // Messages

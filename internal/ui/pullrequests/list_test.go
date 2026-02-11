@@ -375,7 +375,7 @@ func TestHasContextBar(t *testing.T) {
 		t.Error("List view should not have context bar")
 	}
 
-	// After entering detail view, should have context bar
+	// PR detail view also doesn't have context bar (scroll % is shown in status bar instead)
 	model.prs = []azdevops.PullRequest{
 		{
 			ID:            123,
@@ -390,8 +390,8 @@ func TestHasContextBar(t *testing.T) {
 	model.table.SetRows(model.prsToRows())
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if !model.HasContextBar() {
-		t.Error("Detail view should have context bar")
+	if model.HasContextBar() {
+		t.Error("Detail view should not have context bar (scroll % is in status bar)")
 	}
 }
 

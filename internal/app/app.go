@@ -258,8 +258,17 @@ func (m Model) View() string {
 			m.contextBar.SetStatus(statusMessage)
 		}
 
+		m.statusBar.ShowScrollPercent(false)
 		footer = m.contextBar.View() + "\n" + m.statusBar.View()
 	} else {
+		// Show scroll percent in status bar for views without context bar
+		// (e.g., PR detail view which has scrollable content)
+		if scrollPercent > 0 {
+			m.statusBar.ShowScrollPercent(true)
+			m.statusBar.SetScrollPercent(scrollPercent)
+		} else {
+			m.statusBar.ShowScrollPercent(false)
+		}
 		footer = m.statusBar.View()
 	}
 
