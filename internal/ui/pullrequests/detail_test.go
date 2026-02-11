@@ -445,10 +445,12 @@ func TestDetailModel_ViewportScrolling(t *testing.T) {
 		t.Errorf("Initial SelectedIndex = %d, want 0", model.SelectedIndex())
 	}
 
-	// Page down should move more than 1 item
+	// Page down should move selection forward
+	// With multi-line threads (header + comments), each thread takes ~3 lines
+	// HalfViewDown moves by ~3-4 lines, so selection moves by ~1-2 threads
 	model.PageDown()
-	if model.SelectedIndex() <= 1 {
-		t.Errorf("After PageDown, SelectedIndex = %d, want > 1", model.SelectedIndex())
+	if model.SelectedIndex() < 1 {
+		t.Errorf("After PageDown, SelectedIndex = %d, want >= 1", model.SelectedIndex())
 	}
 
 	// Move to near the end
@@ -536,9 +538,9 @@ func TestDetailModel_View_ShowsFilePathForCodeComments(t *testing.T) {
 
 	view := model.View()
 
-	// Should show file path prominently
-	if !strings.Contains(view, "/src/main.go") {
-		t.Error("View should contain file path for code comments")
+	// Should show shortened file path (last 2 segments)
+	if !strings.Contains(view, "../src/main.go") {
+		t.Error("View should contain shortened file path for code comments")
 	}
 	// Should show line number
 	if !strings.Contains(view, "42") {
@@ -683,6 +685,214 @@ func TestDetailModel_View_HandlesLineBreaksInComments(t *testing.T) {
 	// Content should still be present
 	if !strings.Contains(view, "Line one") || !strings.Contains(view, "Line two") {
 		t.Error("View should contain comment content")
+	}
+}
+
+func TestShortenFilePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "long path gets shortened",
+			input:    "/Services/UnitService/Extensions/UnitService.cs",
+			expected: "../Extensions/UnitService.cs",
+		},
+		{
+			name:     "path with 3 segments",
+			input:    "/src/main/App.go",
+			expected: "../main/App.go",
+		},
+		{
+			name:     "path with 2 segments",
+			input:    "/src/main.go",
+			expected: "../src/main.go",
+		},
+		{
+			name:     "path with 1 segment (just filename at root)",
+			input:    "/main.go",
+			expected: "main.go",
+		},
+		{
+			name:     "simple filename",
+			input:    "main.go",
+			expected: "main.go",
+		},
+		{
+			name:     "empty path",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "path with many segments",
+			input:    "/a/b/c/d/e/f/g.txt",
+			expected: "../f/g.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shortenFilePath(tt.input)
+			if got != tt.expected {
+				t.Errorf("shortenFilePath(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDetailModel_GetContextItems_NoApproveReject(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+
+	items := model.GetContextItems()
+
+	// Should have context items for navigation and back
+	if len(items) == 0 {
+		t.Fatal("Detail view should have context items")
+	}
+
+	// Should NOT have approve or reject actions
+	for _, item := range items {
+		if item.Description == "approve" {
+			t.Error("Context items should not include 'approve' - view should be read-only")
+		}
+		if item.Description == "reject" {
+			t.Error("Context items should not include 'reject' - view should be read-only")
+		}
+		if item.Key == "a" {
+			t.Error("Context items should not include 'a' key for approve")
+		}
+		if item.Key == "x" {
+			t.Error("Context items should not include 'x' key for reject")
+		}
+	}
+}
+
+func TestDetailModel_View_ShowsShortenedFilePath(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath: "/Services/UnitService/Extensions/UnitService.cs",
+				RightFileStart: &azdevops.FilePosition{Line: 91, Offset: 1},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Please review", Author: azdevops.Identity{DisplayName: "Reviewer"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should show shortened path (last 2 segments)
+	if !strings.Contains(view, "../Extensions/UnitService.cs:91") {
+		t.Error("View should contain shortened file path '../Extensions/UnitService.cs:91'")
+	}
+
+	// Should NOT show full path
+	if strings.Contains(view, "/Services/UnitService/Extensions/UnitService.cs") {
+		t.Error("View should NOT contain full file path")
+	}
+}
+
+func TestDetailModel_GetThreadLineCount(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+
+	tests := []struct {
+		name           string
+		thread         azdevops.Thread
+		expectedLines  int
+	}{
+		{
+			name: "thread with 1 comment",
+			thread: azdevops.Thread{
+				ID:     1,
+				Status: "active",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Single comment"},
+				},
+			},
+			expectedLines: 2, // 1 header + 1 comment
+		},
+		{
+			name: "thread with 3 comments",
+			thread: azdevops.Thread{
+				ID:     2,
+				Status: "fixed",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Comment 1"},
+					{ID: 2, Content: "Comment 2"},
+					{ID: 3, Content: "Comment 3"},
+				},
+			},
+			expectedLines: 4, // 1 header + 3 comments
+		},
+		{
+			name: "thread with no comments",
+			thread: azdevops.Thread{
+				ID:       3,
+				Status:   "active",
+				Comments: []azdevops.Comment{},
+			},
+			expectedLines: 1, // 1 header only
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := model.getThreadLineCount(tt.thread)
+			if got != tt.expectedLines {
+				t.Errorf("getThreadLineCount() = %d, want %d", got, tt.expectedLines)
+			}
+		})
+	}
+}
+
+func TestDetailModel_GetSelectedThreadLineOffset(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	// Create threads with varying comment counts
+	threads := []azdevops.Thread{
+		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "Comment 1"}}},           // 2 lines
+		{ID: 2, Status: "fixed", Comments: []azdevops.Comment{{ID: 2, Content: "Comment 2"}}},            // 2 lines
+		{ID: 3, Status: "active", Comments: []azdevops.Comment{{ID: 3, Content: "A"}, {ID: 4, Content: "B"}}}, // 3 lines
+	}
+	model.SetThreads(threads)
+
+	// Thread section starts at line 1 (just the "Comments (3)" header since no description/reviewers)
+	// Thread 0: lines 1-2 (header + comment) + newline at line 3
+	// Thread 1: lines 4-5 (header + comment) + newline at line 6
+	// Thread 2: lines 7-9 (header + 2 comments)
+
+	tests := []struct {
+		selectedIndex  int
+		expectedOffset int
+	}{
+		{0, 1},  // Thread 0 starts at line 1
+		{1, 4},  // Thread 1 starts at line 4 (after thread 0: 1 + 2 + 1 = 4)
+		{2, 7},  // Thread 2 starts at line 7 (after thread 1: 4 + 2 + 1 = 7)
+	}
+
+	for _, tt := range tests {
+		model.selectedIndex = tt.selectedIndex
+		got := model.getSelectedThreadLineOffset()
+		if got != tt.expectedOffset {
+			t.Errorf("getSelectedThreadLineOffset() for index %d = %d, want %d", tt.selectedIndex, got, tt.expectedOffset)
+		}
 	}
 }
 

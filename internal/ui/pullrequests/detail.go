@@ -61,12 +61,6 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		case "r":
 			m.loading = true
 			return m, m.fetchThreads()
-		case "a":
-			// Approve PR
-			return m, m.votePR(azdevops.VoteApprove)
-		case "x":
-			// Reject PR
-			return m, m.votePR(azdevops.VoteReject)
 		}
 
 	case threadsMsg:
@@ -161,14 +155,23 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 	// Add file path and line number for code comments
 	if thread.IsCodeComment() {
 		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
-		location := thread.ThreadContext.FilePath
+		shortPath := shortenFilePath(thread.ThreadContext.FilePath)
+		location := shortPath
 		if thread.ThreadContext.RightFileStart != nil {
-			location = fmt.Sprintf("%s:%d", thread.ThreadContext.FilePath, thread.ThreadContext.RightFileStart.Line)
+			location = fmt.Sprintf("%s:%d", shortPath, thread.ThreadContext.RightFileStart.Line)
 		}
 		headerParts = append(headerParts, fileStyle.Render(location))
 	}
 
-	sb.WriteString("  " + strings.Join(headerParts, " "))
+	// Build header line with selection indicator on this line only
+	headerLine := "  " + strings.Join(headerParts, " ")
+	if selected {
+		selectedStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color("57")).
+			Foreground(lipgloss.Color("229"))
+		headerLine = selectedStyle.Render(headerLine)
+	}
+	sb.WriteString(headerLine)
 	sb.WriteString("\n")
 
 	// Render all comments in the thread
@@ -215,16 +218,7 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		}
 	}
 
-	result := sb.String()
-
-	if selected {
-		selectedStyle := lipgloss.NewStyle().
-			Background(lipgloss.Color("57")).
-			Foreground(lipgloss.Color("229"))
-		return selectedStyle.Render(result)
-	}
-
-	return result
+	return sb.String()
 }
 
 // SetSize sets the size of the detail view
@@ -300,16 +294,20 @@ func (m *DetailModel) ensureSelectedVisible() {
 		return
 	}
 
-	lineOffset := m.getThreadsLineOffset()
-	selectedLine := lineOffset + m.selectedIndex
+	// Calculate actual line position of selected thread
+	selectedLineStart := m.getSelectedThreadLineOffset()
+	selectedLineEnd := selectedLineStart + m.getThreadLineCount(m.threads[m.selectedIndex]) - 1
 
 	visibleStart := m.viewport.YOffset
 	visibleEnd := visibleStart + m.viewport.Height - 1
 
-	if selectedLine < visibleStart {
-		m.viewport.SetYOffset(selectedLine)
-	} else if selectedLine > visibleEnd {
-		m.viewport.SetYOffset(selectedLine - m.viewport.Height + 1)
+	// If selected thread is above the visible area, scroll up to show it
+	if selectedLineStart < visibleStart {
+		m.viewport.SetYOffset(selectedLineStart)
+	} else if selectedLineEnd > visibleEnd {
+		// If selected thread is below the visible area, scroll down
+		// Position so the thread header is near the top of the viewport
+		m.viewport.SetYOffset(selectedLineStart)
 	}
 }
 
@@ -387,16 +385,20 @@ func (m *DetailModel) updateSelectionFromViewport() {
 	// Find which thread is most visible in the center of the viewport
 	viewportCenter := m.viewport.YOffset + m.viewport.Height/2
 
-	// Calculate which thread index corresponds to viewport center
-	threadLine := viewportCenter - lineOffset
-	if threadLine < 0 {
-		m.selectedIndex = 0
-	} else if threadLine >= len(m.threads) {
-		m.selectedIndex = len(m.threads) - 1
-	} else {
-		m.selectedIndex = threadLine
+	// Find which thread contains the viewport center line
+	currentLine := lineOffset
+	for i, thread := range m.threads {
+		threadLines := m.getThreadLineCount(thread) + 1 // +1 for newline after thread
+		if viewportCenter < currentLine+threadLines {
+			m.selectedIndex = i
+			m.updateViewportContent()
+			return
+		}
+		currentLine += threadLines
 	}
 
+	// If we're past all threads, select the last one
+	m.selectedIndex = len(m.threads) - 1
 	m.updateViewportContent()
 }
 
@@ -412,6 +414,21 @@ func (m *DetailModel) getThreadsLineOffset() int {
 	// Comments header line
 	lineOffset += 1
 	return lineOffset
+}
+
+// getThreadLineCount returns the number of lines a thread takes to render
+// Each thread has 1 header line + N comment lines
+func (m *DetailModel) getThreadLineCount(thread azdevops.Thread) int {
+	return 1 + len(thread.Comments)
+}
+
+// getSelectedThreadLineOffset returns the line number where the selected thread starts
+func (m *DetailModel) getSelectedThreadLineOffset() int {
+	offset := m.getThreadsLineOffset()
+	for i := 0; i < m.selectedIndex && i < len(m.threads); i++ {
+		offset += m.getThreadLineCount(m.threads[i]) + 1 // +1 for the newline after each thread
+	}
+	return offset
 }
 
 // SelectedIndex returns the current selection index
@@ -431,8 +448,7 @@ func (m *DetailModel) SelectedThread() *azdevops.Thread {
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓", Description: "navigate"},
-		{Key: "a", Description: "approve"},
-		{Key: "x", Description: "reject"},
+		{Key: "r", Description: "refresh"},
 		{Key: "esc", Description: "back"},
 	}
 }
@@ -456,6 +472,41 @@ func (m *DetailModel) GetPR() azdevops.PullRequest {
 }
 
 // Helper functions
+
+// shortenFilePath shortens a file path to show only the last 2 segments
+// e.g., /Services/UnitService/Extensions/UnitService.cs -> ../Extensions/UnitService.cs
+func shortenFilePath(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	// Split by forward slash (Azure DevOps paths use forward slashes)
+	parts := strings.Split(path, "/")
+
+	// Remove empty parts (from leading slash)
+	var nonEmpty []string
+	for _, p := range parts {
+		if p != "" {
+			nonEmpty = append(nonEmpty, p)
+		}
+	}
+
+	if len(nonEmpty) == 0 {
+		return path
+	}
+
+	if len(nonEmpty) == 1 {
+		// Just filename, return as-is
+		return nonEmpty[0]
+	}
+
+	// Return last 2 parts with ../ prefix
+	if len(nonEmpty) >= 2 {
+		return "../" + nonEmpty[len(nonEmpty)-2] + "/" + nonEmpty[len(nonEmpty)-1]
+	}
+
+	return path
+}
 
 // reviewerVoteIcon returns an icon for the reviewer's vote
 func reviewerVoteIcon(vote int) string {
