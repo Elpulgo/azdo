@@ -223,9 +223,14 @@ func TestDetailModel_View_WithContent(t *testing.T) {
 		t.Error("View should contain PR description")
 	}
 
-	// Should contain reviewer
+	// Should contain reviewer name
 	if !strings.Contains(view, "Jane Smith") {
 		t.Error("View should contain reviewer name")
+	}
+
+	// Should contain vote description (not just the number)
+	if !strings.Contains(view, "Approved") {
+		t.Error("View should contain vote description 'Approved' for vote 10")
 	}
 }
 
@@ -382,6 +387,30 @@ func TestReviewerVoteIcon(t *testing.T) {
 			got := reviewerVoteIcon(tt.vote)
 			if !strings.Contains(got, tt.wantContains) {
 				t.Errorf("reviewerVoteIcon(%d) = %q, want to contain %q", tt.vote, got, tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestReviewerVoteDescription(t *testing.T) {
+	tests := []struct {
+		name     string
+		vote     int
+		expected string
+	}{
+		{name: "approved", vote: 10, expected: "Approved"},
+		{name: "approved with suggestions", vote: 5, expected: "Approved with suggestions"},
+		{name: "no vote", vote: 0, expected: "No vote"},
+		{name: "waiting for author", vote: -5, expected: "Waiting for author"},
+		{name: "rejected", vote: -10, expected: "Rejected"},
+		{name: "unknown vote", vote: 99, expected: "Unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reviewerVoteDescription(tt.vote)
+			if got != tt.expected {
+				t.Errorf("reviewerVoteDescription(%d) = %q, want %q", tt.vote, got, tt.expected)
 			}
 		})
 	}

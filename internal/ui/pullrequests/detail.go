@@ -293,7 +293,9 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n")
 		for _, reviewer := range m.pr.Reviewers {
 			icon := reviewerVoteIcon(reviewer.Vote)
-			sb.WriteString(fmt.Sprintf("  %s %s\n", icon, reviewer.DisplayName))
+			voteDesc := reviewerVoteDescription(reviewer.Vote)
+			voteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+			sb.WriteString(fmt.Sprintf("  %s %s (%s)\n", icon, reviewer.DisplayName, voteStyle.Render(voteDesc)))
 		}
 		sb.WriteString("\n")
 	}
@@ -614,6 +616,24 @@ func reviewerVoteIcon(vote int) string {
 		return redStyle.Render("✗")
 	default:
 		return grayStyle.Render("?")
+	}
+}
+
+// reviewerVoteDescription returns a human-readable description of the vote
+func reviewerVoteDescription(vote int) string {
+	switch vote {
+	case 10:
+		return "Approved"
+	case 5:
+		return "Approved with suggestions"
+	case 0:
+		return "No vote"
+	case -5:
+		return "Waiting for author"
+	case -10:
+		return "Rejected"
+	default:
+		return "Unknown"
 	}
 }
 
