@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Tab represents the active tab in the application
@@ -113,7 +114,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = TabPipelines
 			return m, nil
 		case "2":
-			m.activeTab = TabPullRequests
+			if m.activeTab != TabPullRequests {
+				m.activeTab = TabPullRequests
+				// Trigger initial load when switching to PR tab
+				return m, m.pullRequestsView.Init()
+			}
 			return m, nil
 		}
 
@@ -123,6 +128,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar.SetWidth(msg.Width)
 		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
+		// Pass size to both views so they're ready when switched to
+		m.pipelinesView, _ = m.pipelinesView.Update(msg)
+		m.pullRequestsView, _ = m.pullRequestsView.Update(msg)
 
 	case polling.TickMsg:
 		// Time to poll for updates
@@ -163,6 +171,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// Tab header styles
+var (
+	activeTabStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("229")).
+			Background(lipgloss.Color("57")).
+			Padding(0, 2).
+			Bold(true)
+
+	inactiveTabStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).
+				Background(lipgloss.Color("236")).
+				Padding(0, 2)
+
+	tabBarStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("236"))
+)
+
+// renderTabBar renders the tab header
+func (m Model) renderTabBar() string {
+	var tab1, tab2 string
+
+	if m.activeTab == TabPipelines {
+		tab1 = activeTabStyle.Render("1: Pipelines")
+		tab2 = inactiveTabStyle.Render("2: Pull Requests")
+	} else {
+		tab1 = inactiveTabStyle.Render("1: Pipelines")
+		tab2 = activeTabStyle.Render("2: Pull Requests")
+	}
+
+	return tabBarStyle.Render(tab1 + " " + tab2) + "\n"
+}
+
 // View renders the application UI
 func (m Model) View() string {
 	if m.err != nil {
@@ -173,6 +213,9 @@ func (m Model) View() string {
 	if m.helpModal.IsVisible() {
 		return m.helpModal.View()
 	}
+
+	// Render tab bar
+	tabBar := m.renderTabBar()
 
 	// Render content based on active tab
 	var content string
@@ -215,5 +258,5 @@ func (m Model) View() string {
 		footer = m.statusBar.View()
 	}
 
-	return content + "\n" + footer
+	return tabBar + content + "\n" + footer
 }

@@ -240,19 +240,29 @@ func (m Model) View() string {
 
 // viewList renders the pull request list view
 func (m Model) viewList() string {
+	var content string
+
 	if m.err != nil {
-		return fmt.Sprintf("Error loading pull requests: %v\n\nPress r to retry, q to quit", m.err)
+		content = fmt.Sprintf("Error loading pull requests: %v\n\nPress r to retry, q to quit", m.err)
+	} else if m.loading {
+		content = "Loading pull requests...\n\nPress q to quit"
+	} else if len(m.prs) == 0 {
+		content = "No pull requests found.\n\nPress r to refresh, q to quit"
+	} else {
+		return baseStyle.Render(m.table.View())
 	}
 
-	if m.loading {
-		return "Loading pull requests...\n\nPress q to quit"
+	// For non-table content, fill available height
+	availableHeight := m.height - 5 // Account for tab bar and status bar
+	if availableHeight < 1 {
+		availableHeight = 10
 	}
 
-	if len(m.prs) == 0 {
-		return "No pull requests found.\n\nPress r to refresh, q to quit"
-	}
+	contentStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(availableHeight)
 
-	return baseStyle.Render(m.table.View())
+	return contentStyle.Render(content)
 }
 
 // prsToRows converts pull requests to table rows

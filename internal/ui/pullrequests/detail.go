@@ -92,12 +92,24 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 
 // View renders the detail view
 func (m *DetailModel) View() string {
+	// Helper to wrap content with proper height
+	wrapContent := func(content string) string {
+		availableHeight := m.height - 5
+		if availableHeight < 1 {
+			availableHeight = 10
+		}
+		contentStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Height(availableHeight)
+		return contentStyle.Render(content)
+	}
+
 	if m.err != nil {
-		return fmt.Sprintf("Error loading threads: %v\n\nPress r to retry, Esc to go back", m.err)
+		return wrapContent(fmt.Sprintf("Error loading threads: %v\n\nPress r to retry, Esc to go back", m.err))
 	}
 
 	if m.loading {
-		return fmt.Sprintf("Loading threads for PR #%d...", m.pr.ID)
+		return wrapContent(fmt.Sprintf("Loading threads for PR #%d...", m.pr.ID))
 	}
 
 	var sb strings.Builder
@@ -111,7 +123,11 @@ func (m *DetailModel) View() string {
 	branchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	sb.WriteString(branchStyle.Render(fmt.Sprintf("%s → %s", m.pr.SourceBranchShortName(), m.pr.TargetBranchShortName())))
 	sb.WriteString("\n")
-	sb.WriteString(strings.Repeat("─", min(m.width-2, 60)))
+	separatorWidth := min(m.width-2, 60)
+	if separatorWidth < 1 {
+		separatorWidth = 60
+	}
+	sb.WriteString(strings.Repeat("─", separatorWidth))
 	sb.WriteString("\n\n")
 
 	// Description
@@ -150,7 +166,19 @@ func (m *DetailModel) View() string {
 		sb.WriteString("\n")
 	}
 
-	return sb.String()
+	content := sb.String()
+
+	// Fill available height
+	availableHeight := m.height - 5 // Account for tab bar and status bar
+	if availableHeight < 1 {
+		availableHeight = 10
+	}
+
+	contentStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(availableHeight)
+
+	return contentStyle.Render(content)
 }
 
 // renderThread renders a single thread
