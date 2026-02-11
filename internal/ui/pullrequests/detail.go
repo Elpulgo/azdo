@@ -271,6 +271,21 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n\n")
 	}
 
+	// "Go to PR" link
+	if m.client != nil {
+		prURL := buildPROverviewURL(
+			m.client.GetOrg(),
+			m.client.GetProject(),
+			m.pr.Repository.ID,
+			m.pr.ID,
+		)
+		if prURL != "" {
+			linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
+			sb.WriteString(hyperlink(linkStyle.Render("Go to PR"), prURL))
+			sb.WriteString("\n\n")
+		}
+	}
+
 	// Reviewers section
 	if len(m.pr.Reviewers) > 0 {
 		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
@@ -446,6 +461,10 @@ func (m *DetailModel) getThreadsLineOffset() int {
 	if m.pr.Description != "" {
 		lineOffset += strings.Count(m.pr.Description, "\n") + 2
 	}
+	// "Go to PR" link takes 2 lines (link + empty line)
+	if m.client != nil && m.pr.Repository.ID != "" {
+		lineOffset += 2
+	}
 	if len(m.pr.Reviewers) > 0 {
 		lineOffset += 1 + len(m.pr.Reviewers) + 1
 	}
@@ -528,6 +547,15 @@ func buildPRThreadURL(org, project, repoID string, prID int, threadID int) strin
 	}
 	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
 		org, project, repoID, prID, threadID)
+}
+
+// buildPROverviewURL constructs the Azure DevOps URL to view the PR overview page
+func buildPROverviewURL(org, project, repoID string, prID int) string {
+	if org == "" || project == "" || repoID == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
+		org, project, repoID, prID)
 }
 
 // shortenFilePath shortens a file path to show only the last 2 segments

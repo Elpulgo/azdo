@@ -656,6 +656,29 @@ func TestDetailModel_View_ShowsStatusTextForAllStatuses(t *testing.T) {
 	}
 }
 
+func TestDetailModel_View_ShowsGoToPRLink(t *testing.T) {
+	// Create a mock client to provide org/project info
+	client, _ := azdevops.NewClient("myorg", "myproject", "test-pat")
+
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+		Reviewers: []azdevops.Reviewer{
+			{ID: "1", DisplayName: "Reviewer 1", Vote: 10},
+		},
+	}
+	model := NewDetailModel(client, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	// Should contain "Go to PR" text
+	if !strings.Contains(view, "Go to PR") {
+		t.Error("View should contain 'Go to PR' link text")
+	}
+}
+
 func TestDetailModel_View_HandlesLineBreaksInComments(t *testing.T) {
 	pr := azdevops.PullRequest{
 		ID:         101,
@@ -714,6 +737,59 @@ func TestHyperlink(t *testing.T) {
 			got := hyperlink(tt.text, tt.url)
 			if got != tt.expected {
 				t.Errorf("hyperlink(%q, %q) = %q, want %q", tt.text, tt.url, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildPROverviewURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		org      string
+		project  string
+		repoID   string
+		prID     int
+		expected string
+	}{
+		{
+			name:     "builds complete PR overview URL",
+			org:      "myorg",
+			project:  "myproject",
+			repoID:   "repo-guid-123",
+			prID:     123,
+			expected: "https://dev.azure.com/myorg/myproject/_git/repo-guid-123/pullrequest/123",
+		},
+		{
+			name:     "returns empty when org is missing",
+			org:      "",
+			project:  "myproject",
+			repoID:   "repo-guid",
+			prID:     123,
+			expected: "",
+		},
+		{
+			name:     "returns empty when project is missing",
+			org:      "myorg",
+			project:  "",
+			repoID:   "repo-guid",
+			prID:     123,
+			expected: "",
+		},
+		{
+			name:     "returns empty when repoID is missing",
+			org:      "myorg",
+			project:  "myproject",
+			repoID:   "",
+			prID:     123,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildPROverviewURL(tt.org, tt.project, tt.repoID, tt.prID)
+			if got != tt.expected {
+				t.Errorf("buildPROverviewURL() = %q, want %q", got, tt.expected)
 			}
 		})
 	}
