@@ -74,6 +74,28 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestClient_GetOrg(t *testing.T) {
+	client, err := NewClient("myorg", "myproject", "test-pat")
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	if got := client.GetOrg(); got != "myorg" {
+		t.Errorf("GetOrg() = %q, want %q", got, "myorg")
+	}
+}
+
+func TestClient_GetProject(t *testing.T) {
+	client, err := NewClient("myorg", "myproject", "test-pat")
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	if got := client.GetProject(); got != "myproject" {
+		t.Errorf("GetProject() = %q, want %q", got, "myproject")
+	}
+}
+
 func TestClient_BaseURL(t *testing.T) {
 	client, err := NewClient("myorg", "myproject", "test-pat")
 	if err != nil {

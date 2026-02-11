@@ -688,6 +688,104 @@ func TestDetailModel_View_HandlesLineBreaksInComments(t *testing.T) {
 	}
 }
 
+func TestHyperlink(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		url      string
+		expected string
+	}{
+		{
+			name:     "creates OSC 8 hyperlink",
+			text:     "Click me",
+			url:      "https://example.com",
+			expected: "\x1b]8;;https://example.com\x07Click me\x1b]8;;\x07",
+		},
+		{
+			name:     "falls back to plain text when URL is empty",
+			text:     "Plain text",
+			url:      "",
+			expected: "Plain text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hyperlink(tt.text, tt.url)
+			if got != tt.expected {
+				t.Errorf("hyperlink(%q, %q) = %q, want %q", tt.text, tt.url, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildPRFileURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		org      string
+		project  string
+		repoName string
+		prID     int
+		filePath string
+		expected string
+	}{
+		{
+			name:     "builds complete URL",
+			org:      "myorg",
+			project:  "myproject",
+			repoName: "myrepo",
+			prID:     123,
+			filePath: "/src/main.go",
+			expected: "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/123?path=%2Fsrc%2Fmain.go&_a=files",
+		},
+		{
+			name:     "URL encodes special characters in path",
+			org:      "myorg",
+			project:  "myproject",
+			repoName: "myrepo",
+			prID:     456,
+			filePath: "/src/My File.cs",
+			expected: "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/456?path=%2Fsrc%2FMy+File.cs&_a=files",
+		},
+		{
+			name:     "returns empty when org is missing",
+			org:      "",
+			project:  "myproject",
+			repoName: "myrepo",
+			prID:     123,
+			filePath: "/src/main.go",
+			expected: "",
+		},
+		{
+			name:     "returns empty when project is missing",
+			org:      "myorg",
+			project:  "",
+			repoName: "myrepo",
+			prID:     123,
+			filePath: "/src/main.go",
+			expected: "",
+		},
+		{
+			name:     "returns empty when repo is missing",
+			org:      "myorg",
+			project:  "myproject",
+			repoName: "",
+			prID:     123,
+			filePath: "/src/main.go",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildPRFileURL(tt.org, tt.project, tt.repoName, tt.prID, tt.filePath)
+			if got != tt.expected {
+				t.Errorf("buildPRFileURL() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestShortenFilePath(t *testing.T) {
 	tests := []struct {
 		name     string

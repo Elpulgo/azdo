@@ -17,6 +17,16 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// GetOrg returns the organization name
+func (c *Client) GetOrg() string {
+	return c.org
+}
+
+// GetProject returns the project name
+func (c *Client) GetProject() string {
+	return c.project
+}
+
 // NewClient creates a new Azure DevOps API client
 func NewClient(org, project, pat string) (*Client, error) {
 	if org == "" {

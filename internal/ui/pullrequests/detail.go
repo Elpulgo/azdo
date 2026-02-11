@@ -2,6 +2,7 @@ package pullrequests
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -154,13 +155,28 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 
 	// Add file path and line number for code comments
 	if thread.IsCodeComment() {
-		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
+		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
 		shortPath := shortenFilePath(thread.ThreadContext.FilePath)
 		location := shortPath
 		if thread.ThreadContext.RightFileStart != nil {
 			location = fmt.Sprintf("%s:%d", shortPath, thread.ThreadContext.RightFileStart.Line)
 		}
-		headerParts = append(headerParts, fileStyle.Render(location))
+
+		// Build hyperlink URL if we have client info
+		var fileURL string
+		if m.client != nil {
+			fileURL = buildPRFileURL(
+				m.client.GetOrg(),
+				m.client.GetProject(),
+				m.pr.Repository.Name,
+				m.pr.ID,
+				thread.ThreadContext.FilePath,
+			)
+		}
+
+		// Render as hyperlink (falls back to plain text if no URL)
+		styledLocation := fileStyle.Render(location)
+		headerParts = append(headerParts, hyperlink(styledLocation, fileURL))
 	}
 
 	// Build header line with selection indicator on this line only
@@ -495,6 +511,27 @@ func (m *DetailModel) GetPR() azdevops.PullRequest {
 }
 
 // Helper functions
+
+// hyperlink creates an OSC 8 terminal hyperlink
+// Format: \x1b]8;;URL\x07TEXT\x1b]8;;\x07
+// Falls back to just text if URL is empty
+func hyperlink(text, url string) string {
+	if url == "" {
+		return text
+	}
+	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
+}
+
+// buildPRFileURL constructs the Azure DevOps URL to view a file in a PR
+func buildPRFileURL(org, project, repoName string, prID int, filePath string) string {
+	if org == "" || project == "" || repoName == "" {
+		return ""
+	}
+	// URL encode the file path
+	encodedPath := url.QueryEscape(filePath)
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?path=%s&_a=files",
+		org, project, repoName, prID, encodedPath)
+}
 
 // shortenFilePath shortens a file path to show only the last 2 segments
 // e.g., /Services/UnitService/Extensions/UnitService.cs -> ../Extensions/UnitService.cs
