@@ -894,6 +894,67 @@ func TestBuildPRThreadURL(t *testing.T) {
 	}
 }
 
+func TestTruncateString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxRunes int
+		expected string
+	}{
+		{
+			name:     "ASCII string within limit",
+			input:    "hello",
+			maxRunes: 10,
+			expected: "hello",
+		},
+		{
+			name:     "ASCII string exceeds limit",
+			input:    "hello world",
+			maxRunes: 5,
+			expected: "hello",
+		},
+		{
+			name:     "Unicode string within limit",
+			input:    "héllo wörld",
+			maxRunes: 15,
+			expected: "héllo wörld",
+		},
+		{
+			name:     "Unicode string exceeds limit",
+			input:    "héllo wörld",
+			maxRunes: 5,
+			expected: "héllo",
+		},
+		{
+			name:     "Swedish characters",
+			input:    "uppdateras här",
+			maxRunes: 10,
+			expected: "uppdateras",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			maxRunes: 5,
+			expected: "",
+		},
+		{
+			name:     "zero max runes",
+			input:    "hello",
+			maxRunes: 0,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateString(tt.input, tt.maxRunes)
+			if got != tt.expected {
+				t.Errorf("truncateString(%q, %d) = %q, want %q", tt.input, tt.maxRunes, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestShortenFilePath(t *testing.T) {
 	tests := []struct {
 		name     string

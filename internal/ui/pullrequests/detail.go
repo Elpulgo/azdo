@@ -3,6 +3,7 @@ package pullrequests
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
@@ -210,16 +211,16 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		content = strings.TrimSpace(content)
 
 		// Calculate available width for content (account for indent and author)
-		authorLen := len(comment.Author.DisplayName) + 2 // +2 for ": "
-		indentLen := len(indent)
+		authorLen := utf8.RuneCountInString(comment.Author.DisplayName) + 2 // +2 for ": "
+		indentLen := utf8.RuneCountInString(indent)
 		availableWidth := m.width - indentLen - authorLen - 4 // -4 for margin
 		if availableWidth < 20 {
 			availableWidth = 60 // fallback
 		}
 
-		// Truncate if longer than available width
-		if len(content) > availableWidth {
-			content = content[:availableWidth-3] + "..."
+		// Truncate if longer than available width (use rune count for proper Unicode handling)
+		if utf8.RuneCountInString(content) > availableWidth {
+			content = truncateString(content, availableWidth-3) + "..."
 		}
 
 		commentLine := fmt.Sprintf("%s%s: %s",
@@ -558,6 +559,18 @@ func buildPROverviewURL(org, project, repoID string, prID int) string {
 	}
 	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
 		org, project, repoID, prID)
+}
+
+// truncateString truncates a string to maxRunes runes (not bytes)
+func truncateString(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes])
 }
 
 // shortenFilePath shortens a file path to show only the last 2 segments
