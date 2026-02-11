@@ -17,8 +17,8 @@ import (
 type Tab int
 
 const (
-	TabPipelines     Tab = iota // Pipelines tab (key '1')
-	TabPullRequests             // Pull Requests tab (key '2')
+	TabPipelines    Tab = iota // Pipelines tab (key '1')
+	TabPullRequests            // Pull Requests tab (key '2')
 )
 
 // Model is the root application model for the TUI
@@ -44,6 +44,11 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	statusBar := components.NewStatusBar()
 	statusBar.SetOrganization(cfg.Organization)
 	statusBar.SetProject(cfg.Project)
+
+	// Set config path if available
+	if configPath, err := config.GetPath(); err == nil {
+		statusBar.SetConfigPath(configPath)
+	}
 
 	// Create context bar for view-specific info
 	contextBar := components.NewContextBar()
@@ -200,7 +205,7 @@ func (m Model) renderTabBar() string {
 		tab2 = activeTabStyle.Render("2: Pull Requests")
 	}
 
-	return tabBarStyle.Render(tab1 + " " + tab2) + "\n"
+	return tabBarStyle.Render(tab1+" "+tab2) + "\n"
 }
 
 // View renders the application UI

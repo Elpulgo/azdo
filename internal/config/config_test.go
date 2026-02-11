@@ -128,6 +128,25 @@ func TestLoad_MissingConfigDirectory(t *testing.T) {
 	}
 }
 
+func TestGetPath_ReturnsExpectedPath(t *testing.T) {
+	// Create a temporary directory
+	tempDir := t.TempDir()
+
+	// Set HOME to temp directory for testing
+	cleanup := setTestHome(t, tempDir)
+	defer cleanup()
+
+	path, err := GetPath()
+	if err != nil {
+		t.Fatalf("GetPath() failed: %v", err)
+	}
+
+	expectedPath := filepath.Join(tempDir, ".config", "azdo-tui", "config.yaml")
+	if path != expectedPath {
+		t.Errorf("GetPath() = %s, want %s", path, expectedPath)
+	}
+}
+
 func TestConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string

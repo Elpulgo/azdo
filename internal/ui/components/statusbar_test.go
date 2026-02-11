@@ -231,3 +231,24 @@ func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
 		t.Error("Update should return nil cmd for key messages")
 	}
 }
+
+func TestStatusBar_SetConfigPath(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+
+	if sb.configPath != "/home/user/.config/azdo-tui/config.yaml" {
+		t.Errorf("expected configPath to be set, got '%s'", sb.configPath)
+	}
+}
+
+func TestStatusBar_View_ContainsConfigPath(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("view should contain config path")
+	}
+}

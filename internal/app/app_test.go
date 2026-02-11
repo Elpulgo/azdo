@@ -222,3 +222,26 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 		t.Error("View should show pull requests content when on PR tab")
 	}
 }
+
+func TestModel_StatusBarShowsConfigPath(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 200
+	m.height = 30
+
+	// Update with window size to initialize status bar width
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Should contain config.yaml somewhere in the view
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("view should contain config file path")
+	}
+}

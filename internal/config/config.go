@@ -22,6 +22,15 @@ const (
 	DefaultTheme           = "dark"
 )
 
+// GetPath returns the path to the config file
+func GetPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(homeDir, ".config", "azdo-tui", "config.yaml"), nil
+}
+
 // Load reads the configuration from ~/.config/azdo-tui/config.yaml
 // Returns an error if the file doesn't exist, showing the expected path
 func Load() (*Config, error) {

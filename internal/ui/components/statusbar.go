@@ -17,6 +17,7 @@ type StatusBar struct {
 	project      string
 	state        polling.ConnectionState
 	keybindings  string
+	configPath   string
 	width        int
 }
 
@@ -48,6 +49,11 @@ var (
 			Foreground(lipgloss.Color("39")).
 			Background(lipgloss.Color("236")).
 			Bold(true)
+
+		// Config path style
+	configPathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243")).
+			Background(lipgloss.Color("236"))
 
 	// Connection state styles
 	connectedStyle = lipgloss.NewStyle().
@@ -100,6 +106,11 @@ func (s *StatusBar) SetWidth(width int) {
 	s.width = width
 }
 
+// SetConfigPath sets the config file path to display.
+func (s *StatusBar) SetConfigPath(path string) {
+	s.configPath = path
+}
+
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
 	return nil
@@ -125,6 +136,10 @@ func (s *StatusBar) View() string {
 
 	if orgProj := s.renderOrgProject(); orgProj != "" {
 		parts = append(parts, orgProj)
+	}
+
+	if configPath := s.renderConfigPath(); configPath != "" {
+		parts = append(parts, configPath)
 	}
 
 	parts = append(parts, s.renderConnectionState())
@@ -174,6 +189,14 @@ func (s *StatusBar) renderOrgProject() string {
 	}
 
 	return orgProjectStyle.Render(s.project)
+}
+
+// renderConfigPath renders the config file path.
+func (s *StatusBar) renderConfigPath() string {
+	if s.configPath == "" {
+		return ""
+	}
+	return configPathStyle.Render(s.configPath)
 }
 
 // renderConnectionState renders the connection state indicator.
