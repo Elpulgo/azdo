@@ -128,45 +128,12 @@ func (m *DetailModel) View() string {
 		separatorWidth = 60
 	}
 	sb.WriteString(strings.Repeat("─", separatorWidth))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
 
-	// Description
-	if m.pr.Description != "" {
-		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-		sb.WriteString(descStyle.Render(m.pr.Description))
-		sb.WriteString("\n\n")
+	// Viewport with scrollable content
+	if m.ready {
+		sb.WriteString(m.viewport.View())
 	}
-
-	// Reviewers section
-	if len(m.pr.Reviewers) > 0 {
-		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
-		sb.WriteString(sectionStyle.Render("Reviewers"))
-		sb.WriteString("\n")
-		for _, reviewer := range m.pr.Reviewers {
-			icon := reviewerVoteIcon(reviewer.Vote)
-			sb.WriteString(fmt.Sprintf("  %s %s\n", icon, reviewer.DisplayName))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Threads section
-	if len(m.threads) > 0 {
-		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
-		sb.WriteString(sectionStyle.Render(fmt.Sprintf("Comments (%d)", len(m.threads))))
-		sb.WriteString("\n")
-
-		for i, thread := range m.threads {
-			line := m.renderThread(thread, i == m.selectedIndex)
-			sb.WriteString(line)
-			sb.WriteString("\n")
-		}
-	} else {
-		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		sb.WriteString(grayStyle.Render("No comments"))
-		sb.WriteString("\n")
-	}
-
-	content := sb.String()
 
 	// Fill available height
 	availableHeight := m.height - 5 // Account for tab bar and status bar
@@ -178,7 +145,7 @@ func (m *DetailModel) View() string {
 		Width(m.width).
 		Height(availableHeight)
 
-	return contentStyle.Render(content)
+	return contentStyle.Render(sb.String())
 }
 
 // renderThread renders a single thread
@@ -235,18 +202,102 @@ func (m *DetailModel) SetSize(width, height int) {
 		m.viewport.Width = width
 		m.viewport.Height = viewportHeight
 	}
+
+	// Update viewport content
+	m.updateViewportContent()
+}
+
+// updateViewportContent builds the content and sets it in the viewport
+func (m *DetailModel) updateViewportContent() {
+	var sb strings.Builder
+
+	// Description
+	if m.pr.Description != "" {
+		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		sb.WriteString(descStyle.Render(m.pr.Description))
+		sb.WriteString("\n\n")
+	}
+
+	// Reviewers section
+	if len(m.pr.Reviewers) > 0 {
+		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
+		sb.WriteString(sectionStyle.Render("Reviewers"))
+		sb.WriteString("\n")
+		for _, reviewer := range m.pr.Reviewers {
+			icon := reviewerVoteIcon(reviewer.Vote)
+			sb.WriteString(fmt.Sprintf("  %s %s\n", icon, reviewer.DisplayName))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Threads section
+	if len(m.threads) > 0 {
+		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
+		sb.WriteString(sectionStyle.Render(fmt.Sprintf("Comments (%d)", len(m.threads))))
+		sb.WriteString("\n")
+
+		for i, thread := range m.threads {
+			line := m.renderThread(thread, i == m.selectedIndex)
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	} else {
+		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+		sb.WriteString(grayStyle.Render("No comments"))
+		sb.WriteString("\n")
+	}
+
+	m.viewport.SetContent(sb.String())
+}
+
+// ensureSelectedVisible scrolls the viewport to keep the selected item visible
+func (m *DetailModel) ensureSelectedVisible() {
+	if !m.ready || len(m.threads) == 0 {
+		return
+	}
+
+	// Calculate the line offset for the selected thread
+	// Account for: description (if present, 2+ lines), reviewers section, comments header
+	lineOffset := 0
+	if m.pr.Description != "" {
+		// Count lines in description + blank line
+		lineOffset += strings.Count(m.pr.Description, "\n") + 2
+	}
+	if len(m.pr.Reviewers) > 0 {
+		// Reviewers header + reviewer lines + blank line
+		lineOffset += 1 + len(m.pr.Reviewers) + 1
+	}
+	// Comments header line
+	lineOffset += 1
+
+	// The selected thread line is lineOffset + selectedIndex
+	selectedLine := lineOffset + m.selectedIndex
+
+	visibleStart := m.viewport.YOffset
+	visibleEnd := visibleStart + m.viewport.Height - 1
+
+	if selectedLine < visibleStart {
+		m.viewport.SetYOffset(selectedLine)
+	} else if selectedLine > visibleEnd {
+		m.viewport.SetYOffset(selectedLine - m.viewport.Height + 1)
+	}
 }
 
 // SetThreads sets the threads (useful for testing)
 func (m *DetailModel) SetThreads(threads []azdevops.Thread) {
 	m.threads = threads
 	m.selectedIndex = 0
+	if m.ready {
+		m.updateViewportContent()
+	}
 }
 
 // MoveUp moves selection up
 func (m *DetailModel) MoveUp() {
 	if m.selectedIndex > 0 {
 		m.selectedIndex--
+		m.updateViewportContent()
+		m.ensureSelectedVisible()
 	}
 }
 
@@ -254,25 +305,43 @@ func (m *DetailModel) MoveUp() {
 func (m *DetailModel) MoveDown() {
 	if len(m.threads) > 0 && m.selectedIndex < len(m.threads)-1 {
 		m.selectedIndex++
+		m.updateViewportContent()
+		m.ensureSelectedVisible()
 	}
 }
 
 // PageUp moves selection up by one page
 func (m *DetailModel) PageUp() {
-	pageSize := 5
+	if !m.ready || len(m.threads) == 0 {
+		return
+	}
+	pageSize := m.viewport.Height
+	if pageSize < 1 {
+		pageSize = 5
+	}
 	m.selectedIndex -= pageSize
 	if m.selectedIndex < 0 {
 		m.selectedIndex = 0
 	}
+	m.updateViewportContent()
+	m.ensureSelectedVisible()
 }
 
 // PageDown moves selection down by one page
 func (m *DetailModel) PageDown() {
-	pageSize := 5
+	if !m.ready || len(m.threads) == 0 {
+		return
+	}
+	pageSize := m.viewport.Height
+	if pageSize < 1 {
+		pageSize = 5
+	}
 	m.selectedIndex += pageSize
-	if len(m.threads) > 0 && m.selectedIndex >= len(m.threads) {
+	if m.selectedIndex >= len(m.threads) {
 		m.selectedIndex = len(m.threads) - 1
 	}
+	m.updateViewportContent()
+	m.ensureSelectedVisible()
 }
 
 // SelectedIndex returns the current selection index

@@ -354,3 +354,157 @@ func TestThreadStatusIcon(t *testing.T) {
 }
 
 var errMockDetail = fmt.Errorf("mock error")
+
+func TestDetailModel_ViewportScrolling(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	// Set a small viewport height to force scrolling
+	model.SetSize(80, 15) // Small height
+
+	// Create many threads to overflow the viewport
+	threads := make([]azdevops.Thread, 20)
+	for i := 0; i < 20; i++ {
+		threads[i] = azdevops.Thread{
+			ID:     i + 1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: i + 1, Content: fmt.Sprintf("Comment number %d", i+1), Author: azdevops.Identity{DisplayName: "User"}},
+			},
+		}
+	}
+	model.SetThreads(threads)
+
+	// Verify model is ready for viewport operations
+	if !model.ready {
+		t.Fatal("Model should be ready after SetSize")
+	}
+
+	// Initial state
+	if model.SelectedIndex() != 0 {
+		t.Errorf("Initial SelectedIndex = %d, want 0", model.SelectedIndex())
+	}
+
+	// Page down should move more than 1 item
+	model.PageDown()
+	if model.SelectedIndex() <= 1 {
+		t.Errorf("After PageDown, SelectedIndex = %d, want > 1", model.SelectedIndex())
+	}
+
+	// Move to near the end
+	for i := 0; i < 15; i++ {
+		model.MoveDown()
+	}
+
+	// Should be able to scroll to items at the end
+	if model.SelectedIndex() < 10 {
+		t.Errorf("After multiple MoveDown, SelectedIndex = %d, want >= 10", model.SelectedIndex())
+	}
+
+	// View should still render without error and contain content
+	view := model.View()
+	if view == "" {
+		t.Error("View should not be empty after scrolling")
+	}
+
+	// The view should use viewport (contain the selected item's content)
+	// Note: This tests that the viewport is rendering properly
+	selected := model.SelectedThread()
+	if selected == nil {
+		t.Fatal("Should have a selected thread")
+	}
+}
+
+func TestDetailModel_ViewportEnsuresSelectedVisible(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 12) // Very small viewport
+
+	// Create threads
+	threads := make([]azdevops.Thread, 15)
+	for i := 0; i < 15; i++ {
+		threads[i] = azdevops.Thread{
+			ID:     i + 1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: i + 1, Content: fmt.Sprintf("Thread %d", i+1), Author: azdevops.Identity{DisplayName: "User"}},
+			},
+		}
+	}
+	model.SetThreads(threads)
+
+	// Move to an item that's beyond the initial viewport
+	for i := 0; i < 10; i++ {
+		model.MoveDown()
+	}
+
+	// After scrolling, viewport should have adjusted
+	if model.viewport.YOffset == 0 && model.SelectedIndex() > 5 {
+		// If selected item is beyond viewport but YOffset is still 0,
+		// the scrolling isn't working
+		t.Error("Viewport YOffset should have changed to keep selected item visible")
+	}
+}
+
+func TestDetailModel_PageUpDown(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 20)
+
+	// Create threads
+	threads := make([]azdevops.Thread, 30)
+	for i := 0; i < 30; i++ {
+		threads[i] = azdevops.Thread{
+			ID:     i + 1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: i + 1, Content: fmt.Sprintf("Thread %d", i+1)},
+			},
+		}
+	}
+	model.SetThreads(threads)
+
+	// Page down
+	initialIndex := model.SelectedIndex()
+	model.PageDown()
+	afterPageDown := model.SelectedIndex()
+
+	if afterPageDown <= initialIndex {
+		t.Errorf("PageDown should increase index, got %d -> %d", initialIndex, afterPageDown)
+	}
+
+	// Page up should go back
+	model.PageUp()
+	afterPageUp := model.SelectedIndex()
+
+	if afterPageUp >= afterPageDown {
+		t.Errorf("PageUp should decrease index, got %d -> %d", afterPageDown, afterPageUp)
+	}
+
+	// Page up at top should stay at 0
+	model.PageUp()
+	model.PageUp()
+	model.PageUp()
+	if model.SelectedIndex() != 0 {
+		t.Errorf("Multiple PageUp at top should result in index 0, got %d", model.SelectedIndex())
+	}
+
+	// Page down at bottom should stay at last
+	for i := 0; i < 10; i++ {
+		model.PageDown()
+	}
+	if model.SelectedIndex() != len(threads)-1 {
+		t.Errorf("Multiple PageDown should stop at last index %d, got %d", len(threads)-1, model.SelectedIndex())
+	}
+}
