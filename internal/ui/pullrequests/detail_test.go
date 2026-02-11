@@ -896,6 +896,147 @@ func TestDetailModel_GetSelectedThreadLineOffset(t *testing.T) {
 	}
 }
 
+func TestDetailModel_LargeThreadCount_Scrolling(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:          101,
+		Title:       "Test PR with many comments",
+		Description: "A test description",
+		Repository:  azdevops.Repository{ID: "repo-123"},
+		Reviewers: []azdevops.Reviewer{
+			{ID: "1", DisplayName: "Reviewer 1", Vote: 10},
+			{ID: "2", DisplayName: "Reviewer 2", Vote: 0},
+		},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 30) // Reasonable viewport
+
+	// Create 130 threads with varying comment counts (simulating real PR)
+	threads := make([]azdevops.Thread, 130)
+	for i := 0; i < 130; i++ {
+		commentCount := (i % 3) + 1 // 1-3 comments per thread
+		comments := make([]azdevops.Comment, commentCount)
+		for j := 0; j < commentCount; j++ {
+			comments[j] = azdevops.Comment{
+				ID:      i*10 + j + 1,
+				Content: fmt.Sprintf("Comment %d in thread %d", j+1, i+1),
+				Author:  azdevops.Identity{DisplayName: "User"},
+			}
+		}
+		threads[i] = azdevops.Thread{
+			ID:       i + 1,
+			Status:   []string{"active", "fixed", "pending"}[i%3],
+			Comments: comments,
+		}
+	}
+	model.SetThreads(threads)
+
+	// Test 1: Scroll down through all threads
+	for i := 0; i < 129; i++ {
+		prevIndex := model.SelectedIndex()
+		model.MoveDown()
+		newIndex := model.SelectedIndex()
+
+		// Selection should always increase by 1
+		if newIndex != prevIndex+1 {
+			t.Errorf("MoveDown at index %d: got %d, want %d", prevIndex, newIndex, prevIndex+1)
+		}
+
+		// Selection should always be valid
+		if newIndex < 0 || newIndex >= 130 {
+			t.Errorf("Invalid selection index after MoveDown: %d", newIndex)
+		}
+	}
+
+	// Should be at the last thread now
+	if model.SelectedIndex() != 129 {
+		t.Errorf("After scrolling to end, SelectedIndex = %d, want 129", model.SelectedIndex())
+	}
+
+	// Test 2: Scroll back up through all threads
+	for i := 0; i < 129; i++ {
+		prevIndex := model.SelectedIndex()
+		model.MoveUp()
+		newIndex := model.SelectedIndex()
+
+		// Selection should always decrease by 1
+		if newIndex != prevIndex-1 {
+			t.Errorf("MoveUp at index %d: got %d, want %d", prevIndex, newIndex, prevIndex-1)
+		}
+	}
+
+	// Should be at the first thread now
+	if model.SelectedIndex() != 0 {
+		t.Errorf("After scrolling to start, SelectedIndex = %d, want 0", model.SelectedIndex())
+	}
+
+	// Test 3: PageDown multiple times
+	for i := 0; i < 10; i++ {
+		prevIndex := model.SelectedIndex()
+		model.PageDown()
+		// PageDown should move selection forward (or stay if at end)
+		if model.SelectedIndex() < prevIndex && prevIndex < 129 {
+			t.Errorf("PageDown decreased selection from %d to %d", prevIndex, model.SelectedIndex())
+		}
+	}
+
+	// Test 4: PageUp multiple times
+	for i := 0; i < 10; i++ {
+		prevIndex := model.SelectedIndex()
+		model.PageUp()
+		// PageUp should move selection backward (or stay if at start)
+		if model.SelectedIndex() > prevIndex && prevIndex > 0 {
+			t.Errorf("PageUp increased selection from %d to %d", prevIndex, model.SelectedIndex())
+		}
+	}
+
+	// Test 5: View should always render without panic
+	view := model.View()
+	if view == "" {
+		t.Error("View should not be empty")
+	}
+}
+
+func TestDetailModel_ScrollPreservesViewportPosition(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 20)
+
+	// Create 50 threads
+	threads := make([]azdevops.Thread, 50)
+	for i := 0; i < 50; i++ {
+		threads[i] = azdevops.Thread{
+			ID:     i + 1,
+			Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: i + 1, Content: fmt.Sprintf("Comment %d", i+1), Author: azdevops.Identity{DisplayName: "User"}},
+			},
+		}
+	}
+	model.SetThreads(threads)
+
+	// Move to middle of list
+	for i := 0; i < 25; i++ {
+		model.MoveDown()
+	}
+
+	// Get current viewport position
+	initialOffset := model.viewport.YOffset
+
+	// Move down one more - should only scroll if necessary
+	model.MoveDown()
+	newOffset := model.viewport.YOffset
+
+	// Viewport should not jump dramatically (at most by thread height)
+	maxJump := 10 // reasonable max for a thread with comments
+	if newOffset-initialOffset > maxJump {
+		t.Errorf("Viewport jumped too much: from %d to %d (diff %d)", initialOffset, newOffset, newOffset-initialOffset)
+	}
+}
+
 func TestDetailModel_PageUpDown(t *testing.T) {
 	pr := azdevops.PullRequest{
 		ID:         101,

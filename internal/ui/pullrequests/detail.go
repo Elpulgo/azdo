@@ -296,18 +296,25 @@ func (m *DetailModel) ensureSelectedVisible() {
 
 	// Calculate actual line position of selected thread
 	selectedLineStart := m.getSelectedThreadLineOffset()
-	selectedLineEnd := selectedLineStart + m.getThreadLineCount(m.threads[m.selectedIndex]) - 1
+	threadHeight := m.getThreadLineCount(m.threads[m.selectedIndex])
+	selectedLineEnd := selectedLineStart + threadHeight - 1
 
 	visibleStart := m.viewport.YOffset
 	visibleEnd := visibleStart + m.viewport.Height - 1
 
-	// If selected thread is above the visible area, scroll up to show it
+	// If selected thread header is above the visible area, scroll up
+	// Position so the header is at the top of the viewport
 	if selectedLineStart < visibleStart {
 		m.viewport.SetYOffset(selectedLineStart)
 	} else if selectedLineEnd > visibleEnd {
-		// If selected thread is below the visible area, scroll down
-		// Position so the thread header is near the top of the viewport
-		m.viewport.SetYOffset(selectedLineStart)
+		// If selected thread extends below the visible area, scroll down
+		// But only scroll enough to show the thread - keep it at the bottom
+		// This prevents jarring jumps when moving down
+		newOffset := selectedLineEnd - m.viewport.Height + 1
+		if newOffset < 0 {
+			newOffset = 0
+		}
+		m.viewport.SetYOffset(newOffset)
 	}
 }
 
@@ -328,7 +335,11 @@ func (m *DetailModel) MoveUp() {
 	}
 	if m.selectedIndex > 0 {
 		m.selectedIndex--
+		// Save viewport position before content update
+		savedOffset := m.viewport.YOffset
 		m.updateViewportContent()
+		// Restore position, then adjust if needed
+		m.viewport.SetYOffset(savedOffset)
 		m.ensureSelectedVisible()
 	} else {
 		// At first thread, scroll viewport up to show description/reviewers
@@ -343,7 +354,11 @@ func (m *DetailModel) MoveDown() {
 	}
 	if len(m.threads) > 0 && m.selectedIndex < len(m.threads)-1 {
 		m.selectedIndex++
+		// Save viewport position before content update
+		savedOffset := m.viewport.YOffset
 		m.updateViewportContent()
+		// Restore position, then adjust if needed
+		m.viewport.SetYOffset(savedOffset)
 		m.ensureSelectedVisible()
 	} else {
 		// At last thread, scroll viewport down to show more content
@@ -382,24 +397,31 @@ func (m *DetailModel) updateSelectionFromViewport() {
 	// Calculate line offset where threads start
 	lineOffset := m.getThreadsLineOffset()
 
-	// Find which thread is most visible in the center of the viewport
-	viewportCenter := m.viewport.YOffset + m.viewport.Height/2
+	// Find which thread is visible at the top of the viewport (with small margin)
+	targetLine := m.viewport.YOffset + 2 // Small margin from top
 
-	// Find which thread contains the viewport center line
+	// Find which thread contains this line
 	currentLine := lineOffset
 	for i, thread := range m.threads {
 		threadLines := m.getThreadLineCount(thread) + 1 // +1 for newline after thread
-		if viewportCenter < currentLine+threadLines {
+		threadEnd := currentLine + threadLines
+		if targetLine < threadEnd {
 			m.selectedIndex = i
+			// Save position before content update
+			savedOffset := m.viewport.YOffset
 			m.updateViewportContent()
+			// Restore position - don't let content update change it
+			m.viewport.SetYOffset(savedOffset)
 			return
 		}
-		currentLine += threadLines
+		currentLine = threadEnd
 	}
 
 	// If we're past all threads, select the last one
 	m.selectedIndex = len(m.threads) - 1
+	savedOffset := m.viewport.YOffset
 	m.updateViewportContent()
+	m.viewport.SetYOffset(savedOffset)
 }
 
 // getThreadsLineOffset returns the line number where threads section starts
