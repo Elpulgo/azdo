@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
+	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -19,6 +20,7 @@ type Tab int
 const (
 	TabPipelines    Tab = iota // Pipelines tab (key '1')
 	TabPullRequests            // Pull Requests tab (key '2')
+	TabWorkItems               // Work Items tab (key '3')
 )
 
 // Model is the root application model for the TUI
@@ -28,6 +30,7 @@ type Model struct {
 	activeTab        Tab
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
+	workItemsView    workitems.Model
 	statusBar        *components.StatusBar
 	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
@@ -69,6 +72,7 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 		activeTab:        TabPipelines,
 		pipelinesView:    pipelines.NewModel(client),
 		pullRequestsView: pullrequests.NewModel(client),
+		workItemsView:    workitems.NewModel(client),
 		statusBar:        statusBar,
 		contextBar:       contextBar,
 		helpModal:        helpModal,
@@ -125,6 +129,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
+		case "3":
+			if m.activeTab != TabWorkItems {
+				m.activeTab = TabWorkItems
+				// Trigger initial load when switching to Work Items tab
+				return m, m.workItemsView.Init()
+			}
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -133,9 +144,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar.SetWidth(msg.Width)
 		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
-		// Pass size to both views so they're ready when switched to
+		// Pass size to all views so they're ready when switched to
 		m.pipelinesView, _ = m.pipelinesView.Update(msg)
 		m.pullRequestsView, _ = m.pullRequestsView.Update(msg)
+		m.workItemsView, _ = m.workItemsView.Update(msg)
 
 	case polling.TickMsg:
 		// Time to poll for updates
@@ -166,6 +178,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.activeTab {
 	case TabPullRequests:
 		m.pullRequestsView, cmd = m.pullRequestsView.Update(msg)
+	case TabWorkItems:
+		m.workItemsView, cmd = m.workItemsView.Update(msg)
 	default:
 		m.pipelinesView, cmd = m.pipelinesView.Update(msg)
 	}
@@ -195,17 +209,24 @@ var (
 
 // renderTabBar renders the tab header
 func (m Model) renderTabBar() string {
-	var tab1, tab2 string
+	var tab1, tab2, tab3 string
 
-	if m.activeTab == TabPipelines {
+	switch m.activeTab {
+	case TabPipelines:
 		tab1 = activeTabStyle.Render("1: Pipelines")
 		tab2 = inactiveTabStyle.Render("2: Pull Requests")
-	} else {
+		tab3 = inactiveTabStyle.Render("3: Work Items")
+	case TabPullRequests:
 		tab1 = inactiveTabStyle.Render("1: Pipelines")
 		tab2 = activeTabStyle.Render("2: Pull Requests")
+		tab3 = inactiveTabStyle.Render("3: Work Items")
+	case TabWorkItems:
+		tab1 = inactiveTabStyle.Render("1: Pipelines")
+		tab2 = inactiveTabStyle.Render("2: Pull Requests")
+		tab3 = activeTabStyle.Render("3: Work Items")
 	}
 
-	return tabBarStyle.Render(tab1+" "+tab2) + "\n"
+	return tabBarStyle.Render(tab1+" "+tab2+" "+tab3) + "\n"
 }
 
 // View renders the application UI
@@ -236,6 +257,12 @@ func (m Model) View() string {
 		contextItems = m.pullRequestsView.GetContextItems()
 		scrollPercent = m.pullRequestsView.GetScrollPercent()
 		statusMessage = m.pullRequestsView.GetStatusMessage()
+	case TabWorkItems:
+		content = m.workItemsView.View()
+		hasContextBar = m.workItemsView.HasContextBar()
+		contextItems = m.workItemsView.GetContextItems()
+		scrollPercent = m.workItemsView.GetScrollPercent()
+		statusMessage = m.workItemsView.GetStatusMessage()
 	default:
 		content = m.pipelinesView.View()
 		hasContextBar = m.pipelinesView.HasContextBar()

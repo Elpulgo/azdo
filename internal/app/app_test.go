@@ -245,3 +245,71 @@ func TestModel_StatusBarShowsConfigPath(t *testing.T) {
 		t.Error("view should contain config file path")
 	}
 }
+
+func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	// Press '3' to switch to work items tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabWorkItems {
+		t.Errorf("After pressing '3', activeTab should be TabWorkItems (2), got %d", m.activeTab)
+	}
+}
+
+func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	// Switch to work items tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Should show work items content (empty list message or similar)
+	if !strings.Contains(view, "work item") && !strings.Contains(view, "No work items") {
+		t.Error("View should show work items content when on Work Items tab")
+	}
+}
+
+func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	// Should show all three tabs in the tab bar
+	if !strings.Contains(view, "Pipelines") {
+		t.Error("Tab bar should show Pipelines")
+	}
+	if !strings.Contains(view, "Pull Requests") {
+		t.Error("Tab bar should show Pull Requests")
+	}
+	if !strings.Contains(view, "Work Items") {
+		t.Error("Tab bar should show Work Items")
+	}
+}
