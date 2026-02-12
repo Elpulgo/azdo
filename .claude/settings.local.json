@@ -24,7 +24,10 @@
       "Bash(tree:*)",
       "Bash(xargs:*)",
       "Bash(bd --help:*)",
-      "Bash(bd children:*)"
+      "Bash(bd children:*)",
+      "Bash(bd view:*)",
+      "Bash(grep:*)",
+      "Bash(bd agent:*)"
     ],
     "deny": [
       "Read(**/.env)",
