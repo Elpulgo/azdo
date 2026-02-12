@@ -38,19 +38,19 @@ type Model struct {
 	spinner   *components.LoadingIndicator
 }
 
-// Column width ratios (percentages of available width)
+// Column width ratios (percentages of available width) - must total 100%
 const (
-	typeWidthPct     = 8  // Type column percentage
+	typeWidthPct     = 10 // Type column percentage (matches PR status column)
 	idWidthPct       = 8  // ID column percentage
-	titleWidthPct    = 34 // Title column percentage
+	titleWidthPct    = 32 // Title column percentage
 	stateWidthPct    = 18 // State column percentage (needs space for "Ready for Test")
 	priorityWidthPct = 6  // Priority column percentage
-	assignedWidthPct = 16 // Assigned column percentage
+	assignedWidthPct = 26 // Assigned column percentage (10+8+32+18+6+26=100)
 )
 
 // Minimum column widths
 const (
-	minTypeWidth     = 7
+	minTypeWidth     = 8 // "Feature" (7 chars) + padding
 	minIDWidth       = 6
 	minTitleWidth    = 15
 	minStateWidth    = 16
@@ -95,10 +95,13 @@ func NewModel(client *azdevops.Client) Model {
 
 // makeColumns creates table columns sized for the given width
 func makeColumns(width int) []table.Column {
-	// Account for table structure
-	available := width - 12
-	if available < 60 {
-		available = 60
+	// Account for table structure:
+	// - 5 chars for column separators (between 6 columns)
+	// - Some padding for cell content
+	// Total overhead: ~10 chars
+	available := width - 10
+	if available < 70 {
+		available = 70 // Minimum usable width
 	}
 
 	// Calculate widths based on percentages
@@ -293,8 +296,7 @@ func (m Model) workItemsToRows() []table.Row {
 	return rows
 }
 
-// typeIcon returns a styled icon for the work item type
-// All labels are padded to 7 chars for consistent column width
+// typeIcon returns a styled text label for the work item type
 func typeIcon(workItemType string) string {
 	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
@@ -303,22 +305,21 @@ func typeIcon(workItemType string) string {
 	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
-	// Use fixed-width text labels (7 chars) for consistent column alignment
 	switch workItemType {
 	case "Bug":
-		return redStyle.Render("Bug    ")
+		return redStyle.Render("Bug")
 	case "Task":
-		return blueStyle.Render("Task   ")
+		return blueStyle.Render("Task")
 	case "User Story":
-		return greenStyle.Render("Story  ")
+		return greenStyle.Render("Story")
 	case "Feature":
 		return purpleStyle.Render("Feature")
 	case "Epic":
-		return yellowStyle.Render("Epic   ")
+		return yellowStyle.Render("Epic")
 	case "Issue":
-		return redStyle.Render("Issue  ")
+		return redStyle.Render("Issue")
 	default:
-		return grayStyle.Render("Item   ")
+		return grayStyle.Render("Item")
 	}
 }
 
