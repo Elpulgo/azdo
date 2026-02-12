@@ -6,6 +6,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -82,7 +83,7 @@ func NewModel(client *azdevops.Client) Model {
 		Bold(false)
 	t.SetStyles(s)
 
-	spinner := components.NewLoadingIndicator()
+	spinner := components.NewLoadingIndicator(styles.DefaultStyles())
 	spinner.SetMessage("Loading pipeline runs...")
 
 	return Model{

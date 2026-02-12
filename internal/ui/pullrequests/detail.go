@@ -7,6 +7,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,7 +32,7 @@ type DetailModel struct {
 
 // NewDetailModel creates a new PR detail model
 func NewDetailModel(client *azdevops.Client, pr azdevops.PullRequest) *DetailModel {
-	s := components.NewLoadingIndicator()
+	s := components.NewLoadingIndicator(styles.DefaultStyles())
 	s.SetMessage(fmt.Sprintf("Loading threads for PR #%d...", pr.ID))
 
 	return &DetailModel{

@@ -21,7 +21,10 @@
       "Bash(bd sync:*)",
       "Bash(go fmt:*)",
       "Bash(go vet:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(xargs:*)",
+      "Bash(bd --help:*)",
+      "Bash(bd children:*)"
     ],
     "deny": [
       "Read(**/.env)",

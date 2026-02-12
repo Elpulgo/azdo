@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,7 +41,7 @@ type DetailModel struct {
 
 // NewDetailModel creates a new detail model for a pipeline run
 func NewDetailModel(client *azdevops.Client, run azdevops.PipelineRun) *DetailModel {
-	s := components.NewLoadingIndicator()
+	s := components.NewLoadingIndicator(styles.DefaultStyles())
 	s.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
 
 	return &DetailModel{

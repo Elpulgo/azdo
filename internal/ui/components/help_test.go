@@ -4,11 +4,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestHelpModal_New(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 
 	if h == nil {
 		t.Fatal("expected non-nil HelpModal")
@@ -19,7 +20,7 @@ func TestHelpModal_New(t *testing.T) {
 }
 
 func TestHelpModal_Show(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.Show()
 
 	if !h.IsVisible() {
@@ -28,7 +29,7 @@ func TestHelpModal_Show(t *testing.T) {
 }
 
 func TestHelpModal_Hide(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.Show()
 	h.Hide()
 
@@ -38,7 +39,7 @@ func TestHelpModal_Hide(t *testing.T) {
 }
 
 func TestHelpModal_Toggle(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 
 	h.Toggle()
 	if !h.IsVisible() {
@@ -52,7 +53,7 @@ func TestHelpModal_Toggle(t *testing.T) {
 }
 
 func TestHelpModal_View_WhenHidden(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 24)
 
 	view := h.View()
@@ -63,7 +64,7 @@ func TestHelpModal_View_WhenHidden(t *testing.T) {
 }
 
 func TestHelpModal_View_WhenVisible(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 24)
 	h.Show()
 
@@ -75,7 +76,7 @@ func TestHelpModal_View_WhenVisible(t *testing.T) {
 }
 
 func TestHelpModal_View_ContainsTitle(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 24)
 	h.Show()
 
@@ -87,7 +88,7 @@ func TestHelpModal_View_ContainsTitle(t *testing.T) {
 }
 
 func TestHelpModal_View_ContainsKeybindings(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 24)
 	h.Show()
 
@@ -103,7 +104,7 @@ func TestHelpModal_View_ContainsKeybindings(t *testing.T) {
 }
 
 func TestHelpModal_Update_EscHides(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.Show()
 
 	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -114,7 +115,7 @@ func TestHelpModal_Update_EscHides(t *testing.T) {
 }
 
 func TestHelpModal_Update_QuestionMarkHides(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.Show()
 
 	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
@@ -125,7 +126,7 @@ func TestHelpModal_Update_QuestionMarkHides(t *testing.T) {
 }
 
 func TestHelpModal_Update_QHides(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.Show()
 
 	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
@@ -136,7 +137,7 @@ func TestHelpModal_Update_QHides(t *testing.T) {
 }
 
 func TestHelpModal_SetSize(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(100, 50)
 
 	if h.width != 100 || h.height != 50 {
@@ -145,7 +146,7 @@ func TestHelpModal_SetSize(t *testing.T) {
 }
 
 func TestHelpModal_AddSection(t *testing.T) {
-	h := NewHelpModal()
+	h := NewHelpModal(styles.DefaultStyles())
 	h.AddSection("Custom", []HelpBinding{
 		{Key: "x", Description: "do something"},
 	})

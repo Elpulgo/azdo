@@ -95,3 +95,12 @@ func (c *Config) Validate() error {
 
 	return nil
 }
+
+// GetTheme returns the configured theme name.
+// Returns the default theme if the theme is empty.
+func (c *Config) GetTheme() string {
+	if c.Theme == "" {
+		return DefaultTheme
+	}
+	return c.Theme
+}

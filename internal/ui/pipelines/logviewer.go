@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,7 +36,7 @@ type LogViewerModel struct {
 
 // NewLogViewerModel creates a new log viewer model
 func NewLogViewerModel(client *azdevops.Client, buildID, logID int, title string) *LogViewerModel {
-	s := components.NewLoadingIndicator()
+	s := components.NewLoadingIndicator(styles.DefaultStyles())
 	s.SetMessage(fmt.Sprintf("Loading log for %s...", title))
 
 	return &LogViewerModel{

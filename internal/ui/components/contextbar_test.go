@@ -3,10 +3,12 @@ package components
 import (
 	"strings"
 	"testing"
+
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 )
 
 func TestContextBar_New(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 
 	if cb == nil {
 		t.Fatal("expected non-nil ContextBar")
@@ -14,7 +16,7 @@ func TestContextBar_New(t *testing.T) {
 }
 
 func TestContextBar_SetWidth(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(100)
 
 	if cb.width != 100 {
@@ -23,7 +25,7 @@ func TestContextBar_SetWidth(t *testing.T) {
 }
 
 func TestContextBar_SetItems(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	items := []ContextItem{
 		{Key: "↑↓", Description: "navigate"},
 		{Key: "enter", Description: "select"},
@@ -36,7 +38,7 @@ func TestContextBar_SetItems(t *testing.T) {
 }
 
 func TestContextBar_AddItem(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.AddItem("esc", "back")
 
 	if len(cb.items) != 1 {
@@ -48,7 +50,7 @@ func TestContextBar_AddItem(t *testing.T) {
 }
 
 func TestContextBar_SetStatus(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetStatus("Loading...")
 
 	if cb.status != "Loading..." {
@@ -57,7 +59,7 @@ func TestContextBar_SetStatus(t *testing.T) {
 }
 
 func TestContextBar_SetScrollPercent(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetScrollPercent(50.5)
 
 	if cb.scrollPercent != 50.5 {
@@ -66,7 +68,7 @@ func TestContextBar_SetScrollPercent(t *testing.T) {
 }
 
 func TestContextBar_ShowScrollPercent(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 
 	// Default should be false
 	if cb.showScroll {
@@ -80,7 +82,7 @@ func TestContextBar_ShowScrollPercent(t *testing.T) {
 }
 
 func TestContextBar_View_Empty(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(80)
 
 	view := cb.View()
@@ -92,7 +94,7 @@ func TestContextBar_View_Empty(t *testing.T) {
 }
 
 func TestContextBar_View_WithItems(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(100)
 	cb.AddItem("↑↓", "navigate")
 	cb.AddItem("enter", "select")
@@ -108,7 +110,7 @@ func TestContextBar_View_WithItems(t *testing.T) {
 }
 
 func TestContextBar_View_WithStatus(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(100)
 	cb.SetStatus("Stage has no logs")
 
@@ -120,7 +122,7 @@ func TestContextBar_View_WithStatus(t *testing.T) {
 }
 
 func TestContextBar_View_WithScrollPercent(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(100)
 	cb.ShowScrollPercent(true)
 	cb.SetScrollPercent(75.0)
@@ -133,7 +135,7 @@ func TestContextBar_View_WithScrollPercent(t *testing.T) {
 }
 
 func TestContextBar_View_SeparatorsBetweenItems(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(100)
 	cb.AddItem("a", "first")
 	cb.AddItem("b", "second")
@@ -147,7 +149,7 @@ func TestContextBar_View_SeparatorsBetweenItems(t *testing.T) {
 }
 
 func TestContextBar_Clear(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.AddItem("a", "test")
 	cb.SetStatus("status")
 	cb.SetScrollPercent(50)
@@ -166,7 +168,7 @@ func TestContextBar_Clear(t *testing.T) {
 }
 
 func TestContextBar_View_HasBorder(t *testing.T) {
-	cb := NewContextBar()
+	cb := NewContextBar(styles.DefaultStyles())
 	cb.SetWidth(80)
 	cb.AddItem("test", "item")
 

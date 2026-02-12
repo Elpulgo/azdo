@@ -3,6 +3,7 @@ package components
 import (
 	"strings"
 
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -21,42 +22,17 @@ type HelpSection struct {
 
 // HelpModal is an overlay that displays available keybindings.
 type HelpModal struct {
+	styles   *styles.Styles
 	visible  bool
 	width    int
 	height   int
 	sections []HelpSection
 }
 
-// Styles for the help modal
-var (
-	helpModalStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 2).
-			Background(lipgloss.Color("235"))
-
-	helpTitleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true).
-			MarginBottom(1)
-
-	helpSectionStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Bold(true).
-				MarginTop(1)
-
-	helpKeyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true).
-			Width(12)
-
-	helpDescStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
-)
-
 // NewHelpModal creates a new HelpModal with default keybindings.
-func NewHelpModal() *HelpModal {
+func NewHelpModal(s *styles.Styles) *HelpModal {
 	return &HelpModal{
+		styles:  s,
 		visible: false,
 		sections: []HelpSection{
 			{
@@ -139,6 +115,34 @@ func (h *HelpModal) View() string {
 		return ""
 	}
 
+	// Build styles from theme
+	helpModalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(h.styles.Theme.Accent)).
+		Padding(1, 2).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	helpTitleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
+		Bold(true).
+		MarginBottom(1)
+
+	helpSectionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
+		Bold(true).
+		MarginTop(1)
+
+	helpKeyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
+		Bold(true).
+		Width(12)
+
+	helpDescStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Foreground))
+
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted))
+
 	var content strings.Builder
 
 	// Title
@@ -159,7 +163,7 @@ func (h *HelpModal) View() string {
 
 	// Footer hint
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("Press esc, q, or ? to close"))
+	content.WriteString(footerStyle.Render("Press esc, q, or ? to close"))
 
 	// Render the modal box
 	modal := helpModalStyle.Render(content.String())

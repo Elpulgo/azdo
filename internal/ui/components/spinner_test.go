@@ -4,12 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestLoadingIndicator_New(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 
 	if li == nil {
 		t.Fatal("expected non-nil LoadingIndicator")
@@ -20,7 +21,7 @@ func TestLoadingIndicator_New(t *testing.T) {
 }
 
 func TestLoadingIndicator_SetMessage(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 	li.SetMessage("Fetching pipelines...")
 
 	if li.message != "Fetching pipelines..." {
@@ -29,7 +30,7 @@ func TestLoadingIndicator_SetMessage(t *testing.T) {
 }
 
 func TestLoadingIndicator_SetVisible(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 
 	li.SetVisible(true)
 	if !li.visible {
@@ -43,7 +44,7 @@ func TestLoadingIndicator_SetVisible(t *testing.T) {
 }
 
 func TestLoadingIndicator_IsVisible(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 
 	if li.IsVisible() {
 		t.Error("expected IsVisible to be false by default")
@@ -56,7 +57,7 @@ func TestLoadingIndicator_IsVisible(t *testing.T) {
 }
 
 func TestLoadingIndicator_View_WhenVisible(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 	li.SetVisible(true)
 	li.SetMessage("Loading data...")
 
@@ -69,7 +70,7 @@ func TestLoadingIndicator_View_WhenVisible(t *testing.T) {
 }
 
 func TestLoadingIndicator_View_WhenNotVisible(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 	li.SetVisible(false)
 
 	view := li.View()
@@ -81,7 +82,7 @@ func TestLoadingIndicator_View_WhenNotVisible(t *testing.T) {
 }
 
 func TestLoadingIndicator_Init_ReturnsSpinnerTick(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 	cmd := li.Init()
 
 	if cmd == nil {
@@ -90,7 +91,7 @@ func TestLoadingIndicator_Init_ReturnsSpinnerTick(t *testing.T) {
 }
 
 func TestLoadingIndicator_Update_HandlesSpinnerMsg(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 
 	// Create a spinner tick message
 	tickMsg := spinner.TickMsg{}
@@ -104,7 +105,7 @@ func TestLoadingIndicator_Update_HandlesSpinnerMsg(t *testing.T) {
 }
 
 func TestLoadingIndicator_Update_IgnoresOtherMessages(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 	li.SetMessage("Original")
 
 	// Send a random message type
@@ -123,7 +124,7 @@ func TestLoadingIndicator_Update_IgnoresOtherMessages(t *testing.T) {
 
 func TestLoadingIndicator_SpinnerStyle(t *testing.T) {
 	// Test that spinner can be created with different styles
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 
 	// Should not panic
 	li.SetVisible(true)
@@ -134,7 +135,7 @@ func TestLoadingIndicator_SpinnerStyle(t *testing.T) {
 }
 
 func TestLoadingIndicator_Toggle(t *testing.T) {
-	li := NewLoadingIndicator()
+	li := NewLoadingIndicator(styles.DefaultStyles())
 
 	// Initial state
 	if li.IsVisible() {

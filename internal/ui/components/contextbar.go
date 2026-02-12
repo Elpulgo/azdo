@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -17,6 +18,7 @@ type ContextItem struct {
 // such as keybindings, status messages, and scroll position. It appears above
 // the main footer bar and can be customized per view.
 type ContextBar struct {
+	styles        *styles.Styles
 	items         []ContextItem
 	status        string
 	scrollPercent float64
@@ -24,35 +26,10 @@ type ContextBar struct {
 	width         int
 }
 
-// Styles for the context bar
-var (
-	contextBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderBottom(false).
-			BorderForeground(lipgloss.Color("240")).
-			Foreground(lipgloss.Color("252"))
-
-	contextKeyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true)
-
-	contextDescStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252"))
-
-	contextSepStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-
-	contextStatusStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("243")).
-				Italic(true)
-
-	contextScrollStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39"))
-)
-
 // NewContextBar creates a new ContextBar with default values.
-func NewContextBar() *ContextBar {
+func NewContextBar(s *styles.Styles) *ContextBar {
 	return &ContextBar{
+		styles:     s,
 		items:      []ContextItem{},
 		showScroll: false,
 	}
@@ -103,32 +80,46 @@ func (c *ContextBar) View() string {
 		width = 80
 	}
 
+	// Build styles from theme
+	contextBoxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderBottom(false).
+		BorderForeground(lipgloss.Color(c.styles.Theme.Border)).
+		Foreground(lipgloss.Color(c.styles.Theme.Foreground))
+
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(c.styles.Theme.Border))
+
+	statusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(c.styles.Theme.ForegroundMuted)).
+		Italic(true)
+
 	var parts []string
 
 	// Render keybinding items
 	if len(c.items) > 0 {
 		var itemStrings []string
 		for _, item := range c.items {
-			itemStr := contextKeyStyle.Render(item.Key) + " " + contextDescStyle.Render(item.Description)
+			itemStr := c.styles.Key.Render(item.Key) + " " + c.styles.Description.Render(item.Description)
 			itemStrings = append(itemStrings, itemStr)
 		}
-		sep := contextSepStyle.Render(" • ")
+		sep := sepStyle.Render(" • ")
 		parts = append(parts, strings.Join(itemStrings, sep))
 	}
 
 	// Add status message if present
 	if c.status != "" {
-		parts = append(parts, contextStatusStyle.Render(c.status))
+		parts = append(parts, statusStyle.Render(c.status))
 	}
 
 	// Add scroll percentage if enabled
 	if c.showScroll {
-		scrollStr := contextScrollStyle.Render(fmt.Sprintf("%.0f%%", c.scrollPercent))
+		scrollStr := c.styles.ScrollInfo.Render(fmt.Sprintf("%.0f%%", c.scrollPercent))
 		parts = append(parts, scrollStr)
 	}
 
 	// Join all parts with separator
-	content := strings.Join(parts, contextSepStyle.Render(" │ "))
+	content := strings.Join(parts, sepStyle.Render(" │ "))
 
 	// Calculate box inner width
 	boxInnerWidth := width - 2

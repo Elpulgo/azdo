@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -13,6 +14,7 @@ import (
 // StatusBar is a component that displays keybindings, org/project info,
 // and connection state at the bottom of the screen like lazygit.
 type StatusBar struct {
+	styles        *styles.Styles
 	organization  string
 	project       string
 	state         polling.ConnectionState
@@ -23,66 +25,10 @@ type StatusBar struct {
 	width         int
 }
 
-// Styles for the status bar
-var (
-	// Box style with rounded border
-	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("252"))
-
-	// Keybinding styles
-	keyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Background(lipgloss.Color("236")).
-			Bold(true)
-
-	descStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")).
-			Background(lipgloss.Color("236"))
-
-	sepStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
-			Background(lipgloss.Color("236"))
-
-	// Org/project style
-	orgProjectStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Background(lipgloss.Color("236")).
-			Bold(true)
-
-		// Config path style
-	configPathStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
-			Background(lipgloss.Color("236"))
-
-	// Connection state styles
-	connectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42")).
-			Background(lipgloss.Color("236"))
-
-	connectingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("226")).
-			Background(lipgloss.Color("236"))
-
-	disconnectedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("243")).
-				Background(lipgloss.Color("236"))
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
-			Background(lipgloss.Color("236"))
-
-	// Scroll percentage style
-	scrollPercentStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Background(lipgloss.Color("236"))
-)
-
 // NewStatusBar creates a new StatusBar with default values.
-func NewStatusBar() *StatusBar {
+func NewStatusBar(s *styles.Styles) *StatusBar {
 	return &StatusBar{
+		styles:      s,
 		state:       polling.StateConnecting,
 		keybindings: "",
 	}
@@ -146,7 +92,11 @@ func (s *StatusBar) View() string {
 		width = 80
 	}
 
-	// Build sections with pipe separators
+	// Build separator style
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Border)).
+		Background(lipgloss.Color(s.styles.Theme.Background))
+
 	sep := sepStyle.Render(" │ ")
 
 	parts := []string{s.renderKeybindings()}
@@ -174,7 +124,7 @@ func (s *StatusBar) View() string {
 		boxInnerWidth = 20
 	}
 
-	return boxStyle.Width(boxInnerWidth).Render(content)
+	return s.styles.BoxRounded.Width(boxInnerWidth).Render(content)
 }
 
 // renderKeybindings renders the keybindings section.
@@ -183,14 +133,19 @@ func (s *StatusBar) renderKeybindings() string {
 		return s.keybindings
 	}
 
+	// Build styles from theme
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Border)).
+		Background(lipgloss.Color(s.styles.Theme.Background))
+
 	// Default keybindings with styled keys
 	sep := sepStyle.Render(" • ")
-	return keyStyle.Render("r") + descStyle.Render(" refresh") + sep +
-		keyStyle.Render("↑↓") + descStyle.Render(" navigate") + sep +
-		keyStyle.Render("enter") + descStyle.Render(" details") + sep +
-		keyStyle.Render("esc") + descStyle.Render(" back") + sep +
-		keyStyle.Render("?") + descStyle.Render(" help") + sep +
-		keyStyle.Render("q") + descStyle.Render(" quit")
+	return s.styles.Key.Render("r") + s.styles.Description.Render(" refresh") + sep +
+		s.styles.Key.Render("↑↓") + s.styles.Description.Render(" navigate") + sep +
+		s.styles.Key.Render("enter") + s.styles.Description.Render(" details") + sep +
+		s.styles.Key.Render("esc") + s.styles.Description.Render(" back") + sep +
+		s.styles.Key.Render("?") + s.styles.Description.Render(" help") + sep +
+		s.styles.Key.Render("q") + s.styles.Description.Render(" quit")
 }
 
 // renderOrgProject renders the organization and project section.
@@ -198,6 +153,15 @@ func (s *StatusBar) renderOrgProject() string {
 	if s.organization == "" && s.project == "" {
 		return ""
 	}
+
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Border)).
+		Background(lipgloss.Color(s.styles.Theme.Background))
+
+	orgProjectStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
+		Background(lipgloss.Color(s.styles.Theme.Background)).
+		Bold(true)
 
 	sep := sepStyle.Render("/")
 
@@ -217,7 +181,7 @@ func (s *StatusBar) renderConfigPath() string {
 	if s.configPath == "" {
 		return ""
 	}
-	return configPathStyle.Render(s.configPath)
+	return s.styles.Muted.Render(s.configPath)
 }
 
 // renderScrollPercent renders the scroll percentage indicator.
@@ -225,21 +189,21 @@ func (s *StatusBar) renderScrollPercent() string {
 	if !s.showScroll {
 		return ""
 	}
-	return scrollPercentStyle.Render(fmt.Sprintf("%.0f%%", s.scrollPercent))
+	return s.styles.ScrollInfo.Render(fmt.Sprintf("%.0f%%", s.scrollPercent))
 }
 
 // renderConnectionState renders the connection state indicator.
 func (s *StatusBar) renderConnectionState() string {
 	switch s.state {
 	case polling.StateConnected:
-		return connectedStyle.Render("● connected")
+		return s.styles.Connected.Render("● connected")
 	case polling.StateConnecting:
-		return connectingStyle.Render("◐ connecting")
+		return s.styles.Connecting.Render("◐ connecting")
 	case polling.StateDisconnected:
-		return disconnectedStyle.Render("○ disconnected")
+		return s.styles.Disconnected.Render("○ disconnected")
 	case polling.StateError:
-		return errorStyle.Render("✗ error")
+		return s.styles.ConnError.Render("✗ error")
 	default:
-		return disconnectedStyle.Render(fmt.Sprintf("? %s", s.state))
+		return s.styles.Disconnected.Render(fmt.Sprintf("? %s", s.state))
 	}
 }

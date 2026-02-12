@@ -9,9 +9,9 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Tab represents the active tab in the application
@@ -27,6 +27,7 @@ const (
 type Model struct {
 	client           *azdevops.Client
 	config           *config.Config
+	styles           *styles.Styles
 	activeTab        Tab
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
@@ -43,8 +44,12 @@ type Model struct {
 
 // NewModel creates a new application model with the given Azure DevOps client and config
 func NewModel(client *azdevops.Client, cfg *config.Config) Model {
+	// Load theme from config and create styles
+	theme := styles.GetThemeByNameWithFallback(cfg.GetTheme())
+	appStyles := styles.NewStyles(theme)
+
 	// Create status bar with org/project info
-	statusBar := components.NewStatusBar()
+	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
 	statusBar.SetProject(cfg.Project)
 
@@ -54,10 +59,10 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	}
 
 	// Create context bar for view-specific info
-	contextBar := components.NewContextBar()
+	contextBar := components.NewContextBar(appStyles)
 
 	// Create help modal
-	helpModal := components.NewHelpModal()
+	helpModal := components.NewHelpModal(appStyles)
 
 	// Create poller with configured interval
 	interval := time.Duration(cfg.PollingInterval) * time.Second
@@ -69,6 +74,7 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	return Model{
 		client:           client,
 		config:           cfg,
+		styles:           appStyles,
 		activeTab:        TabPipelines,
 		pipelinesView:    pipelines.NewModel(client),
 		pullRequestsView: pullrequests.NewModel(client),
@@ -190,22 +196,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// Tab header styles
-var (
-	activeTabStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("229")).
-			Background(lipgloss.Color("57")).
-			Padding(0, 2).
-			Bold(true)
-
-	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252")).
-				Background(lipgloss.Color("236")).
-				Padding(0, 2)
-
-	tabBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("236"))
-)
+// Note: Tab styles are now provided by the styles package and accessed via m.styles
 
 // renderTabBar renders the tab header
 func (m Model) renderTabBar() string {
@@ -213,20 +204,20 @@ func (m Model) renderTabBar() string {
 
 	switch m.activeTab {
 	case TabPipelines:
-		tab1 = activeTabStyle.Render("1: Pipelines")
-		tab2 = inactiveTabStyle.Render("2: Pull Requests")
-		tab3 = inactiveTabStyle.Render("3: Work Items")
+		tab1 = m.styles.TabActive.Render("1: Pipelines")
+		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
+		tab3 = m.styles.TabInactive.Render("3: Work Items")
 	case TabPullRequests:
-		tab1 = inactiveTabStyle.Render("1: Pipelines")
-		tab2 = activeTabStyle.Render("2: Pull Requests")
-		tab3 = inactiveTabStyle.Render("3: Work Items")
+		tab1 = m.styles.TabInactive.Render("1: Pipelines")
+		tab2 = m.styles.TabActive.Render("2: Pull Requests")
+		tab3 = m.styles.TabInactive.Render("3: Work Items")
 	case TabWorkItems:
-		tab1 = inactiveTabStyle.Render("1: Pipelines")
-		tab2 = inactiveTabStyle.Render("2: Pull Requests")
-		tab3 = activeTabStyle.Render("3: Work Items")
+		tab1 = m.styles.TabInactive.Render("1: Pipelines")
+		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
+		tab3 = m.styles.TabActive.Render("3: Work Items")
 	}
 
-	return tabBarStyle.Render(tab1+" "+tab2+" "+tab3) + "\n"
+	return m.styles.TabBar.Render(tab1+" "+tab2+" "+tab3) + "\n"
 }
 
 // View renders the application UI
