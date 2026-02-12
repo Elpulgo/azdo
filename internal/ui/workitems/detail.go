@@ -191,9 +191,17 @@ func (m *DetailModel) GetWorkItem() azdevops.WorkItem {
 
 // Helper functions
 
-// stripHTMLTags removes HTML tags from a string
+// stripHTMLTags removes HTML tags from a string and converts to plain text
 func stripHTMLTags(s string) string {
-	// Remove HTML tags
+	// Convert block elements to newlines before stripping
+	blockTags := regexp.MustCompile(`(?i)</(p|div|br|li|tr)>`)
+	s = blockTags.ReplaceAllString(s, "\n")
+
+	// Convert <br> and <br/> to newlines
+	brTags := regexp.MustCompile(`(?i)<br\s*/?>`)
+	s = brTags.ReplaceAllString(s, "\n")
+
+	// Remove remaining HTML tags
 	re := regexp.MustCompile(`<[^>]*>`)
 	s = re.ReplaceAllString(s, "")
 
@@ -205,13 +213,19 @@ func stripHTMLTags(s string) string {
 	s = strings.ReplaceAll(s, "&quot;", "\"")
 	s = strings.ReplaceAll(s, "&#39;", "'")
 
-	// Clean up excessive whitespace
-	s = strings.TrimSpace(s)
-	for strings.Contains(s, "  ") {
-		s = strings.ReplaceAll(s, "  ", " ")
+	// Clean up excessive blank lines (more than 2 newlines -> 2)
+	for strings.Contains(s, "\n\n\n") {
+		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
 	}
 
-	return s
+	// Clean up spaces on each line
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	s = strings.Join(lines, "\n")
+
+	return strings.TrimSpace(s)
 }
 
 // shortenIterationPath shortens a long iteration path

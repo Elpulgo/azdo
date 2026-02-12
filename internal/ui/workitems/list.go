@@ -3,6 +3,7 @@ package workitems
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
@@ -329,18 +330,21 @@ func stateText(state string) string {
 	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	cyanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
 
-	switch state {
-	case "New":
+	// Normalize for comparison
+	stateLower := strings.ToLower(state)
+
+	switch {
+	case stateLower == "new":
 		return grayStyle.Render("○ New")
-	case "Active":
+	case stateLower == "active":
 		return blueStyle.Render("◐ Active")
-	case "Resolved":
+	case stateLower == "resolved":
 		return yellowStyle.Render("● Resolved")
-	case "Ready for Test":
-		return cyanStyle.Render("● Ready for Test")
-	case "Closed":
+	case strings.Contains(stateLower, "ready"):
+		return cyanStyle.Render("● " + state)
+	case stateLower == "closed":
 		return greenStyle.Render("✓ Closed")
-	case "Removed":
+	case stateLower == "removed":
 		return redStyle.Render("✗ Removed")
 	default:
 		return grayStyle.Render("○ " + state)
