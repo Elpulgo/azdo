@@ -320,26 +320,30 @@ func typeIcon(workItemType string) string {
 }
 
 // stateText returns styled text for the work item state
+// Workflow: New → Active → Resolved/Ready for Test → Closed
 func stateText(state string) string {
 	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
 	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	cyanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
 
 	switch state {
 	case "New":
 		return grayStyle.Render("○ New")
 	case "Active":
-		return blueStyle.Render("● Active")
+		return blueStyle.Render("◐ Active")
 	case "Resolved":
-		return yellowStyle.Render("◐ Resolved")
+		return yellowStyle.Render("● Resolved")
+	case "Ready for Test":
+		return cyanStyle.Render("● Ready for Test")
 	case "Closed":
 		return greenStyle.Render("✓ Closed")
 	case "Removed":
 		return redStyle.Render("✗ Removed")
 	default:
-		return grayStyle.Render(state)
+		return grayStyle.Render("○ " + state)
 	}
 }
 

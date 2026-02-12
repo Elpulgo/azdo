@@ -39,12 +39,13 @@ func TestWorkItem_StateIcon(t *testing.T) {
 		want  string
 	}{
 		{"New", "○"},
-		{"Active", "●"},
-		{"Resolved", "◐"},
+		{"Active", "◐"},
+		{"Resolved", "●"},
+		{"Ready for Test", "●"},
 		{"Closed", "✓"},
 		{"Removed", "✗"},
-		{"Unknown", "?"},
-		{"", "?"},
+		{"Unknown", "○"},
+		{"", "○"},
 	}
 
 	for _, tt := range tests {

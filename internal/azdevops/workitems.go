@@ -66,20 +66,21 @@ func (wi *WorkItem) TypeIcon() string {
 }
 
 // StateIcon returns an icon for the work item state
+// Workflow: New → Active → Resolved/Ready for Test → Closed
 func (wi *WorkItem) StateIcon() string {
 	switch wi.Fields.State {
 	case "New":
 		return "○"
 	case "Active":
-		return "●"
-	case "Resolved":
 		return "◐"
+	case "Resolved", "Ready for Test":
+		return "●"
 	case "Closed":
 		return "✓"
 	case "Removed":
 		return "✗"
 	default:
-		return "?"
+		return "○"
 	}
 }
 
@@ -139,6 +140,7 @@ func (c *Client) GetWorkItems(ids []int) ([]WorkItem, error) {
 		"Microsoft.VSTS.Common.Priority",
 		"System.ChangedDate",
 		"System.IterationPath",
+		"System.Description",
 	}, ",")
 
 	path := fmt.Sprintf("/wit/workitems?ids=%s&fields=%s&api-version=7.1", idsParam, fields)
