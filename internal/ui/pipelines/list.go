@@ -38,6 +38,7 @@ type Model struct {
 	detail    *DetailModel
 	logViewer *LogViewerModel
 	spinner   *components.LoadingIndicator
+	styles    *styles.Styles
 }
 
 // Column width ratios (percentages of available width)
@@ -60,8 +61,13 @@ const (
 	minDurationWidth  = 8
 )
 
-// NewModel creates a new pipeline list model
+// NewModel creates a new pipeline list model with default styles
 func NewModel(client *azdevops.Client) Model {
+	return NewModelWithStyles(client, styles.DefaultStyles())
+}
+
+// NewModelWithStyles creates a new pipeline list model with custom styles
+func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 	// Start with minimum widths, will be resized on first WindowSizeMsg
 	columns := makeColumns(80)
 
@@ -71,19 +77,12 @@ func NewModel(client *azdevops.Client) Model {
 		table.WithHeight(10),
 	)
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(false)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
+	ts := table.DefaultStyles()
+	ts.Header = s.TableHeader
+	ts.Selected = s.TableSelected
+	t.SetStyles(ts)
 
-	spinner := components.NewLoadingIndicator(styles.DefaultStyles())
+	spinner := components.NewLoadingIndicator(s)
 	spinner.SetMessage("Loading pipeline runs...")
 
 	return Model{
@@ -92,6 +91,7 @@ func NewModel(client *azdevops.Client) Model {
 		runs:     []azdevops.PipelineRun{},
 		viewMode: ViewList,
 		spinner:  spinner,
+		styles:   s,
 	}
 }
 
@@ -132,8 +132,6 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	// Handle window resize for all views
 	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width = wmsg.Width
@@ -149,8 +147,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	default:
 		return m.updateList(msg)
 	}
-
-	return m, cmd
 }
 
 // updateList handles updates for the list view
@@ -338,7 +334,7 @@ func (m Model) runsToRows() []table.Row {
 	rows := make([]table.Row, len(m.runs))
 	for i, run := range m.runs {
 		rows[i] = table.Row{
-			statusIcon(run.Status, run.Result),
+			statusIconWithStyles(run.Status, run.Result, m.styles),
 			run.Definition.Name,
 			run.BranchShortName(),
 			run.BuildNumber,
@@ -349,38 +345,35 @@ func (m Model) runsToRows() []table.Row {
 	return rows
 }
 
-// statusIcon returns a colored status icon for the pipeline run
+// statusIcon returns a colored status icon for the pipeline run using default styles
 func statusIcon(status, result string) string {
+	return statusIconWithStyles(status, result, styles.DefaultStyles())
+}
+
+// statusIconWithStyles returns a colored status icon using the provided styles
+func statusIconWithStyles(status, result string, s *styles.Styles) string {
 	// Use case-insensitive comparison for status values
 	statusLower := strings.ToLower(status)
 	resultLower := strings.ToLower(result)
 
-	// Define styles
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-
 	switch {
 	case statusLower == "inprogress":
-		return blueStyle.Render("● Running")
+		return s.Info.Render("● Running")
 	case statusLower == "notstarted":
-		return blueStyle.Render("○ Queued")
+		return s.Info.Render("○ Queued")
 	case statusLower == "canceling":
-		return orangeStyle.Render("⊘ Cancel")
+		return s.Warning.Render("⊘ Cancel")
 	case resultLower == "succeeded":
-		return greenStyle.Render("✓ Success")
+		return s.Success.Render("✓ Success")
 	case resultLower == "failed":
-		return redStyle.Render("✗ Failed")
+		return s.Error.Render("✗ Failed")
 	case resultLower == "canceled":
-		return grayStyle.Render("○ Cancel")
+		return s.Muted.Render("○ Cancel")
 	case resultLower == "partiallysucceeded":
-		return yellowStyle.Render("⚠ Partial")
+		return s.Warning.Render("⚠ Partial")
 	default:
 		// Debug: show what we received
-		return grayStyle.Render(fmt.Sprintf("%s/%s", status, result))
+		return s.Muted.Render(fmt.Sprintf("%s/%s", status, result))
 	}
 }
 

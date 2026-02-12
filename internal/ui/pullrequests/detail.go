@@ -28,19 +28,26 @@ type DetailModel struct {
 	ready         bool
 	statusMessage string
 	spinner       *components.LoadingIndicator
+	styles        *styles.Styles
 }
 
-// NewDetailModel creates a new PR detail model
+// NewDetailModel creates a new PR detail model with default styles
 func NewDetailModel(client *azdevops.Client, pr azdevops.PullRequest) *DetailModel {
-	s := components.NewLoadingIndicator(styles.DefaultStyles())
-	s.SetMessage(fmt.Sprintf("Loading threads for PR #%d...", pr.ID))
+	return NewDetailModelWithStyles(client, pr, styles.DefaultStyles())
+}
+
+// NewDetailModelWithStyles creates a new PR detail model with custom styles
+func NewDetailModelWithStyles(client *azdevops.Client, pr azdevops.PullRequest, s *styles.Styles) *DetailModel {
+	spinner := components.NewLoadingIndicator(s)
+	spinner.SetMessage(fmt.Sprintf("Loading threads for PR #%d...", pr.ID))
 
 	return &DetailModel{
 		client:        client,
 		pr:            pr,
 		threads:       []azdevops.Thread{},
 		selectedIndex: 0,
-		spinner:       s,
+		spinner:       spinner,
+		styles:        s,
 	}
 }
 
@@ -131,13 +138,11 @@ func (m *DetailModel) View() string {
 	var sb strings.Builder
 
 	// Header with PR title
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("PR #%d: %s", m.pr.ID, m.pr.Title)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("PR #%d: %s", m.pr.ID, m.pr.Title)))
 	sb.WriteString("\n")
 
 	// Branch info
-	branchStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	sb.WriteString(branchStyle.Render(fmt.Sprintf("%s → %s", m.pr.SourceBranchShortName(), m.pr.TargetBranchShortName())))
+	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s → %s", m.pr.SourceBranchShortName(), m.pr.TargetBranchShortName())))
 	sb.WriteString("\n")
 	separatorWidth := min(m.width-2, 60)
 	if separatorWidth < 1 {
@@ -168,7 +173,7 @@ func (m *DetailModel) View() string {
 func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string {
 	var sb strings.Builder
 
-	icon := threadStatusIcon(thread.Status)
+	icon := threadStatusIconWithStyles(thread.Status, m.styles)
 	statusStyle := lipgloss.NewStyle().Bold(true)
 
 	// Header line with status icon and file location
@@ -176,7 +181,6 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 
 	// Add file path and line number for code comments
 	if thread.IsCodeComment() {
-		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
 		shortPath := shortenFilePath(thread.ThreadContext.FilePath)
 		location := shortPath
 		if thread.ThreadContext.RightFileStart != nil {
@@ -196,17 +200,14 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		}
 
 		// Render as hyperlink (falls back to plain text if no URL)
-		styledLocation := fileStyle.Render(location)
+		styledLocation := m.styles.Link.Render(location)
 		headerParts = append(headerParts, hyperlink(styledLocation, threadURL))
 	}
 
 	// Build header line with selection indicator on this line only
 	headerLine := "  " + strings.Join(headerParts, " ")
 	if selected {
-		selectedStyle := lipgloss.NewStyle().
-			Background(lipgloss.Color("57")).
-			Foreground(lipgloss.Color("229"))
-		headerLine = selectedStyle.Render(headerLine)
+		headerLine = m.styles.Selected.Render(headerLine)
 	}
 	sb.WriteString(headerLine)
 	sb.WriteString("\n")
@@ -217,9 +218,6 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 		if comment.ParentCommentID != 0 {
 			indent = "      └ " // Reply indicator
 		}
-
-		authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
-		contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 
 		// Replace line breaks with spaces for cleaner display
 		content := strings.ReplaceAll(comment.Content, "\r\n", " ")
@@ -246,8 +244,8 @@ func (m *DetailModel) renderThread(thread azdevops.Thread, selected bool) string
 
 		commentLine := fmt.Sprintf("%s%s: %s",
 			indent,
-			authorStyle.Render(comment.Author.DisplayName),
-			contentStyle.Render(content))
+			m.styles.Header.Render(comment.Author.DisplayName),
+			m.styles.Value.Render(content))
 
 		sb.WriteString(commentLine)
 		if i < len(thread.Comments)-1 {
@@ -288,8 +286,7 @@ func (m *DetailModel) updateViewportContent() {
 
 	// Description
 	if m.pr.Description != "" {
-		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-		sb.WriteString(descStyle.Render(m.pr.Description))
+		sb.WriteString(m.styles.Value.Render(m.pr.Description))
 		sb.WriteString("\n\n")
 	}
 
@@ -302,30 +299,26 @@ func (m *DetailModel) updateViewportContent() {
 			m.pr.ID,
 		)
 		if prURL != "" {
-			linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
-			sb.WriteString(hyperlink(linkStyle.Render("Go to PR"), prURL))
+			sb.WriteString(hyperlink(m.styles.Link.Render("Go to PR"), prURL))
 			sb.WriteString("\n\n")
 		}
 	}
 
 	// Reviewers section
 	if len(m.pr.Reviewers) > 0 {
-		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
-		sb.WriteString(sectionStyle.Render("Reviewers"))
+		sb.WriteString(m.styles.Label.Render("Reviewers"))
 		sb.WriteString("\n")
 		for _, reviewer := range m.pr.Reviewers {
-			icon := reviewerVoteIcon(reviewer.Vote)
+			icon := reviewerVoteIconWithStyles(reviewer.Vote, m.styles)
 			voteDesc := reviewerVoteDescription(reviewer.Vote)
-			voteStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-			sb.WriteString(fmt.Sprintf("  %s %s (%s)\n", icon, reviewer.DisplayName, voteStyle.Render(voteDesc)))
+			sb.WriteString(fmt.Sprintf("  %s %s (%s)\n", icon, reviewer.DisplayName, m.styles.Muted.Render(voteDesc)))
 		}
 		sb.WriteString("\n")
 	}
 
 	// Threads section
 	if len(m.threads) > 0 {
-		sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
-		sb.WriteString(sectionStyle.Render(fmt.Sprintf("Comments (%d)", len(m.threads))))
+		sb.WriteString(m.styles.Label.Render(fmt.Sprintf("Comments (%d)", len(m.threads))))
 		sb.WriteString("\n")
 
 		for i, thread := range m.threads {
@@ -334,8 +327,7 @@ func (m *DetailModel) updateViewportContent() {
 			sb.WriteString("\n\n") // Extra blank line between threads for spacing
 		}
 	} else {
-		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		sb.WriteString(grayStyle.Render("No comments"))
+		sb.WriteString(m.styles.Muted.Render("No comments"))
 		sb.WriteString("\n")
 	}
 
@@ -629,27 +621,26 @@ func shortenFilePath(path string) string {
 	return path
 }
 
-// reviewerVoteIcon returns an icon for the reviewer's vote
+// reviewerVoteIcon returns an icon for the reviewer's vote using default styles
 func reviewerVoteIcon(vote int) string {
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	return reviewerVoteIconWithStyles(vote, styles.DefaultStyles())
+}
 
+// reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles
+func reviewerVoteIconWithStyles(vote int, s *styles.Styles) string {
 	switch vote {
 	case 10:
-		return greenStyle.Render("✓")
+		return s.Success.Render("✓")
 	case 5:
-		return yellowStyle.Render("~")
+		return s.Warning.Render("~")
 	case 0:
-		return grayStyle.Render("○")
+		return s.Muted.Render("○")
 	case -5:
-		return orangeStyle.Render("◐")
+		return s.Warning.Render("◐")
 	case -10:
-		return redStyle.Render("✗")
+		return s.Error.Render("✗")
 	default:
-		return grayStyle.Render("?")
+		return s.Muted.Render("?")
 	}
 }
 
@@ -671,24 +662,24 @@ func reviewerVoteDescription(vote int) string {
 	}
 }
 
-// threadStatusIcon returns an icon for the thread status
+// threadStatusIcon returns an icon for the thread status using default styles
 func threadStatusIcon(status string) string {
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	return threadStatusIconWithStyles(status, styles.DefaultStyles())
+}
 
+// threadStatusIconWithStyles returns an icon for the thread status using provided styles
+func threadStatusIconWithStyles(status string, s *styles.Styles) string {
 	switch status {
 	case "active":
-		return blueStyle.Render("●")
+		return s.Info.Render("●")
 	case "fixed":
-		return greenStyle.Render("✓")
+		return s.Success.Render("✓")
 	case "wontFix", "closed":
-		return grayStyle.Render("○")
+		return s.Muted.Render("○")
 	case "pending":
-		return orangeStyle.Render("◐")
+		return s.Warning.Render("◐")
 	default:
-		return grayStyle.Render("○")
+		return s.Muted.Render("○")
 	}
 }
 

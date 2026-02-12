@@ -36,6 +36,7 @@ type Model struct {
 	viewMode ViewMode
 	detail   *DetailModel
 	spinner  *components.LoadingIndicator
+	styles   *styles.Styles
 }
 
 // Column width ratios (percentages of available width)
@@ -58,8 +59,13 @@ const (
 	minReviewsWidth = 6
 )
 
-// NewModel creates a new pull request list model
+// NewModel creates a new pull request list model with default styles
 func NewModel(client *azdevops.Client) Model {
+	return NewModelWithStyles(client, styles.DefaultStyles())
+}
+
+// NewModelWithStyles creates a new pull request list model with custom styles
+func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 	// Start with minimum widths, will be resized on first WindowSizeMsg
 	columns := makeColumns(80)
 
@@ -69,19 +75,12 @@ func NewModel(client *azdevops.Client) Model {
 		table.WithHeight(10),
 	)
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(false)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
+	ts := table.DefaultStyles()
+	ts.Header = s.TableHeader
+	ts.Selected = s.TableSelected
+	t.SetStyles(ts)
 
-	spinner := components.NewLoadingIndicator(styles.DefaultStyles())
+	spinner := components.NewLoadingIndicator(s)
 	spinner.SetMessage("Loading pull requests...")
 
 	return Model{
@@ -90,6 +89,7 @@ func NewModel(client *azdevops.Client) Model {
 		prs:      []azdevops.PullRequest{},
 		viewMode: ViewList,
 		spinner:  spinner,
+		styles:   s,
 	}
 }
 
@@ -130,8 +130,6 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	// Handle window resize for all views
 	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width = wmsg.Width
@@ -145,8 +143,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	default:
 		return m.updateList(msg)
 	}
-
-	return m, cmd
 }
 
 // updateList handles updates for the list view
@@ -290,56 +286,53 @@ func (m Model) prsToRows() []table.Row {
 	for i, pr := range m.prs {
 		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
 		rows[i] = table.Row{
-			statusIcon(pr.Status, pr.IsDraft),
+			statusIconWithStyles(pr.Status, pr.IsDraft, m.styles),
 			pr.Title,
 			branchInfo,
 			pr.CreatedBy.DisplayName,
 			pr.Repository.Name,
-			voteIcon(pr.Reviewers),
+			voteIconWithStyles(pr.Reviewers, m.styles),
 		}
 	}
 	return rows
 }
 
-// statusIcon returns a colored status icon for the pull request
+// statusIcon returns a colored status icon for the pull request using default styles
 func statusIcon(status string, isDraft bool) string {
-	statusLower := strings.ToLower(status)
+	return statusIconWithStyles(status, isDraft, styles.DefaultStyles())
+}
 
-	// Define styles
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
+// statusIconWithStyles returns a colored status icon using the provided styles
+func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string {
+	statusLower := strings.ToLower(status)
 
 	// Draft takes precedence
 	if isDraft {
-		return yellowStyle.Render("◐ Draft")
+		return s.Warning.Render("◐ Draft")
 	}
 
 	switch statusLower {
 	case "active":
-		return blueStyle.Render("● Active")
+		return s.Info.Render("● Active")
 	case "completed":
-		return greenStyle.Render("✓ Merged")
+		return s.Success.Render("✓ Merged")
 	case "abandoned":
-		return grayStyle.Render("○ Closed")
+		return s.Muted.Render("○ Closed")
 	default:
-		return grayStyle.Render(status)
+		return s.Muted.Render(status)
 	}
 }
 
-// voteIcon returns a summary icon for reviewer votes
+// voteIcon returns a summary icon for reviewer votes using default styles
 func voteIcon(reviewers []azdevops.Reviewer) string {
-	if len(reviewers) == 0 {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("-")
-	}
+	return voteIconWithStyles(reviewers, styles.DefaultStyles())
+}
 
-	// Define styles
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+// voteIconWithStyles returns a summary icon for reviewer votes using provided styles
+func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string {
+	if len(reviewers) == 0 {
+		return s.Muted.Render("-")
+	}
 
 	// Find the most significant vote (rejected > waiting > approved with suggestions > approved > no vote)
 	hasRejected := false
@@ -367,17 +360,17 @@ func voteIcon(reviewers []azdevops.Reviewer) string {
 
 	switch {
 	case hasRejected:
-		return redStyle.Render(fmt.Sprintf("✗ %d", count))
+		return s.Error.Render(fmt.Sprintf("✗ %d", count))
 	case hasWaiting:
-		return orangeStyle.Render(fmt.Sprintf("◐ %d", count))
+		return s.Warning.Render(fmt.Sprintf("◐ %d", count))
 	case hasApprovedWithSuggestions:
-		return yellowStyle.Render(fmt.Sprintf("~ %d", count))
+		return s.Warning.Render(fmt.Sprintf("~ %d", count))
 	case hasApproved:
-		return greenStyle.Render(fmt.Sprintf("✓ %d", count))
+		return s.Success.Render(fmt.Sprintf("✓ %d", count))
 	case hasNoVote:
-		return grayStyle.Render(fmt.Sprintf("○ %d", count))
+		return s.Muted.Render(fmt.Sprintf("○ %d", count))
 	default:
-		return grayStyle.Render(fmt.Sprintf("- %d", count))
+		return s.Muted.Render(fmt.Sprintf("- %d", count))
 	}
 }
 

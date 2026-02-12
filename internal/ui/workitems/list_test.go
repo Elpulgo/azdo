@@ -5,8 +5,109 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestNewModel_HasStyles(t *testing.T) {
+	m := NewModel(nil)
+
+	if m.styles == nil {
+		t.Error("Expected model to have styles initialized")
+	}
+}
+
+func TestNewModelWithStyles(t *testing.T) {
+	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
+	m := NewModelWithStyles(nil, customStyles)
+
+	if m.styles != customStyles {
+		t.Error("Expected model to use provided custom styles")
+	}
+}
+
+func TestTypeIconWithStyles(t *testing.T) {
+	themes := []string{"dark", "gruvbox", "nord", "dracula"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			tests := []struct {
+				workItemType string
+				wantContains string
+			}{
+				{"Bug", "Bug"},
+				{"Task", "Task"},
+				{"User Story", "Story"},
+				{"Feature", "Feature"},
+			}
+
+			for _, tt := range tests {
+				got := typeIconWithStyles(tt.workItemType, s)
+				if !strings.Contains(got, tt.wantContains) {
+					t.Errorf("typeIconWithStyles(%q) with theme %s = %q, want to contain %q",
+						tt.workItemType, themeName, got, tt.wantContains)
+				}
+			}
+		})
+	}
+}
+
+func TestStateTextWithStyles(t *testing.T) {
+	themes := []string{"dark", "nord"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			tests := []struct {
+				state        string
+				wantContains string
+			}{
+				{"New", "New"},
+				{"Active", "Active"},
+				{"Closed", "Closed"},
+			}
+
+			for _, tt := range tests {
+				got := stateTextWithStyles(tt.state, s)
+				if !strings.Contains(got, tt.wantContains) {
+					t.Errorf("stateTextWithStyles(%q) with theme %s = %q, want to contain %q",
+						tt.state, themeName, got, tt.wantContains)
+				}
+			}
+		})
+	}
+}
+
+func TestPriorityTextWithStyles(t *testing.T) {
+	themes := []string{"dark", "gruvbox"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			tests := []struct {
+				priority     int
+				wantContains string
+			}{
+				{1, "P1"},
+				{2, "P2"},
+				{3, "P3"},
+				{4, "P4"},
+			}
+
+			for _, tt := range tests {
+				got := priorityTextWithStyles(tt.priority, s)
+				if !strings.Contains(got, tt.wantContains) {
+					t.Errorf("priorityTextWithStyles(%d) with theme %s = %q, want to contain %q",
+						tt.priority, themeName, got, tt.wantContains)
+				}
+			}
+		})
+	}
+}
 
 func TestNewModel(t *testing.T) {
 	m := NewModel(nil)

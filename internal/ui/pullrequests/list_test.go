@@ -7,8 +7,81 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestNewModel_HasStyles(t *testing.T) {
+	m := NewModel(nil)
+
+	if m.styles == nil {
+		t.Error("Expected model to have styles initialized")
+	}
+}
+
+func TestNewModelWithStyles(t *testing.T) {
+	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
+	m := NewModelWithStyles(nil, customStyles)
+
+	if m.styles != customStyles {
+		t.Error("Expected model to use provided custom styles")
+	}
+}
+
+func TestStatusIconWithStyles(t *testing.T) {
+	themes := []string{"dark", "gruvbox", "nord", "dracula"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			tests := []struct {
+				status   string
+				isDraft  bool
+				wantIcon string
+			}{
+				{"active", false, "Active"},
+				{"completed", false, "Merged"},
+				{"active", true, "Draft"},
+			}
+
+			for _, tt := range tests {
+				got := statusIconWithStyles(tt.status, tt.isDraft, s)
+				if !strings.Contains(got, tt.wantIcon) {
+					t.Errorf("statusIconWithStyles(%q, %v) with theme %s = %q, want to contain %q",
+						tt.status, tt.isDraft, themeName, got, tt.wantIcon)
+				}
+			}
+		})
+	}
+}
+
+func TestVoteIconWithStyles(t *testing.T) {
+	themes := []string{"dark", "gruvbox", "nord"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			tests := []struct {
+				reviewers []azdevops.Reviewer
+				wantIcon  string
+			}{
+				{[]azdevops.Reviewer{{Vote: 10}}, "✓"},
+				{[]azdevops.Reviewer{{Vote: -10}}, "✗"},
+				{[]azdevops.Reviewer{}, "-"},
+			}
+
+			for _, tt := range tests {
+				got := voteIconWithStyles(tt.reviewers, s)
+				if !strings.Contains(got, tt.wantIcon) {
+					t.Errorf("voteIconWithStyles with theme %s = %q, want to contain %q",
+						themeName, got, tt.wantIcon)
+				}
+			}
+		})
+	}
+}
 
 func TestStatusIcon(t *testing.T) {
 	tests := []struct {

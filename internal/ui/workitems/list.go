@@ -37,6 +37,7 @@ type Model struct {
 	viewMode  ViewMode
 	detail    *DetailModel
 	spinner   *components.LoadingIndicator
+	styles    *styles.Styles
 }
 
 // Column width ratios (percentages of available width) - must total 100%
@@ -59,8 +60,13 @@ const (
 	minAssignedWidth = 10
 )
 
-// NewModel creates a new work items list model
+// NewModel creates a new work items list model with default styles
 func NewModel(client *azdevops.Client) Model {
+	return NewModelWithStyles(client, styles.DefaultStyles())
+}
+
+// NewModelWithStyles creates a new work items list model with custom styles
+func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 	// Start with minimum widths, will be resized on first WindowSizeMsg
 	columns := makeColumns(80)
 
@@ -70,19 +76,12 @@ func NewModel(client *azdevops.Client) Model {
 		table.WithHeight(10),
 	)
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(false)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
+	ts := table.DefaultStyles()
+	ts.Header = s.TableHeader
+	ts.Selected = s.TableSelected
+	t.SetStyles(ts)
 
-	spinner := components.NewLoadingIndicator(styles.DefaultStyles())
+	spinner := components.NewLoadingIndicator(s)
 	spinner.SetMessage("Loading work items...")
 
 	return Model{
@@ -91,6 +90,7 @@ func NewModel(client *azdevops.Client) Model {
 		workItems: []azdevops.WorkItem{},
 		viewMode:  ViewList,
 		spinner:   spinner,
+		styles:    s,
 	}
 }
 
@@ -286,93 +286,95 @@ func (m Model) workItemsToRows() []table.Row {
 	rows := make([]table.Row, len(m.workItems))
 	for i, wi := range m.workItems {
 		rows[i] = table.Row{
-			typeIcon(wi.Fields.WorkItemType),
+			typeIconWithStyles(wi.Fields.WorkItemType, m.styles),
 			strconv.Itoa(wi.ID),
 			wi.Fields.Title,
-			stateText(wi.Fields.State),
-			priorityText(wi.Fields.Priority),
+			stateTextWithStyles(wi.Fields.State, m.styles),
+			priorityTextWithStyles(wi.Fields.Priority, m.styles),
 			wi.AssignedToName(),
 		}
 	}
 	return rows
 }
 
-// typeIcon returns a styled text label for the work item type
+// typeIcon returns a styled text label for the work item type using default styles
 func typeIcon(workItemType string) string {
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	purpleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("129"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	return typeIconWithStyles(workItemType, styles.DefaultStyles())
+}
+
+// typeIconWithStyles returns a styled text label for the work item type using provided styles
+func typeIconWithStyles(workItemType string, s *styles.Styles) string {
+	// Create accent style from theme for Feature/Epic
+	accentStyle := lipgloss.NewStyle().Foreground(s.Theme.Accent)
 
 	switch workItemType {
 	case "Bug":
-		return redStyle.Render("Bug")
+		return s.Error.Render("Bug")
 	case "Task":
-		return blueStyle.Render("Task")
+		return s.Info.Render("Task")
 	case "User Story":
-		return greenStyle.Render("Story")
+		return s.Success.Render("Story")
 	case "Feature":
-		return purpleStyle.Render("Feature")
+		return accentStyle.Render("Feature")
 	case "Epic":
-		return yellowStyle.Render("Epic")
+		return s.Warning.Render("Epic")
 	case "Issue":
-		return redStyle.Render("Issue")
+		return s.Error.Render("Issue")
 	default:
-		return grayStyle.Render("Item")
+		return s.Muted.Render("Item")
 	}
 }
 
-// stateText returns styled text for the work item state
+// stateText returns styled text for the work item state using default styles
 // Workflow: New → Active → Resolved/Ready for Test → Closed
 func stateText(state string) string {
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	cyanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
+	return stateTextWithStyles(state, styles.DefaultStyles())
+}
 
+// stateTextWithStyles returns styled text for the work item state using provided styles
+func stateTextWithStyles(state string, s *styles.Styles) string {
 	// Normalize for comparison
 	stateLower := strings.ToLower(state)
 
+	// Create secondary style for "Ready" states
+	secondaryStyle := lipgloss.NewStyle().Foreground(s.Theme.Secondary)
+
 	switch {
 	case stateLower == "new":
-		return grayStyle.Render("New")
+		return s.Muted.Render("New")
 	case stateLower == "active":
-		return blueStyle.Render("Active")
+		return s.Info.Render("Active")
 	case stateLower == "resolved":
-		return yellowStyle.Render("Resolved")
+		return s.Warning.Render("Resolved")
 	case strings.Contains(stateLower, "ready"):
-		return cyanStyle.Render(state)
+		return secondaryStyle.Render(state)
 	case stateLower == "closed":
-		return greenStyle.Render("Closed")
+		return s.Success.Render("Closed")
 	case stateLower == "removed":
-		return redStyle.Render("Removed")
+		return s.Error.Render("Removed")
 	default:
-		return grayStyle.Render(state)
+		return s.Muted.Render(state)
 	}
 }
 
-// priorityText returns styled text for priority
+// priorityText returns styled text for priority using default styles
 func priorityText(priority int) string {
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	return priorityTextWithStyles(priority, styles.DefaultStyles())
+}
 
+// priorityTextWithStyles returns styled text for priority using provided styles
+func priorityTextWithStyles(priority int, s *styles.Styles) string {
 	switch priority {
 	case 1:
-		return redStyle.Render("P1")
+		return s.Error.Render("P1")
 	case 2:
-		return orangeStyle.Render("P2")
+		return s.Warning.Render("P2")
 	case 3:
-		return yellowStyle.Render("P3")
+		return s.Warning.Render("P3")
 	case 4:
-		return grayStyle.Render("P4")
+		return s.Muted.Render("P4")
 	default:
-		return grayStyle.Render(fmt.Sprintf("P%d", priority))
+		return s.Muted.Render(fmt.Sprintf("P%d", priority))
 	}
 }
 

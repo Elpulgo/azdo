@@ -7,6 +7,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,13 +21,20 @@ type DetailModel struct {
 	height   int
 	viewport viewport.Model
 	ready    bool
+	styles   *styles.Styles
 }
 
-// NewDetailModel creates a new work item detail model
+// NewDetailModel creates a new work item detail model with default styles
 func NewDetailModel(client *azdevops.Client, wi azdevops.WorkItem) *DetailModel {
+	return NewDetailModelWithStyles(client, wi, styles.DefaultStyles())
+}
+
+// NewDetailModelWithStyles creates a new work item detail model with custom styles
+func NewDetailModelWithStyles(client *azdevops.Client, wi azdevops.WorkItem, s *styles.Styles) *DetailModel {
 	return &DetailModel{
 		client:   client,
 		workItem: wi,
+		styles:   s,
 	}
 }
 
@@ -65,13 +73,11 @@ func (m *DetailModel) View() string {
 	wi := m.workItem
 
 	// Fixed header with ID and title (no type icon)
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("#%d: %s", wi.ID, wi.Fields.Title)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("#%d: %s", wi.ID, wi.Fields.Title)))
 	sb.WriteString("\n")
 
 	// Type, state and priority
-	stateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	sb.WriteString(stateStyle.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.Fields.WorkItemType, wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
+	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.Fields.WorkItemType, wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
 	sb.WriteString("\n")
 
 	// Separator
@@ -106,46 +112,41 @@ func (m *DetailModel) updateViewportContent() {
 	wi := m.workItem
 
 	// Assigned To
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 	if wi.Fields.AssignedTo != nil {
-		sb.WriteString(labelStyle.Render("Assigned To: "))
+		sb.WriteString(m.styles.Label.Render("Assigned To: "))
 		sb.WriteString(wi.Fields.AssignedTo.DisplayName)
 		sb.WriteString("\n\n")
 	} else {
-		sb.WriteString(labelStyle.Render("Assigned To: "))
-		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		sb.WriteString(grayStyle.Render("Unassigned"))
+		sb.WriteString(m.styles.Label.Render("Assigned To: "))
+		sb.WriteString(m.styles.Muted.Render("Unassigned"))
 		sb.WriteString("\n\n")
 	}
 
 	// Iteration Path
 	if wi.Fields.IterationPath != "" {
-		sb.WriteString(labelStyle.Render("Iteration: "))
+		sb.WriteString(m.styles.Label.Render("Iteration: "))
 		sb.WriteString(shortenIterationPath(wi.Fields.IterationPath))
 		sb.WriteString("\n\n")
 	}
 
 	// Description (with HTML stripped)
 	if wi.Fields.Description != "" {
-		sb.WriteString(labelStyle.Render("Description"))
+		sb.WriteString(m.styles.Label.Render("Description"))
 		sb.WriteString("\n")
-		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 		cleanDesc := stripHTMLTags(wi.Fields.Description)
-		sb.WriteString(descStyle.Render(cleanDesc))
+		sb.WriteString(m.styles.Value.Render(cleanDesc))
 		sb.WriteString("\n")
 	} else {
-		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		sb.WriteString(grayStyle.Render("No description"))
+		sb.WriteString(m.styles.Muted.Render("No description"))
 		sb.WriteString("\n")
 	}
 
 	// Link to work item
 	if m.client != nil {
 		sb.WriteString("\n")
-		linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
 		url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), wi.ID)
 		if url != "" {
-			sb.WriteString(hyperlink(linkStyle.Render("Open in browser"), url))
+			sb.WriteString(hyperlink(m.styles.Link.Render("Open in browser"), url))
 			sb.WriteString("\n")
 		}
 	}

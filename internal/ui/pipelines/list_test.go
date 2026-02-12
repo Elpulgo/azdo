@@ -6,8 +6,55 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestNewModel_HasStyles(t *testing.T) {
+	m := NewModel(nil)
+
+	if m.styles == nil {
+		t.Error("Expected model to have styles initialized")
+	}
+}
+
+func TestNewModelWithStyles(t *testing.T) {
+	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
+	m := NewModelWithStyles(nil, customStyles)
+
+	if m.styles != customStyles {
+		t.Error("Expected model to use provided custom styles")
+	}
+}
+
+func TestStatusIconWithStyles(t *testing.T) {
+	// Test that statusIcon works with different themes
+	themes := []string{"dark", "gruvbox", "nord", "dracula"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			// Test various statuses don't panic and return expected content
+			tests := []struct {
+				status, result string
+				wantContains   string
+			}{
+				{"inProgress", "", "Running"},
+				{"completed", "succeeded", "Success"},
+				{"completed", "failed", "Failed"},
+			}
+
+			for _, tt := range tests {
+				got := statusIconWithStyles(tt.status, tt.result, s)
+				if !strings.Contains(got, tt.wantContains) {
+					t.Errorf("statusIconWithStyles(%q, %q) with theme %s = %q, want to contain %q",
+						tt.status, tt.result, themeName, got, tt.wantContains)
+				}
+			}
+		})
+	}
+}
 
 func TestStatusIcon(t *testing.T) {
 	tests := []struct {

@@ -37,18 +37,25 @@ type DetailModel struct {
 	viewport      viewport.Model
 	ready         bool
 	spinner       *components.LoadingIndicator
+	styles        *styles.Styles
 }
 
-// NewDetailModel creates a new detail model for a pipeline run
+// NewDetailModel creates a new detail model for a pipeline run with default styles
 func NewDetailModel(client *azdevops.Client, run azdevops.PipelineRun) *DetailModel {
-	s := components.NewLoadingIndicator(styles.DefaultStyles())
-	s.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
+	return NewDetailModelWithStyles(client, run, styles.DefaultStyles())
+}
+
+// NewDetailModelWithStyles creates a new detail model with custom styles
+func NewDetailModelWithStyles(client *azdevops.Client, run azdevops.PipelineRun, s *styles.Styles) *DetailModel {
+	spinner := components.NewLoadingIndicator(s)
+	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
 
 	return &DetailModel{
 		client:        client,
 		run:           run,
 		selectedIndex: 0,
-		spinner:       s,
+		spinner:       spinner,
+		styles:        s,
 	}
 }
 
@@ -186,8 +193,7 @@ func (m *DetailModel) View() string {
 	var sb strings.Builder
 
 	// Header
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("%s #%s", m.run.Definition.Name, m.run.BuildNumber)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("%s #%s", m.run.Definition.Name, m.run.BuildNumber)))
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", min(m.width-2, 60)))
 	sb.WriteString("\n")
@@ -203,7 +209,7 @@ func (m *DetailModel) View() string {
 // renderRecord renders a single timeline record
 func (m *DetailModel) renderRecord(node *TimelineNode, selected bool) string {
 	indent := indentForType(node.Record.Type)
-	icon := recordIcon(node.Record.State, node.Record.Result)
+	icon := recordIconWithStyles(node.Record.State, node.Record.Result, m.styles)
 	duration := formatRecordDuration(node.Record.StartTime, node.Record.FinishTime)
 
 	// Format: [indent][icon] [name] [duration]
@@ -219,10 +225,7 @@ func (m *DetailModel) renderRecord(node *TimelineNode, selected bool) string {
 	}
 
 	if selected {
-		selectedStyle := lipgloss.NewStyle().
-			Background(lipgloss.Color("57")).
-			Foreground(lipgloss.Color("229"))
-		return selectedStyle.Render(line)
+		return m.styles.Selected.Render(line)
 	}
 
 	return line
@@ -367,32 +370,31 @@ func (m *DetailModel) fetchTimeline() tea.Cmd {
 
 // Helper functions
 
-// recordIcon returns an icon based on state and result
+// recordIcon returns an icon based on state and result using default styles
 func recordIcon(state, result string) string {
+	return recordIconWithStyles(state, result, styles.DefaultStyles())
+}
+
+// recordIconWithStyles returns an icon based on state and result using provided styles
+func recordIconWithStyles(state, result string, s *styles.Styles) string {
 	stateLower := strings.ToLower(state)
 	resultLower := strings.ToLower(result)
 
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-
 	switch {
 	case stateLower == "inprogress":
-		return blueStyle.Render("●")
+		return s.Info.Render("●")
 	case stateLower == "pending":
-		return grayStyle.Render("○")
+		return s.Muted.Render("○")
 	case resultLower == "succeeded":
-		return greenStyle.Render("✓")
+		return s.Success.Render("✓")
 	case resultLower == "succeededwithissues":
-		return yellowStyle.Render("⚠")
+		return s.Warning.Render("⚠")
 	case resultLower == "failed":
-		return redStyle.Render("✗")
+		return s.Error.Render("✗")
 	case resultLower == "canceled", resultLower == "skipped", resultLower == "abandoned":
-		return grayStyle.Render("○")
+		return s.Muted.Render("○")
 	default:
-		return grayStyle.Render("○")
+		return s.Muted.Render("○")
 	}
 }
 

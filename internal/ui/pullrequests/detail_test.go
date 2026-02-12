@@ -7,8 +7,54 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestDetailModel_HasStyles(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 123, Title: "Test"}
+	m := NewDetailModel(nil, pr)
+
+	if m.styles == nil {
+		t.Error("Expected detail model to have styles initialized")
+	}
+}
+
+func TestDetailModel_WithStyles(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 123, Title: "Test"}
+	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
+	m := NewDetailModelWithStyles(nil, pr, customStyles)
+
+	if m.styles != customStyles {
+		t.Error("Expected detail model to use provided custom styles")
+	}
+}
+
+func TestDetailIconsWithStyles(t *testing.T) {
+	themes := []string{"dark", "gruvbox", "nord", "dracula"}
+
+	for _, themeName := range themes {
+		t.Run(themeName, func(t *testing.T) {
+			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
+
+			// Test reviewer vote icons
+			if !strings.Contains(reviewerVoteIconWithStyles(10, s), "✓") {
+				t.Error("reviewerVoteIconWithStyles(10) should contain ✓")
+			}
+			if !strings.Contains(reviewerVoteIconWithStyles(-10, s), "✗") {
+				t.Error("reviewerVoteIconWithStyles(-10) should contain ✗")
+			}
+
+			// Test thread status icons
+			if !strings.Contains(threadStatusIconWithStyles("active", s), "●") {
+				t.Error("threadStatusIconWithStyles('active') should contain ●")
+			}
+			if !strings.Contains(threadStatusIconWithStyles("fixed", s), "✓") {
+				t.Error("threadStatusIconWithStyles('fixed') should contain ✓")
+			}
+		})
+	}
+}
 
 func TestNewDetailModel(t *testing.T) {
 	pr := azdevops.PullRequest{

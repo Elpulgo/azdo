@@ -5,8 +5,28 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestDetailModel_HasStyles(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 123}
+	m := NewDetailModel(nil, wi)
+
+	if m.styles == nil {
+		t.Error("Expected detail model to have styles initialized")
+	}
+}
+
+func TestDetailModel_WithStyles(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 123}
+	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
+	m := NewDetailModelWithStyles(nil, wi, customStyles)
+
+	if m.styles != customStyles {
+		t.Error("Expected detail model to use provided custom styles")
+	}
+}
 
 func TestNewDetailModel(t *testing.T) {
 	wi := azdevops.WorkItem{
