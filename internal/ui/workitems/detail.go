@@ -64,7 +64,7 @@ func (m *DetailModel) View() string {
 
 	wi := m.workItem
 
-	// Header with work item type and ID
+	// Fixed header with work item type and ID
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
 	sb.WriteString(headerStyle.Render(fmt.Sprintf("%s #%d: %s", wi.TypeIcon(), wi.ID, wi.Fields.Title)))
 	sb.WriteString("\n")
@@ -80,16 +80,38 @@ func (m *DetailModel) View() string {
 		separatorWidth = 60
 	}
 	sb.WriteString(strings.Repeat("─", separatorWidth))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
+
+	// Scrollable viewport content
+	if m.ready {
+		sb.WriteString(m.viewport.View())
+	}
+
+	// Fill available height
+	availableHeight := m.height - 5
+	if availableHeight < 1 {
+		availableHeight = 10
+	}
+
+	contentStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(availableHeight)
+
+	return contentStyle.Render(sb.String())
+}
+
+// updateViewportContent builds the scrollable content and sets it in the viewport
+func (m *DetailModel) updateViewportContent() {
+	var sb strings.Builder
+	wi := m.workItem
 
 	// Assigned To
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 	if wi.Fields.AssignedTo != nil {
-		labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 		sb.WriteString(labelStyle.Render("Assigned To: "))
 		sb.WriteString(wi.Fields.AssignedTo.DisplayName)
 		sb.WriteString("\n\n")
 	} else {
-		labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 		sb.WriteString(labelStyle.Render("Assigned To: "))
 		grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 		sb.WriteString(grayStyle.Render("Unassigned"))
@@ -98,7 +120,6 @@ func (m *DetailModel) View() string {
 
 	// Iteration Path
 	if wi.Fields.IterationPath != "" {
-		labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 		sb.WriteString(labelStyle.Render("Iteration: "))
 		sb.WriteString(shortenIterationPath(wi.Fields.IterationPath))
 		sb.WriteString("\n\n")
@@ -106,7 +127,6 @@ func (m *DetailModel) View() string {
 
 	// Description (with HTML stripped)
 	if wi.Fields.Description != "" {
-		labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 		sb.WriteString(labelStyle.Render("Description"))
 		sb.WriteString("\n")
 		descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -130,17 +150,7 @@ func (m *DetailModel) View() string {
 		}
 	}
 
-	// Fill available height
-	availableHeight := m.height - 5
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
-
-	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
-
-	return contentStyle.Render(sb.String())
+	m.viewport.SetContent(sb.String())
 }
 
 // SetSize sets the size of the detail view
@@ -161,6 +171,9 @@ func (m *DetailModel) SetSize(width, height int) {
 		m.viewport.Width = width
 		m.viewport.Height = viewportHeight
 	}
+
+	// Update viewport content
+	m.updateViewportContent()
 }
 
 // GetContextItems returns context items for the detail view

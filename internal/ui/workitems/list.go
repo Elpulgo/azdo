@@ -40,20 +40,20 @@ type Model struct {
 
 // Column width ratios (percentages of available width)
 const (
-	typeWidthPct     = 6  // Type column percentage
+	typeWidthPct     = 8  // Type column percentage
 	idWidthPct       = 8  // ID column percentage
-	titleWidthPct    = 40 // Title column percentage
-	stateWidthPct    = 12 // State column percentage
-	priorityWidthPct = 8  // Priority column percentage
+	titleWidthPct    = 34 // Title column percentage
+	stateWidthPct    = 18 // State column percentage (needs space for "Ready for Test")
+	priorityWidthPct = 6  // Priority column percentage
 	assignedWidthPct = 16 // Assigned column percentage
 )
 
 // Minimum column widths
 const (
-	minTypeWidth     = 4
+	minTypeWidth     = 7
 	minIDWidth       = 6
 	minTitleWidth    = 15
-	minStateWidth    = 10
+	minStateWidth    = 16
 	minPriorityWidth = 4
 	minAssignedWidth = 10
 )
@@ -302,21 +302,22 @@ func typeIcon(workItemType string) string {
 	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
+	// Use text-based icons for consistent column width
 	switch workItemType {
 	case "Bug":
-		return redStyle.Render("🐛")
+		return redStyle.Render("[Bug]")
 	case "Task":
-		return blueStyle.Render("📋")
+		return blueStyle.Render("[Task]")
 	case "User Story":
-		return greenStyle.Render("📖")
+		return greenStyle.Render("[Story]")
 	case "Feature":
-		return purpleStyle.Render("⭐")
+		return purpleStyle.Render("[Feat]")
 	case "Epic":
-		return yellowStyle.Render("🎯")
+		return yellowStyle.Render("[Epic]")
 	case "Issue":
-		return redStyle.Render("❗")
+		return redStyle.Render("[Issue]")
 	default:
-		return grayStyle.Render("📄")
+		return grayStyle.Render("[Item]")
 	}
 }
 
