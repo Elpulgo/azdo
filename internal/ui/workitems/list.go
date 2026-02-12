@@ -294,6 +294,7 @@ func (m Model) workItemsToRows() []table.Row {
 }
 
 // typeIcon returns a styled icon for the work item type
+// All labels are padded to 7 chars for consistent column width
 func typeIcon(workItemType string) string {
 	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
@@ -302,22 +303,22 @@ func typeIcon(workItemType string) string {
 	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
-	// Use text-based icons for consistent column width
+	// Use fixed-width text labels (7 chars) for consistent column alignment
 	switch workItemType {
 	case "Bug":
-		return redStyle.Render("[Bug]")
+		return redStyle.Render("Bug    ")
 	case "Task":
-		return blueStyle.Render("[Task]")
+		return blueStyle.Render("Task   ")
 	case "User Story":
-		return greenStyle.Render("[Story]")
+		return greenStyle.Render("Story  ")
 	case "Feature":
-		return purpleStyle.Render("[Feat]")
+		return purpleStyle.Render("Feature")
 	case "Epic":
-		return yellowStyle.Render("[Epic]")
+		return yellowStyle.Render("Epic   ")
 	case "Issue":
-		return redStyle.Render("[Issue]")
+		return redStyle.Render("Issue  ")
 	default:
-		return grayStyle.Render("[Item]")
+		return grayStyle.Render("Item   ")
 	}
 }
 
@@ -336,19 +337,19 @@ func stateText(state string) string {
 
 	switch {
 	case stateLower == "new":
-		return grayStyle.Render("○ New")
+		return grayStyle.Render("New")
 	case stateLower == "active":
-		return blueStyle.Render("◐ Active")
+		return blueStyle.Render("Active")
 	case stateLower == "resolved":
-		return yellowStyle.Render("● Resolved")
+		return yellowStyle.Render("Resolved")
 	case strings.Contains(stateLower, "ready"):
-		return cyanStyle.Render("● " + state)
+		return cyanStyle.Render(state)
 	case stateLower == "closed":
-		return greenStyle.Render("✓ Closed")
+		return greenStyle.Render("Closed")
 	case stateLower == "removed":
-		return redStyle.Render("✗ Removed")
+		return redStyle.Render("Removed")
 	default:
-		return grayStyle.Render("○ " + state)
+		return grayStyle.Render(state)
 	}
 }
 
