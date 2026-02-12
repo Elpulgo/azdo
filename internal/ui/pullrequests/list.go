@@ -77,6 +77,7 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 
 	ts := table.DefaultStyles()
 	ts.Header = s.TableHeader
+	ts.Cell = s.TableCell
 	ts.Selected = s.TableSelected
 	t.SetStyles(ts)
 
@@ -233,7 +234,7 @@ func (m Model) enterDetailView() (Model, tea.Cmd) {
 	}
 
 	selectedPR := m.prs[idx]
-	m.detail = NewDetailModel(m.client, selectedPR)
+	m.detail = NewDetailModelWithStyles(m.client, selectedPR, m.styles)
 	m.detail.SetSize(m.width, m.height)
 	m.viewMode = ViewDetail
 

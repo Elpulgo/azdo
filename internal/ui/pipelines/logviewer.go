@@ -32,12 +32,18 @@ type LogViewerModel struct {
 	height   int
 	ready    bool
 	spinner  *components.LoadingIndicator
+	styles   *styles.Styles
 }
 
-// NewLogViewerModel creates a new log viewer model
+// NewLogViewerModel creates a new log viewer model with default styles
 func NewLogViewerModel(client *azdevops.Client, buildID, logID int, title string) *LogViewerModel {
-	s := components.NewLoadingIndicator(styles.DefaultStyles())
-	s.SetMessage(fmt.Sprintf("Loading log for %s...", title))
+	return NewLogViewerModelWithStyles(client, buildID, logID, title, styles.DefaultStyles())
+}
+
+// NewLogViewerModelWithStyles creates a new log viewer model with custom styles
+func NewLogViewerModelWithStyles(client *azdevops.Client, buildID, logID int, title string, s *styles.Styles) *LogViewerModel {
+	spinner := components.NewLoadingIndicator(s)
+	spinner.SetMessage(fmt.Sprintf("Loading log for %s...", title))
 
 	return &LogViewerModel{
 		client:  client,
@@ -45,7 +51,8 @@ func NewLogViewerModel(client *azdevops.Client, buildID, logID int, title string
 		logID:   logID,
 		title:   title,
 		loading: true,
-		spinner: s,
+		spinner: spinner,
+		styles:  s,
 	}
 }
 
@@ -203,8 +210,7 @@ func (m *LogViewerModel) View() string {
 	var sb strings.Builder
 
 	// Header
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("Log: %s", m.title)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("Log: %s", m.title)))
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", min(m.width-2, 60)))
 	sb.WriteString("\n")

@@ -79,6 +79,7 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 
 	ts := table.DefaultStyles()
 	ts.Header = s.TableHeader
+	ts.Cell = s.TableCell
 	ts.Selected = s.TableSelected
 	t.SetStyles(ts)
 
@@ -263,7 +264,7 @@ func (m Model) enterDetailView() (Model, tea.Cmd) {
 	}
 
 	selectedRun := m.runs[idx]
-	m.detail = NewDetailModel(m.client, selectedRun)
+	m.detail = NewDetailModelWithStyles(m.client, selectedRun, m.styles)
 	m.detail.SetSize(m.width, m.height)
 	m.viewMode = ViewDetail
 
@@ -283,11 +284,12 @@ func (m Model) enterLogView() (Model, tea.Cmd) {
 	}
 
 	run := m.detail.GetRun()
-	m.logViewer = NewLogViewerModel(
+	m.logViewer = NewLogViewerModelWithStyles(
 		m.client,
 		run.ID,
 		selected.Record.Log.ID,
 		selected.Record.Name,
+		m.styles,
 	)
 	m.logViewer.SetSize(m.width, m.height)
 	m.viewMode = ViewLogs

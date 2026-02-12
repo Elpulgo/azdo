@@ -15,18 +15,18 @@ type Styles struct {
 	TabBar      lipgloss.Style
 
 	// Box and container styles
-	Box         lipgloss.Style
-	BoxRounded  lipgloss.Style
-	ModalBox    lipgloss.Style
+	Box        lipgloss.Style
+	BoxRounded lipgloss.Style
+	ModalBox   lipgloss.Style
 
 	// Text styles
-	Header       lipgloss.Style
-	Title        lipgloss.Style
-	Subtitle     lipgloss.Style
-	Label        lipgloss.Style
-	Value        lipgloss.Style
-	Muted        lipgloss.Style
-	Bold         lipgloss.Style
+	Header   lipgloss.Style
+	Title    lipgloss.Style
+	Subtitle lipgloss.Style
+	Label    lipgloss.Style
+	Value    lipgloss.Style
+	Muted    lipgloss.Style
+	Bold     lipgloss.Style
 
 	// Status styles
 	Success lipgloss.Style
@@ -43,9 +43,9 @@ type Styles struct {
 	Link        lipgloss.Style
 
 	// UI element styles
-	Border      lipgloss.Style
-	Spinner     lipgloss.Style
-	ScrollInfo  lipgloss.Style
+	Border     lipgloss.Style
+	Spinner    lipgloss.Style
+	ScrollInfo lipgloss.Style
 
 	// Connection state styles
 	Connected    lipgloss.Style
@@ -55,6 +55,7 @@ type Styles struct {
 
 	// Table styles
 	TableHeader   lipgloss.Style
+	TableCell     lipgloss.Style
 	TableSelected lipgloss.Style
 }
 
@@ -185,6 +186,10 @@ func NewStyles(theme Theme) *Styles {
 		BorderForeground(lipgloss.Color(theme.Border)).
 		BorderBottom(true).
 		Bold(false)
+
+	s.TableCell = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Foreground)).
+		Padding(0, 1)
 
 	s.TableSelected = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.SelectForeground)).
