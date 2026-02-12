@@ -64,14 +64,14 @@ func (m *DetailModel) View() string {
 
 	wi := m.workItem
 
-	// Fixed header with work item type and ID
+	// Fixed header with ID and title (no type icon)
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("%s #%d: %s", wi.TypeIcon(), wi.ID, wi.Fields.Title)))
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("#%d: %s", wi.ID, wi.Fields.Title)))
 	sb.WriteString("\n")
 
-	// State and priority
+	// Type, state and priority
 	stateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	sb.WriteString(stateStyle.Render(fmt.Sprintf("State: %s %s  |  Priority: P%d", wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
+	sb.WriteString(stateStyle.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.Fields.WorkItemType, wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
 	sb.WriteString("\n")
 
 	// Separator

@@ -49,6 +49,33 @@ func TestDetailView_ShowsTitle(t *testing.T) {
 	if !strings.Contains(view, "Active") {
 		t.Error("Expected view to contain work item state")
 	}
+	if !strings.Contains(view, "Bug") {
+		t.Error("Expected view to contain work item type in state line")
+	}
+}
+
+func TestDetailView_NoTypeIconInTitle(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 789,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "New",
+			WorkItemType: "Bug",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	// Title line should not contain emoji icons
+	if strings.Contains(view, "🐛") {
+		t.Error("Title should not contain bug emoji icon")
+	}
+	if strings.Contains(view, "📋") {
+		t.Error("Title should not contain task emoji icon")
+	}
 }
 
 func TestDetailView_Scrolling(t *testing.T) {

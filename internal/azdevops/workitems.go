@@ -68,16 +68,18 @@ func (wi *WorkItem) TypeIcon() string {
 // StateIcon returns an icon for the work item state
 // Workflow: New → Active → Resolved/Ready for Test → Closed
 func (wi *WorkItem) StateIcon() string {
-	switch wi.Fields.State {
-	case "New":
+	stateLower := strings.ToLower(wi.Fields.State)
+
+	switch {
+	case stateLower == "new":
 		return "○"
-	case "Active":
+	case stateLower == "active":
 		return "◐"
-	case "Resolved", "Ready for Test":
+	case stateLower == "resolved" || strings.Contains(stateLower, "ready"):
 		return "●"
-	case "Closed":
+	case stateLower == "closed":
 		return "✓"
-	case "Removed":
+	case stateLower == "removed":
 		return "✗"
 	default:
 		return "○"
