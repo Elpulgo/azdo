@@ -193,6 +193,28 @@ go build -o azdo-tui ./cmd/azdo-tui
 
 Contributions are welcome! Please check the `Architecture.md` file for implementation details.
 
+## Notes
+
+### Local Table Fork (TrueColor Fix)
+
+The table component at `internal/ui/components/table/` is a local fork of
+[charmbracelet/bubbles/table](https://github.com/charmbracelet/bubbles/tree/main/table).
+The only change is replacing `runewidth.Truncate` with `ansi.Truncate` from
+`github.com/charmbracelet/x/ansi` in the `headersView()` and `renderRow()`
+functions.
+
+**Why:** The upstream bubbles table uses `go-runewidth` for truncation, which is
+not ANSI-aware — it counts escape code characters (e.g. `\x1b[38;2;R;G;Bm`) as
+having visual width. This causes columns to misalign and text to get truncated
+when cell values contain styled ANSI content (like our colored status icons).
+The `x/ansi` package's `Truncate` function is a drop-in replacement that
+properly skips ANSI escape sequences.
+
+**When upgrading bubbletea/bubbles:** Check if the upstream table has switched
+from `runewidth.Truncate` to `ansi.Truncate`. If so, the local fork can be
+removed and we can go back to importing `github.com/charmbracelet/bubbles/table`
+directly.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
