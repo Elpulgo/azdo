@@ -68,12 +68,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Mark as submitted and return the PAT
+			// Mark as submitted and return both the PAT and quit command
 			m.submitted = true
 			m.err = ""
-			return m, func() tea.Msg {
-				return PATSubmittedMsg{PAT: pat}
-			}
+			return m, tea.Batch(
+				func() tea.Msg {
+					return PATSubmittedMsg{PAT: pat}
+				},
+				tea.Quit,
+			)
 
 		case tea.KeyEsc, tea.KeyCtrlC:
 			return m, tea.Quit

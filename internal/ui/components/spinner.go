@@ -1,6 +1,7 @@
 package components
 
 import (
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -9,23 +10,21 @@ import (
 // LoadingIndicator is a component that displays a spinner with a message
 // when visible. It wraps the bubbles spinner component.
 type LoadingIndicator struct {
+	styles  *styles.Styles
 	spinner spinner.Model
 	message string
 	visible bool
 }
 
-// Style for the loading indicator
-var loadingStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("205"))
-
 // NewLoadingIndicator creates a new LoadingIndicator with default settings.
-func NewLoadingIndicator() *LoadingIndicator {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+func NewLoadingIndicator(s *styles.Styles) *LoadingIndicator {
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(s.Theme.Spinner))
 
 	return &LoadingIndicator{
-		spinner: s,
+		styles:  s,
+		spinner: sp,
 		message: "Loading...",
 		visible: false,
 	}
@@ -73,7 +72,7 @@ func (l *LoadingIndicator) View() string {
 	if !l.visible {
 		return ""
 	}
-	return l.spinner.View() + " " + loadingStyle.Render(l.message)
+	return l.spinner.View() + " " + l.styles.Spinner.Render(l.message)
 }
 
 // Tick returns the spinner tick command.

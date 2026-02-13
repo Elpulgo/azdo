@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestStatusBar_New(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 
 	if sb == nil {
 		t.Fatal("expected non-nil StatusBar")
@@ -20,7 +21,7 @@ func TestStatusBar_New(t *testing.T) {
 }
 
 func TestStatusBar_SetOrganization(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("myorg")
 
 	if sb.organization != "myorg" {
@@ -29,7 +30,7 @@ func TestStatusBar_SetOrganization(t *testing.T) {
 }
 
 func TestStatusBar_SetProject(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetProject("myproject")
 
 	if sb.project != "myproject" {
@@ -38,7 +39,7 @@ func TestStatusBar_SetProject(t *testing.T) {
 }
 
 func TestStatusBar_SetState(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetState(polling.StateConnected)
 
 	if sb.state != polling.StateConnected {
@@ -47,7 +48,7 @@ func TestStatusBar_SetState(t *testing.T) {
 }
 
 func TestStatusBar_SetWidth(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetWidth(100)
 
 	if sb.width != 100 {
@@ -56,7 +57,7 @@ func TestStatusBar_SetWidth(t *testing.T) {
 }
 
 func TestStatusBar_View_ContainsOrganization(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("testorg")
 	sb.SetProject("testproject")
 	sb.SetWidth(120)
@@ -69,7 +70,7 @@ func TestStatusBar_View_ContainsOrganization(t *testing.T) {
 }
 
 func TestStatusBar_View_ContainsProject(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("testorg")
 	sb.SetProject("testproject")
 	sb.SetWidth(120)
@@ -82,7 +83,7 @@ func TestStatusBar_View_ContainsProject(t *testing.T) {
 }
 
 func TestStatusBar_View_Connected_ShowsConnected(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetState(polling.StateConnected)
 	sb.SetWidth(120)
 
@@ -94,7 +95,7 @@ func TestStatusBar_View_Connected_ShowsConnected(t *testing.T) {
 }
 
 func TestStatusBar_View_Error_ShowsError(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetState(polling.StateError)
 	sb.SetWidth(120)
 
@@ -106,7 +107,7 @@ func TestStatusBar_View_Error_ShowsError(t *testing.T) {
 }
 
 func TestStatusBar_View_ContainsDefaultKeybindings(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetWidth(120)
 
 	view := sb.View()
@@ -124,7 +125,7 @@ func TestStatusBar_View_ContainsDefaultKeybindings(t *testing.T) {
 }
 
 func TestStatusBar_SetKeybindings(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetKeybindings("custom keybindings")
 	sb.SetWidth(120)
 
@@ -148,7 +149,7 @@ func TestStatusBar_StateIcons(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.state.String(), func(t *testing.T) {
-			sb := NewStatusBar()
+			sb := NewStatusBar(styles.DefaultStyles())
 			sb.SetState(tt.state)
 			sb.SetWidth(120)
 
@@ -161,7 +162,7 @@ func TestStatusBar_StateIcons(t *testing.T) {
 }
 
 func TestStatusBar_View_MinimumWidth(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("org")
 	sb.SetProject("project")
 	sb.SetState(polling.StateConnected)
@@ -174,7 +175,7 @@ func TestStatusBar_View_MinimumWidth(t *testing.T) {
 }
 
 func TestStatusBar_Update_ReturnsModel(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 
 	model, cmd := sb.Update(nil)
 	if model != sb {
@@ -186,7 +187,7 @@ func TestStatusBar_Update_ReturnsModel(t *testing.T) {
 }
 
 func TestStatusBar_Init_ReturnsNil(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	cmd := sb.Init()
 
 	if cmd != nil {
@@ -195,7 +196,7 @@ func TestStatusBar_Init_ReturnsNil(t *testing.T) {
 }
 
 func TestStatusBar_OrgProjectSeparator(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("myorg")
 	sb.SetProject("myproject")
 	sb.SetWidth(120)
@@ -208,7 +209,7 @@ func TestStatusBar_OrgProjectSeparator(t *testing.T) {
 }
 
 func TestStatusBar_View_HasBackground(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetWidth(80)
 
 	view := sb.View()
@@ -221,7 +222,7 @@ func TestStatusBar_View_HasBackground(t *testing.T) {
 }
 
 func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 
 	model, cmd := sb.Update(tea.KeyMsg{})
 	if model != sb {
@@ -233,7 +234,7 @@ func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
 }
 
 func TestStatusBar_SetConfigPath(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
 
 	if sb.configPath != "/home/user/.config/azdo-tui/config.yaml" {
@@ -242,7 +243,7 @@ func TestStatusBar_SetConfigPath(t *testing.T) {
 }
 
 func TestStatusBar_View_ContainsConfigPath(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
 	sb.SetWidth(200)
 
@@ -254,7 +255,7 @@ func TestStatusBar_View_ContainsConfigPath(t *testing.T) {
 }
 
 func TestStatusBar_SetScrollPercent(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetScrollPercent(45.5)
 
 	if sb.scrollPercent != 45.5 {
@@ -263,7 +264,7 @@ func TestStatusBar_SetScrollPercent(t *testing.T) {
 }
 
 func TestStatusBar_ShowScrollPercent(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.ShowScrollPercent(true)
 
 	if !sb.showScroll {
@@ -277,7 +278,7 @@ func TestStatusBar_ShowScrollPercent(t *testing.T) {
 }
 
 func TestStatusBar_View_ContainsScrollPercent(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetScrollPercent(75)
 	sb.ShowScrollPercent(true)
 	sb.SetWidth(120)
@@ -290,7 +291,7 @@ func TestStatusBar_View_ContainsScrollPercent(t *testing.T) {
 }
 
 func TestStatusBar_View_NoScrollPercentWhenDisabled(t *testing.T) {
-	sb := NewStatusBar()
+	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetScrollPercent(75)
 	sb.ShowScrollPercent(false)
 	sb.SetWidth(120)
@@ -299,5 +300,69 @@ func TestStatusBar_View_NoScrollPercentWhenDisabled(t *testing.T) {
 
 	if strings.Contains(view, "75%") {
 		t.Error("view should NOT contain scroll percentage when disabled")
+	}
+}
+
+func TestStatusBar_SetErrorMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetErrorMessage("Connection failed")
+
+	if sb.errorMessage != "Connection failed" {
+		t.Errorf("expected errorMessage 'Connection failed', got '%s'", sb.errorMessage)
+	}
+}
+
+func TestStatusBar_ClearErrorMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetErrorMessage("Connection failed")
+	sb.ClearErrorMessage()
+
+	if sb.errorMessage != "" {
+		t.Errorf("expected errorMessage to be empty, got '%s'", sb.errorMessage)
+	}
+}
+
+func TestStatusBar_View_ContainsErrorMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateError)
+	sb.SetErrorMessage("Network timeout. Retrying...")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "Network timeout. Retrying...") {
+		t.Error("view should contain error message when state is error")
+	}
+}
+
+func TestStatusBar_View_NoErrorMessageWhenConnected(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateConnected)
+	sb.SetErrorMessage("Network timeout. Retrying...")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if strings.Contains(view, "Network timeout. Retrying...") {
+		t.Error("view should NOT show error message when state is connected")
+	}
+}
+
+func TestStatusBar_View_ErrorMessageReplacesKeybindings(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateError)
+	sb.SetErrorMessage("Connection failed. Check your network and press 'r' to retry.")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	// Error message should be shown
+	if !strings.Contains(view, "Connection failed") {
+		t.Error("view should contain error message")
+	}
+
+	// Default detailed keybindings should NOT be shown when error is displayed
+	if strings.Contains(view, "navigate") {
+		t.Error("view should not contain detailed navigate keybinding when showing error")
 	}
 }

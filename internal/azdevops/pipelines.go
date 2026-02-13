@@ -19,7 +19,8 @@ func (c *Client) ListPipelineRuns(top int) ([]PipelineRun, error) {
 	var response PipelineRunsResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal pipeline runs response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for pipeline runs: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return response.Value, nil

@@ -3,9 +3,13 @@ package components
 import (
 	"strings"
 
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// minModalWidth is the minimum width for the help modal content
+const minModalWidth = 50
 
 // HelpBinding represents a single keybinding entry.
 type HelpBinding struct {
@@ -21,42 +25,17 @@ type HelpSection struct {
 
 // HelpModal is an overlay that displays available keybindings.
 type HelpModal struct {
+	styles   *styles.Styles
 	visible  bool
 	width    int
 	height   int
 	sections []HelpSection
 }
 
-// Styles for the help modal
-var (
-	helpModalStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 2).
-			Background(lipgloss.Color("235"))
-
-	helpTitleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true).
-			MarginBottom(1)
-
-	helpSectionStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Bold(true).
-				MarginTop(1)
-
-	helpKeyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true).
-			Width(12)
-
-	helpDescStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
-)
-
 // NewHelpModal creates a new HelpModal with default keybindings.
-func NewHelpModal() *HelpModal {
+func NewHelpModal(s *styles.Styles) *HelpModal {
 	return &HelpModal{
+		styles:  s,
 		visible: false,
 		sections: []HelpSection{
 			{
@@ -70,9 +49,17 @@ func NewHelpModal() *HelpModal {
 				},
 			},
 			{
+				Title: "Tabs",
+				Bindings: []HelpBinding{
+					{Key: "1/2/3", Description: "Switch to tab 1/2/3"},
+					{Key: "←/→", Description: "Previous / next tab"},
+				},
+			},
+			{
 				Title: "Actions",
 				Bindings: []HelpBinding{
 					{Key: "r", Description: "Refresh data"},
+					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},
 					{Key: "q", Description: "Quit application"},
 				},
@@ -139,6 +126,68 @@ func (h *HelpModal) View() string {
 		return ""
 	}
 
+	// Calculate content width (minimum width or longest content)
+	titleText := "⌨ Keyboard Shortcuts"
+	footerText := "Press esc, q, or ? to close"
+
+	contentWidth := minModalWidth
+	if len(titleText) > contentWidth {
+		contentWidth = len(titleText)
+	}
+	if len(footerText) > contentWidth {
+		contentWidth = len(footerText)
+	}
+
+	// Check section titles and bindings
+	for _, section := range h.sections {
+		if len(section.Title) > contentWidth {
+			contentWidth = len(section.Title)
+		}
+		for _, binding := range section.Bindings {
+			lineLen := 12 + len(binding.Description) // Key width + description
+			if lineLen > contentWidth {
+				contentWidth = lineLen
+			}
+		}
+	}
+
+	// Build styles from theme
+	helpModalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(h.styles.Theme.Accent)).
+		Padding(1, 2).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	helpTitleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
+		Bold(true).
+		MarginBottom(1).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	helpSectionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
+		Bold(true).
+		MarginTop(1).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	helpKeyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
+		Bold(true).
+		Width(12).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	helpDescStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Foreground)).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+		Width(contentWidth - 12)
+
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
 	var content strings.Builder
 
 	// Title
@@ -159,7 +208,7 @@ func (h *HelpModal) View() string {
 
 	// Footer hint
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("Press esc, q, or ? to close"))
+	content.WriteString(footerStyle.Render("Press esc, q, or ? to close"))
 
 	// Render the modal box
 	modal := helpModalStyle.Render(content.String())

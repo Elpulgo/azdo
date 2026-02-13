@@ -17,7 +17,8 @@ func (c *Client) ListBuildLogs(buildID int) ([]BuildLog, error) {
 	var response BuildLogsResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal build logs response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for build logs: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return response.Value, nil

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -9,9 +10,22 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
+	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
+
+// ThemeNotFoundError represents an error when a requested theme is not found.
+type ThemeNotFoundError struct {
+	ThemeName  string
+	ThemesPath string
+}
+
+func (e *ThemeNotFoundError) Error() string {
+	availableThemes := styles.ListAvailableThemes()
+	return fmt.Sprintf("Theme '%s' not found. Using default theme. Available themes: %v. Custom themes can be placed in: %s",
+		e.ThemeName, availableThemes, e.ThemesPath)
+}
 
 // Tab represents the active tab in the application
 type Tab int
@@ -19,18 +33,22 @@ type Tab int
 const (
 	TabPipelines    Tab = iota // Pipelines tab (key '1')
 	TabPullRequests            // Pull Requests tab (key '2')
+	TabWorkItems               // Work Items tab (key '3')
 )
 
 // Model is the root application model for the TUI
 type Model struct {
 	client           *azdevops.Client
 	config           *config.Config
+	styles           *styles.Styles
 	activeTab        Tab
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
+	workItemsView    workitems.Model
 	statusBar        *components.StatusBar
 	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
+	themePicker      components.ThemePicker
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
 	width            int
@@ -40,8 +58,34 @@ type Model struct {
 
 // NewModel creates a new application model with the given Azure DevOps client and config
 func NewModel(client *azdevops.Client, cfg *config.Config) Model {
+	// Create error handler early to capture initialization errors
+	errorHandler := polling.NewErrorHandler()
+
+	// Load custom themes from themes directory
+	if themesDir, err := styles.GetThemesDirectoryPath(); err != nil {
+		// Failed to get themes directory path
+		errorHandler.SetError(fmt.Errorf("failed to access themes directory: %w", err))
+	} else {
+		// Try to load custom themes
+		_, err := styles.LoadCustomThemesFromDirectory(themesDir)
+		if err != nil {
+			// Failed to load custom themes - set error but continue
+			errorHandler.SetError(fmt.Errorf("failed to load custom themes from %s: %w", themesDir, err))
+		}
+	}
+
+	// Try to load the requested theme
+	requestedTheme := cfg.GetTheme()
+	theme, themeErr := styles.GetThemeByName(requestedTheme)
+	if themeErr != nil {
+		// Fall back to default theme
+		theme = styles.GetDefaultTheme()
+	}
+
+	appStyles := styles.NewStyles(theme)
+
 	// Create status bar with org/project info
-	statusBar := components.NewStatusBar()
+	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
 	statusBar.SetProject(cfg.Project)
 
@@ -51,10 +95,14 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	}
 
 	// Create context bar for view-specific info
-	contextBar := components.NewContextBar()
+	contextBar := components.NewContextBar(appStyles)
 
 	// Create help modal
-	helpModal := components.NewHelpModal()
+	helpModal := components.NewHelpModal(appStyles)
+
+	// Create theme picker
+	availableThemes := styles.ListAvailableThemes()
+	themePicker := components.NewThemePicker(appStyles, availableThemes, cfg.GetTheme())
 
 	// Create poller with configured interval
 	interval := time.Duration(cfg.PollingInterval) * time.Second
@@ -63,22 +111,41 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	}
 	poller := polling.NewPoller(client, interval)
 
+	// If theme was not found, set a friendly error message
+	if themeErr != nil {
+		themesDir, _ := styles.GetThemesDirectoryPath()
+		themeNotFoundErr := &ThemeNotFoundError{
+			ThemeName:  requestedTheme,
+			ThemesPath: themesDir,
+		}
+		errorHandler.SetError(themeNotFoundErr)
+	}
+
 	return Model{
 		client:           client,
 		config:           cfg,
+		styles:           appStyles,
 		activeTab:        TabPipelines,
-		pipelinesView:    pipelines.NewModel(client),
-		pullRequestsView: pullrequests.NewModel(client),
+		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
+		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
+		workItemsView:    workitems.NewModelWithStyles(client, appStyles),
 		statusBar:        statusBar,
 		contextBar:       contextBar,
 		helpModal:        helpModal,
+		themePicker:      themePicker,
 		poller:           poller,
-		errorHandler:     polling.NewErrorHandler(),
+		errorHandler:     errorHandler,
 	}
 }
 
 // Init initializes the application
 func (m Model) Init() tea.Cmd {
+	// Check for any startup errors (e.g., theme not found)
+	if m.errorHandler.ShouldShowError() {
+		m.statusBar.SetState(polling.StateError)
+		m.statusBar.SetErrorMessage(m.errorHandler.ErrorMessage())
+	}
+
 	return tea.Batch(
 		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
 		m.poller.StartPolling(),      // Start polling timer
@@ -105,6 +172,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// If theme picker is visible, handle its input first
+	if m.themePicker.IsVisible() {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			var cmd tea.Cmd
+			m.themePicker, cmd = m.themePicker.Update(msg)
+			return m, cmd
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.themePicker.SetSize(msg.Width, msg.Height)
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -114,6 +197,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.helpModal.SetSize(m.width, m.height)
 			m.helpModal.Show()
+			return m, nil
+		case "t":
+			m.themePicker.SetSize(m.width, m.height)
+			m.themePicker.Show()
 			return m, nil
 		case "1":
 			m.activeTab = TabPipelines
@@ -125,7 +212,108 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
+		case "3":
+			if m.activeTab != TabWorkItems {
+				m.activeTab = TabWorkItems
+				// Trigger initial load when switching to Work Items tab
+				return m, m.workItemsView.Init()
+			}
+			return m, nil
+		case "left":
+			// Navigate to previous tab (with wraparound)
+			switch m.activeTab {
+			case TabPipelines:
+				m.activeTab = TabWorkItems
+				return m, m.workItemsView.Init()
+			case TabPullRequests:
+				m.activeTab = TabPipelines
+				return m, nil
+			case TabWorkItems:
+				m.activeTab = TabPullRequests
+				return m, m.pullRequestsView.Init()
+			}
+			return m, nil
+		case "right":
+			// Navigate to next tab (with wraparound)
+			switch m.activeTab {
+			case TabPipelines:
+				m.activeTab = TabPullRequests
+				return m, m.pullRequestsView.Init()
+			case TabPullRequests:
+				m.activeTab = TabWorkItems
+				return m, m.workItemsView.Init()
+			case TabWorkItems:
+				m.activeTab = TabPipelines
+				return m, nil
+			}
+			return m, nil
 		}
+
+	case components.ThemeSelectedMsg:
+		// Update theme in config and save
+		if err := m.config.UpdateTheme(msg.ThemeName); err != nil {
+			// Handle error - set error message in status bar
+			m.errorHandler.SetError(fmt.Errorf("failed to save theme: %w", err))
+			m.statusBar.SetState(polling.StateError)
+			m.statusBar.SetErrorMessage(fmt.Sprintf("Failed to save theme setting: %v", err))
+			return m, nil
+		}
+
+		// Load the new theme
+		theme, err := styles.GetThemeByName(msg.ThemeName)
+		if err != nil {
+			// Handle error - this shouldn't happen as we selected from available themes
+			m.errorHandler.SetError(fmt.Errorf("failed to load theme: %w", err))
+			m.statusBar.SetState(polling.StateError)
+			m.statusBar.SetErrorMessage(fmt.Sprintf("Failed to load theme '%s': %v", msg.ThemeName, err))
+			return m, nil
+		}
+
+		// Create new styles with the selected theme
+		m.styles = styles.NewStyles(theme)
+
+		// Update all components with new styles
+		m.statusBar = components.NewStatusBar(m.styles)
+		m.statusBar.SetOrganization(m.config.Organization)
+		m.statusBar.SetProject(m.config.Project)
+		m.statusBar.SetWidth(m.width)
+		if configPath, err := config.GetPath(); err == nil {
+			m.statusBar.SetConfigPath(configPath)
+		}
+
+		m.contextBar = components.NewContextBar(m.styles)
+		m.contextBar.SetWidth(m.width)
+
+		m.helpModal = components.NewHelpModal(m.styles)
+		m.helpModal.SetSize(m.width, m.height)
+
+		// Update theme picker with new styles and current theme
+		availableThemes := styles.ListAvailableThemes()
+		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
+
+		// Recreate views with new styles
+		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
+		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
+		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
+
+		// CRITICAL: Set window size for all views before they try to render
+		if m.width > 0 && m.height > 0 {
+			sizeMsg := tea.WindowSizeMsg{Width: m.width, Height: m.height}
+			m.pipelinesView, _ = m.pipelinesView.Update(sizeMsg)
+			m.pullRequestsView, _ = m.pullRequestsView.Update(sizeMsg)
+			m.workItemsView, _ = m.workItemsView.Update(sizeMsg)
+		}
+
+		// Re-initialize views to fetch data again
+		cmds = append(cmds, m.pipelinesView.Init())
+		if m.activeTab == TabPullRequests {
+			cmds = append(cmds, m.pullRequestsView.Init())
+		}
+		if m.activeTab == TabWorkItems {
+			cmds = append(cmds, m.workItemsView.Init())
+		}
+
+		return m, tea.Batch(cmds...)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -133,9 +321,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar.SetWidth(msg.Width)
 		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
-		// Pass size to both views so they're ready when switched to
+		m.themePicker.SetSize(msg.Width, msg.Height)
+		// Pass size to all views so they're ready when switched to
 		m.pipelinesView, _ = m.pipelinesView.Update(msg)
 		m.pullRequestsView, _ = m.pullRequestsView.Update(msg)
+		m.workItemsView, _ = m.workItemsView.Update(msg)
 
 	case polling.TickMsg:
 		// Time to poll for updates
@@ -147,8 +337,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if hasError {
 			m.statusBar.SetState(polling.StateError)
+			// Display user-friendly error message
+			if m.errorHandler.ShouldShowError() {
+				m.statusBar.SetErrorMessage(m.errorHandler.RecoveryMessage())
+			}
 		} else {
 			m.statusBar.SetState(polling.StateConnected)
+			m.statusBar.ClearErrorMessage()
 		}
 
 		// Update pipelines view with the runs
@@ -166,6 +361,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.activeTab {
 	case TabPullRequests:
 		m.pullRequestsView, cmd = m.pullRequestsView.Update(msg)
+	case TabWorkItems:
+		m.workItemsView, cmd = m.workItemsView.Update(msg)
 	default:
 		m.pipelinesView, cmd = m.pipelinesView.Update(msg)
 	}
@@ -176,36 +373,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// Tab header styles
-var (
-	activeTabStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("229")).
-			Background(lipgloss.Color("57")).
-			Padding(0, 2).
-			Bold(true)
-
-	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252")).
-				Background(lipgloss.Color("236")).
-				Padding(0, 2)
-
-	tabBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("236"))
-)
+// Note: Tab styles are now provided by the styles package and accessed via m.styles
 
 // renderTabBar renders the tab header
 func (m Model) renderTabBar() string {
-	var tab1, tab2 string
+	var tab1, tab2, tab3 string
 
-	if m.activeTab == TabPipelines {
-		tab1 = activeTabStyle.Render("1: Pipelines")
-		tab2 = inactiveTabStyle.Render("2: Pull Requests")
-	} else {
-		tab1 = inactiveTabStyle.Render("1: Pipelines")
-		tab2 = activeTabStyle.Render("2: Pull Requests")
+	switch m.activeTab {
+	case TabPipelines:
+		tab1 = m.styles.TabActive.Render("1: Pipelines")
+		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
+		tab3 = m.styles.TabInactive.Render("3: Work Items")
+	case TabPullRequests:
+		tab1 = m.styles.TabInactive.Render("1: Pipelines")
+		tab2 = m.styles.TabActive.Render("2: Pull Requests")
+		tab3 = m.styles.TabInactive.Render("3: Work Items")
+	case TabWorkItems:
+		tab1 = m.styles.TabInactive.Render("1: Pipelines")
+		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
+		tab3 = m.styles.TabActive.Render("3: Work Items")
 	}
 
-	return tabBarStyle.Render(tab1+" "+tab2) + "\n"
+	return m.styles.TabBar.Render(tab1+" "+tab2+" "+tab3) + "\n"
 }
 
 // View renders the application UI
@@ -217,6 +406,11 @@ func (m Model) View() string {
 	// If help modal is visible, show it as overlay
 	if m.helpModal.IsVisible() {
 		return m.helpModal.View()
+	}
+
+	// If theme picker is visible, show it as overlay
+	if m.themePicker.IsVisible() {
+		return m.themePicker.View()
 	}
 
 	// Render tab bar
@@ -236,6 +430,12 @@ func (m Model) View() string {
 		contextItems = m.pullRequestsView.GetContextItems()
 		scrollPercent = m.pullRequestsView.GetScrollPercent()
 		statusMessage = m.pullRequestsView.GetStatusMessage()
+	case TabWorkItems:
+		content = m.workItemsView.View()
+		hasContextBar = m.workItemsView.HasContextBar()
+		contextItems = m.workItemsView.GetContextItems()
+		scrollPercent = m.workItemsView.GetScrollPercent()
+		statusMessage = m.workItemsView.GetStatusMessage()
 	default:
 		content = m.pipelinesView.View()
 		hasContextBar = m.pipelinesView.HasContextBar()

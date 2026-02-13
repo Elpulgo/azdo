@@ -1,0 +1,124 @@
+# GoReleaser configuration for azdo-tui
+# https://goreleaser.com
+
+version: 2
+
+# Build configuration
+builds:
+  - # Main package to build
+    main: ./cmd/azdo-tui
+
+    # Binary name (without extension, .exe added automatically on Windows)
+    binary: azdo-tui
+
+    # Inject build info
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+    # Target platforms and architectures
+    goos:
+      - linux
+      - darwin
+      - windows
+
+    goarch:
+      - amd64
+      - arm64
+
+    # Environment variables
+    env:
+      - CGO_ENABLED=0
+
+    # Ignore combinations that don't make sense
+    ignore:
+      # Windows on ARM64 is less common for CLI tools
+      # Uncomment if you want to skip it:
+      # - goos: windows
+      #   goarch: arm64
+
+# Archive configuration
+archives:
+  - # Archive name template
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+    # Files to include in archive
+    files:
+      - README.md
+      - LICENSE
+      - config.yaml.example
+      - example-theme.json
+
+# Checksum configuration
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+# Snapshot configuration (for local builds)
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Changelog configuration
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - typo
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+# Release configuration
+release:
+  # GitHub release settings
+  github:
+    owner: Elpulgo
+    name: azdo
+
+  # Draft release (set to false for automatic release)
+  draft: true
+
+  # Prerelease detection
+  prerelease: auto
+
+  # Release name
+  name_template: "{{.ProjectName}} v{{.Version}}"
+
+  # Release notes header
+  header: |
+    ## azdo-tui {{.Tag}}
+
+    Cross-platform TUI for Azure DevOps
+
+    ### Installation
+
+    Download the appropriate binary for your platform below, extract it, and run it.
+
+    For detailed setup instructions, see the [README](https://github.com/Elpulgo/azdo#installation).
+
+  # Release notes footer
+  footer: |
+    **Full Changelog**: https://github.com/Elpulgo/azdo/compare/{{.PreviousTag}}...{{.Tag}}
+
+# Announce (optional - for future use)
+# announce:
+#   skip: true

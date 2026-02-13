@@ -163,3 +163,54 @@ func TestSetPAT_EmptyToken(t *testing.T) {
 		t.Error("Expected SetPAT to fail with empty token")
 	}
 }
+
+func TestGetPAT_FallbackToEnvVar(t *testing.T) {
+	// Set environment variable
+	envPAT := "env-pat-token-123"
+	t.Setenv("AZDO_PAT", envPAT)
+
+	// Create keyring that will fail
+	mock := newMockKeyring()
+	mock.err = errors.New("keyring unavailable")
+	ks := &KeyringStore{provider: mock}
+
+	// Should fall back to environment variable
+	pat, err := ks.GetPAT()
+	if err != nil {
+		t.Fatalf("GetPAT() should succeed with env fallback, got error: %v", err)
+	}
+
+	if pat != envPAT {
+		t.Errorf("Expected PAT from env var '%s', got '%s'", envPAT, pat)
+	}
+}
+
+func TestGetPAT_ErrorWhenNoFallback(t *testing.T) {
+	// Ensure AZDO_PAT is not set
+	t.Setenv("AZDO_PAT", "")
+
+	// Create keyring that will fail
+	mock := newMockKeyring()
+	mock.err = errors.New("keyring unavailable")
+	ks := &KeyringStore{provider: mock}
+
+	// Should return error with helpful message
+	_, err := ks.GetPAT()
+	if err == nil {
+		t.Error("Expected GetPAT to fail when keyring unavailable and no env var set")
+	}
+
+	// Check error message mentions both issues
+	errMsg := err.Error()
+	if !contains(errMsg, "keyring") {
+		t.Errorf("Error message should mention keyring: %s", errMsg)
+	}
+	if !contains(errMsg, "AZDO_PAT") {
+		t.Errorf("Error message should mention AZDO_PAT env var: %s", errMsg)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && (s[:len(substr)] == substr || contains(s[1:], substr))))
+}
