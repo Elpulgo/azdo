@@ -14,6 +14,7 @@ type Config struct {
 	Project         string `mapstructure:"project"`
 	PollingInterval int    `mapstructure:"polling_interval"`
 	Theme           string `mapstructure:"theme"`
+	configPath      string // internal field to store config path for saving
 }
 
 // Default configuration values
@@ -44,6 +45,14 @@ func Load() (*Config, error) {
 	configDir := filepath.Join(homeDir, ".config", "azdo-tui")
 	configPath := filepath.Join(configDir, "config.yaml")
 
+	return LoadFrom(configPath)
+}
+
+// LoadFrom reads the configuration from a specific path
+// This is useful for testing or custom config locations
+func LoadFrom(configPath string) (*Config, error) {
+	configDir := filepath.Dir(configPath)
+
 	// Create config directory if it doesn't exist
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
@@ -53,9 +62,8 @@ func Load() (*Config, error) {
 	v := viper.New()
 
 	// Configure viper
-	v.SetConfigName("config")
+	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
-	v.AddConfigPath(configDir)
 
 	// Set defaults
 	v.SetDefault("polling_interval", DefaultPollingInterval)
@@ -74,6 +82,9 @@ func Load() (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+
+	// Store the config path for saving
+	cfg.configPath = configPath
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -103,4 +114,55 @@ func (c *Config) GetTheme() string {
 		return DefaultTheme
 	}
 	return c.Theme
+}
+
+// Save writes the current configuration to the config file
+func (c *Config) Save() error {
+	// Validate before saving
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("cannot save invalid config: %w", err)
+	}
+
+	// Get config path - use stored path if available, otherwise get default
+	configPath := c.configPath
+	if configPath == "" {
+		var err error
+		configPath, err = GetPath()
+		if err != nil {
+			return fmt.Errorf("failed to get config path: %w", err)
+		}
+	}
+
+	// Create a new viper instance for writing
+	v := viper.New()
+	v.SetConfigFile(configPath)
+	v.SetConfigType("yaml")
+
+	// Set all config values
+	v.Set("organization", c.Organization)
+	v.Set("project", c.Project)
+	v.Set("polling_interval", c.PollingInterval)
+	v.Set("theme", c.Theme)
+
+	// Write config file
+	if err := v.WriteConfig(); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateTheme updates the theme in the config and saves it
+func (c *Config) UpdateTheme(themeName string) error {
+	if themeName == "" {
+		return fmt.Errorf("theme name cannot be empty")
+	}
+
+	c.Theme = themeName
+
+	if err := c.Save(); err != nil {
+		return fmt.Errorf("failed to save theme update: %w", err)
+	}
+
+	return nil
 }

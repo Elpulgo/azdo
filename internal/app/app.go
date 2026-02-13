@@ -48,6 +48,7 @@ type Model struct {
 	statusBar        *components.StatusBar
 	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
+	themePicker      components.ThemePicker
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
 	width            int
@@ -89,6 +90,10 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
+	// Create theme picker
+	availableThemes := styles.ListAvailableThemes()
+	themePicker := components.NewThemePicker(appStyles, availableThemes, cfg.GetTheme())
+
 	// Create poller with configured interval
 	interval := time.Duration(cfg.PollingInterval) * time.Second
 	if interval <= 0 {
@@ -120,6 +125,7 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 		statusBar:        statusBar,
 		contextBar:       contextBar,
 		helpModal:        helpModal,
+		themePicker:      themePicker,
 		poller:           poller,
 		errorHandler:     errorHandler,
 	}
@@ -153,6 +159,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// If theme picker is visible, handle its input first
+	if m.themePicker.IsVisible() {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			var cmd tea.Cmd
+			m.themePicker, cmd = m.themePicker.Update(msg)
+			return m, cmd
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.themePicker.SetSize(msg.Width, msg.Height)
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -162,6 +184,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.helpModal.SetSize(m.width, m.height)
 			m.helpModal.Show()
+			return m, nil
+		case "t":
+			m.themePicker.SetSize(m.width, m.height)
+			m.themePicker.Show()
 			return m, nil
 		case "1":
 			m.activeTab = TabPipelines
@@ -182,12 +208,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+	case components.ThemeSelectedMsg:
+		// Update theme in config and save
+		if err := m.config.UpdateTheme(msg.ThemeName); err != nil {
+			// Handle error - could set an error message in status bar
+			m.errorHandler.SetError(fmt.Errorf("failed to save theme: %w", err))
+			return m, nil
+		}
+
+		// Load the new theme
+		theme, err := styles.GetThemeByName(msg.ThemeName)
+		if err != nil {
+			// Handle error - this shouldn't happen as we selected from available themes
+			m.errorHandler.SetError(fmt.Errorf("failed to load theme: %w", err))
+			return m, nil
+		}
+
+		// Create new styles with the selected theme
+		m.styles = styles.NewStyles(theme)
+
+		// Update all components with new styles
+		m.statusBar = components.NewStatusBar(m.styles)
+		m.statusBar.SetOrganization(m.config.Organization)
+		m.statusBar.SetProject(m.config.Project)
+		m.statusBar.SetWidth(m.width)
+		if configPath, err := config.GetPath(); err == nil {
+			m.statusBar.SetConfigPath(configPath)
+		}
+
+		m.contextBar = components.NewContextBar(m.styles)
+		m.contextBar.SetWidth(m.width)
+
+		m.helpModal = components.NewHelpModal(m.styles)
+		m.helpModal.SetSize(m.width, m.height)
+
+		// Update theme picker with new styles and current theme
+		availableThemes := styles.ListAvailableThemes()
+		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
+
+		// Recreate views with new styles
+		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
+		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
+		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
+
+		// Re-initialize views to fetch data again
+		cmds = append(cmds, m.pipelinesView.Init())
+		if m.activeTab == TabPullRequests {
+			cmds = append(cmds, m.pullRequestsView.Init())
+		}
+		if m.activeTab == TabWorkItems {
+			cmds = append(cmds, m.workItemsView.Init())
+		}
+
+		return m, tea.Batch(cmds...)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
 		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
+		m.themePicker.SetSize(msg.Width, msg.Height)
 		// Pass size to all views so they're ready when switched to
 		m.pipelinesView, _ = m.pipelinesView.Update(msg)
 		m.pullRequestsView, _ = m.pullRequestsView.Update(msg)
@@ -267,6 +348,11 @@ func (m Model) View() string {
 	// If help modal is visible, show it as overlay
 	if m.helpModal.IsVisible() {
 		return m.helpModal.View()
+	}
+
+	// If theme picker is visible, show it as overlay
+	if m.themePicker.IsVisible() {
+		return m.themePicker.View()
 	}
 
 	// Render tab bar
