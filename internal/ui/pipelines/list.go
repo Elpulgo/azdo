@@ -382,7 +382,7 @@ func statusIconWithStyles(status, result string, s *styles.Styles) string {
 	case resultLower == "canceled":
 		return s.Muted.Render("○ Cancel")
 	case resultLower == "partiallysucceeded":
-		return s.Warning.Render("⚠ Partial")
+		return s.Warning.Render("◐ Partial")
 	default:
 		// Debug: show what we received
 		return s.Muted.Render(fmt.Sprintf("%s/%s", status, result))
