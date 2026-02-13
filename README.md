@@ -104,6 +104,59 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 - `catppuccin` - Soothing pastel theme (Mocha variant)
 - `github` - GitHub Dark theme
 
+### Custom Themes
+
+You can create your own custom themes by placing JSON theme files in the themes directory:
+- **Linux/macOS**: `~/.config/azdo-tui/themes/`
+- **Windows**: `C:\Users\<username>\.config\azdo-tui\themes\`
+
+**Creating a Custom Theme:**
+
+1. Create the themes directory if it doesn't exist:
+   ```bash
+   mkdir -p ~/.config/azdo-tui/themes
+   ```
+
+2. Create a JSON theme file (e.g., `mytheme.json`):
+   ```json
+   {
+     "name": "mytheme",
+     "primary": "#0088ff",
+     "secondary": "#00aaff",
+     "accent": "#ff8800",
+     "success": "#00ff88",
+     "warning": "#ffaa00",
+     "error": "#ff4444",
+     "info": "#00ccff",
+     "background": "#1a1b26",
+     "background_alt": "#24283b",
+     "background_select": "#343b58",
+     "foreground": "#c0caf5",
+     "foreground_muted": "#787c99",
+     "foreground_bold": "#ffffff",
+     "select_foreground": "#ffffff",
+     "select_background": "#0088ff",
+     "border": "#3b4261",
+     "link": "#7aa2f7",
+     "spinner": "#bb9af7",
+     "tab_active_foreground": "#ffffff",
+     "tab_active_background": "#0088ff",
+     "tab_inactive_foreground": "#787c99",
+     "tab_inactive_background": "#1a1b26"
+   }
+   ```
+
+3. Set the theme in your `config.yaml`:
+   ```yaml
+   theme: mytheme
+   ```
+
+4. Restart the application to use your custom theme.
+
+See `example-theme.json` in the repository for a complete template with all available color properties. Colors can be specified as:
+- Hex values: `#ff0000` or `#f00`
+- ANSI 256 colors: `"1"`, `"33"`, `"196"`
+
 ### 2. Azure DevOps Personal Access Token (PAT)
 
 On first run, the application will prompt you to enter your Azure DevOps PAT. The token is securely stored in your system's credential manager:

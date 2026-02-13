@@ -1,6 +1,10 @@
 package styles
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
@@ -52,6 +56,150 @@ func ListAvailableThemes() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// GetThemesDirectoryPath returns the path to the custom themes directory.
+// Custom themes should be placed in ~/.config/azdo-tui/themes/
+func GetThemesDirectoryPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(homeDir, ".config", "azdo-tui", "themes"), nil
+}
+
+// themeJSON represents the JSON structure for custom themes.
+// Uses snake_case for JSON field names to match common conventions.
+type themeJSON struct {
+	Name                  string `json:"name"`
+	Primary               string `json:"primary"`
+	Secondary             string `json:"secondary"`
+	Accent                string `json:"accent"`
+	Success               string `json:"success"`
+	Warning               string `json:"warning"`
+	Error                 string `json:"error"`
+	Info                  string `json:"info"`
+	Background            string `json:"background"`
+	BackgroundAlt         string `json:"background_alt"`
+	BackgroundSelect      string `json:"background_select"`
+	Foreground            string `json:"foreground"`
+	ForegroundMuted       string `json:"foreground_muted"`
+	ForegroundBold        string `json:"foreground_bold"`
+	SelectForeground      string `json:"select_foreground"`
+	SelectBackground      string `json:"select_background"`
+	Border                string `json:"border"`
+	Link                  string `json:"link"`
+	Spinner               string `json:"spinner"`
+	TabActiveForeground   string `json:"tab_active_foreground"`
+	TabActiveBackground   string `json:"tab_active_background"`
+	TabInactiveForeground string `json:"tab_inactive_foreground"`
+	TabInactiveBackground string `json:"tab_inactive_background"`
+}
+
+// LoadThemeFromJSON loads a theme from JSON bytes.
+// Returns an error if the JSON is invalid or the theme fails validation.
+func LoadThemeFromJSON(data []byte) (Theme, error) {
+	var tj themeJSON
+	if err := json.Unmarshal(data, &tj); err != nil {
+		return Theme{}, fmt.Errorf("failed to parse theme JSON: %w", err)
+	}
+
+	// Convert JSON structure to Theme
+	theme := Theme{
+		Name:                  tj.Name,
+		Primary:               lipgloss.Color(tj.Primary),
+		Secondary:             lipgloss.Color(tj.Secondary),
+		Accent:                lipgloss.Color(tj.Accent),
+		Success:               lipgloss.Color(tj.Success),
+		Warning:               lipgloss.Color(tj.Warning),
+		Error:                 lipgloss.Color(tj.Error),
+		Info:                  lipgloss.Color(tj.Info),
+		Background:            lipgloss.Color(tj.Background),
+		BackgroundAlt:         lipgloss.Color(tj.BackgroundAlt),
+		BackgroundSelect:      lipgloss.Color(tj.BackgroundSelect),
+		Foreground:            lipgloss.Color(tj.Foreground),
+		ForegroundMuted:       lipgloss.Color(tj.ForegroundMuted),
+		ForegroundBold:        lipgloss.Color(tj.ForegroundBold),
+		SelectForeground:      lipgloss.Color(tj.SelectForeground),
+		SelectBackground:      lipgloss.Color(tj.SelectBackground),
+		Border:                lipgloss.Color(tj.Border),
+		Link:                  lipgloss.Color(tj.Link),
+		Spinner:               lipgloss.Color(tj.Spinner),
+		TabActiveForeground:   lipgloss.Color(tj.TabActiveForeground),
+		TabActiveBackground:   lipgloss.Color(tj.TabActiveBackground),
+		TabInactiveForeground: lipgloss.Color(tj.TabInactiveForeground),
+		TabInactiveBackground: lipgloss.Color(tj.TabInactiveBackground),
+	}
+
+	// Validate the theme
+	if err := theme.Validate(); err != nil {
+		return Theme{}, fmt.Errorf("invalid theme: %w", err)
+	}
+
+	return theme, nil
+}
+
+// RegisterTheme registers a custom theme in the theme registry.
+// Returns an error if the theme fails validation.
+func RegisterTheme(theme Theme) error {
+	if err := theme.Validate(); err != nil {
+		return fmt.Errorf("invalid theme: %w", err)
+	}
+	themeRegistry[theme.Name] = theme
+	return nil
+}
+
+// LoadCustomThemesFromDirectory loads all custom theme files from a directory.
+// Theme files must have a .json extension and contain valid theme JSON.
+// Returns the number of themes successfully loaded and any critical errors.
+// Missing directory or individual invalid theme files are not considered errors.
+func LoadCustomThemesFromDirectory(dir string) (int, error) {
+	// Check if directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		// Directory doesn't exist - not an error, just no custom themes
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to access themes directory: %w", err)
+	}
+
+	// Read all files in the directory
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read themes directory: %w", err)
+	}
+
+	loadedCount := 0
+	for _, entry := range entries {
+		// Skip directories and non-JSON files
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		// Read the theme file
+		themePath := filepath.Join(dir, entry.Name())
+		data, err := os.ReadFile(themePath)
+		if err != nil {
+			// Skip files that can't be read
+			continue
+		}
+
+		// Try to load the theme
+		theme, err := LoadThemeFromJSON(data)
+		if err != nil {
+			// Skip invalid theme files
+			continue
+		}
+
+		// Register the theme
+		if err := RegisterTheme(theme); err != nil {
+			// Skip themes that fail registration
+			continue
+		}
+
+		loadedCount++
+	}
+
+	return loadedCount, nil
 }
 
 // Dark theme - the default theme matching current application colors

@@ -1,6 +1,8 @@
 package styles
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -255,5 +257,272 @@ func TestThemeColorsInterface(t *testing.T) {
 	}
 	if theme.GetForeground() != theme.Foreground {
 		t.Error("GetForeground() doesn't match Foreground field")
+	}
+}
+
+// TestLoadThemeFromJSON tests loading a theme from JSON bytes
+func TestLoadThemeFromJSON(t *testing.T) {
+	jsonData := `{
+		"name": "custom-test",
+		"primary": "#ff0000",
+		"secondary": "#00ff00",
+		"accent": "#0000ff",
+		"success": "#00ff00",
+		"warning": "#ffff00",
+		"error": "#ff0000",
+		"info": "#00ffff",
+		"background": "#000000",
+		"background_alt": "#111111",
+		"background_select": "#222222",
+		"foreground": "#ffffff",
+		"foreground_muted": "#888888",
+		"foreground_bold": "#ffffff",
+		"select_foreground": "#ffffff",
+		"select_background": "#0000ff",
+		"border": "#444444",
+		"link": "#0088ff",
+		"spinner": "#ff00ff",
+		"tab_active_foreground": "#ffffff",
+		"tab_active_background": "#0000ff",
+		"tab_inactive_foreground": "#888888",
+		"tab_inactive_background": "#333333"
+	}`
+
+	theme, err := LoadThemeFromJSON([]byte(jsonData))
+	if err != nil {
+		t.Fatalf("LoadThemeFromJSON() failed: %v", err)
+	}
+
+	if theme.Name != "custom-test" {
+		t.Errorf("Name = %q, want %q", theme.Name, "custom-test")
+	}
+	if string(theme.Primary) != "#ff0000" {
+		t.Errorf("Primary = %q, want %q", theme.Primary, "#ff0000")
+	}
+	if string(theme.Background) != "#000000" {
+		t.Errorf("Background = %q, want %q", theme.Background, "#000000")
+	}
+
+	// Validate the loaded theme
+	if err := theme.Validate(); err != nil {
+		t.Errorf("Loaded theme failed validation: %v", err)
+	}
+}
+
+// TestLoadThemeFromJSON_InvalidJSON tests error handling for invalid JSON
+func TestLoadThemeFromJSON_InvalidJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonData string
+		wantErr  bool
+	}{
+		{
+			name:     "invalid JSON syntax",
+			jsonData: `{invalid json}`,
+			wantErr:  true,
+		},
+		{
+			name:     "missing name field",
+			jsonData: `{"primary": "#ff0000"}`,
+			wantErr:  true,
+		},
+		{
+			name:     "empty name field",
+			jsonData: `{"name": "", "primary": "#ff0000"}`,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadThemeFromJSON([]byte(tt.jsonData))
+			if tt.wantErr && err == nil {
+				t.Error("LoadThemeFromJSON() expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("LoadThemeFromJSON() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestGetThemesDirectoryPath tests the themes directory path function
+func TestGetThemesDirectoryPath(t *testing.T) {
+	path, err := GetThemesDirectoryPath()
+	if err != nil {
+		t.Fatalf("GetThemesDirectoryPath() failed: %v", err)
+	}
+
+	if path == "" {
+		t.Error("GetThemesDirectoryPath() returned empty path")
+	}
+
+	// Path should contain .config/azdo-tui/themes
+	if !contains(path, "azdo-tui") || !contains(path, "themes") {
+		t.Errorf("GetThemesDirectoryPath() = %q, should contain 'azdo-tui' and 'themes'", path)
+	}
+}
+
+// Helper function
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (hasPrefix(s, substr) || hasSuffix(s, substr) || hasInfix(s, substr)))
+}
+
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+func hasSuffix(s, suffix string) bool {
+	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
+}
+
+func hasInfix(s, infix string) bool {
+	for i := 0; i <= len(s)-len(infix); i++ {
+		if s[i:i+len(infix)] == infix {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLoadCustomThemesFromDirectory tests loading custom themes from a directory
+func TestLoadCustomThemesFromDirectory(t *testing.T) {
+	// Create a temporary directory for test themes
+	tmpDir := t.TempDir()
+
+	// Create a valid custom theme file
+	customTheme := `{
+		"name": "custom-blue",
+		"primary": "#0066ff",
+		"secondary": "#00aaff",
+		"accent": "#0044aa",
+		"success": "#00ff00",
+		"warning": "#ffff00",
+		"error": "#ff0000",
+		"info": "#00ffff",
+		"background": "#000033",
+		"background_alt": "#000055",
+		"background_select": "#000077",
+		"foreground": "#ffffff",
+		"foreground_muted": "#888888",
+		"foreground_bold": "#ffffff",
+		"select_foreground": "#ffffff",
+		"select_background": "#0066ff",
+		"border": "#444444",
+		"link": "#0088ff",
+		"spinner": "#ff00ff",
+		"tab_active_foreground": "#ffffff",
+		"tab_active_background": "#0066ff",
+		"tab_inactive_foreground": "#888888",
+		"tab_inactive_background": "#333333"
+	}`
+
+	// Write the theme file
+	themeFile := filepath.Join(tmpDir, "custom-blue.json")
+	if err := os.WriteFile(themeFile, []byte(customTheme), 0644); err != nil {
+		t.Fatalf("Failed to write test theme file: %v", err)
+	}
+
+	// Create an invalid theme file (should be skipped)
+	invalidFile := filepath.Join(tmpDir, "invalid.json")
+	if err := os.WriteFile(invalidFile, []byte("{invalid}"), 0644); err != nil {
+		t.Fatalf("Failed to write invalid theme file: %v", err)
+	}
+
+	// Create a non-JSON file (should be ignored)
+	txtFile := filepath.Join(tmpDir, "readme.txt")
+	if err := os.WriteFile(txtFile, []byte("This is not a theme"), 0644); err != nil {
+		t.Fatalf("Failed to write txt file: %v", err)
+	}
+
+	// Load custom themes from the directory
+	count, err := LoadCustomThemesFromDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadCustomThemesFromDirectory() failed: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("LoadCustomThemesFromDirectory() loaded %d themes, want 1", count)
+	}
+
+	// Verify the custom theme is now available
+	theme, err := GetThemeByName("custom-blue")
+	if err != nil {
+		t.Fatalf("GetThemeByName('custom-blue') failed after loading: %v", err)
+	}
+
+	if theme.Name != "custom-blue" {
+		t.Errorf("Theme name = %q, want %q", theme.Name, "custom-blue")
+	}
+	if string(theme.Primary) != "#0066ff" {
+		t.Errorf("Theme Primary = %q, want %q", theme.Primary, "#0066ff")
+	}
+}
+
+// TestLoadCustomThemesFromDirectory_NonexistentDirectory tests handling of missing directory
+func TestLoadCustomThemesFromDirectory_NonexistentDirectory(t *testing.T) {
+	// Should not error, just return 0 themes loaded
+	count, err := LoadCustomThemesFromDirectory("/nonexistent/path/that/does/not/exist")
+	if err != nil {
+		t.Errorf("LoadCustomThemesFromDirectory() with nonexistent dir should not error, got: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("LoadCustomThemesFromDirectory() with nonexistent dir should return 0, got %d", count)
+	}
+}
+
+// TestRegisterTheme tests registering a custom theme
+func TestRegisterTheme(t *testing.T) {
+	customTheme := Theme{
+		Name:                  "test-register",
+		Primary:               "#ff0000",
+		Secondary:             "#00ff00",
+		Accent:                "#0000ff",
+		Success:               "#00ff00",
+		Warning:               "#ffff00",
+		Error:                 "#ff0000",
+		Info:                  "#00ffff",
+		Background:            "#000000",
+		BackgroundAlt:         "#111111",
+		BackgroundSelect:      "#222222",
+		Foreground:            "#ffffff",
+		ForegroundMuted:       "#888888",
+		ForegroundBold:        "#ffffff",
+		SelectForeground:      "#ffffff",
+		SelectBackground:      "#0000ff",
+		Border:                "#444444",
+		Link:                  "#0088ff",
+		Spinner:               "#ff00ff",
+		TabActiveForeground:   "#ffffff",
+		TabActiveBackground:   "#0000ff",
+		TabInactiveForeground: "#888888",
+		TabInactiveBackground: "#333333",
+	}
+
+	// Register the theme
+	if err := RegisterTheme(customTheme); err != nil {
+		t.Fatalf("RegisterTheme() failed: %v", err)
+	}
+
+	// Verify it's now available
+	theme, err := GetThemeByName("test-register")
+	if err != nil {
+		t.Fatalf("GetThemeByName('test-register') failed after registration: %v", err)
+	}
+
+	if theme.Name != "test-register" {
+		t.Errorf("Theme name = %q, want %q", theme.Name, "test-register")
+	}
+}
+
+// TestRegisterTheme_InvalidTheme tests error handling for invalid themes
+func TestRegisterTheme_InvalidTheme(t *testing.T) {
+	invalidTheme := Theme{
+		Name: "", // Empty name should fail validation
+	}
+
+	err := RegisterTheme(invalidTheme)
+	if err == nil {
+		t.Error("RegisterTheme() with invalid theme should return error, got nil")
 	}
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -13,6 +14,18 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// ThemeNotFoundError represents an error when a requested theme is not found.
+type ThemeNotFoundError struct {
+	ThemeName  string
+	ThemesPath string
+}
+
+func (e *ThemeNotFoundError) Error() string {
+	availableThemes := styles.ListAvailableThemes()
+	return fmt.Sprintf("Theme '%s' not found. Using default theme. Available themes: %v. Custom themes can be placed in: %s",
+		e.ThemeName, availableThemes, e.ThemesPath)
+}
 
 // Tab represents the active tab in the application
 type Tab int
@@ -44,8 +57,20 @@ type Model struct {
 
 // NewModel creates a new application model with the given Azure DevOps client and config
 func NewModel(client *azdevops.Client, cfg *config.Config) Model {
-	// Load theme from config and create styles
-	theme := styles.GetThemeByNameWithFallback(cfg.GetTheme())
+	// Load custom themes from themes directory
+	if themesDir, err := styles.GetThemesDirectoryPath(); err == nil {
+		// Silently load custom themes - errors are ignored
+		_, _ = styles.LoadCustomThemesFromDirectory(themesDir)
+	}
+
+	// Try to load the requested theme
+	requestedTheme := cfg.GetTheme()
+	theme, themeErr := styles.GetThemeByName(requestedTheme)
+	if themeErr != nil {
+		// Fall back to default theme
+		theme = styles.GetDefaultTheme()
+	}
+
 	appStyles := styles.NewStyles(theme)
 
 	// Create status bar with org/project info
@@ -71,6 +96,19 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	}
 	poller := polling.NewPoller(client, interval)
 
+	// Create error handler
+	errorHandler := polling.NewErrorHandler()
+
+	// If theme was not found, set a friendly error message
+	if themeErr != nil {
+		themesDir, _ := styles.GetThemesDirectoryPath()
+		themeNotFoundErr := &ThemeNotFoundError{
+			ThemeName:  requestedTheme,
+			ThemesPath: themesDir,
+		}
+		errorHandler.SetError(themeNotFoundErr)
+	}
+
 	return Model{
 		client:           client,
 		config:           cfg,
@@ -83,7 +121,7 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 		contextBar:       contextBar,
 		helpModal:        helpModal,
 		poller:           poller,
-		errorHandler:     polling.NewErrorHandler(),
+		errorHandler:     errorHandler,
 	}
 }
 

@@ -11,5 +11,7 @@ project: your-project-name
 polling_interval: 60
 
 # Theme (optional, default: dark)
-# Options: dark, light
+# Built-in themes: dark, gruvbox, nord, dracula, catppuccin, github
+# Custom themes: Place JSON theme files in ~/.config/azdo-tui/themes/
+# Example: If you have ~/.config/azdo-tui/themes/mytheme.json, use: theme: mytheme
 theme: dark
