@@ -251,6 +251,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
 
+		// CRITICAL: Set window size for all views before they try to render
+		if m.width > 0 && m.height > 0 {
+			sizeMsg := tea.WindowSizeMsg{Width: m.width, Height: m.height}
+			m.pipelinesView, _ = m.pipelinesView.Update(sizeMsg)
+			m.pullRequestsView, _ = m.pullRequestsView.Update(sizeMsg)
+			m.workItemsView, _ = m.workItemsView.Update(sizeMsg)
+		}
+
 		// Re-initialize views to fetch data again
 		cmds = append(cmds, m.pipelinesView.Init())
 		if m.activeTab == TabPullRequests {
