@@ -185,7 +185,8 @@ func NewStyles(theme Theme) *Styles {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(theme.Border)).
 		BorderBottom(true).
-		Bold(false)
+		Bold(false).
+		Padding(0, 1)
 
 	s.TableCell = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Foreground)).
