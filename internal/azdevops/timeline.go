@@ -18,7 +18,8 @@ func (c *Client) GetBuildTimeline(buildID int) (*Timeline, error) {
 	var timeline Timeline
 	err = json.Unmarshal(body, &timeline)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal timeline response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for build timeline: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return &timeline, nil

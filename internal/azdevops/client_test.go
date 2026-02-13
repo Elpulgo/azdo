@@ -450,3 +450,53 @@ func TestClient_Get_ContentTypeHeader(t *testing.T) {
 		t.Fatalf("get() failed: %v", err)
 	}
 }
+
+func TestFormatHTTPError_NotFound(t *testing.T) {
+	err := formatHTTPError(http.StatusNotFound, []byte(`{}`))
+
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Expected error to contain '404', got %q", err.Error())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "not found") {
+		t.Errorf("Expected error to mention 'not found', got %q", err.Error())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "organization") && !strings.Contains(strings.ToLower(err.Error()), "project") {
+		t.Errorf("Expected error to mention organization or project, got %q", err.Error())
+	}
+}
+
+func TestFormatHTTPError_RateLimit(t *testing.T) {
+	err := formatHTTPError(http.StatusTooManyRequests, []byte(`{}`))
+
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("Expected error to contain '429', got %q", err.Error())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "rate limit") {
+		t.Errorf("Expected error to mention 'rate limit', got %q", err.Error())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "wait") && !strings.Contains(strings.ToLower(err.Error()), "retry") {
+		t.Errorf("Expected error to suggest waiting or retrying, got %q", err.Error())
+	}
+}
+
+func TestFormatHTTPError_ServerError(t *testing.T) {
+	err := formatHTTPError(http.StatusInternalServerError, []byte(`{}`))
+
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("Expected error to contain '500', got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Azure DevOps") {
+		t.Errorf("Expected error to mention 'Azure DevOps', got %q", err.Error())
+	}
+}
+
+func TestFormatHTTPError_ServiceUnavailable(t *testing.T) {
+	err := formatHTTPError(http.StatusServiceUnavailable, []byte(`{}`))
+
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("Expected error to contain '503', got %q", err.Error())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "unavailable") || !strings.Contains(strings.ToLower(err.Error()), "temporary") {
+		t.Errorf("Expected error to mention service unavailability or temporary issue, got %q", err.Error())
+	}
+}

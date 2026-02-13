@@ -58,10 +58,20 @@ type Model struct {
 
 // NewModel creates a new application model with the given Azure DevOps client and config
 func NewModel(client *azdevops.Client, cfg *config.Config) Model {
+	// Create error handler early to capture initialization errors
+	errorHandler := polling.NewErrorHandler()
+
 	// Load custom themes from themes directory
-	if themesDir, err := styles.GetThemesDirectoryPath(); err == nil {
-		// Silently load custom themes - errors are ignored
-		_, _ = styles.LoadCustomThemesFromDirectory(themesDir)
+	if themesDir, err := styles.GetThemesDirectoryPath(); err != nil {
+		// Failed to get themes directory path
+		errorHandler.SetError(fmt.Errorf("failed to access themes directory: %w", err))
+	} else {
+		// Try to load custom themes
+		_, err := styles.LoadCustomThemesFromDirectory(themesDir)
+		if err != nil {
+			// Failed to load custom themes - set error but continue
+			errorHandler.SetError(fmt.Errorf("failed to load custom themes from %s: %w", themesDir, err))
+		}
 	}
 
 	// Try to load the requested theme
@@ -101,9 +111,6 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	}
 	poller := polling.NewPoller(client, interval)
 
-	// Create error handler
-	errorHandler := polling.NewErrorHandler()
-
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
 		themesDir, _ := styles.GetThemesDirectoryPath()
@@ -133,6 +140,12 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 
 // Init initializes the application
 func (m Model) Init() tea.Cmd {
+	// Check for any startup errors (e.g., theme not found)
+	if m.errorHandler.ShouldShowError() {
+		m.statusBar.SetState(polling.StateError)
+		m.statusBar.SetErrorMessage(m.errorHandler.ErrorMessage())
+	}
+
 	return tea.Batch(
 		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
 		m.poller.StartPolling(),      // Start polling timer
@@ -211,8 +224,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case components.ThemeSelectedMsg:
 		// Update theme in config and save
 		if err := m.config.UpdateTheme(msg.ThemeName); err != nil {
-			// Handle error - could set an error message in status bar
+			// Handle error - set error message in status bar
 			m.errorHandler.SetError(fmt.Errorf("failed to save theme: %w", err))
+			m.statusBar.SetState(polling.StateError)
+			m.statusBar.SetErrorMessage(fmt.Sprintf("Failed to save theme setting: %v", err))
 			return m, nil
 		}
 
@@ -221,6 +236,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			// Handle error - this shouldn't happen as we selected from available themes
 			m.errorHandler.SetError(fmt.Errorf("failed to load theme: %w", err))
+			m.statusBar.SetState(polling.StateError)
+			m.statusBar.SetErrorMessage(fmt.Sprintf("Failed to load theme '%s': %v", msg.ThemeName, err))
 			return m, nil
 		}
 
@@ -292,8 +309,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if hasError {
 			m.statusBar.SetState(polling.StateError)
+			// Display user-friendly error message
+			if m.errorHandler.ShouldShowError() {
+				m.statusBar.SetErrorMessage(m.errorHandler.RecoveryMessage())
+			}
 		} else {
 			m.statusBar.SetState(polling.StateConnected)
+			m.statusBar.ClearErrorMessage()
 		}
 
 		// Update pipelines view with the runs

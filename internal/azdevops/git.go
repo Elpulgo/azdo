@@ -106,7 +106,8 @@ func (c *Client) ListPullRequests(top int) ([]PullRequest, error) {
 	var response PullRequestsResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal pull requests response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for pull requests: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return response.Value, nil
@@ -192,7 +193,8 @@ func (c *Client) GetPRThreads(repositoryID string, pullRequestID int) ([]Thread,
 	var response ThreadsResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal threads response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for PR threads: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return response.Value, nil
@@ -250,7 +252,8 @@ func (c *Client) AddPRComment(repositoryID string, pullRequestID int, comment st
 	var thread Thread
 	err = json.Unmarshal(body, &thread)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal thread response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for thread: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return &thread, nil

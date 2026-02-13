@@ -23,6 +23,7 @@ type StatusBar struct {
 	scrollPercent float64
 	showScroll    bool
 	width         int
+	errorMessage  string
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -74,6 +75,16 @@ func (s *StatusBar) ShowScrollPercent(show bool) {
 	s.showScroll = show
 }
 
+// SetErrorMessage sets the error message to display.
+func (s *StatusBar) SetErrorMessage(message string) {
+	s.errorMessage = message
+}
+
+// ClearErrorMessage clears the error message.
+func (s *StatusBar) ClearErrorMessage() {
+	s.errorMessage = ""
+}
+
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
 	return nil
@@ -99,7 +110,18 @@ func (s *StatusBar) View() string {
 
 	sep := sepStyle.Render(" │ ")
 
-	parts := []string{s.renderKeybindings()}
+	parts := []string{}
+
+	// If there's an error message and state is error, show it prominently
+	if s.errorMessage != "" && s.state == polling.StateError {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.Error)).
+			Background(lipgloss.Color(s.styles.Theme.Background)).
+			Bold(true)
+		parts = append(parts, errorStyle.Render(s.errorMessage))
+	} else {
+		parts = append(parts, s.renderKeybindings())
+	}
 
 	if orgProj := s.renderOrgProject(); orgProj != "" {
 		parts = append(parts, orgProj)

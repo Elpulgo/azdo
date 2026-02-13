@@ -107,7 +107,8 @@ func (c *Client) QueryWorkItemIDs(query string, top int) ([]int, error) {
 
 	var response WIQLResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal WIQL response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for work item query: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	ids := make([]int, len(response.WorkItems))
@@ -154,7 +155,8 @@ func (c *Client) GetWorkItems(ids []int) ([]WorkItem, error) {
 
 	var response WorkItemsResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal work items response: %w", err)
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for work items: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
 	}
 
 	return response.Value, nil

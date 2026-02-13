@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/zalando/go-keyring"
 )
@@ -71,13 +72,19 @@ func (k *KeyringStore) SetPAT(token string) error {
 }
 
 // GetPAT retrieves the Personal Access Token from the system keyring
+// If the keyring is unavailable, it falls back to the AZDO_PAT environment variable
 func (k *KeyringStore) GetPAT() (string, error) {
 	token, err := k.provider.Get(serviceName, userName)
 	if err != nil {
 		if err == ErrNotFound {
 			return "", ErrNotFound
 		}
-		return "", fmt.Errorf("failed to retrieve PAT from keyring: %w", err)
+		// Keyring access failed - try environment variable fallback
+		if envPAT := os.Getenv("AZDO_PAT"); envPAT != "" {
+			return envPAT, nil
+		}
+		return "", fmt.Errorf("failed to retrieve PAT from keyring and AZDO_PAT environment variable not set: %w. "+
+			"Please either fix your system keyring or set the AZDO_PAT environment variable", err)
 	}
 
 	return token, nil

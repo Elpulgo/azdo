@@ -302,3 +302,67 @@ func TestStatusBar_View_NoScrollPercentWhenDisabled(t *testing.T) {
 		t.Error("view should NOT contain scroll percentage when disabled")
 	}
 }
+
+func TestStatusBar_SetErrorMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetErrorMessage("Connection failed")
+
+	if sb.errorMessage != "Connection failed" {
+		t.Errorf("expected errorMessage 'Connection failed', got '%s'", sb.errorMessage)
+	}
+}
+
+func TestStatusBar_ClearErrorMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetErrorMessage("Connection failed")
+	sb.ClearErrorMessage()
+
+	if sb.errorMessage != "" {
+		t.Errorf("expected errorMessage to be empty, got '%s'", sb.errorMessage)
+	}
+}
+
+func TestStatusBar_View_ContainsErrorMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateError)
+	sb.SetErrorMessage("Network timeout. Retrying...")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "Network timeout. Retrying...") {
+		t.Error("view should contain error message when state is error")
+	}
+}
+
+func TestStatusBar_View_NoErrorMessageWhenConnected(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateConnected)
+	sb.SetErrorMessage("Network timeout. Retrying...")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if strings.Contains(view, "Network timeout. Retrying...") {
+		t.Error("view should NOT show error message when state is connected")
+	}
+}
+
+func TestStatusBar_View_ErrorMessageReplacesKeybindings(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateError)
+	sb.SetErrorMessage("Connection failed. Check your network and press 'r' to retry.")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	// Error message should be shown
+	if !strings.Contains(view, "Connection failed") {
+		t.Error("view should contain error message")
+	}
+
+	// Default detailed keybindings should NOT be shown when error is displayed
+	if strings.Contains(view, "navigate") {
+		t.Error("view should not contain detailed navigate keybinding when showing error")
+	}
+}

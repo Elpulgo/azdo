@@ -147,6 +147,18 @@ func formatHTTPError(statusCode int, _ []byte) error {
 	case http.StatusForbidden:
 		return fmt.Errorf("access denied (HTTP 403): your PAT does not have sufficient permissions. " +
 			"Required scopes: Code (Read), Build (Read), Work Items (Read)")
+	case http.StatusNotFound:
+		return fmt.Errorf("resource not found (HTTP 404): the requested resource does not exist. " +
+			"Please verify your organization and project names are correct in your configuration")
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("rate limit exceeded (HTTP 429): too many requests to Azure DevOps. " +
+			"Please wait a few minutes before retrying")
+	case http.StatusInternalServerError:
+		return fmt.Errorf("server error (HTTP 500): Azure DevOps encountered an internal error. " +
+			"This is usually temporary - please try again in a few moments")
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("service unavailable (HTTP 503): Azure DevOps is temporarily unavailable. " +
+			"This is usually a temporary issue - please try again later")
 	default:
 		return fmt.Errorf("HTTP request failed with status %d", statusCode)
 	}
