@@ -11,7 +11,7 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 - **Pipelines** (Tab 1): Monitor and drill into pipeline runs
 - **Pull Requests** (Tab 2): View and track pull requests
 - **Work Items** (Tab 3): Browse and manage work items
-- Switch between tabs using `1`, `2`, `3` keys
+- Switch between tabs using `1`, `2`, `3` keys or `←`/`→` arrow keys
 
 ### Pipeline Dashboard
 - View recent pipeline runs in a sortable table
@@ -190,15 +190,15 @@ azdo-tui
 ### Global
 | Key | Action |
 |-----|--------|
-| `1` | Switch to Pipelines tab |
-| `2` | Switch to Pull Requests tab |
-| `3` | Switch to Work Items tab |
+| `1`, `2`, `3` | Switch to Pipelines/PR/Work Items tab |
+| `←/→` | Previous / next tab |
 | `r` | Refresh data |
 | `↑/↓` or `j/k` | Navigate up/down |
 | `pgup/pgdn` | Page up/down |
 | `enter` | View details / expand |
 | `esc` | Go back |
 | `?` | Toggle help modal |
+| `t` | Select theme |
 | `q` or `Ctrl+C` | Quit |
 
 ### Log Viewer

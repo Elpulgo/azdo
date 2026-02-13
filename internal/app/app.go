@@ -219,6 +219,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.workItemsView.Init()
 			}
 			return m, nil
+		case "left":
+			// Navigate to previous tab (with wraparound)
+			switch m.activeTab {
+			case TabPipelines:
+				m.activeTab = TabWorkItems
+				return m, m.workItemsView.Init()
+			case TabPullRequests:
+				m.activeTab = TabPipelines
+				return m, nil
+			case TabWorkItems:
+				m.activeTab = TabPullRequests
+				return m, m.pullRequestsView.Init()
+			}
+			return m, nil
+		case "right":
+			// Navigate to next tab (with wraparound)
+			switch m.activeTab {
+			case TabPipelines:
+				m.activeTab = TabPullRequests
+				return m, m.pullRequestsView.Init()
+			case TabPullRequests:
+				m.activeTab = TabWorkItems
+				return m, m.workItemsView.Init()
+			case TabWorkItems:
+				m.activeTab = TabPipelines
+				return m, nil
+			}
+			return m, nil
 		}
 
 	case components.ThemeSelectedMsg:
