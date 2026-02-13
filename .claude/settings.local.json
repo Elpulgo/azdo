@@ -28,7 +28,8 @@
       "Bash(bd view:*)",
       "Bash(grep:*)",
       "Bash(bd agent:*)",
-      "Bash(go doc:*)"
+      "Bash(go doc:*)",
+      "Bash(wc:*)"
     ],
     "deny": [
       "Read(**/.env)",
