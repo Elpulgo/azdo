@@ -2,6 +2,7 @@
 
 A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly from your terminal.
 
+![Tests](https://img.shields.io/github/actions/workflow/status/Elpulgo/azdo/ci.yml?label=tests)
 ![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
