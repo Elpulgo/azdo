@@ -316,19 +316,29 @@ func (m Model) View() string {
 
 // viewList renders the pipeline list view
 func (m Model) viewList() string {
+	var content string
+
 	if m.err != nil {
-		return fmt.Sprintf("Error loading pipeline runs: %v\n\nPress r to retry, q to quit", m.err)
+		content = fmt.Sprintf("Error loading pipeline runs: %v\n\nPress r to retry, q to quit", m.err)
+	} else if m.loading {
+		content = m.spinner.View() + "\n\nPress q to quit"
+	} else if len(m.runs) == 0 {
+		content = "No pipeline runs found.\n\nPress r to refresh, q to quit"
+	} else {
+		return baseStyle.Render(m.table.View())
 	}
 
-	if m.loading {
-		return m.spinner.View() + "\n\nPress q to quit"
+	// For non-table content, fill available height
+	availableHeight := m.height - 5 // Account for tab bar and status bar
+	if availableHeight < 1 {
+		availableHeight = 10
 	}
 
-	if len(m.runs) == 0 {
-		return "No pipeline runs found.\n\nPress r to refresh, q to quit"
-	}
+	contentStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(availableHeight)
 
-	return baseStyle.Render(m.table.View())
+	return contentStyle.Render(content)
 }
 
 // runsToRows converts pipeline runs to table rows
