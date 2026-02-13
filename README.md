@@ -7,29 +7,35 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 
 ## Features
 
+### Multi-Tab Interface
+- **Pipelines** (Tab 1): Monitor and drill into pipeline runs
+- **Pull Requests** (Tab 2): View and track pull requests
+- **Work Items** (Tab 3): Browse and manage work items
+- Switch between tabs using `1`, `2`, `3` keys
+
 ### Pipeline Dashboard
 - View recent pipeline runs in a sortable table
 - Color-coded status indicators (✓ Success, ✗ Failed, ● Running, ○ Queued)
 - Live auto-refresh with configurable polling interval
 - Connection status indicator in footer
-
-### Pipeline Detail View
-- Hierarchical view of stages, jobs, and tasks
+- Hierarchical detail view with stages, jobs, and tasks
 - Duration tracking for each step
-- Log indicator showing which items have viewable logs
-- Status messages for selected items
+- Full log viewer with scrollable viewport
 
-### Log Viewer
-- Full log content for any task
-- Scrollable viewport with keyboard navigation
-- Timestamps automatically stripped for cleaner display
-- Jump to top/bottom with g/G keys
+### Pull Requests
+- List view of pull requests with status indicators
+- Detailed view showing PR information and metadata
 
-### Additional Features
+### Work Items
+- List view of work items with status and type information
+- Detailed view showing work item details
+
+### User Experience
 - Help modal with all keyboard shortcuts (press `?`)
 - Secure PAT storage using system keyring
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
+- Six built-in themes with true color support
 
 ## Installation
 
@@ -51,7 +57,9 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 
 ### 1. Create Configuration File
 
-Create a configuration file at `~/.config/azdo-tui/config.yaml`:
+Create a configuration file at the following location:
+- **Linux/macOS**: `~/.config/azdo-tui/config.yaml`
+- **Windows**: `C:\Users\<username>\.config\azdo-tui\config.yaml`
 
 ```yaml
 # Azure DevOps organization name (required)
@@ -61,22 +69,47 @@ organization: your-org-name
 project: your-project-name
 
 # Polling interval in seconds (optional, default: 60)
-polling_interval: 30
+polling_interval: 60
 
 # Theme (optional, default: dark)
+# Available themes: dark, gruvbox, nord, dracula, catppuccin, github
 theme: dark
 ```
 
 Or copy the example configuration:
 
+**Linux/macOS:**
 ```bash
 mkdir -p ~/.config/azdo-tui
 cp config.yaml.example ~/.config/azdo-tui/config.yaml
 ```
 
+**Windows (PowerShell):**
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.config\azdo-tui"
+Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
+```
+
+**Configuration Options:**
+- `organization`: Your Azure DevOps organization name (required)
+- `project`: Your Azure DevOps project name (required)
+- `polling_interval`: How often to refresh data in seconds (optional, default: 60)
+- `theme`: Color theme for the UI (optional, default: dark)
+
+**Available Themes:**
+- `dark` - Default dark theme with blue and cyan accents
+- `gruvbox` - Retro groove color scheme
+- `nord` - Arctic, north-bluish color palette
+- `dracula` - Dark theme with purple and pink accents
+- `catppuccin` - Soothing pastel theme (Mocha variant)
+- `github` - GitHub Dark theme
+
 ### 2. Azure DevOps Personal Access Token (PAT)
 
-On first run, the application will prompt you to enter your Azure DevOps PAT. The token is securely stored in your system keyring (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
+On first run, the application will prompt you to enter your Azure DevOps PAT. The token is securely stored in your system's credential manager:
+- **Windows**: Windows Credential Manager
+- **macOS**: Keychain
+- **Linux**: Secret Service (gnome-keyring, KWallet, etc.)
 
 **Required PAT Scopes:**
 - `Build` - Read (for pipeline runs and logs)
@@ -104,6 +137,9 @@ azdo-tui
 ### Global
 | Key | Action |
 |-----|--------|
+| `1` | Switch to Pipelines tab |
+| `2` | Switch to Pull Requests tab |
+| `3` | Switch to Work Items tab |
 | `r` | Refresh data |
 | `↑/↓` or `j/k` | Navigate up/down |
 | `pgup/pgdn` | Page up/down |
@@ -124,12 +160,14 @@ azdo-tui
 azdo/
 ├── cmd/azdo-tui/           # Application entry point
 ├── internal/
-│   ├── app/                # Root Bubble Tea application
+│   ├── app/                # Root Bubble Tea application with tab management
 │   ├── azdevops/           # Azure DevOps API client
 │   │   ├── client.go       # HTTP client with authentication
 │   │   ├── pipelines.go    # Pipeline runs API
 │   │   ├── timeline.go     # Build timeline API
 │   │   ├── logs.go         # Build logs API
+│   │   ├── pullrequests.go # Pull requests API
+│   │   ├── workitems.go    # Work items API
 │   │   └── types.go        # API response types
 │   ├── config/             # Configuration management
 │   │   ├── config.go       # YAML config with Viper
@@ -143,11 +181,22 @@ azdo/
 │       │   ├── statusbar.go    # Footer with keybindings
 │       │   ├── contextbar.go   # View-specific info bar
 │       │   ├── help.go         # Help modal overlay
-│       │   └── spinner.go      # Loading indicator
+│       │   ├── spinner.go      # Loading indicator
+│       │   └── table/          # Local table fork (TrueColor fix)
+│       ├── styles/         # Theming system
+│       │   ├── theme.go        # Theme type definition
+│       │   ├── themes.go       # Built-in themes
+│       │   └── styles.go       # Lipgloss styles
 │       ├── pipelines/      # Pipeline views
 │       │   ├── list.go         # Pipeline runs table
 │       │   ├── detail.go       # Timeline tree view
 │       │   └── logviewer.go    # Log content viewer
+│       ├── pullrequests/   # Pull request views
+│       │   ├── list.go         # PR list table
+│       │   └── detail.go       # PR detail view
+│       ├── workitems/      # Work item views
+│       │   ├── list.go         # Work items table
+│       │   └── detail.go       # Work item detail view
 │       └── patinput/       # PAT input prompt
 ├── config.yaml.example     # Example configuration
 └── Architecture.md         # Detailed architecture docs
@@ -183,11 +232,13 @@ go build -o azdo-tui ./cmd/azdo-tui
 
 ## Roadmap
 
-- [ ] Pull requests tab
-- [ ] Work items board
+- [x] Pull requests tab
+- [x] Work items tab
+- [x] Multiple theme support
 - [ ] Pipeline filtering and search
 - [ ] Trigger pipeline runs
 - [ ] Multi-project support
+- [ ] Theme switching within the app
 
 ## Contributing
 
