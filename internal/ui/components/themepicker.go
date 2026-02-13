@@ -115,6 +115,26 @@ func (t ThemePicker) View() string {
 	}
 
 	// Build the theme list
+	// Calculate maximum line width for consistent backgrounds
+	// Include title and help text in width calculation, with minimum width
+	titleText := "Select Theme"
+	helpTextStr := "↑/↓: navigate • enter: select • esc/q: cancel"
+
+	maxWidth := minModalWidth
+	if len(titleText) > maxWidth {
+		maxWidth = len(titleText)
+	}
+	if len(helpTextStr) > maxWidth {
+		maxWidth = len(helpTextStr)
+	}
+
+	for _, themeName := range t.availableThemes {
+		lineLen := len("> " + themeName + " (current)")
+		if lineLen > maxWidth {
+			maxWidth = lineLen
+		}
+	}
+
 	var themeList string
 	for i, themeName := range t.availableThemes {
 		cursor := " "
@@ -134,10 +154,13 @@ func (t ThemePicker) View() string {
 			line = lipgloss.NewStyle().
 				Foreground(t.styles.Theme.GetSelectForeground()).
 				Background(t.styles.Theme.GetSelectBackground()).
+				Width(maxWidth).
 				Render(line)
 		} else {
 			line = lipgloss.NewStyle().
 				Foreground(t.styles.Theme.GetForeground()).
+				Background(t.styles.Theme.GetBackground()).
+				Width(maxWidth).
 				Render(line)
 		}
 
@@ -147,11 +170,15 @@ func (t ThemePicker) View() string {
 	// Build the modal content
 	title := lipgloss.NewStyle().
 		Foreground(t.styles.Theme.GetPrimary()).
+		Background(t.styles.Theme.GetBackground()).
 		Bold(true).
+		Width(maxWidth).
 		Render("Select Theme")
 
 	helpText := lipgloss.NewStyle().
 		Foreground(t.styles.Theme.GetForegroundMuted()).
+		Background(t.styles.Theme.GetBackground()).
+		Width(maxWidth).
 		Render("↑/↓: navigate • enter: select • esc/q: cancel")
 
 	content := lipgloss.JoinVertical(

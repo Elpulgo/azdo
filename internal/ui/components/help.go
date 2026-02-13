@@ -8,6 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// minModalWidth is the minimum width for the help modal content
+const minModalWidth = 50
+
 // HelpBinding represents a single keybinding entry.
 type HelpBinding struct {
 	Key         string
@@ -116,6 +119,31 @@ func (h *HelpModal) View() string {
 		return ""
 	}
 
+	// Calculate content width (minimum width or longest content)
+	titleText := "⌨ Keyboard Shortcuts"
+	footerText := "Press esc, q, or ? to close"
+
+	contentWidth := minModalWidth
+	if len(titleText) > contentWidth {
+		contentWidth = len(titleText)
+	}
+	if len(footerText) > contentWidth {
+		contentWidth = len(footerText)
+	}
+
+	// Check section titles and bindings
+	for _, section := range h.sections {
+		if len(section.Title) > contentWidth {
+			contentWidth = len(section.Title)
+		}
+		for _, binding := range section.Bindings {
+			lineLen := 12 + len(binding.Description) // Key width + description
+			if lineLen > contentWidth {
+				contentWidth = lineLen
+			}
+		}
+	}
+
 	// Build styles from theme
 	helpModalStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -126,23 +154,32 @@ func (h *HelpModal) View() string {
 	helpTitleStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
 		Bold(true).
-		MarginBottom(1)
+		MarginBottom(1).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
 
 	helpSectionStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
 		Bold(true).
-		MarginTop(1)
+		MarginTop(1).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
 
 	helpKeyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
 		Bold(true).
-		Width(12)
+		Width(12).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
 
 	helpDescStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(h.styles.Theme.Foreground))
+		Foreground(lipgloss.Color(h.styles.Theme.Foreground)).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+		Width(contentWidth - 12)
 
 	footerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted))
+		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
 
 	var content strings.Builder
 
