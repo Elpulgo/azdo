@@ -53,6 +53,58 @@ func TestUpdate_EnterSubmitsPAT(t *testing.T) {
 	}
 }
 
+func TestUpdate_EnterQuitsProgram(t *testing.T) {
+	model := NewModel()
+
+	// Simulate typing a PAT
+	testPAT := "test-pat-token-123"
+	for _, char := range testPAT {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{char}}
+		m, _ := model.Update(msg)
+		model = m.(Model)
+	}
+
+	// Simulate pressing Enter
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	_, cmd := model.Update(msg)
+
+	if cmd == nil {
+		t.Fatal("Expected a command to be returned after submission")
+	}
+
+	// Execute the command and check if it contains a quit message
+	// The command should return a tea.Quit or similar message
+	result := cmd()
+
+	// Check if the result is a batch command (which would contain both PAT submission and quit)
+	// We need to verify that tea.Quit is called
+	batchMsg, isBatch := result.(tea.BatchMsg)
+	if !isBatch {
+		t.Fatal("Expected a batch command containing both PAT submission and quit")
+	}
+
+	// Execute all commands in the batch
+	foundPATMsg := false
+	foundQuitMsg := false
+	for _, cmdFunc := range batchMsg {
+		msg := cmdFunc()
+		if _, ok := msg.(PATSubmittedMsg); ok {
+			foundPATMsg = true
+		}
+		if _, ok := msg.(tea.QuitMsg); ok {
+			foundQuitMsg = true
+		}
+	}
+
+	if !foundPATMsg {
+		t.Error("Expected batch to contain PATSubmittedMsg")
+	}
+
+	if !foundQuitMsg {
+		t.Error("Expected batch to contain tea.QuitMsg to exit the program")
+	}
+}
+
 func TestUpdate_EscCancels(t *testing.T) {
 	model := NewModel()
 
