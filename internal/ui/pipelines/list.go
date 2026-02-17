@@ -233,6 +233,11 @@ func (m Model) HasContextBar() bool {
 	return m.list.HasContextBar()
 }
 
+// TableHeight returns the table viewport height (for debugging).
+func (m Model) TableHeight() int {
+	return m.list.Table().Height()
+}
+
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
 type detailAdapter struct {
 	model *DetailModel

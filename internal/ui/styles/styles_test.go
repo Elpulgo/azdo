@@ -90,6 +90,30 @@ func TestStylesSelectionStyles(t *testing.T) {
 	}
 }
 
+// TestStylesContentBoxHasRoundedBorder tests that ContentBox style has a rounded border
+func TestStylesContentBoxHasRoundedBorder(t *testing.T) {
+	theme := GetDefaultTheme()
+	s := NewStyles(theme)
+
+	// ContentBox should have a rounded border with the theme's border color
+	border := s.ContentBox.GetBorderStyle()
+	if border == (lipgloss.Border{}) {
+		t.Error("ContentBox should have a border style set")
+	}
+	if s.ContentBox.GetBorderTopSize() != 1 {
+		t.Error("ContentBox should have a top border")
+	}
+	if s.ContentBox.GetBorderBottomSize() != 1 {
+		t.Error("ContentBox should have a bottom border")
+	}
+	if s.ContentBox.GetBorderLeftSize() != 1 {
+		t.Error("ContentBox should have a left border")
+	}
+	if s.ContentBox.GetBorderRightSize() != 1 {
+		t.Error("ContentBox should have a right border")
+	}
+}
+
 // TestStylesAllThemes tests that NewStyles works with all built-in themes
 func TestStylesAllThemes(t *testing.T) {
 	themeNames := ListAvailableThemes()

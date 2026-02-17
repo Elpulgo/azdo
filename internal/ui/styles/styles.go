@@ -17,6 +17,7 @@ type Styles struct {
 	// Box and container styles
 	Box        lipgloss.Style
 	BoxRounded lipgloss.Style
+	ContentBox lipgloss.Style
 	ModalBox   lipgloss.Style
 
 	// Text styles
@@ -91,6 +92,10 @@ func NewStyles(theme Theme) *Styles {
 		BorderForeground(lipgloss.Color(theme.Accent)).
 		Background(lipgloss.Color(theme.Background)).
 		Padding(0, 1)
+
+	s.ContentBox = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Border))
 
 	s.ModalBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

@@ -186,15 +186,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 
 // View renders the detail view
 func (m *DetailModel) View() string {
-	// Helper to wrap content with proper height so footer stays at bottom
+	// Helper to wrap content with consistent width
 	wrapContent := func(content string) string {
-		availableHeight := m.height - 4 // Account for header and footer
-		if availableHeight < 1 {
-			availableHeight = 10
-		}
 		contentStyle := lipgloss.NewStyle().
-			Width(m.width).
-			Height(availableHeight)
+			Width(m.width)
 		return contentStyle.Render(content)
 	}
 

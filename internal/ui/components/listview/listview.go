@@ -19,6 +19,7 @@ const (
 	ViewDetail
 )
 
+
 // ColumnSpec defines a column with percentage-based width and minimum.
 type ColumnSpec struct {
 	Title    string
@@ -123,7 +124,9 @@ func (m Model[T]) updateList(msg tea.Msg) (Model[T], tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.table.SetHeight(msg.Height - 5)
+		// table.SetHeight accounts for the header internally, but not for the
+		// newline between the header and the viewport in table.View().
+		m.table.SetHeight(msg.Height - 1)
 		minW := m.config.MinWidth
 		if minW == 0 {
 			minW = 70
@@ -213,14 +216,8 @@ func (m Model[T]) viewList() string {
 		return baseStyle.Render(m.table.View())
 	}
 
-	availableHeight := m.height - 5
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
-
 	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
+		Width(m.width)
 
 	return contentStyle.Render(content)
 }
@@ -310,9 +307,13 @@ func (m Model[T]) Detail() DetailView {
 	return m.detail
 }
 
+// cellPadding is the horizontal space added by each table cell's Padding(0, 1) style.
+const cellPadding = 2
+
 // makeColumns creates table columns from specs, sized for the given width.
 func makeColumns(specs []ColumnSpec, width, minWidth int) []table.Column {
-	available := width - 10
+	// Subtract cell padding per column so the total rendered width fits
+	available := width - len(specs)*cellPadding
 	if available < minWidth {
 		available = minWidth
 	}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -34,6 +35,28 @@ const (
 	TabPipelines    Tab = iota // Pipelines tab (key '1')
 	TabPullRequests            // Pull Requests tab (key '2')
 	TabWorkItems               // Work Items tab (key '3')
+)
+
+// Layout constants for the bordered content area.
+const (
+	// borderWidth is the horizontal space consumed by box side borders (left + right).
+	borderWidth = 2
+
+	// boxBorderRows is the vertical space consumed by the box border itself:
+	// top border (1) + bottom border (1) = 2.
+	boxBorderRows = 2
+
+	// boxInternalChromeRows is the vertical space consumed inside the box
+	// by non-view elements: tab row (1) + separator (1) = 2.
+	boxInternalChromeRows = 2
+
+	// newlineBeforeFooter accounts for the newline between the box and footer.
+	newlineBeforeFooter = 1
+
+	// maxFooterRows is a conservative estimate of footer height (status bar + context bar).
+	// Used at WindowSizeMsg time when the actual footer hasn't been rendered yet.
+	// Status bar: ~4 lines (border + content). Context bar: ~3 lines + newline = ~4.
+	maxFooterRows = 8
 )
 
 // Model is the root application model for the TUI
@@ -297,8 +320,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
 
 		// CRITICAL: Set window size for all views before they try to render
+		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
 		if m.width > 0 && m.height > 0 {
-			sizeMsg := tea.WindowSizeMsg{Width: m.width, Height: m.height}
+			sizeMsg := tea.WindowSizeMsg{Width: m.width - borderWidth, Height: m.height - boxBorderRows - maxFooterRows - newlineBeforeFooter - boxInternalChromeRows}
 			m.pipelinesView, _ = m.pipelinesView.Update(sizeMsg)
 			m.pullRequestsView, _ = m.pullRequestsView.Update(sizeMsg)
 			m.workItemsView, _ = m.workItemsView.Update(sizeMsg)
@@ -322,10 +346,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
 		m.themePicker.SetSize(msg.Width, msg.Height)
-		// Pass size to all views so they're ready when switched to
-		m.pipelinesView, _ = m.pipelinesView.Update(msg)
-		m.pullRequestsView, _ = m.pullRequestsView.Update(msg)
-		m.workItemsView, _ = m.workItemsView.Update(msg)
+		// Adjust size for content views to account for borders:
+		// - Tab bar border: 1 line top
+		// - Content border: 1 line bottom
+		// - Side borders: 2 chars width
+		contentMsg := tea.WindowSizeMsg{
+			Width:  msg.Width - borderWidth,
+			Height: msg.Height - boxBorderRows - maxFooterRows - newlineBeforeFooter - boxInternalChromeRows,
+		}
+		m.pipelinesView, _ = m.pipelinesView.Update(contentMsg)
+		m.pullRequestsView, _ = m.pullRequestsView.Update(contentMsg)
+		m.workItemsView, _ = m.workItemsView.Update(contentMsg)
+		return m, nil
 
 	case polling.TickMsg:
 		// Time to poll for updates
@@ -375,7 +407,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // Note: Tab styles are now provided by the styles package and accessed via m.styles
 
-// renderTabBar renders the tab header
+// renderTabBar renders the tab header content (without border — border is applied in View)
 func (m Model) renderTabBar() string {
 	var tab1, tab2, tab3 string
 
@@ -394,7 +426,7 @@ func (m Model) renderTabBar() string {
 		tab3 = m.styles.TabActive.Render("3: Work Items")
 	}
 
-	return m.styles.TabBar.Render(tab1+" "+tab2+" "+tab3) + "\n"
+	return m.styles.TabBar.Render(tab1 + " " + tab2 + " " + tab3)
 }
 
 // View renders the application UI
@@ -472,5 +504,26 @@ func (m Model) View() string {
 		footer = m.statusBar.View()
 	}
 
-	return tabBar + content + "\n" + footer
+	// Combine tabs and content in a single bordered box with separator
+	boxInnerWidth := m.width - borderWidth
+	if boxInnerWidth < 20 {
+		boxInnerWidth = 20
+	}
+
+	separator := m.styles.Border.Render(strings.Repeat("─", boxInnerWidth))
+	boxContent := tabBar + "\n" + separator + "\n" + content
+
+	// Calculate inner height dynamically: subtract box borders, footer height, and newline
+	footerHeight := strings.Count(footer, "\n") + 1
+	boxInnerHeight := m.height - boxBorderRows - footerHeight - newlineBeforeFooter
+	if boxInnerHeight < 5 {
+		boxInnerHeight = 5
+	}
+
+	borderedBox := m.styles.ContentBox.
+		Width(boxInnerWidth).
+		Height(boxInnerHeight).
+		Render(boxContent)
+
+	return borderedBox + "\n" + footer
 }

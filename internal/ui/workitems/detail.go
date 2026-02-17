@@ -93,15 +93,8 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	// Fill available height
-	availableHeight := m.height - 5
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
-
 	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
+		Width(m.width)
 
 	return contentStyle.Render(sb.String())
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -286,6 +287,148 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	// Should show work items content (empty list message or similar)
 	if !strings.Contains(view, "work item") && !strings.Contains(view, "No work items") {
 		t.Error("View should show work items content when on Work Items tab")
+	}
+}
+
+func TestModel_View_HasBorderedTabBar(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Tab bar should be wrapped in a rounded border (╭ top-left corner)
+	if !strings.Contains(view, "╭") {
+		t.Error("Tab bar should have rounded border (expected ╭ corner)")
+	}
+}
+
+func TestModel_View_HasBorderedContent(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Content should be wrapped in a border — we expect at least 2 rounded borders
+	// (one for tabs, one for content area)
+	cornerCount := strings.Count(view, "╭")
+	if cornerCount < 2 {
+		t.Errorf("Expected at least 2 bordered sections (tabs + content), got %d ╭ corners", cornerCount)
+	}
+}
+
+func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	// The first line should contain the top-left rounded corner of the tab border
+	if len(lines) == 0 || !strings.Contains(lines[0], "╭") {
+		t.Errorf("First line should contain tab bar border corner ╭, got: %q", lines[0])
+	}
+
+	// Total lines should not exceed terminal height
+	if len(lines) > 30 {
+		t.Errorf("View output has %d lines, should not exceed terminal height 30", len(lines))
+	}
+}
+
+func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+
+	// Simulate window size first
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Simulate pipeline data arriving (like from polling)
+	runs := make([]azdevops.PipelineRun, 30)
+	for i := range runs {
+		runs[i] = azdevops.PipelineRun{
+			ID:          i + 1,
+			BuildNumber: fmt.Sprintf("2024.%d", i+1),
+			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
+			Status:      "completed",
+			Result:      "succeeded",
+		}
+	}
+	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
+	m = updated.(Model)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	t.Logf("Total lines: %d (terminal height: 40)", len(lines))
+	// Count lines with actual visible content (not just whitespace/ANSI)
+	nonEmptyCount := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			nonEmptyCount++
+		}
+		if i < 8 || i > len(lines)-6 {
+			t.Logf("Line %d (bytes=%d): %.120q", i, len(line), line)
+		}
+	}
+	t.Logf("Non-empty lines: %d", nonEmptyCount)
+
+	// Count actual data rows (lines with "Pipeline-")
+	dataRows := 0
+	for _, line := range lines {
+		if strings.Contains(line, "Pipeline-") {
+			dataRows++
+		}
+	}
+	t.Logf("Data rows visible: %d (sent %d runs)", dataRows, len(runs))
+
+	// Check raw content height before ContentBox wrapping
+	rawContent := m.pipelinesView.View()
+	rawLines := strings.Split(rawContent, "\n")
+	t.Logf("Raw pipeline view lines: %d, table height: %d", len(rawLines), m.pipelinesView.TableHeight())
+
+	if len(lines) > 40 {
+		t.Errorf("View has %d lines, exceeds terminal height 40", len(lines))
+	}
+
+	// Tab bar border should be on line 0
+	if !strings.Contains(lines[0], "╭") {
+		t.Errorf("Line 0 should have tab bar top border, got: %.80q", lines[0])
 	}
 }
 
