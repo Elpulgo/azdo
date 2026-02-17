@@ -42,11 +42,11 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 	cfg := listview.Config[azdevops.PipelineRun]{
 		Columns: []listview.ColumnSpec{
 			{Title: "Status", WidthPct: 10, MinWidth: 10},
-			{Title: "Pipeline", WidthPct: 25, MinWidth: 15},
-			{Title: "Branch", WidthPct: 22, MinWidth: 10},
-			{Title: "Build", WidthPct: 13, MinWidth: 8},
+			{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
+			{Title: "Branch", WidthPct: 20, MinWidth: 10},
+			{Title: "Build", WidthPct: 24, MinWidth: 8},
 			{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
-			{Title: "Duration", WidthPct: 15, MinWidth: 8},
+			{Title: "Duration", WidthPct: 10, MinWidth: 8},
 		},
 		LoadingMessage: "Loading pipeline runs...",
 		EntityName:     "pipeline runs",
