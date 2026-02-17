@@ -7,58 +7,27 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
-	"github.com/Elpulgo/azdo/internal/ui/styles"
-	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// ViewMode represents the current view in the work items UI
-type ViewMode int
+// ViewMode re-exports listview.ViewMode for backward compatibility.
+type ViewMode = listview.ViewMode
 
 const (
-	ViewList   ViewMode = iota // Work items list view
-	ViewDetail                 // Work item detail view
+	ViewList   = listview.ViewList
+	ViewDetail = listview.ViewDetail
 )
-
-// baseStyle is used for consistent styling
-var baseStyle = lipgloss.NewStyle()
 
 // Model represents the work items list view with sub-views
 type Model struct {
-	table     table.Model
-	client    *azdevops.Client
-	workItems []azdevops.WorkItem
-	loading   bool
-	err       error
-	width     int
-	height    int
-	viewMode  ViewMode
-	detail    *DetailModel
-	spinner   *components.LoadingIndicator
-	styles    *styles.Styles
+	list   listview.Model[azdevops.WorkItem]
+	client *azdevops.Client
+	styles *styles.Styles
 }
-
-// Column width ratios (percentages of available width) - must total 100%
-const (
-	typeWidthPct     = 10 // Type column percentage (matches PR status column)
-	idWidthPct       = 8  // ID column percentage
-	titleWidthPct    = 32 // Title column percentage
-	stateWidthPct    = 18 // State column percentage (needs space for "Ready for Test")
-	priorityWidthPct = 6  // Priority column percentage
-	assignedWidthPct = 26 // Assigned column percentage (10+8+32+18+6+26=100)
-)
-
-// Minimum column widths
-const (
-	minTypeWidth     = 8 // "Feature" (7 chars) + padding
-	minIDWidth       = 6
-	minTitleWidth    = 15
-	minStateWidth    = 16
-	minPriorityWidth = 4
-	minAssignedWidth = 10
-)
 
 // NewModel creates a new work items list model with default styles
 func NewModel(client *azdevops.Client) Model {
@@ -67,236 +36,158 @@ func NewModel(client *azdevops.Client) Model {
 
 // NewModelWithStyles creates a new work items list model with custom styles
 func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
-	// Start with minimum widths, will be resized on first WindowSizeMsg
-	columns := makeColumns(80)
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithFocused(true),
-		table.WithHeight(10),
-	)
-
-	ts := table.DefaultStyles()
-	ts.Header = s.TableHeader
-	ts.Cell = s.TableCell
-	ts.Selected = s.TableSelected
-	t.SetStyles(ts)
-
-	spinner := components.NewLoadingIndicator(s)
-	spinner.SetMessage("Loading work items...")
+	cfg := listview.Config[azdevops.WorkItem]{
+		Columns: []listview.ColumnSpec{
+			{Title: "Type", WidthPct: 10, MinWidth: 8},
+			{Title: "ID", WidthPct: 8, MinWidth: 6},
+			{Title: "Title", WidthPct: 32, MinWidth: 15},
+			{Title: "State", WidthPct: 18, MinWidth: 16},
+			{Title: "Pri", WidthPct: 6, MinWidth: 4},
+			{Title: "Assigned", WidthPct: 26, MinWidth: 10},
+		},
+		LoadingMessage: "Loading work items...",
+		EntityName:     "work items",
+		MinWidth:       70,
+		ToRows:         workItemsToRows,
+		Fetch: func() tea.Cmd {
+			return fetchWorkItems(client)
+		},
+		EnterDetail: func(item azdevops.WorkItem, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
+			d := NewDetailModelWithStyles(client, item, st)
+			d.SetSize(w, h)
+			return &detailAdapter{d}, nil
+		},
+	}
 
 	return Model{
-		table:     t,
-		client:    client,
-		workItems: []azdevops.WorkItem{},
-		viewMode:  ViewList,
-		spinner:   spinner,
-		styles:    s,
-	}
-}
-
-// makeColumns creates table columns sized for the given width
-func makeColumns(width int) []table.Column {
-	// Account for table structure:
-	// - 5 chars for column separators (between 6 columns)
-	// - Some padding for cell content
-	// Total overhead: ~10 chars
-	available := width - 10
-	if available < 70 {
-		available = 70 // Minimum usable width
-	}
-
-	// Calculate widths based on percentages
-	typeW := max(minTypeWidth, available*typeWidthPct/100)
-	idW := max(minIDWidth, available*idWidthPct/100)
-	titleW := max(minTitleWidth, available*titleWidthPct/100)
-	stateW := max(minStateWidth, available*stateWidthPct/100)
-	priorityW := max(minPriorityWidth, available*priorityWidthPct/100)
-	assignedW := max(minAssignedWidth, available*assignedWidthPct/100)
-
-	return []table.Column{
-		{Title: "Type", Width: typeW},
-		{Title: "ID", Width: idW},
-		{Title: "Title", Width: titleW},
-		{Title: "State", Width: stateW},
-		{Title: "Pri", Width: priorityW},
-		{Title: "Assigned", Width: assignedW},
+		list:   listview.New(cfg, s),
+		client: client,
+		styles: s,
 	}
 }
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	m.spinner.SetVisible(true)
-	return tea.Batch(fetchWorkItems(m.client), m.spinner.Init())
+	return m.list.Init()
 }
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	// Handle window resize for all views
-	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
-		m.width = wmsg.Width
-		m.height = wmsg.Height
-	}
-
-	// Route to the appropriate view
-	switch m.viewMode {
-	case ViewDetail:
-		return m.updateDetail(msg)
-	default:
-		return m.updateList(msg)
-	}
-}
-
-// updateList handles updates for the list view
-func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.table.SetHeight(msg.Height - 5)
-		m.table.SetColumns(makeColumns(msg.Width))
-
-	case spinner.TickMsg:
-		// Forward spinner tick messages
-		if m.loading {
-			var spinnerCmd tea.Cmd
-			m.spinner, spinnerCmd = m.spinner.Update(msg)
-			return m, spinnerCmd
-		}
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "r":
-			// Manual refresh
-			m.loading = true
-			m.spinner.SetVisible(true)
-			return m, tea.Batch(fetchWorkItems(m.client), m.spinner.Tick())
-		case "enter":
-			// Navigate to detail view
-			return m.enterDetailView()
-		}
-
 	case workItemsMsg:
-		m.loading = false
-		m.spinner.SetVisible(false)
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.workItems = msg.workItems
-		m.table.SetRows(m.workItemsToRows())
+		m.list = m.list.HandleFetchResult(msg.workItems, msg.err)
 		return m, nil
-
 	case SetWorkItemsMsg:
-		// Direct update from polling - clear loading and error states
-		m.loading = false
-		m.spinner.SetVisible(false)
-		m.err = nil
-		m.workItems = msg.WorkItems
-		m.table.SetRows(m.workItemsToRows())
+		m.list = m.list.SetItems(msg.WorkItems)
 		return m, nil
-	}
-
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-// updateDetail handles updates for the detail view
-func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
-	if m.detail == nil {
-		m.viewMode = ViewList
-		return m, nil
-	}
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		// Detail model handles its own sizing
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			// Go back to list
-			m.viewMode = ViewList
-			m.detail = nil
-			return m, nil
-		}
 	}
 
 	var cmd tea.Cmd
-	m.detail, cmd = m.detail.Update(msg)
+	m.list, cmd = m.list.Update(msg)
 	return m, cmd
-}
-
-// enterDetailView navigates to the detail view for the selected work item
-func (m Model) enterDetailView() (Model, tea.Cmd) {
-	idx := m.table.Cursor()
-	if idx < 0 || idx >= len(m.workItems) {
-		return m, nil
-	}
-
-	selectedItem := m.workItems[idx]
-	m.detail = NewDetailModelWithStyles(m.client, selectedItem, m.styles)
-	m.detail.SetSize(m.width, m.height)
-	m.viewMode = ViewDetail
-
-	return m, nil
 }
 
 // View renders the view
 func (m Model) View() string {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.View()
-		}
-	}
-
-	// Default: list view
-	return m.viewList()
+	return m.list.View()
 }
 
-// viewList renders the work items list view
-func (m Model) viewList() string {
-	var content string
+// GetViewMode returns the current view mode (for testing)
+func (m Model) GetViewMode() ViewMode {
+	return m.list.GetViewMode()
+}
 
-	if m.err != nil {
-		content = fmt.Sprintf("Error loading work items: %v\n\nPress r to retry, q to quit", m.err)
-	} else if m.loading {
-		content = m.spinner.View() + "\n\nPress q to quit"
-	} else if len(m.workItems) == 0 {
-		content = "No work items found.\n\nPress r to refresh, q to quit"
-	} else {
-		return baseStyle.Render(m.table.View())
-	}
+// GetContextItems returns context bar items for the current view
+func (m Model) GetContextItems() []components.ContextItem {
+	return m.list.GetContextItems()
+}
 
-	// For non-table content, fill available height
-	availableHeight := m.height - 5
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
+// GetScrollPercent returns the scroll percentage for the current view
+func (m Model) GetScrollPercent() float64 {
+	return m.list.GetScrollPercent()
+}
 
-	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
+// GetStatusMessage returns the status message for the current view
+func (m Model) GetStatusMessage() string {
+	return m.list.GetStatusMessage()
+}
 
-	return contentStyle.Render(content)
+// HasContextBar returns true if the current view should show a context bar
+func (m Model) HasContextBar() bool {
+	return m.list.HasContextBar()
+}
+
+// detailAdapter wraps *DetailModel to satisfy listview.DetailView
+type detailAdapter struct {
+	model *DetailModel
+}
+
+func (a *detailAdapter) Update(msg tea.Msg) (listview.DetailView, tea.Cmd) {
+	var cmd tea.Cmd
+	a.model, cmd = a.model.Update(msg)
+	return a, cmd
+}
+
+func (a *detailAdapter) View() string {
+	return a.model.View()
+}
+
+func (a *detailAdapter) SetSize(width, height int) {
+	a.model.SetSize(width, height)
+}
+
+func (a *detailAdapter) GetContextItems() []components.ContextItem {
+	return a.model.GetContextItems()
+}
+
+func (a *detailAdapter) GetScrollPercent() float64 {
+	return a.model.GetScrollPercent()
+}
+
+func (a *detailAdapter) GetStatusMessage() string {
+	return a.model.GetStatusMessage()
 }
 
 // workItemsToRows converts work items to table rows
-func (m Model) workItemsToRows() []table.Row {
-	rows := make([]table.Row, len(m.workItems))
-	for i, wi := range m.workItems {
+func workItemsToRows(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
+	rows := make([]table.Row, len(items))
+	for i, wi := range items {
 		rows[i] = table.Row{
-			typeIconWithStyles(wi.Fields.WorkItemType, m.styles),
+			typeIconWithStyles(wi.Fields.WorkItemType, s),
 			strconv.Itoa(wi.ID),
 			wi.Fields.Title,
-			stateTextWithStyles(wi.Fields.State, m.styles),
-			priorityTextWithStyles(wi.Fields.Priority, m.styles),
+			stateTextWithStyles(wi.Fields.State, s),
+			priorityTextWithStyles(wi.Fields.Priority, s),
 			wi.AssignedToName(),
 		}
 	}
 	return rows
 }
+
+// Messages
+
+type workItemsMsg struct {
+	workItems []azdevops.WorkItem
+	err       error
+}
+
+// SetWorkItemsMsg is a message to directly set the work items (from polling)
+type SetWorkItemsMsg struct {
+	WorkItems []azdevops.WorkItem
+}
+
+// fetchWorkItems fetches work items from Azure DevOps
+func fetchWorkItems(client *azdevops.Client) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return workItemsMsg{workItems: nil, err: nil}
+		}
+		workItems, err := client.ListWorkItems(50)
+		return workItemsMsg{workItems: workItems, err: err}
+	}
+}
+
+// Icon/text formatting functions (unchanged)
 
 // typeIcon returns a styled text label for the work item type using default styles
 func typeIcon(workItemType string) string {
@@ -305,7 +196,6 @@ func typeIcon(workItemType string) string {
 
 // typeIconWithStyles returns a styled text label for the work item type using provided styles
 func typeIconWithStyles(workItemType string, s *styles.Styles) string {
-	// Create accent style from theme for Feature/Epic
 	accentStyle := lipgloss.NewStyle().Foreground(s.Theme.Accent)
 
 	switch workItemType {
@@ -327,17 +217,13 @@ func typeIconWithStyles(workItemType string, s *styles.Styles) string {
 }
 
 // stateText returns styled text for the work item state using default styles
-// Workflow: New → Active → Resolved/Ready for Test → Closed
 func stateText(state string) string {
 	return stateTextWithStyles(state, styles.DefaultStyles())
 }
 
 // stateTextWithStyles returns styled text for the work item state using provided styles
 func stateTextWithStyles(state string, s *styles.Styles) string {
-	// Normalize for comparison
 	stateLower := strings.ToLower(state)
-
-	// Create secondary style for "Ready" states
 	secondaryStyle := lipgloss.NewStyle().Foreground(s.Theme.Secondary)
 
 	switch {
@@ -376,72 +262,5 @@ func priorityTextWithStyles(priority int, s *styles.Styles) string {
 		return s.Muted.Render("P4")
 	default:
 		return s.Muted.Render(fmt.Sprintf("P%d", priority))
-	}
-}
-
-// GetViewMode returns the current view mode (for testing)
-func (m Model) GetViewMode() ViewMode {
-	return m.viewMode
-}
-
-// GetContextItems returns context bar items for the current view
-func (m Model) GetContextItems() []components.ContextItem {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.GetContextItems()
-		}
-	}
-	// List view has no specific context items
-	return nil
-}
-
-// GetScrollPercent returns the scroll percentage for the current view
-func (m Model) GetScrollPercent() float64 {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.GetScrollPercent()
-		}
-	}
-	return 0
-}
-
-// GetStatusMessage returns the status message for the current view
-func (m Model) GetStatusMessage() string {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.GetStatusMessage()
-		}
-	}
-	return ""
-}
-
-// HasContextBar returns true if the current view should show a context bar
-func (m Model) HasContextBar() bool {
-	return false
-}
-
-// Messages
-
-type workItemsMsg struct {
-	workItems []azdevops.WorkItem
-	err       error
-}
-
-// SetWorkItemsMsg is a message to directly set the work items (from polling)
-type SetWorkItemsMsg struct {
-	WorkItems []azdevops.WorkItem
-}
-
-// fetchWorkItems fetches work items from Azure DevOps
-func fetchWorkItems(client *azdevops.Client) tea.Cmd {
-	return func() tea.Msg {
-		if client == nil {
-			return workItemsMsg{workItems: nil, err: nil}
-		}
-		workItems, err := client.ListWorkItems(50)
-		return workItemsMsg{workItems: workItems, err: err}
 	}
 }

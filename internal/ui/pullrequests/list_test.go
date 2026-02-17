@@ -218,19 +218,12 @@ func TestVoteIcon(t *testing.T) {
 func TestNewModel(t *testing.T) {
 	model := NewModel(nil)
 
-	// Initial state should be ViewList
 	if model.GetViewMode() != ViewList {
 		t.Errorf("Initial ViewMode = %d, want ViewList (%d)", model.GetViewMode(), ViewList)
 	}
 
-	// Should have no PRs initially
-	if len(model.prs) != 0 {
-		t.Errorf("Initial prs length = %d, want 0", len(model.prs))
-	}
-
-	// Should not be loading initially
-	if model.loading {
-		t.Error("Initial loading state should be false")
+	if len(model.list.Items()) != 0 {
+		t.Errorf("Initial prs length = %d, want 0", len(model.list.Items()))
 	}
 }
 
@@ -261,18 +254,17 @@ func TestUpdateWithSetPRsMsg(t *testing.T) {
 
 	model, _ = model.Update(SetPRsMsg{PRs: prs})
 
-	if len(model.prs) != 2 {
-		t.Errorf("After SetPRsMsg, prs length = %d, want 2", len(model.prs))
+	if len(model.list.Items()) != 2 {
+		t.Errorf("After SetPRsMsg, prs length = %d, want 2", len(model.list.Items()))
 	}
 
-	if model.prs[0].ID != 101 {
-		t.Errorf("First PR ID = %d, want 101", model.prs[0].ID)
+	if model.list.Items()[0].ID != 101 {
+		t.Errorf("First PR ID = %d, want 101", model.list.Items()[0].ID)
 	}
 }
 
 func TestUpdateWithPullRequestsMsg(t *testing.T) {
 	model := NewModel(nil)
-	model.loading = true
 
 	prs := []azdevops.PullRequest{
 		{
@@ -284,40 +276,33 @@ func TestUpdateWithPullRequestsMsg(t *testing.T) {
 
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
-	if model.loading {
-		t.Error("After pullRequestsMsg, loading should be false")
-	}
-
-	if len(model.prs) != 1 {
-		t.Errorf("After pullRequestsMsg, prs length = %d, want 1", len(model.prs))
+	if len(model.list.Items()) != 1 {
+		t.Errorf("After pullRequestsMsg, prs length = %d, want 1", len(model.list.Items()))
 	}
 }
 
 func TestUpdateWithPullRequestsMsgError(t *testing.T) {
 	model := NewModel(nil)
-	model.loading = true
 
 	model, _ = model.Update(pullRequestsMsg{prs: nil, err: errMock})
 
-	if model.loading {
-		t.Error("After pullRequestsMsg with error, loading should be false")
-	}
-
-	if model.err == nil {
-		t.Error("After pullRequestsMsg with error, err should be set")
+	// View should show error
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	view := model.View()
+	if !strings.Contains(view, "Error") {
+		t.Error("After pullRequestsMsg with error, view should show error")
 	}
 }
 
 func TestViewModeNavigation(t *testing.T) {
 	model := NewModel(nil)
 
-	// Initial state should be ViewList
 	if model.GetViewMode() != ViewList {
 		t.Errorf("Initial ViewMode = %d, want ViewList (%d)", model.GetViewMode(), ViewList)
 	}
 
 	// Simulate having some PRs loaded
-	model.prs = []azdevops.PullRequest{
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
 			ID:            123,
 			Title:         "Test PR",
@@ -327,8 +312,7 @@ func TestViewModeNavigation(t *testing.T) {
 			CreatedBy:     azdevops.Identity{DisplayName: "Test User"},
 			Repository:    azdevops.Repository{Name: "test-repo"},
 		},
-	}
-	model.table.SetRows(model.prsToRows())
+	})
 
 	// Enter should transition to detail view
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -337,7 +321,7 @@ func TestViewModeNavigation(t *testing.T) {
 	}
 
 	// Detail model should be set
-	if model.detail == nil {
+	if model.list.Detail() == nil {
 		t.Error("After Enter, detail model should not be nil")
 	}
 
@@ -350,8 +334,9 @@ func TestViewModeNavigation(t *testing.T) {
 
 func TestViewLoading(t *testing.T) {
 	model := NewModel(nil)
-	model.loading = true
-	model.spinner.SetVisible(true)
+	// Trigger refresh which sets loading state on the returned model
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	view := model.View()
 
@@ -362,7 +347,8 @@ func TestViewLoading(t *testing.T) {
 
 func TestViewError(t *testing.T) {
 	model := NewModel(nil)
-	model.err = errMock
+	model, _ = model.Update(pullRequestsMsg{prs: nil, err: errMock})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	view := model.View()
 
@@ -373,7 +359,8 @@ func TestViewError(t *testing.T) {
 
 func TestViewEmpty(t *testing.T) {
 	model := NewModel(nil)
-	model.prs = []azdevops.PullRequest{}
+	model.list = model.list.SetItems([]azdevops.PullRequest{})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	view := model.View()
 
@@ -383,10 +370,10 @@ func TestViewEmpty(t *testing.T) {
 }
 
 func TestPRsToRows(t *testing.T) {
-	model := NewModel(nil)
+	s := styles.DefaultStyles()
 	now := time.Now()
 
-	model.prs = []azdevops.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
 			ID:            101,
 			Title:         "Add new feature",
@@ -403,29 +390,25 @@ func TestPRsToRows(t *testing.T) {
 		},
 	}
 
-	rows := model.prsToRows()
+	rows := prsToRows(prs, s)
 
 	if len(rows) != 1 {
 		t.Fatalf("prsToRows() returned %d rows, want 1", len(rows))
 	}
 
 	row := rows[0]
-	// Row should contain: Status, Title, Source->Target, Author, Repo, Reviews
 	if len(row) != 6 {
 		t.Errorf("Row has %d columns, want 6", len(row))
 	}
 
-	// Check title column
 	if row[1] != "Add new feature" {
 		t.Errorf("Title column = %q, want 'Add new feature'", row[1])
 	}
 
-	// Check author column
 	if row[3] != "John Doe" {
 		t.Errorf("Author column = %q, want 'John Doe'", row[3])
 	}
 
-	// Check repo column
 	if row[4] != "my-repo" {
 		t.Errorf("Repo column = %q, want 'my-repo'", row[4])
 	}
@@ -434,7 +417,6 @@ func TestPRsToRows(t *testing.T) {
 func TestGetContextItems(t *testing.T) {
 	model := NewModel(nil)
 
-	// List view should have no context items
 	items := model.GetContextItems()
 	if items != nil {
 		t.Error("List view should return nil context items")
@@ -444,13 +426,12 @@ func TestGetContextItems(t *testing.T) {
 func TestHasContextBar(t *testing.T) {
 	model := NewModel(nil)
 
-	// List view should not have context bar
 	if model.HasContextBar() {
 		t.Error("List view should not have context bar")
 	}
 
-	// PR detail view also doesn't have context bar (scroll % is shown in status bar instead)
-	model.prs = []azdevops.PullRequest{
+	// PR detail view also doesn't have context bar
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
 			ID:            123,
 			Title:         "Test PR",
@@ -460,8 +441,7 @@ func TestHasContextBar(t *testing.T) {
 			CreatedBy:     azdevops.Identity{DisplayName: "User"},
 			Repository:    azdevops.Repository{Name: "repo"},
 		},
-	}
-	model.table.SetRows(model.prsToRows())
+	})
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if model.HasContextBar() {
@@ -474,15 +454,10 @@ var errMock = fmt.Errorf("mock error")
 
 func TestSpinnerIntegration(t *testing.T) {
 	model := NewModel(nil)
+	// Trigger refresh which sets loading state on the returned model
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	// Spinner should be initialized
-	if model.spinner == nil {
-		t.Fatal("Spinner should be initialized in NewModel")
-	}
-
-	// When loading, view should use spinner (contains animated content)
-	model.loading = true
-	model.spinner.SetVisible(true)
 	view := model.View()
 
 	if !strings.Contains(view, "Loading") || !strings.Contains(view, "pull requests") {
