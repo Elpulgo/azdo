@@ -67,8 +67,9 @@ func (m *LogViewerModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// Account for header and footer
-	viewportHeight := height - 4
+	// Account for header lines rendered in View(): title (1) + separator (1) = 2
+	headerLines := 2
+	viewportHeight := height - headerLines
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}

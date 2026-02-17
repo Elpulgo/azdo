@@ -10,6 +10,38 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 )
 
+func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
+	// The height passed to SetSize is already the content area (after app-level
+	// borders and footer are subtracted). The detail view should only subtract
+	// its own header lines (title + separator = 2 lines).
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	model := NewDetailModel(nil, run)
+
+	height := 30
+	model.SetSize(80, height)
+
+	// Create enough items to fill the viewport
+	records := make([]azdevops.TimelineRecord, 50)
+	for i := range records {
+		records[i] = azdevops.TimelineRecord{
+			ID: fmt.Sprintf("task-%d", i), ParentID: nil,
+			Type: "Task", Name: fmt.Sprintf("Task %d", i), Order: i,
+		}
+	}
+	model.SetTimeline(&azdevops.Timeline{ID: "test", Records: records})
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+
+	// The view output should use the full height passed in.
+	// Header = 2 lines, viewport = height - 2 lines.
+	// Total output lines should equal height.
+	if len(lines) != height {
+		t.Errorf("Detail view output has %d lines, want %d (height passed to SetSize). "+
+			"Viewport is not using full available height.", len(lines), height)
+	}
+}
+
 func TestDetailModel_HasStyles(t *testing.T) {
 	run := azdevops.PipelineRun{ID: 123, Definition: azdevops.PipelineDefinition{Name: "Test"}}
 	m := NewDetailModel(nil, run)
@@ -447,7 +479,7 @@ func TestDetailModel_PageUpDown(t *testing.T) {
 
 	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
-	model.SetSize(80, 20) // viewport height = 20 - 6 = 14
+	model.SetSize(80, 20) // viewport height = 20 - 2 (header) = 18
 	model.SetTimeline(timeline)
 
 	// Initial position should be 0

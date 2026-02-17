@@ -249,8 +249,9 @@ func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// Account for header (4 lines) and footer (2 lines)
-	viewportHeight := height - 8
+	// Account for header lines rendered in View(): title (1) + branch (1) + separator (1) = 3
+	headerLines := 3
+	viewportHeight := height - headerLines
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}

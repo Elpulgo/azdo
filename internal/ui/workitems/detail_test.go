@@ -9,6 +9,35 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
+	// The height passed to SetSize is already the content area (after app-level
+	// borders and footer are subtracted). The work item detail view should only
+	// subtract its own header lines (title + type/state + separator = 3 lines).
+	wi := azdevops.WorkItem{
+		ID: 123,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "Active",
+			WorkItemType: "Bug",
+			Priority:     1,
+			Description:  strings.Repeat("Long description text. ", 50),
+		},
+	}
+	model := NewDetailModel(nil, wi)
+
+	height := 30
+	model.SetSize(80, height)
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+
+	// Total output lines should equal the height passed in.
+	if len(lines) != height {
+		t.Errorf("Work item detail view output has %d lines, want %d (height passed to SetSize). "+
+			"Viewport is not using full available height.", len(lines), height)
+	}
+}
+
 func TestDetailModel_HasStyles(t *testing.T) {
 	wi := azdevops.WorkItem{ID: 123}
 	m := NewDetailModel(nil, wi)

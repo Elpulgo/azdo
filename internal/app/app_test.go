@@ -427,6 +427,84 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	}
 }
 
+func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	terminalHeight := 40
+	m := NewModel(client, cfg)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: terminalHeight})
+	m = updated.(Model)
+
+	// Load enough data to fill the table
+	runs := make([]azdevops.PipelineRun, 50)
+	for i := range runs {
+		runs[i] = azdevops.PipelineRun{
+			ID:          i + 1,
+			BuildNumber: fmt.Sprintf("2024.%d", i+1),
+			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
+			Status:      "completed",
+			Result:      "succeeded",
+		}
+	}
+	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
+	m = updated.(Model)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	// Find the content box bottom border (╰)
+	boxBottomLine := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "╰") {
+			// The last ╰ is the status bar bottom; the second-to-last is the content box bottom
+			// But we want the content box bottom which comes before the status bar
+			// Content box bottom is followed by the status bar (╭)
+			if i+1 < len(lines) && strings.Contains(lines[i+1], "╭") {
+				boxBottomLine = i
+				break
+			}
+		}
+	}
+	if boxBottomLine == -1 {
+		t.Fatal("Could not find content box bottom border")
+	}
+
+	// Count empty lines inside the box (lines that are just border chars with whitespace)
+	// Empty padding lines look like: "│                    │"
+	emptyPaddingLines := 0
+	for i := boxBottomLine - 1; i >= 0; i-- {
+		line := lines[i]
+		// Strip the border characters and check if content is just whitespace
+		if strings.Contains(line, "│") {
+			// Extract content between borders
+			inner := strings.TrimPrefix(line, "│")
+			inner = strings.TrimSuffix(inner, "│")
+			inner = strings.TrimSpace(inner)
+			if inner == "" {
+				emptyPaddingLines++
+			} else {
+				break
+			}
+		}
+	}
+
+	// Allow at most 1 line of padding (for rounding). More than that indicates
+	// the content view height doesn't match the box inner height.
+	const maxAllowedPadding = 1
+	if emptyPaddingLines > maxAllowedPadding {
+		t.Errorf("Content box has %d empty padding lines at the bottom (max allowed: %d). "+
+			"This indicates maxFooterRows is too conservative, causing content views to be undersized.",
+			emptyPaddingLines, maxAllowedPadding)
+	}
+
+	t.Logf("Total lines: %d, box bottom at line: %d, empty padding: %d", len(lines), boxBottomLine, emptyPaddingLines)
+}
+
 func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	cfg := &config.Config{
 		Organization: "testorg",
