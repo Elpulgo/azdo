@@ -42,7 +42,7 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 			{Title: "ID", WidthPct: 8, MinWidth: 6},
 			{Title: "Title", WidthPct: 32, MinWidth: 15},
 			{Title: "State", WidthPct: 18, MinWidth: 16},
-			{Title: "Pri", WidthPct: 6, MinWidth: 4},
+			{Title: "Prio", WidthPct: 6, MinWidth: 4},
 			{Title: "Assigned", WidthPct: 26, MinWidth: 10},
 		},
 		LoadingMessage: "Loading work items...",

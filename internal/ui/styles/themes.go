@@ -43,9 +43,9 @@ func GetThemeByNameWithFallback(name string) Theme {
 	return theme
 }
 
-// GetDefaultTheme returns the default dark theme.
+// GetDefaultTheme returns the default gruvbox theme.
 func GetDefaultTheme() Theme {
-	return darkTheme
+	return gruvboxTheme
 }
 
 // ListAvailableThemes returns a sorted list of all available theme names.
