@@ -128,7 +128,6 @@ func (m *DetailModel) SetSize(width, height int) {
 
 	if !m.ready {
 		m.viewport = viewport.New(width, viewportHeight)
-		m.viewport.HighPerformanceRendering = false
 		m.ready = true
 	} else {
 		m.viewport.Width = width
