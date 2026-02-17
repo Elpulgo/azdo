@@ -189,11 +189,6 @@ func fetchWorkItems(client *azdevops.Client) tea.Cmd {
 
 // Icon/text formatting functions (unchanged)
 
-// typeIcon returns a styled text label for the work item type using default styles
-func typeIcon(workItemType string) string {
-	return typeIconWithStyles(workItemType, styles.DefaultStyles())
-}
-
 // typeIconWithStyles returns a styled text label for the work item type using provided styles
 func typeIconWithStyles(workItemType string, s *styles.Styles) string {
 	accentStyle := lipgloss.NewStyle().Foreground(s.Theme.Accent)
@@ -214,11 +209,6 @@ func typeIconWithStyles(workItemType string, s *styles.Styles) string {
 	default:
 		return s.Muted.Render("Item")
 	}
-}
-
-// stateText returns styled text for the work item state using default styles
-func stateText(state string) string {
-	return stateTextWithStyles(state, styles.DefaultStyles())
 }
 
 // stateTextWithStyles returns styled text for the work item state using provided styles
@@ -242,11 +232,6 @@ func stateTextWithStyles(state string, s *styles.Styles) string {
 	default:
 		return s.Muted.Render(state)
 	}
-}
-
-// priorityText returns styled text for priority using default styles
-func priorityText(priority int) string {
-	return priorityTextWithStyles(priority, styles.DefaultStyles())
 }
 
 // priorityTextWithStyles returns styled text for priority using provided styles

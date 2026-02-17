@@ -163,11 +163,6 @@ func prsToRows(items []azdevops.PullRequest, s *styles.Styles) []table.Row {
 	return rows
 }
 
-// statusIcon returns a colored status icon for the pull request using default styles
-func statusIcon(status string, isDraft bool) string {
-	return statusIconWithStyles(status, isDraft, styles.DefaultStyles())
-}
-
 // statusIconWithStyles returns a colored status icon using the provided styles
 func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string {
 	statusLower := strings.ToLower(status)
@@ -186,11 +181,6 @@ func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string 
 	default:
 		return s.Muted.Render(status)
 	}
-}
-
-// voteIcon returns a summary icon for reviewer votes using default styles
-func voteIcon(reviewers []azdevops.Reviewer) string {
-	return voteIconWithStyles(reviewers, styles.DefaultStyles())
 }
 
 // voteIconWithStyles returns a summary icon for reviewer votes using provided styles

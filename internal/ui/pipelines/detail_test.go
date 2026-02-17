@@ -109,9 +109,9 @@ func TestDetailRecordIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := recordIcon(tt.state, tt.result)
+			got := recordIconWithStyles(tt.state, tt.result, styles.DefaultStyles())
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("recordIcon(%q, %q) = %q, want to contain %q",
+				t.Errorf("recordIconWithStyles(%q, %q) = %q, want to contain %q",
 					tt.state, tt.result, got, tt.wantContains)
 			}
 		})

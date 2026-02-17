@@ -130,10 +130,10 @@ func TestStatusIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := statusIcon(tt.status, tt.isDraft)
+			got := statusIconWithStyles(tt.status, tt.isDraft, styles.DefaultStyles())
 
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("statusIcon(%q, %v) = %q, want to contain %q",
+				t.Errorf("statusIconWithStyles(%q, %v) = %q, want to contain %q",
 					tt.status, tt.isDraft, got, tt.wantContains)
 			}
 		})
@@ -206,10 +206,10 @@ func TestVoteIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := voteIcon(tt.reviewers)
+			got := voteIconWithStyles(tt.reviewers, styles.DefaultStyles())
 
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("voteIcon() = %q, want to contain %q", got, tt.wantContains)
+				t.Errorf("voteIconWithStyles() = %q, want to contain %q", got, tt.wantContains)
 			}
 		})
 	}

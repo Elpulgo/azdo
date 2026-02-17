@@ -201,8 +201,6 @@ func (m Model[T]) View() string {
 	return m.viewList()
 }
 
-var baseStyle = lipgloss.NewStyle()
-
 func (m Model[T]) viewList() string {
 	var content string
 
@@ -213,7 +211,7 @@ func (m Model[T]) viewList() string {
 	} else if len(m.items) == 0 {
 		content = fmt.Sprintf("No %s found.\n\nPress r to refresh, q to quit", m.config.EntityName)
 	} else {
-		return baseStyle.Render(m.table.View())
+		return m.table.View()
 	}
 
 	contentStyle := lipgloss.NewStyle().

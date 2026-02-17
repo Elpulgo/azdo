@@ -23,11 +23,9 @@ type Styles struct {
 	// Text styles
 	Header   lipgloss.Style
 	Title    lipgloss.Style
-	Subtitle lipgloss.Style
-	Label    lipgloss.Style
-	Value    lipgloss.Style
-	Muted    lipgloss.Style
-	Bold     lipgloss.Style
+	Label lipgloss.Style
+	Value lipgloss.Style
+	Muted lipgloss.Style
 
 	// Status styles
 	Success lipgloss.Style
@@ -112,9 +110,6 @@ func NewStyles(theme Theme) *Styles {
 		Foreground(lipgloss.Color(theme.Primary)).
 		Bold(true)
 
-	s.Subtitle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.Secondary))
-
 	s.Label = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Warning)).
 		Bold(true)
@@ -124,10 +119,6 @@ func NewStyles(theme Theme) *Styles {
 
 	s.Muted = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.ForegroundMuted))
-
-	s.Bold = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.ForegroundBold)).
-		Bold(true)
 
 	// Status styles
 	s.Success = lipgloss.NewStyle().

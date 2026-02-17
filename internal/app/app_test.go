@@ -417,11 +417,6 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	}
 	t.Logf("Data rows visible: %d (sent %d runs)", dataRows, len(runs))
 
-	// Check raw content height before ContentBox wrapping
-	rawContent := m.pipelinesView.View()
-	rawLines := strings.Split(rawContent, "\n")
-	t.Logf("Raw pipeline view lines: %d, table height: %d", len(rawLines), m.pipelinesView.TableHeight())
-
 	if len(lines) > 40 {
 		t.Errorf("View has %d lines, exceeds terminal height 40", len(lines))
 	}

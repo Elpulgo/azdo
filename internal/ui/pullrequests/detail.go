@@ -608,11 +608,6 @@ func shortenFilePath(path string) string {
 	return path
 }
 
-// reviewerVoteIcon returns an icon for the reviewer's vote using default styles
-func reviewerVoteIcon(vote int) string {
-	return reviewerVoteIconWithStyles(vote, styles.DefaultStyles())
-}
-
 // reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles
 func reviewerVoteIconWithStyles(vote int, s *styles.Styles) string {
 	switch vote {
@@ -647,11 +642,6 @@ func reviewerVoteDescription(vote int) string {
 	default:
 		return "Unknown"
 	}
-}
-
-// threadStatusIcon returns an icon for the thread status using default styles
-func threadStatusIcon(status string) string {
-	return threadStatusIconWithStyles(status, styles.DefaultStyles())
 }
 
 // threadStatusIconWithStyles returns an icon for the thread status using provided styles

@@ -434,11 +434,6 @@ func (m *DetailModel) fetchTimeline() tea.Cmd {
 
 // Helper functions
 
-// recordIcon returns an icon based on state and result using default styles
-func recordIcon(state, result string) string {
-	return recordIconWithStyles(state, result, styles.DefaultStyles())
-}
-
 // recordIconWithStyles returns an icon based on state and result using provided styles
 func recordIconWithStyles(state, result string, s *styles.Styles) string {
 	stateLower := strings.ToLower(state)

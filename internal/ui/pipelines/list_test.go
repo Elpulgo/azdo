@@ -132,15 +132,15 @@ func TestStatusIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := statusIcon(tt.status, tt.result)
+			got := statusIconWithStyles(tt.status, tt.result, styles.DefaultStyles())
 
 			if tt.wantContains != "" && !strings.Contains(got, tt.wantContains) {
-				t.Errorf("statusIcon(%q, %q) = %q, want to contain %q",
+				t.Errorf("statusIconWithStyles(%q, %q) = %q, want to contain %q",
 					tt.status, tt.result, got, tt.wantContains)
 			}
 
 			if tt.wantNotContain != "" && strings.Contains(got, tt.wantNotContain) {
-				t.Errorf("statusIcon(%q, %q) = %q, should NOT contain %q",
+				t.Errorf("statusIconWithStyles(%q, %q) = %q, should NOT contain %q",
 					tt.status, tt.result, got, tt.wantNotContain)
 			}
 		})
