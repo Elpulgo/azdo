@@ -340,6 +340,85 @@ func TestRunsToRowsIncludesTimestamp(t *testing.T) {
 	}
 }
 
+func TestDetailView_EnterTogglesExpandOnNodeWithChildren(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 80
+	model.height = 24
+
+	model.runs = []azdevops.PipelineRun{
+		{
+			ID:          123,
+			BuildNumber: "20240206.1",
+			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Build Pipeline"},
+		},
+	}
+	model.table.SetRows(model.runsToRows())
+
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Set timeline with stage containing children
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1,
+				Log: &azdevops.LogReference{ID: 10}},
+		},
+	}
+	model.detail.SetTimeline(timeline)
+
+	// Initially stage is collapsed, only 1 item visible
+	if len(model.detail.flatItems) != 1 {
+		t.Fatalf("Expected 1 flat item (collapsed), got %d", len(model.detail.flatItems))
+	}
+
+	// Enter on stage should expand, NOT navigate to logs
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewDetail {
+		t.Errorf("Enter on expandable node should stay in ViewDetail, got %d", model.GetViewMode())
+	}
+
+	// Stage should now be expanded showing job too
+	if len(model.detail.flatItems) != 2 {
+		t.Errorf("Expected 2 flat items after expanding stage, got %d", len(model.detail.flatItems))
+	}
+}
+
+func TestDetailView_EnterOnLeafWithLogsOpensLogViewer(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 80
+	model.height = 24
+
+	model.runs = []azdevops.PipelineRun{
+		{
+			ID:          123,
+			BuildNumber: "20240206.1",
+			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Build Pipeline"},
+		},
+	}
+	model.table.SetRows(model.runsToRows())
+
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Set timeline with a single task (no children, has log)
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "task-1", ParentID: nil, Type: "Task", Name: "npm install", Order: 1,
+				Log: &azdevops.LogReference{ID: 10}},
+		},
+	}
+	model.detail.SetTimeline(timeline)
+
+	// Enter on leaf node with log should open log viewer
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewLogs {
+		t.Errorf("Enter on leaf node with log should open ViewLogs, got %d", model.GetViewMode())
+	}
+}
+
 func TestMakeColumnsHasSixColumns(t *testing.T) {
 	columns := makeColumns(120)
 

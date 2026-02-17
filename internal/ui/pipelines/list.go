@@ -223,7 +223,11 @@ func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 			m.detail = nil
 			return m, nil
 		case "enter":
-			// Navigate to log viewer if selected item has a log
+			// Toggle expand/collapse if node has children, otherwise view logs
+			if selected := m.detail.SelectedItem(); selected != nil && selected.HasChildren() {
+				m.detail.ToggleExpand()
+				return m, nil
+			}
 			return m.enterLogView()
 		}
 	}

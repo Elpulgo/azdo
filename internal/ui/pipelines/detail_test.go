@@ -118,36 +118,53 @@ func TestDetailRecordIcon(t *testing.T) {
 	}
 }
 
-func TestDetailIndentation(t *testing.T) {
-	tests := []struct {
-		name       string
-		recordType string
-		want       string
-	}{
-		{
-			name:       "stage has no indentation",
-			recordType: "Stage",
-			want:       "",
-		},
-		{
-			name:       "job has 2 space indentation",
-			recordType: "Job",
-			want:       "  ",
-		},
-		{
-			name:       "task has 4 space indentation",
-			recordType: "Task",
-			want:       "    ",
+func TestVisualDepthIndentation(t *testing.T) {
+	// Indentation is based on visual depth (2 spaces per level)
+	// not record type, so root-level Jobs get no indentation
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+			// Root-level Job (like Azure DevOps "Finalize build")
+			{ID: "finalize", ParentID: nil, Type: "Job", Name: "Finalize build", Order: 2},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := indentForType(tt.recordType)
-			if got != tt.want {
-				t.Errorf("indentForType(%q) = %q, want %q", tt.recordType, got, tt.want)
-			}
-		})
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Expand everything to check depths
+	model.ToggleExpand() // expand Build stage
+	model.MoveDown()
+	model.ToggleExpand() // expand Build Job
+
+	// Visual depths: Build=0, Build Job=1, npm install=2, Finalize build=0
+	expected := []struct {
+		name  string
+		depth int
+	}{
+		{"Build", 0},
+		{"Build Job", 1},
+		{"npm install", 2},
+		{"Finalize build", 0},
+	}
+
+	if len(model.flatItems) != len(expected) {
+		t.Fatalf("Expected %d flat items, got %d", len(expected), len(model.flatItems))
+	}
+
+	for i, exp := range expected {
+		node := model.flatItems[i]
+		if node.Record.Name != exp.name {
+			t.Errorf("flatItems[%d].Name = %q, want %q", i, node.Record.Name, exp.name)
+		}
+		if node.VisualDepth != exp.depth {
+			t.Errorf("flatItems[%d] (%s) VisualDepth = %d, want %d", i, exp.name, node.VisualDepth, exp.depth)
+		}
 	}
 }
 
@@ -245,11 +262,32 @@ func TestFlattenTree(t *testing.T) {
 	}
 
 	tree := buildTimelineTree(timeline)
-	flat := flattenTree(tree)
 
-	// Should have 4 items in order: stage-1, job-1, task-1, stage-2
+	// Collapsed by default: only root stages visible
+	flat := flattenTree(tree)
+	if len(flat) != 2 {
+		t.Fatalf("Expected 2 flat items (collapsed), got %d", len(flat))
+	}
+	if flat[0].Record.Name != "Build" {
+		t.Errorf("flat[0].Name = %q, want Build", flat[0].Record.Name)
+	}
+	if flat[1].Record.Name != "Test" {
+		t.Errorf("flat[1].Name = %q, want Test", flat[1].Record.Name)
+	}
+
+	// Expand all nodes and verify full tree
+	var expandAll func(nodes []*TimelineNode)
+	expandAll = func(nodes []*TimelineNode) {
+		for _, n := range nodes {
+			n.Expanded = true
+			expandAll(n.Children)
+		}
+	}
+	expandAll(tree)
+
+	flat = flattenTree(tree)
 	if len(flat) != 4 {
-		t.Fatalf("Expected 4 flat items, got %d", len(flat))
+		t.Fatalf("Expected 4 flat items (expanded), got %d", len(flat))
 	}
 
 	expectedOrder := []string{"Build", "Build Job", "npm install", "Test"}
@@ -322,7 +360,10 @@ func TestDetailModel_SelectedItem(t *testing.T) {
 		t.Errorf("Initial SelectedIndex() = %d, want 0", model.SelectedIndex())
 	}
 
-	// Move down
+	// Expand stage to reveal job
+	model.ToggleExpand()
+
+	// Move down to job
 	model.MoveDown()
 	if model.SelectedIndex() != 1 {
 		t.Errorf("After MoveDown, SelectedIndex() = %d, want 1", model.SelectedIndex())
@@ -456,7 +497,8 @@ func TestDetailModel_StatusMessage(t *testing.T) {
 		t.Error("GetStatusMessage should return a message for items without logs")
 	}
 
-	// Move to task with log
+	// Expand stage and move to task with log
+	model.ToggleExpand()
 	model.MoveDown()
 	if model.SelectedItem().Record.Log == nil {
 		t.Error("Second item (task) should have a log")
@@ -487,7 +529,8 @@ func TestDetailModel_CanViewLogs(t *testing.T) {
 		t.Error("CanViewLogs() should return false for stage without logs")
 	}
 
-	// Task with log should be viewable
+	// Expand stage and move to task with log
+	model.ToggleExpand()
 	model.MoveDown()
 	if !model.CanViewLogs() {
 		t.Error("CanViewLogs() should return true for task with logs")
@@ -565,6 +608,416 @@ func TestDetailModel_GetScrollPercent(t *testing.T) {
 	endPercent := model.GetScrollPercent()
 	if endPercent != 100 {
 		t.Errorf("GetScrollPercent() at end = %f, want 100", endPercent)
+	}
+}
+
+func TestTimelineNode_HasChildren(t *testing.T) {
+	node := &TimelineNode{
+		Record:   azdevops.TimelineRecord{ID: "stage-1", Type: "Stage", Name: "Build"},
+		Children: []*TimelineNode{},
+	}
+
+	if node.HasChildren() {
+		t.Error("Node with empty children slice should not have children")
+	}
+
+	node.Children = []*TimelineNode{
+		{Record: azdevops.TimelineRecord{ID: "job-1", Type: "Job", Name: "Build Job"}},
+	}
+
+	if !node.HasChildren() {
+		t.Error("Node with children should have children")
+	}
+}
+
+func TestDetailModel_NodesStartCollapsed(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Stages should start collapsed — flatItems should only contain the 2 stages
+	if len(model.flatItems) != 2 {
+		t.Errorf("Expected 2 flat items (collapsed stages), got %d", len(model.flatItems))
+	}
+
+	if model.flatItems[0].Record.Name != "Build" {
+		t.Errorf("First flat item = %q, want Build", model.flatItems[0].Record.Name)
+	}
+	if model.flatItems[1].Record.Name != "Test" {
+		t.Errorf("Second flat item = %q, want Test", model.flatItems[1].Record.Name)
+	}
+}
+
+func TestDetailModel_ToggleExpand(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+			{ID: "task-2", ParentID: strPtr("job-1"), Type: "Task", Name: "npm build", Order: 2},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Initially collapsed: only 2 stages visible
+	if len(model.flatItems) != 2 {
+		t.Fatalf("Expected 2 flat items initially, got %d", len(model.flatItems))
+	}
+
+	// Toggle expand on stage-1 (selected by default)
+	model.ToggleExpand()
+
+	// After expanding stage-1: stage-1, job-1, stage-2 (job is collapsed so tasks hidden)
+	if len(model.flatItems) != 3 {
+		t.Fatalf("Expected 3 flat items after expanding stage, got %d", len(model.flatItems))
+	}
+
+	expectedOrder := []string{"Build", "Build Job", "Test"}
+	for i, name := range expectedOrder {
+		if model.flatItems[i].Record.Name != name {
+			t.Errorf("flatItems[%d] = %q, want %q", i, model.flatItems[i].Record.Name, name)
+		}
+	}
+
+	// Move to job-1 and expand it
+	model.MoveDown()
+	model.ToggleExpand()
+
+	// After expanding job-1: stage-1, job-1, task-1, task-2, stage-2
+	if len(model.flatItems) != 5 {
+		t.Fatalf("Expected 5 flat items after expanding job, got %d", len(model.flatItems))
+	}
+
+	expectedOrder = []string{"Build", "Build Job", "npm install", "npm build", "Test"}
+	for i, name := range expectedOrder {
+		if model.flatItems[i].Record.Name != name {
+			t.Errorf("flatItems[%d] = %q, want %q", i, model.flatItems[i].Record.Name, name)
+		}
+	}
+
+	// Collapse stage-1 again (move back to it)
+	model.selectedIndex = 0
+	model.ToggleExpand()
+
+	// After collapsing stage-1: stage-1, stage-2
+	if len(model.flatItems) != 2 {
+		t.Fatalf("Expected 2 flat items after collapsing stage, got %d", len(model.flatItems))
+	}
+}
+
+func TestDetailModel_ToggleExpandPreservesSelection(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
+			{ID: "job-2", ParentID: strPtr("stage-2"), Type: "Job", Name: "Test Job", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Select stage-2 (index 1)
+	model.MoveDown()
+
+	// Expand stage-2
+	model.ToggleExpand()
+
+	// Selection should stay on stage-2 (still index 1)
+	selected := model.SelectedItem()
+	if selected == nil || selected.Record.Name != "Test" {
+		name := ""
+		if selected != nil {
+			name = selected.Record.Name
+		}
+		t.Errorf("After expanding, selected should be Test, got %q", name)
+	}
+}
+
+func TestDetailModel_ToggleDoesNothingOnLeafNode(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "task-1", ParentID: strPtr("stage-1"), Type: "Task", Name: "npm install", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Expand stage to see the task
+	model.ToggleExpand()
+
+	// Move to the task (leaf node)
+	model.MoveDown()
+
+	prevLen := len(model.flatItems)
+	model.ToggleExpand()
+
+	// Nothing should change
+	if len(model.flatItems) != prevLen {
+		t.Errorf("ToggleExpand on leaf node should not change flatItems count, was %d now %d", prevLen, len(model.flatItems))
+	}
+}
+
+func TestDetailModel_RenderShowsExpandIndicator(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", State: "completed", Result: "succeeded", Order: 1},
+			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", State: "completed", Result: "succeeded", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModelWithStyles(nil, run, styles.DefaultStyles())
+	model.SetTimeline(timeline)
+
+	// Collapsed stage should show ▶
+	rendered := model.renderRecord(model.flatItems[0], false)
+	if !strings.Contains(rendered, "▶") {
+		t.Errorf("Collapsed node should show ▶, got %q", rendered)
+	}
+
+	// Expand and check for ▼
+	model.ToggleExpand()
+	rendered = model.renderRecord(model.flatItems[0], false)
+	if !strings.Contains(rendered, "▼") {
+		t.Errorf("Expanded node should show ▼, got %q", rendered)
+	}
+}
+
+func TestDetailModel_CollapseAdjustsSelectionIfBeyondBounds(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Expand everything
+	model.ToggleExpand() // expand stage
+	model.MoveDown()
+	model.ToggleExpand() // expand job
+
+	// Now at index 1, move to task at index 2
+	model.MoveDown()
+	if model.SelectedIndex() != 2 {
+		t.Fatalf("Expected selected index 2, got %d", model.SelectedIndex())
+	}
+
+	// Now collapse stage-1 from index 0
+	model.selectedIndex = 0
+	model.ToggleExpand()
+
+	// After collapse, only 1 item (stage-1). Selection should clamp.
+	if model.selectedIndex >= len(model.flatItems) {
+		t.Errorf("Selection %d should be within bounds (len=%d)", model.selectedIndex, len(model.flatItems))
+	}
+}
+
+func TestFlattenTreeRespectsExpanded(t *testing.T) {
+	// Build a tree manually with Expanded flags
+	tree := []*TimelineNode{
+		{
+			Record:   azdevops.TimelineRecord{ID: "s1", Type: "Stage", Name: "Build"},
+			Expanded: true,
+			Children: []*TimelineNode{
+				{
+					Record:   azdevops.TimelineRecord{ID: "j1", Type: "Job", Name: "Build Job"},
+					Expanded: false,
+					Children: []*TimelineNode{
+						{Record: azdevops.TimelineRecord{ID: "t1", Type: "Task", Name: "npm install"}},
+					},
+				},
+			},
+		},
+		{
+			Record:   azdevops.TimelineRecord{ID: "s2", Type: "Stage", Name: "Test"},
+			Expanded: false,
+			Children: []*TimelineNode{
+				{Record: azdevops.TimelineRecord{ID: "j2", Type: "Job", Name: "Test Job"}},
+			},
+		},
+	}
+
+	flat := flattenTree(tree)
+
+	// s1 expanded → shows s1, j1. j1 collapsed → hides t1. s2 collapsed → hides j2.
+	expectedNames := []string{"Build", "Build Job", "Test"}
+	if len(flat) != len(expectedNames) {
+		t.Fatalf("Expected %d flat items, got %d", len(expectedNames), len(flat))
+	}
+
+	for i, name := range expectedNames {
+		if flat[i].Record.Name != name {
+			t.Errorf("flat[%d] = %q, want %q", i, flat[i].Record.Name, name)
+		}
+	}
+}
+
+func TestDisplayFiltersPhaseAndCheckpoint(t *testing.T) {
+	// Azure DevOps timelines include Phase and Checkpoint intermediary records.
+	// These should be hidden in the UI but their children shown as if direct.
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "checkpoint-1", ParentID: strPtr("stage-1"), Type: "Checkpoint", Name: "Checkpoint", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 1", Order: 2},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1,
+				Log: &azdevops.LogReference{ID: 5}},
+			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Collapsed: only stage visible (Phase and Checkpoint hidden)
+	if len(model.flatItems) != 1 {
+		t.Fatalf("Expected 1 flat item (collapsed), got %d", len(model.flatItems))
+	}
+	if model.flatItems[0].Record.Name != "Build" {
+		t.Errorf("First item = %q, want Build", model.flatItems[0].Record.Name)
+	}
+
+	// Stage should report having children (Jobs visible through Phase)
+	if !model.flatItems[0].HasChildren() {
+		t.Error("Stage with Phase→Job children should report HasChildren=true")
+	}
+
+	// Expand stage: should show Job (Phase/Checkpoint filtered out)
+	model.ToggleExpand()
+	if len(model.flatItems) != 2 {
+		t.Fatalf("Expected 2 flat items after expand, got %d", len(model.flatItems))
+	}
+	if model.flatItems[1].Record.Name != "Build Job" {
+		t.Errorf("Second item = %q, want Build Job", model.flatItems[1].Record.Name)
+	}
+
+	// Expand job: should show Task
+	model.MoveDown()
+	model.ToggleExpand()
+	if len(model.flatItems) != 3 {
+		t.Fatalf("Expected 3 flat items, got %d", len(model.flatItems))
+	}
+	if model.flatItems[2].Record.Name != "npm install" {
+		t.Errorf("Third item = %q, want npm install", model.flatItems[2].Record.Name)
+	}
+}
+
+func TestDisplayJobWithLogNoTasksIsLeaf(t *testing.T) {
+	// When a Job (under a Phase) has a log but no tasks, it should be a leaf node
+	// (no ▶ icon, Enter opens log)
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 1", Order: 1},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1,
+				Log: &azdevops.LogReference{ID: 5}},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Collapsed: only stage visible
+	if len(model.flatItems) != 1 {
+		t.Fatalf("Expected 1 flat item (collapsed), got %d", len(model.flatItems))
+	}
+
+	// Expand stage
+	model.ToggleExpand()
+
+	// Should show stage + job (Phase filtered from display)
+	if len(model.flatItems) != 2 {
+		t.Fatalf("Expected 2 flat items after expand, got %d", len(model.flatItems))
+	}
+
+	// Job should report no visible children (it's a leaf with a log)
+	job := model.flatItems[1]
+	if job.HasChildren() {
+		t.Error("Job with no tasks should not have visible children")
+	}
+	if job.Record.Log == nil {
+		t.Error("Job should have a log")
+	}
+}
+
+func TestDisplayMultipleJobsUnderPhase(t *testing.T) {
+	// All jobs under a stage (through Phases) should be hidden when collapsed
+	// and shown when expanded — no job should leak out as a root
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 1},
+			{ID: "checkpoint-1", ParentID: strPtr("stage-1"), Type: "Checkpoint", Name: "Approval", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 1", Order: 2},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Job A", Order: 1},
+			{ID: "phase-2", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 2", Order: 3},
+			{ID: "job-2", ParentID: strPtr("phase-2"), Type: "Job", Name: "Job B", Order: 1},
+			{ID: "phase-3", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 3", Order: 4},
+			{ID: "job-3", ParentID: strPtr("phase-3"), Type: "Job", Name: "Job C", Order: 1},
+			{ID: "phase-4", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 4", Order: 5},
+			{ID: "job-4", ParentID: strPtr("phase-4"), Type: "Job", Name: "Job D", Order: 1,
+				Log: &azdevops.LogReference{ID: 10}},
+			{ID: "task-1", ParentID: strPtr("job-4"), Type: "Task", Name: "Deploy task", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	model := NewDetailModel(nil, run)
+	model.SetTimeline(timeline)
+
+	// Collapsed: only the stage should be visible — ALL jobs hidden
+	if len(model.flatItems) != 1 {
+		t.Fatalf("Expected 1 flat item (collapsed stage), got %d", len(model.flatItems))
+	}
+	if model.flatItems[0].Record.Name != "Deploy" {
+		t.Errorf("First item = %q, want Deploy", model.flatItems[0].Record.Name)
+	}
+
+	// Expand stage: should show all 4 jobs
+	model.ToggleExpand()
+	if len(model.flatItems) != 5 {
+		t.Fatalf("Expected 5 flat items (stage + 4 jobs), got %d", len(model.flatItems))
+	}
+
+	expectedNames := []string{"Deploy", "Job A", "Job B", "Job C", "Job D"}
+	for i, name := range expectedNames {
+		if model.flatItems[i].Record.Name != name {
+			t.Errorf("flatItems[%d] = %q, want %q", i, model.flatItems[i].Record.Name, name)
+		}
 	}
 }
 

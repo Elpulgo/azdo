@@ -17,9 +17,30 @@ import (
 
 // TimelineNode represents a node in the timeline tree with its children
 type TimelineNode struct {
-	Record   azdevops.TimelineRecord
-	Children []*TimelineNode
-	Depth    int
+	Record      azdevops.TimelineRecord
+	Children    []*TimelineNode
+	VisualDepth int // depth in the displayed tree (skips filtered types)
+	Expanded    bool
+}
+
+// HasChildren returns true if the node has visible (non-filtered) child nodes.
+// Looks through filtered intermediary types (Phase, Checkpoint) to find real children.
+func (n *TimelineNode) HasChildren() bool {
+	return hasVisibleChildren(n.Children)
+}
+
+// hasVisibleChildren checks if any nodes in the slice (or their filtered descendants) are visible
+func hasVisibleChildren(nodes []*TimelineNode) bool {
+	for _, child := range nodes {
+		if !isFilteredRecordType(child.Record.Type) {
+			return true
+		}
+		// Look through filtered nodes for visible grandchildren
+		if hasVisibleChildren(child.Children) {
+			return true
+		}
+	}
+	return false
 }
 
 // DetailModel represents the pipeline detail view showing timeline
@@ -208,12 +229,22 @@ func (m *DetailModel) View() string {
 
 // renderRecord renders a single timeline record
 func (m *DetailModel) renderRecord(node *TimelineNode, selected bool) string {
-	indent := indentForType(node.Record.Type)
+	indent := strings.Repeat("  ", node.VisualDepth)
 	icon := recordIconWithStyles(node.Record.State, node.Record.Result, m.styles)
 	duration := formatRecordDuration(node.Record.StartTime, node.Record.FinishTime)
 
-	// Format: [indent][icon] [name] [duration]
-	line := fmt.Sprintf("%s%s %s", indent, icon, node.Record.Name)
+	// Expand/collapse indicator for nodes with children
+	expandIndicator := " "
+	if node.HasChildren() {
+		if node.Expanded {
+			expandIndicator = "▼"
+		} else {
+			expandIndicator = "▶"
+		}
+	}
+
+	// Format: [indent][icon] [expand] [name] [duration]
+	line := fmt.Sprintf("%s%s %s %s", indent, icon, expandIndicator, node.Record.Name)
 
 	if duration != "-" {
 		line = fmt.Sprintf("%s (%s)", line, duration)
@@ -259,6 +290,45 @@ func (m *DetailModel) MoveDown() {
 		m.selectedIndex++
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
+	}
+}
+
+// ToggleExpand toggles the expanded state of the selected node
+func (m *DetailModel) ToggleExpand() {
+	selected := m.SelectedItem()
+	if selected == nil || !selected.HasChildren() {
+		return
+	}
+
+	selected.Expanded = !selected.Expanded
+
+	// When expanding, also expand any filtered intermediary children
+	// so visible descendants are reachable
+	if selected.Expanded {
+		expandFilteredChildren(selected.Children)
+	}
+
+	m.flatItems = flattenTree(m.tree)
+
+	// Clamp selection if it's out of bounds after collapse
+	if m.selectedIndex >= len(m.flatItems) {
+		m.selectedIndex = len(m.flatItems) - 1
+	}
+
+	if m.ready {
+		m.updateViewportContent()
+		m.ensureSelectedVisible()
+	}
+}
+
+// expandFilteredChildren auto-expands filtered intermediary nodes so their
+// visible children become reachable when the parent is expanded
+func expandFilteredChildren(nodes []*TimelineNode) {
+	for _, node := range nodes {
+		if isFilteredRecordType(node.Record.Type) {
+			node.Expanded = true
+			expandFilteredChildren(node.Children)
+		}
 	}
 }
 
@@ -341,7 +411,7 @@ func (m *DetailModel) GetRun() azdevops.PipelineRun {
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓/pgup/pgdn", Description: "navigate"},
-		{Key: "enter", Description: "view logs"},
+		{Key: "enter", Description: "expand/collapse or view logs"},
 	}
 }
 
@@ -398,20 +468,6 @@ func recordIconWithStyles(state, result string, s *styles.Styles) string {
 	}
 }
 
-// indentForType returns the indentation string for a record type
-func indentForType(recordType string) string {
-	switch recordType {
-	case "Stage":
-		return ""
-	case "Job", "Phase":
-		return "  "
-	case "Task":
-		return "    "
-	default:
-		return "    "
-	}
-}
-
 // formatRecordDuration formats the duration of a timeline record
 func formatRecordDuration(startTime, finishTime *time.Time) string {
 	if startTime == nil {
@@ -439,6 +495,13 @@ func formatDuration(d time.Duration) string {
 	mins := int(d.Minutes()) % 60
 	secs := int(d.Seconds()) % 60
 	return fmt.Sprintf("%dh%dm%ds", hours, mins, secs)
+}
+
+// isFilteredRecordType returns true for record types that are intermediary
+// Azure DevOps nodes (Phase, Checkpoint) which should be hidden in the UI.
+// These nodes are kept in the tree for structure but skipped during display.
+func isFilteredRecordType(recordType string) bool {
+	return recordType == "Phase" || recordType == "Checkpoint"
 }
 
 // buildTimelineTree builds a tree structure from flat timeline records
@@ -479,9 +542,6 @@ func buildTimelineTree(timeline *azdevops.Timeline) []*TimelineNode {
 		sortNodesRecursive(root)
 	}
 
-	// Set depth for all nodes
-	setDepth(roots, 0)
-
 	return roots
 }
 
@@ -500,28 +560,34 @@ func sortNodesRecursive(node *TimelineNode) {
 	}
 }
 
-// setDepth sets the depth for all nodes in the tree
-func setDepth(nodes []*TimelineNode, depth int) {
-	for _, node := range nodes {
-		node.Depth = depth
-		setDepth(node.Children, depth+1)
-	}
-}
-
-// flattenTree converts a tree to a flat list (depth-first)
+// flattenTree converts a tree to a flat list (depth-first), skipping filtered types
 func flattenTree(roots []*TimelineNode) []*TimelineNode {
 	var result []*TimelineNode
 	for _, root := range roots {
-		result = append(result, flattenNode(root)...)
+		result = append(result, flattenNodeAtDepth(root, 0)...)
 	}
 	return result
 }
 
-// flattenNode flattens a single node and its children
-func flattenNode(node *TimelineNode) []*TimelineNode {
+// flattenNodeAtDepth flattens a node and its visible children, tracking visual depth.
+// Filtered types (Phase, Checkpoint) are skipped but their children are included
+// at the same visual depth (as if they were direct children of the grandparent).
+func flattenNodeAtDepth(node *TimelineNode, visualDepth int) []*TimelineNode {
+	// Skip filtered types — always recurse into their children at same depth
+	if isFilteredRecordType(node.Record.Type) {
+		var result []*TimelineNode
+		for _, child := range node.Children {
+			result = append(result, flattenNodeAtDepth(child, visualDepth)...)
+		}
+		return result
+	}
+
+	node.VisualDepth = visualDepth
 	result := []*TimelineNode{node}
-	for _, child := range node.Children {
-		result = append(result, flattenNode(child)...)
+	if node.Expanded {
+		for _, child := range node.Children {
+			result = append(result, flattenNodeAtDepth(child, visualDepth+1)...)
+		}
 	}
 	return result
 }
