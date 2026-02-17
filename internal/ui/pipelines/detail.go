@@ -458,7 +458,7 @@ func recordIconWithStyles(state, result string, s *styles.Styles) string {
 	case resultLower == "succeeded":
 		return s.Success.Render("✓")
 	case resultLower == "succeededwithissues":
-		return s.Warning.Render("⚠")
+		return s.Warning.Render("◐")
 	case resultLower == "failed":
 		return s.Error.Render("✗")
 	case resultLower == "canceled", resultLower == "skipped", resultLower == "abandoned":
