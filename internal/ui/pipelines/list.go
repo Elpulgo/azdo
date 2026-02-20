@@ -65,6 +65,7 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 			// ViewLogs is handled separately by the wrapper
 			return mode == listview.ViewDetail
 		},
+		FilterFunc: filterPipelineRun,
 	}
 
 	return Model{
@@ -120,6 +121,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // updateDetail intercepts detail-mode messages for enter (expand/collapse + log nav)
 func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// When the detail view is searching, let it handle all keys
+		if adapter, ok := m.list.Detail().(*detailAdapter); ok && adapter.model.IsSearching() {
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
+
 		switch keyMsg.String() {
 		case "enter":
 			// Get the detail adapter to access the underlying DetailModel
@@ -233,6 +241,19 @@ func (m Model) HasContextBar() bool {
 	return m.list.HasContextBar()
 }
 
+// IsSearching returns true if the list or detail view is currently in search/filter mode.
+func (m Model) IsSearching() bool {
+	if m.list.IsSearching() {
+		return true
+	}
+	if m.viewMode == ViewDetail {
+		if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+			return adapter.model.IsSearching()
+		}
+	}
+	return false
+}
+
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
 type detailAdapter struct {
 	model *DetailModel
@@ -303,6 +324,17 @@ func statusIconWithStyles(status, result string, s *styles.Styles) string {
 	default:
 		return s.Muted.Render(fmt.Sprintf("%s/%s", status, result))
 	}
+}
+
+// filterPipelineRun returns true if the pipeline run matches the search query.
+func filterPipelineRun(run azdevops.PipelineRun, query string) bool {
+	if query == "" {
+		return true
+	}
+	q := strings.ToLower(query)
+	return strings.Contains(strings.ToLower(run.Definition.Name), q) ||
+		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
+		strings.Contains(strings.ToLower(run.BuildNumber), q)
 }
 
 // Messages

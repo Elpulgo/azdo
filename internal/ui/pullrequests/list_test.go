@@ -449,6 +449,39 @@ func TestHasContextBar(t *testing.T) {
 	}
 }
 
+func TestFilterPR(t *testing.T) {
+	pr := azdevops.PullRequest{
+		Title:         "Add login feature",
+		CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
+		Repository:    azdevops.Repository{Name: "frontend-app"},
+		SourceRefName: "refs/heads/feature/login",
+		TargetRefName: "refs/heads/main",
+	}
+
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{"login", true},         // matches title
+		{"LOGIN", true},         // case-insensitive
+		{"john", true},          // matches author
+		{"frontend", true},      // matches repo name
+		{"feature/login", true}, // matches source branch
+		{"main", true},          // matches target branch
+		{"nonexistent", false},  // no match
+		{"", true},              // empty query matches all
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got := filterPR(pr, tt.query)
+			if got != tt.want {
+				t.Errorf("filterPR(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
 // errMock is a simple error for testing
 var errMock = fmt.Errorf("mock error")
 

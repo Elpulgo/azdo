@@ -57,6 +57,7 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 			d.SetSize(w, h)
 			return &detailAdapter{d}, nil
 		},
+		FilterFunc: filterWorkItem,
 	}
 
 	return Model{
@@ -117,6 +118,11 @@ func (m Model) HasContextBar() bool {
 	return m.list.HasContextBar()
 }
 
+// IsSearching returns true if the list is currently in search/filter mode.
+func (m Model) IsSearching() bool {
+	return m.list.IsSearching()
+}
+
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
 type detailAdapter struct {
 	model *DetailModel
@@ -162,6 +168,26 @@ func workItemsToRows(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
 		}
 	}
 	return rows
+}
+
+// filterWorkItem returns true if the work item matches the search query.
+func filterWorkItem(wi azdevops.WorkItem, query string) bool {
+	if query == "" {
+		return true
+	}
+	q := strings.ToLower(query)
+	if strings.Contains(strings.ToLower(wi.Fields.Title), q) ||
+		strings.Contains(strconv.Itoa(wi.ID), q) ||
+		strings.Contains(strings.ToLower(wi.Fields.State), q) ||
+		strings.Contains(strings.ToLower(wi.Fields.WorkItemType), q) {
+		return true
+	}
+	if wi.Fields.AssignedTo != nil {
+		if strings.Contains(strings.ToLower(wi.Fields.AssignedTo.DisplayName), q) {
+			return true
+		}
+	}
+	return false
 }
 
 // Messages

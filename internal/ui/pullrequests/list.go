@@ -55,6 +55,7 @@ func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
 			d.SetSize(w, h)
 			return &detailAdapter{d}, d.Init()
 		},
+		FilterFunc: filterPR,
 	}
 
 	return Model{
@@ -113,6 +114,11 @@ func (m Model) GetStatusMessage() string {
 // HasContextBar returns true if the current view should show a context bar
 func (m Model) HasContextBar() bool {
 	return m.list.HasContextBar()
+}
+
+// IsSearching returns true if the list is currently in search/filter mode.
+func (m Model) IsSearching() bool {
+	return m.list.IsSearching()
 }
 
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
@@ -226,6 +232,19 @@ func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string 
 	default:
 		return s.Muted.Render(fmt.Sprintf("- %d", count))
 	}
+}
+
+// filterPR returns true if the pull request matches the search query.
+func filterPR(pr azdevops.PullRequest, query string) bool {
+	if query == "" {
+		return true
+	}
+	q := strings.ToLower(query)
+	return strings.Contains(strings.ToLower(pr.Title), q) ||
+		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
+		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||
+		strings.Contains(strings.ToLower(pr.SourceRefName), q) ||
+		strings.Contains(strings.ToLower(pr.TargetRefName), q)
 }
 
 // Messages

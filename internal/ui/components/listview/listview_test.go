@@ -47,6 +47,12 @@ func (d *testDetailView) GetStatusMessage() string {
 	return "test status"
 }
 
+func testFilterFunc(item testItem, query string) bool {
+	q := strings.ToLower(query)
+	return strings.Contains(strings.ToLower(item.Name), q) ||
+		strings.Contains(fmt.Sprintf("%d", item.ID), q)
+}
+
 func testConfig() Config[testItem] {
 	return Config[testItem]{
 		Columns: []ColumnSpec{
@@ -70,6 +76,7 @@ func testConfig() Config[testItem] {
 			d := &testDetailView{width: w, height: h}
 			return d, nil
 		},
+		FilterFunc: testFilterFunc,
 	}
 }
 
@@ -471,5 +478,238 @@ func TestView_DetailMode(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "detail view content") {
 		t.Errorf("Expected detail view content, got: %q", view)
+	}
+}
+
+// --- Search/Filter Tests ---
+
+func TestSearch_FKeyEntersSearchMode(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{{ID: 1, Name: "Alpha"}, {ID: 2, Name: "Beta"}}
+	m = m.SetItems(items)
+
+	if m.IsSearching() {
+		t.Fatal("Should not be searching initially")
+	}
+
+	// Press 'f' to enter search mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	if !m.IsSearching() {
+		t.Error("Expected to be in search mode after pressing 'f'")
+	}
+}
+
+func TestSearch_EscExitsSearchMode(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{{ID: 1, Name: "Alpha"}, {ID: 2, Name: "Beta"}}
+	m = m.SetItems(items)
+
+	// Enter search mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !m.IsSearching() {
+		t.Fatal("Should be searching after 'f'")
+	}
+
+	// Press esc to exit search
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.IsSearching() {
+		t.Error("Should not be searching after esc")
+	}
+}
+
+func TestSearch_FiltersItems(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{
+		{ID: 1, Name: "Alpha"},
+		{ID: 2, Name: "Beta"},
+		{ID: 3, Name: "Alphabet"},
+	}
+	m = m.SetItems(items)
+
+	// Enter search mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	// Type "alph" — should match "Alpha" and "Alphabet"
+	for _, r := range "alph" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Table should show 2 filtered rows
+	rows := m.table.Rows()
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 filtered rows, got %d", len(rows))
+	}
+}
+
+func TestSearch_EscRestoresFullList(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{
+		{ID: 1, Name: "Alpha"},
+		{ID: 2, Name: "Beta"},
+		{ID: 3, Name: "Gamma"},
+	}
+	m = m.SetItems(items)
+
+	// Enter search, type query, then esc
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	for _, r := range "alpha" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// All 3 rows should be restored
+	rows := m.table.Rows()
+	if len(rows) != 3 {
+		t.Errorf("Expected 3 rows after exiting search, got %d", len(rows))
+	}
+}
+
+func TestSearch_EnterDetailUsesFilteredIndex(t *testing.T) {
+	s := styles.DefaultStyles()
+	cfg := testConfig()
+	var detailItem testItem
+	cfg.EnterDetail = func(item testItem, st *styles.Styles, w, h int) (DetailView, tea.Cmd) {
+		detailItem = item
+		return &testDetailView{width: w, height: h}, nil
+	}
+	m := New(cfg, s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{
+		{ID: 1, Name: "Alpha"},
+		{ID: 2, Name: "Beta"},
+		{ID: 3, Name: "Gamma"},
+	}
+	m = m.SetItems(items)
+
+	// Enter search, filter to "Beta"
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	for _, r := range "beta" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Press enter — should open detail for "Beta" (ID=2), not "Alpha" (ID=1)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if detailItem.ID != 2 {
+		t.Errorf("Expected detail for item ID=2 (Beta), got ID=%d (%s)", detailItem.ID, detailItem.Name)
+	}
+}
+
+func TestSearch_ViewShowsSearchBar(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{{ID: 1, Name: "Alpha"}}
+	m = m.SetItems(items)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Enter search mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	view := m.View()
+	// Should contain the search prompt or indicator
+	if !strings.Contains(view, "/") && !strings.Contains(view, "Search") {
+		t.Errorf("Search view should contain search indicator, got: %q", view)
+	}
+}
+
+func TestSearch_SetItemsReappliesFilter(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{
+		{ID: 1, Name: "Alpha"},
+		{ID: 2, Name: "Beta"},
+	}
+	m = m.SetItems(items)
+
+	// Enter search, type "alpha"
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	for _, r := range "alpha" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Now simulate a poll update with SetItems
+	newItems := []testItem{
+		{ID: 1, Name: "Alpha"},
+		{ID: 2, Name: "Beta"},
+		{ID: 4, Name: "AlphaTwo"},
+	}
+	m = m.SetItems(newItems)
+
+	// Should re-apply filter: "Alpha" and "AlphaTwo" match
+	rows := m.table.Rows()
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 filtered rows after SetItems, got %d", len(rows))
+	}
+}
+
+func TestSearch_NoFilterFuncDisablesSearch(t *testing.T) {
+	s := styles.DefaultStyles()
+	cfg := testConfig()
+	cfg.FilterFunc = nil // No filter function
+	m := New(cfg, s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{{ID: 1, Name: "Alpha"}}
+	m = m.SetItems(items)
+
+	// Press 'f' — should NOT enter search mode (no FilterFunc)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	if m.IsSearching() {
+		t.Error("Should not enter search mode when FilterFunc is nil")
+	}
+}
+
+func TestSearch_MatchCountInView(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m.width = 100
+	m.height = 30
+
+	items := []testItem{
+		{ID: 1, Name: "Alpha"},
+		{ID: 2, Name: "Beta"},
+		{ID: 3, Name: "Alphabet"},
+	}
+	m = m.SetItems(items)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Enter search, type "alph"
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	for _, r := range "alph" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	view := m.View()
+	// Should show match count like "2/3"
+	if !strings.Contains(view, "2/3") {
+		t.Errorf("Search view should show match count '2/3', got: %q", view)
 	}
 }

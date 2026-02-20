@@ -196,7 +196,8 @@ azdo-tui
 | `↑/↓` or `j/k` | Navigate up/down |
 | `pgup/pgdn` | Page up/down |
 | `enter` | View details / expand |
-| `esc` | Go back |
+| `f` | Search / filter |
+| `esc` | Go back / dismiss search |
 | `?` | Toggle help modal |
 | `t` | Select theme |
 | `q` or `Ctrl+C` | Quit |

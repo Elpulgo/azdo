@@ -314,3 +314,58 @@ func TestListModel_GetStatusMessage(t *testing.T) {
 		t.Errorf("Expected empty status message, got %s", msg)
 	}
 }
+
+func TestFilterWorkItem(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 42,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Fix critical login bug",
+			State:        "Active",
+			WorkItemType: "Bug",
+			AssignedTo:   &azdevops.Identity{DisplayName: "Jane Smith"},
+		},
+	}
+
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{"login", true},        // matches title
+		{"LOGIN", true},        // case-insensitive
+		{"42", true},           // matches ID
+		{"active", true},       // matches state
+		{"jane", true},         // matches assigned to
+		{"Bug", true},          // matches type
+		{"nonexistent", false}, // no match
+		{"", true},             // empty matches all
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got := filterWorkItem(wi, tt.query)
+			if got != tt.want {
+				t.Errorf("filterWorkItem(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterWorkItem_NilAssignedTo(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 10,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Unassigned task",
+			State:        "New",
+			WorkItemType: "Task",
+			AssignedTo:   nil,
+		},
+	}
+
+	// Should match on title but not crash on nil AssignedTo
+	if !filterWorkItem(wi, "unassigned") {
+		t.Error("Expected match on title")
+	}
+	if filterWorkItem(wi, "jane") {
+		t.Error("Expected no match on nonexistent assignee")
+	}
+}

@@ -552,6 +552,68 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	}
 }
 
+func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	m := NewModel(client, cfg)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Load some pipeline data
+	runs := []azdevops.PipelineRun{
+		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	}
+	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
+	m = updated.(Model)
+
+	// Press 'f' to enter search mode
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = updated.(Model)
+
+	// Verify we're searching
+	if !m.isActiveViewSearching() {
+		t.Fatal("Expected active view to be searching after pressing 'f'")
+	}
+
+	// Press 't' — should NOT open theme picker (should go to search input)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m = updated.(Model)
+
+	if m.themePicker.IsVisible() {
+		t.Error("Pressing 't' during search should NOT open theme picker")
+	}
+
+	// Press '2' — should NOT switch tabs
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabPipelines {
+		t.Error("Pressing '2' during search should NOT switch to PR tab")
+	}
+
+	// Press 'q' — should NOT quit (we can't easily test quit, but we can ensure model is returned)
+	// Press esc to exit search
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+
+	if m.isActiveViewSearching() {
+		t.Error("Expected search to be exited after esc")
+	}
+
+	// Now '2' should work again
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabPullRequests {
+		t.Error("After exiting search, '2' should switch to PR tab")
+	}
+}
+
 func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	cfg := &config.Config{
 		Organization: "testorg",

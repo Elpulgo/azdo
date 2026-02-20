@@ -209,6 +209,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When a child view is in search mode, skip all global shortcuts
+		// so keystrokes reach the search input instead.
+		if m.isActiveViewSearching() {
+			break
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.poller.Stop()
@@ -409,6 +415,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.resizeActiveViewIfNeeded()
 
 	return m, tea.Batch(cmds...)
+}
+
+// isActiveViewSearching returns true if the currently active tab's view is in search mode.
+func (m Model) isActiveViewSearching() bool {
+	switch m.activeTab {
+	case TabPipelines:
+		return m.pipelinesView.IsSearching()
+	case TabPullRequests:
+		return m.pullRequestsView.IsSearching()
+	case TabWorkItems:
+		return m.workItemsView.IsSearching()
+	}
+	return false
 }
 
 // Note: Tab styles are now provided by the styles package and accessed via m.styles

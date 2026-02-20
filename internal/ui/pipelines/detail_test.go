@@ -1053,6 +1053,99 @@ func TestDisplayMultipleJobsUnderPhase(t *testing.T) {
 	}
 }
 
+// --- Search/Filter Tests ---
+
+func TestDetailModel_SearchFiltersItems(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+			{ID: "stage-3", ParentID: nil, Type: "Stage", Name: "Test Build", Order: 3},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	if len(model.flatItems) != 3 {
+		t.Fatalf("Expected 3 flat items initially, got %d", len(model.flatItems))
+	}
+
+	// Enter search mode
+	model.EnterSearch()
+	if !model.IsSearching() {
+		t.Fatal("Expected to be in search mode")
+	}
+
+	// Apply filter for "build"
+	model.SetSearchQuery("build")
+
+	// Should match "Build" and "Test Build"
+	if len(model.flatItems) != 2 {
+		t.Errorf("Expected 2 filtered items, got %d", len(model.flatItems))
+	}
+}
+
+func TestDetailModel_SearchExitRestoresItems(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	// Enter search, filter, then exit
+	model.EnterSearch()
+	model.SetSearchQuery("build")
+	if len(model.flatItems) != 1 {
+		t.Fatalf("Expected 1 filtered item, got %d", len(model.flatItems))
+	}
+
+	model.ExitSearch()
+	if model.IsSearching() {
+		t.Error("Should not be searching after ExitSearch")
+	}
+
+	// All items should be restored
+	if len(model.flatItems) != 2 {
+		t.Errorf("Expected 2 items after exiting search, got %d", len(model.flatItems))
+	}
+}
+
+func TestDetailModel_SearchIsCaseInsensitive(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "DEPLOY", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	model.EnterSearch()
+	model.SetSearchQuery("deploy")
+
+	if len(model.flatItems) != 1 {
+		t.Errorf("Expected 1 match (case-insensitive), got %d", len(model.flatItems))
+	}
+	if model.flatItems[0].Record.Name != "DEPLOY" {
+		t.Errorf("Expected 'DEPLOY', got %q", model.flatItems[0].Record.Name)
+	}
+}
+
 // Helper functions
 
 func strPtr(s string) *string {

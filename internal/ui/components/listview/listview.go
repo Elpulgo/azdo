@@ -7,6 +7,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -47,21 +48,29 @@ type Config[T any] struct {
 	Fetch          func() tea.Cmd
 	EnterDetail    func(item T, s *styles.Styles, w, h int) (DetailView, tea.Cmd)
 	HasContextBar  func(mode ViewMode) bool // nil = always false
+	FilterFunc     func(item T, query string) bool // nil = search disabled
 }
+
+// searchBarHeight is the vertical space consumed by the search bar when active.
+const searchBarHeight = 1
 
 // Model is the generic list model.
 type Model[T any] struct {
-	table    table.Model
-	items    []T
-	loading  bool
-	err      error
-	width    int
-	height   int
-	viewMode ViewMode
-	detail   DetailView
-	spinner  *components.LoadingIndicator
-	styles   *styles.Styles
-	config   Config[T]
+	table         table.Model
+	items         []T
+	filteredItems []T
+	searching     bool
+	searchInput   textinput.Model
+	searchQuery   string
+	loading       bool
+	err           error
+	width         int
+	height        int
+	viewMode      ViewMode
+	detail        DetailView
+	spinner       *components.LoadingIndicator
+	styles        *styles.Styles
+	config        Config[T]
 }
 
 // New creates a new generic list model.
@@ -88,13 +97,18 @@ func New[T any](cfg Config[T], s *styles.Styles) Model[T] {
 	sp := components.NewLoadingIndicator(s)
 	sp.SetMessage(cfg.LoadingMessage)
 
+	ti := textinput.New()
+	ti.Prompt = "/ "
+	ti.CharLimit = 100
+
 	return Model[T]{
-		table:    t,
-		items:    []T{},
-		viewMode: ViewList,
-		spinner:  sp,
-		styles:   s,
-		config:   cfg,
+		table:       t,
+		items:       []T{},
+		searchInput: ti,
+		viewMode:    ViewList,
+		spinner:     sp,
+		styles:      s,
+		config:      cfg,
 	}
 }
 
@@ -124,9 +138,11 @@ func (m Model[T]) updateList(msg tea.Msg) (Model[T], tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		// table.SetHeight accounts for the header internally, but not for the
-		// newline between the header and the viewport in table.View().
-		m.table.SetHeight(msg.Height - 1)
+		tableHeight := msg.Height - 1 // newline between header and viewport
+		if m.searching {
+			tableHeight -= searchBarHeight
+		}
+		m.table.SetHeight(tableHeight)
 		minW := m.config.MinWidth
 		if minW == 0 {
 			minW = 70
@@ -141,6 +157,10 @@ func (m Model[T]) updateList(msg tea.Msg) (Model[T], tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.searching {
+			return m.updateSearch(msg)
+		}
+
 		switch msg.String() {
 		case "r":
 			m.loading = true
@@ -148,11 +168,84 @@ func (m Model[T]) updateList(msg tea.Msg) (Model[T], tea.Cmd) {
 			return m, tea.Batch(m.config.Fetch(), m.spinner.Tick())
 		case "enter":
 			return m.enterDetailView()
+		case "f":
+			if m.config.FilterFunc != nil {
+				return m.enterSearch()
+			}
 		}
 	}
 
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
+}
+
+func (m Model[T]) enterSearch() (Model[T], tea.Cmd) {
+	m.searching = true
+	m.searchInput.SetValue("")
+	m.searchQuery = ""
+	m.searchInput.Focus()
+
+	// Shrink table by search bar height
+	m.table.SetHeight(m.height - 1 - searchBarHeight)
+
+	return m, m.searchInput.Focus()
+}
+
+func (m Model[T]) exitSearch() (Model[T], tea.Cmd) {
+	m.searching = false
+	m.searchQuery = ""
+	m.searchInput.Blur()
+	m.filteredItems = nil
+
+	// Restore full items in table
+	m.table.SetRows(m.config.ToRows(m.items, m.styles))
+
+	// Restore table height
+	m.table.SetHeight(m.height - 1)
+
+	return m, nil
+}
+
+func (m Model[T]) updateSearch(msg tea.KeyMsg) (Model[T], tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		return m.exitSearch()
+	case "enter":
+		return m.enterDetailView()
+	case "up", "down", "pgup", "pgdown":
+		// Forward navigation keys to the table
+		m.table, _ = m.table.Update(msg)
+		return m, nil
+	}
+
+	// Forward all other keys to the text input
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+
+	// Re-apply filter whenever the query changes
+	newQuery := m.searchInput.Value()
+	if newQuery != m.searchQuery {
+		m.searchQuery = newQuery
+		m.applyFilter()
+	}
+
+	return m, cmd
+}
+
+func (m *Model[T]) applyFilter() {
+	if m.searchQuery == "" {
+		m.filteredItems = nil
+		m.table.SetRows(m.config.ToRows(m.items, m.styles))
+		return
+	}
+
+	m.filteredItems = make([]T, 0, len(m.items))
+	for _, item := range m.items {
+		if m.config.FilterFunc(item, m.searchQuery) {
+			m.filteredItems = append(m.filteredItems, item)
+		}
+	}
+	m.table.SetRows(m.config.ToRows(m.filteredItems, m.styles))
 }
 
 func (m Model[T]) updateDetail(msg tea.Msg) (Model[T], tea.Cmd) {
@@ -181,11 +274,15 @@ func (m Model[T]) updateDetail(msg tea.Msg) (Model[T], tea.Cmd) {
 
 func (m Model[T]) enterDetailView() (Model[T], tea.Cmd) {
 	idx := m.table.Cursor()
-	if idx < 0 || idx >= len(m.items) {
+	source := m.items
+	if m.searching && m.filteredItems != nil {
+		source = m.filteredItems
+	}
+	if idx < 0 || idx >= len(source) {
 		return m, nil
 	}
 
-	selectedItem := m.items[idx]
+	selectedItem := source[idx]
 	detail, cmd := m.config.EnterDetail(selectedItem, m.styles, m.width, m.height)
 	m.detail = detail
 	m.viewMode = ViewDetail
@@ -211,7 +308,11 @@ func (m Model[T]) viewList() string {
 	} else if len(m.items) == 0 {
 		content = fmt.Sprintf("No %s found.\n\nPress r to refresh, q to quit", m.config.EntityName)
 	} else {
-		return m.table.View()
+		tableView := m.table.View()
+		if m.searching {
+			return tableView + "\n" + m.searchBarView()
+		}
+		return tableView
 	}
 
 	contentStyle := lipgloss.NewStyle().
@@ -220,13 +321,29 @@ func (m Model[T]) viewList() string {
 	return contentStyle.Render(content)
 }
 
+func (m Model[T]) searchBarView() string {
+	total := len(m.items)
+	matched := total
+	if m.searchQuery != "" && m.filteredItems != nil {
+		matched = len(m.filteredItems)
+	}
+
+	matchInfo := fmt.Sprintf(" %d/%d", matched, total)
+	return m.searchInput.View() + matchInfo
+}
+
 // SetItems sets the items directly (e.g. from polling), clearing loading/error state.
 func (m Model[T]) SetItems(items []T) Model[T] {
 	m.loading = false
 	m.spinner.SetVisible(false)
 	m.err = nil
 	m.items = items
-	m.table.SetRows(m.config.ToRows(items, m.styles))
+
+	if m.searching && m.searchQuery != "" && m.config.FilterFunc != nil {
+		m.applyFilter()
+	} else {
+		m.table.SetRows(m.config.ToRows(items, m.styles))
+	}
 	return m
 }
 
@@ -239,8 +356,18 @@ func (m Model[T]) HandleFetchResult(items []T, err error) Model[T] {
 		return m
 	}
 	m.items = items
-	m.table.SetRows(m.config.ToRows(items, m.styles))
+
+	if m.searching && m.searchQuery != "" && m.config.FilterFunc != nil {
+		m.applyFilter()
+	} else {
+		m.table.SetRows(m.config.ToRows(items, m.styles))
+	}
 	return m
+}
+
+// IsSearching returns true if the list is currently in search/filter mode.
+func (m Model[T]) IsSearching() bool {
+	return m.searching
 }
 
 // Items returns the current items.

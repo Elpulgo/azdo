@@ -402,6 +402,35 @@ func TestDetailView_EnterOnLeafWithLogsOpensLogViewer(t *testing.T) {
 	}
 }
 
+func TestFilterPipelineRun(t *testing.T) {
+	run := azdevops.PipelineRun{
+		BuildNumber:  "20240210.1",
+		SourceBranch: "refs/heads/feature/deploy",
+		Definition:   azdevops.PipelineDefinition{Name: "CI Pipeline"},
+	}
+
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{"CI Pipeline", true},   // matches pipeline name
+		{"ci pipe", true},       // case-insensitive
+		{"deploy", true},        // matches branch
+		{"20240210", true},      // matches build number
+		{"nonexistent", false},  // no match
+		{"", true},              // empty matches all
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got := filterPipelineRun(run, tt.query)
+			if got != tt.want {
+				t.Errorf("filterPipelineRun(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMakeColumnsHasSixColumns(t *testing.T) {
 	model := NewModelWithStyles(nil, styles.DefaultStyles())
 	// Trigger resize to generate columns

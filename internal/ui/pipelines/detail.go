@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -50,7 +51,11 @@ type DetailModel struct {
 	timeline      *azdevops.Timeline
 	tree          []*TimelineNode
 	flatItems     []*TimelineNode
+	allFlatItems  []*TimelineNode // unfiltered items, set when searching
 	selectedIndex int
+	searching     bool
+	searchInput   textinput.Model
+	searchQuery   string
 	loading       bool
 	err           error
 	width         int
@@ -71,10 +76,15 @@ func NewDetailModelWithStyles(client *azdevops.Client, run azdevops.PipelineRun,
 	spinner := components.NewLoadingIndicator(s)
 	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
 
+	ti := textinput.New()
+	ti.Prompt = "/ "
+	ti.CharLimit = 100
+
 	return &DetailModel{
 		client:        client,
 		run:           run,
 		selectedIndex: 0,
+		searchInput:   ti,
 		spinner:       spinner,
 		styles:        s,
 	}
@@ -157,6 +167,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.searching {
+			return m.updateSearch(msg)
+		}
+
 		switch msg.String() {
 		case "up", "k":
 			m.MoveUp()
@@ -166,6 +180,11 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.PageUp()
 		case "pgdown":
 			m.PageDown()
+		case "f":
+			if len(m.flatItems) > 0 {
+				m.EnterSearch()
+				return m, m.searchInput.Focus()
+			}
 		case "r":
 			m.loading = true
 			m.spinner.SetVisible(true)
@@ -217,6 +236,16 @@ func (m *DetailModel) View() string {
 	// Viewport with timeline records
 	if m.ready {
 		sb.WriteString(m.viewport.View())
+	}
+
+	if m.searching {
+		total := 0
+		if m.allFlatItems != nil {
+			total = len(m.allFlatItems)
+		}
+		matched := len(m.flatItems)
+		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("%s %d/%d", m.searchInput.View(), matched, total))
 	}
 
 	return wrapContent(sb.String())
@@ -417,6 +446,101 @@ func (m *DetailModel) GetScrollPercent() float64 {
 		return 0
 	}
 	return float64(m.selectedIndex) / float64(len(m.flatItems)-1) * 100
+}
+
+func (m *DetailModel) updateSearch(msg tea.KeyMsg) (*DetailModel, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.ExitSearch()
+		return m, nil
+	case "up", "k":
+		m.MoveUp()
+		return m, nil
+	case "down", "j":
+		m.MoveDown()
+		return m, nil
+	case "pgup":
+		m.PageUp()
+		return m, nil
+	case "pgdown":
+		m.PageDown()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+
+	newQuery := m.searchInput.Value()
+	if newQuery != m.searchQuery {
+		m.searchQuery = newQuery
+		m.applySearchFilter()
+	}
+
+	return m, cmd
+}
+
+// IsSearching returns whether the detail view is in search mode.
+func (m *DetailModel) IsSearching() bool {
+	return m.searching
+}
+
+// EnterSearch enters search mode.
+func (m *DetailModel) EnterSearch() {
+	m.searching = true
+	m.searchInput.SetValue("")
+	m.searchQuery = ""
+	m.allFlatItems = m.flatItems
+	m.searchInput.Focus()
+}
+
+// ExitSearch exits search mode and restores all items.
+func (m *DetailModel) ExitSearch() {
+	m.searching = false
+	m.searchQuery = ""
+	m.searchInput.Blur()
+	if m.allFlatItems != nil {
+		m.flatItems = m.allFlatItems
+		m.allFlatItems = nil
+	}
+	m.selectedIndex = 0
+	if m.ready {
+		m.updateViewportContent()
+	}
+}
+
+// SetSearchQuery sets the search query and filters items.
+func (m *DetailModel) SetSearchQuery(query string) {
+	m.searchQuery = query
+	m.searchInput.SetValue(query)
+	m.applySearchFilter()
+}
+
+// searchBarHeight is the vertical space consumed by the search bar.
+const detailSearchBarHeight = 1
+
+func (m *DetailModel) applySearchFilter() {
+	source := m.allFlatItems
+	if source == nil {
+		source = m.flatItems
+	}
+
+	if m.searchQuery == "" {
+		m.flatItems = source
+	} else {
+		q := strings.ToLower(m.searchQuery)
+		filtered := make([]*TimelineNode, 0, len(source))
+		for _, node := range source {
+			if strings.Contains(strings.ToLower(node.Record.Name), q) {
+				filtered = append(filtered, node)
+			}
+		}
+		m.flatItems = filtered
+	}
+
+	m.selectedIndex = 0
+	if m.ready {
+		m.updateViewportContent()
+	}
 }
 
 // Messages
