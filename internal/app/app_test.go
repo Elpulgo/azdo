@@ -505,6 +505,53 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	t.Logf("Total lines: %d, box bottom at line: %d, empty padding: %d", len(lines), boxBottomLine, emptyPaddingLines)
 }
 
+func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
+	cfg := &config.Config{
+		Organization: "testorg",
+		Project:      "testproject",
+	}
+	client := &azdevops.Client{}
+
+	terminalHeights := []int{24, 30, 40, 50}
+	for _, termHeight := range terminalHeights {
+		t.Run(fmt.Sprintf("height_%d", termHeight), func(t *testing.T) {
+			m := NewModel(client, cfg)
+
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: termHeight})
+			m = updated.(Model)
+
+			// Load data so content fills
+			runs := make([]azdevops.PipelineRun, 50)
+			for i := range runs {
+				runs[i] = azdevops.PipelineRun{
+					ID:          i + 1,
+					BuildNumber: fmt.Sprintf("2024.%d", i+1),
+					Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
+					Status:      "completed",
+					Result:      "succeeded",
+				}
+			}
+			updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
+			m = updated.(Model)
+
+			view := m.View()
+			lines := strings.Split(view, "\n")
+
+			t.Logf("Terminal height: %d, output lines: %d, footerRows: %d", termHeight, len(lines), m.footerRows)
+
+			if len(lines) != termHeight {
+				// Show first and last few lines for debugging
+				for i, line := range lines {
+					if i < 5 || i > len(lines)-5 {
+						t.Logf("Line %d: %.100q", i, line)
+					}
+				}
+				t.Errorf("Output has %d lines, want exactly %d", len(lines), termHeight)
+			}
+		})
+	}
+}
+
 func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	cfg := &config.Config{
 		Organization: "testorg",

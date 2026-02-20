@@ -50,12 +50,6 @@ const (
 	// top border (1) + tab row (1) + bottom border (1) = 3.
 	tabBarRows = 3
 
-	// newlineBetweenTabAndContent accounts for the newline between tab bar and content box.
-	newlineBetweenTabAndContent = 1
-
-	// newlineBeforeFooter accounts for the newline between the content box and footer.
-	newlineBeforeFooter = 1
-
 	// contextBarJoinNewline accounts for the newline joining context bar and status bar.
 	contextBarJoinNewline = 1
 )
@@ -420,9 +414,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Note: Tab styles are now provided by the styles package and accessed via m.styles
 
 // contentViewSize returns the size available for content views inside the
-// bordered content box. It subtracts all chrome: side borders, content box
-// top/bottom borders, the tab bar (with its own border), spacing between
-// tab bar and content box, the footer, and the newline before the footer.
+// bordered content box. It subtracts all chrome from the terminal height:
+// the tab bar (with its own border), the content box borders, and the footer.
+//
+// The "\n" joins between tabBar, contentBox, and footer in View() do not
+// consume extra lines — they only prevent adjacent components from merging
+// on the same line (e.g. "╰──╯╭──╮" becoming one line instead of two).
 func (m Model) contentViewSize() tea.WindowSizeMsg {
 	const minContentWidth = 20
 	const minContentHeight = 5
@@ -432,7 +429,7 @@ func (m Model) contentViewSize() tea.WindowSizeMsg {
 		width = minContentWidth
 	}
 
-	height := m.height - boxBorderRows - tabBarRows - newlineBetweenTabAndContent - m.footerRows - newlineBeforeFooter
+	height := m.height - tabBarRows - boxBorderRows - m.footerRows
 	if height < minContentHeight {
 		height = minContentHeight
 	}
