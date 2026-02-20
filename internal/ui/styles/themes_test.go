@@ -175,7 +175,6 @@ func TestThemeHasAllRequiredColors(t *testing.T) {
 				{"TabActiveForeground", theme.TabActiveForeground},
 				{"TabActiveBackground", theme.TabActiveBackground},
 				{"TabInactiveForeground", theme.TabInactiveForeground},
-				{"TabInactiveBackground", theme.TabInactiveBackground},
 			}
 
 			for _, check := range colorChecks {

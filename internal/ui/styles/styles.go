@@ -74,11 +74,11 @@ func NewStyles(theme Theme) *Styles {
 
 	s.TabInactive = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.TabInactiveForeground)).
-		Background(lipgloss.Color(theme.TabInactiveBackground)).
 		Padding(0, 2)
 
 	s.TabBar = lipgloss.NewStyle().
-		Background(lipgloss.Color(theme.Background))
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Border))
 
 	// Box styles
 	s.Box = lipgloss.NewStyle().

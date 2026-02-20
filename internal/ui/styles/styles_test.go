@@ -114,6 +114,42 @@ func TestStylesContentBoxHasRoundedBorder(t *testing.T) {
 	}
 }
 
+// TestStylesTabInactiveHasNoBackground tests that inactive tabs have no background color
+func TestStylesTabInactiveHasNoBackground(t *testing.T) {
+	theme := GetDefaultTheme()
+	styles := NewStyles(theme)
+
+	// TabInactive should NOT have a background color set
+	bg := styles.TabInactive.GetBackground()
+	if _, isNoColor := bg.(lipgloss.NoColor); !isNoColor {
+		t.Errorf("TabInactive should have no background color, got %v", bg)
+	}
+}
+
+// TestStylesTabBarHasRoundedBorder tests that the tab bar style has a rounded border
+func TestStylesTabBarHasRoundedBorder(t *testing.T) {
+	theme := GetDefaultTheme()
+	styles := NewStyles(theme)
+
+	// TabBar should have a border set
+	border := styles.TabBar.GetBorderStyle()
+	if border == (lipgloss.Border{}) {
+		t.Error("TabBar should have a border style set")
+	}
+	if styles.TabBar.GetBorderTopSize() != 1 {
+		t.Error("TabBar should have a top border")
+	}
+	if styles.TabBar.GetBorderBottomSize() != 1 {
+		t.Error("TabBar should have a bottom border")
+	}
+	if styles.TabBar.GetBorderLeftSize() != 1 {
+		t.Error("TabBar should have a left border")
+	}
+	if styles.TabBar.GetBorderRightSize() != 1 {
+		t.Error("TabBar should have a right border")
+	}
+}
+
 // TestStylesAllThemes tests that NewStyles works with all built-in themes
 func TestStylesAllThemes(t *testing.T) {
 	themeNames := ListAvailableThemes()

@@ -46,11 +46,14 @@ const (
 	// top border (1) + bottom border (1) = 2.
 	boxBorderRows = 2
 
-	// boxInternalChromeRows is the vertical space consumed inside the box
-	// by non-view elements: tab row (1) + separator (1) = 2.
-	boxInternalChromeRows = 2
+	// tabBarRows is the vertical space consumed by the bordered tab bar:
+	// top border (1) + tab row (1) + bottom border (1) = 3.
+	tabBarRows = 3
 
-	// newlineBeforeFooter accounts for the newline between the box and footer.
+	// newlineBetweenTabAndContent accounts for the newline between tab bar and content box.
+	newlineBetweenTabAndContent = 1
+
+	// newlineBeforeFooter accounts for the newline between the content box and footer.
 	newlineBeforeFooter = 1
 
 	// contextBarJoinNewline accounts for the newline joining context bar and status bar.
@@ -331,10 +334,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
 		if m.width > 0 && m.height > 0 {
 			m.footerRows = m.measureFooterHeight()
-			sizeMsg := tea.WindowSizeMsg{Width: m.width - borderWidth, Height: m.height - boxBorderRows - m.footerRows - newlineBeforeFooter - boxInternalChromeRows}
-			m.pipelinesView, _ = m.pipelinesView.Update(sizeMsg)
-			m.pullRequestsView, _ = m.pullRequestsView.Update(sizeMsg)
-			m.workItemsView, _ = m.workItemsView.Update(sizeMsg)
+			contentSize := m.contentViewSize()
+			m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
+			m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
+			m.workItemsView, _ = m.workItemsView.Update(contentSize)
 		}
 
 		// Re-initialize views to fetch data again
@@ -357,17 +360,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.themePicker.SetSize(msg.Width, msg.Height)
 		// Measure actual footer height at current width
 		m.footerRows = m.measureFooterHeight()
-		// Adjust size for content views to account for borders:
-		// - Tab bar border: 1 line top
-		// - Content border: 1 line bottom
-		// - Side borders: 2 chars width
-		contentMsg := tea.WindowSizeMsg{
-			Width:  msg.Width - borderWidth,
-			Height: msg.Height - boxBorderRows - m.footerRows - newlineBeforeFooter - boxInternalChromeRows,
-		}
-		m.pipelinesView, _ = m.pipelinesView.Update(contentMsg)
-		m.pullRequestsView, _ = m.pullRequestsView.Update(contentMsg)
-		m.workItemsView, _ = m.workItemsView.Update(contentMsg)
+		contentSize := m.contentViewSize()
+		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
+		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
+		m.workItemsView, _ = m.workItemsView.Update(contentSize)
 		return m, nil
 
 	case polling.TickMsg:
@@ -423,6 +419,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // Note: Tab styles are now provided by the styles package and accessed via m.styles
 
+// contentViewSize returns the size available for content views inside the
+// bordered content box. It subtracts all chrome: side borders, content box
+// top/bottom borders, the tab bar (with its own border), spacing between
+// tab bar and content box, the footer, and the newline before the footer.
+func (m Model) contentViewSize() tea.WindowSizeMsg {
+	const minContentWidth = 20
+	const minContentHeight = 5
+
+	width := m.width - borderWidth
+	if width < minContentWidth {
+		width = minContentWidth
+	}
+
+	height := m.height - boxBorderRows - tabBarRows - newlineBetweenTabAndContent - m.footerRows - newlineBeforeFooter
+	if height < minContentHeight {
+		height = minContentHeight
+	}
+
+	return tea.WindowSizeMsg{
+		Width:  width,
+		Height: height,
+	}
+}
+
 // resizeActiveViewIfNeeded re-measures the footer height and resizes
 // the active content view if it changed (e.g., after tab switch or
 // view mode change).
@@ -432,17 +452,14 @@ func (m *Model) resizeActiveViewIfNeeded() {
 		return
 	}
 	m.footerRows = newFooterRows
-	contentMsg := tea.WindowSizeMsg{
-		Width:  m.width - borderWidth,
-		Height: m.height - boxBorderRows - m.footerRows - newlineBeforeFooter - boxInternalChromeRows,
-	}
+	contentSize := m.contentViewSize()
 	switch m.activeTab {
 	case TabPullRequests:
-		m.pullRequestsView, _ = m.pullRequestsView.Update(contentMsg)
+		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 	case TabWorkItems:
-		m.workItemsView, _ = m.workItemsView.Update(contentMsg)
+		m.workItemsView, _ = m.workItemsView.Update(contentSize)
 	default:
-		m.pipelinesView, _ = m.pipelinesView.Update(contentMsg)
+		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
 	}
 }
 
@@ -469,8 +486,8 @@ func (m Model) measureFooterHeight() int {
 	return statusRows
 }
 
-// renderTabBar renders the tab header content (without border — border is applied in View)
-func (m Model) renderTabBar() string {
+// renderTabBar renders the tab header content wrapped in its own bordered box.
+func (m Model) renderTabBar(innerWidth int) string {
 	var tab1, tab2, tab3 string
 
 	switch m.activeTab {
@@ -488,7 +505,7 @@ func (m Model) renderTabBar() string {
 		tab3 = m.styles.TabActive.Render("3: Work Items")
 	}
 
-	return m.styles.TabBar.Render(tab1 + " " + tab2 + " " + tab3)
+	return m.styles.TabBar.Width(innerWidth).Render(tab1 + " " + tab2 + " " + tab3)
 }
 
 // View renders the application UI
@@ -507,8 +524,9 @@ func (m Model) View() string {
 		return m.themePicker.View()
 	}
 
-	// Render tab bar
-	tabBar := m.renderTabBar()
+	// Render tab bar in its own bordered box
+	contentSize := m.contentViewSize()
+	tabBar := m.renderTabBar(contentSize.Width)
 
 	// Render content based on active tab
 	var content string
@@ -566,26 +584,12 @@ func (m Model) View() string {
 		footer = m.statusBar.View()
 	}
 
-	// Combine tabs and content in a single bordered box with separator
-	boxInnerWidth := m.width - borderWidth
-	if boxInnerWidth < 20 {
-		boxInnerWidth = 20
-	}
+	// Render content in its own bordered box, using the same dimensions
+	// that were used to size the content views.
+	contentBox := m.styles.ContentBox.
+		Width(contentSize.Width).
+		Height(contentSize.Height).
+		Render(content)
 
-	separator := m.styles.Border.Render(strings.Repeat("─", boxInnerWidth))
-	boxContent := tabBar + "\n" + separator + "\n" + content
-
-	// Use the same footer height that was used to size content views,
-	// so the box inner height matches the content exactly.
-	boxInnerHeight := m.height - boxBorderRows - m.footerRows - newlineBeforeFooter
-	if boxInnerHeight < 5 {
-		boxInnerHeight = 5
-	}
-
-	borderedBox := m.styles.ContentBox.
-		Width(boxInnerWidth).
-		Height(boxInnerHeight).
-		Render(boxContent)
-
-	return borderedBox + "\n" + footer
+	return tabBar + "\n" + contentBox + "\n" + footer
 }
