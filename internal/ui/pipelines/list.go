@@ -81,7 +81,7 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		EnterDetail: func(item azdevops.PipelineRun, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
 			var projectClient *azdevops.Client
 			if client != nil {
-				projectClient = client.ClientFor(item.Project.Name)
+				projectClient = client.ClientFor(item.ProjectName)
 			}
 			d := NewDetailModelWithStyles(projectClient, item, st)
 			d.SetSize(w, h)
@@ -216,7 +216,7 @@ func (m Model) enterLogView(adapter *detailAdapter) (Model, tea.Cmd) {
 	run := detail.GetRun()
 	var projectClient *azdevops.Client
 	if m.client != nil {
-		projectClient = m.client.ClientFor(run.Project.Name)
+		projectClient = m.client.ClientFor(run.ProjectName)
 	}
 	m.logViewer = NewLogViewerModelWithStyles(
 		projectClient,

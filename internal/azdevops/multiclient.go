@@ -54,17 +54,27 @@ func (mc *MultiClient) Projects() []string {
 // merges and sorts by QueueTime descending.
 func (mc *MultiClient) ListPipelineRuns(top int) ([]PipelineRun, error) {
 	type result struct {
-		runs []PipelineRun
-		err  error
+		project string
+		runs    []PipelineRun
+		err     error
 	}
 
+	var wg sync.WaitGroup
 	ch := make(chan result, len(mc.clients))
-	for _, client := range mc.clients {
-		go func(c *Client) {
+
+	for project, client := range mc.clients {
+		wg.Add(1)
+		go func(p string, c *Client) {
+			defer wg.Done()
 			runs, err := c.ListPipelineRuns(top)
-			ch <- result{runs, err}
-		}(client)
+			ch <- result{project, runs, err}
+		}(project, client)
 	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
 
 	var allRuns []PipelineRun
 	var errs []error
@@ -73,6 +83,9 @@ func (mc *MultiClient) ListPipelineRuns(top int) ([]PipelineRun, error) {
 		if r.err != nil {
 			errs = append(errs, r.err)
 			continue
+		}
+		for i := range r.runs {
+			r.runs[i].ProjectName = r.project
 		}
 		allRuns = append(allRuns, r.runs...)
 	}
