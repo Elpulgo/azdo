@@ -1146,6 +1146,124 @@ func TestDetailModel_SearchIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestDetailModel_SearchFindsCollapsedChildren(t *testing.T) {
+	// Bug: search should find items inside collapsed nodes, not just visible ones
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+			{ID: "task-2", ParentID: strPtr("job-1"), Type: "Task", Name: "npm test", Order: 2},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	// Initially only stages are visible (collapsed)
+	if len(model.flatItems) != 2 {
+		t.Fatalf("Expected 2 flat items initially (stages collapsed), got %d", len(model.flatItems))
+	}
+
+	// Enter search and search for a nested task name
+	model.EnterSearch()
+	model.SetSearchQuery("npm install")
+
+	// Should find "npm install" even though it's inside a collapsed stage
+	if len(model.flatItems) != 1 {
+		t.Errorf("Expected 1 match for collapsed child search, got %d", len(model.flatItems))
+	}
+	if len(model.flatItems) > 0 && model.flatItems[0].Record.Name != "npm install" {
+		t.Errorf("Expected match to be 'npm install', got %q", model.flatItems[0].Record.Name)
+	}
+}
+
+func TestDetailModel_SearchEnterToggleExpandDuringSearch(t *testing.T) {
+	// Bug: pressing enter during search should still toggle expand/collapse
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	// Enter search, search for "Build" which should match the stage
+	model.EnterSearch()
+	model.SetSearchQuery("build")
+
+	// Should find "Build" stage and "Build Job"
+	foundStage := false
+	for _, item := range model.flatItems {
+		if item.Record.Name == "Build" && item.Record.Type == "Stage" {
+			foundStage = true
+		}
+	}
+	if !foundStage {
+		t.Fatal("Expected to find 'Build' stage in search results")
+	}
+
+	// Select the Build stage and toggle expand via the model method
+	model.selectedIndex = 0
+	if model.flatItems[0].Record.Name != "Build" {
+		t.Fatalf("Expected first item to be 'Build', got %q", model.flatItems[0].Record.Name)
+	}
+
+	// ToggleExpand should work during search
+	model.ToggleExpand()
+
+	// After expanding, we should see children
+	if !model.flatItems[0].Expanded {
+		t.Error("Expected 'Build' stage to be expanded after ToggleExpand")
+	}
+}
+
+func TestDetailModel_SearchExitRestoresAllTreeItems(t *testing.T) {
+	// After searching (which searches all tree nodes), exiting search should
+	// restore the flat items from the tree (respecting expand/collapse state)
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	// Start with 2 items (stages collapsed)
+	if len(model.flatItems) != 2 {
+		t.Fatalf("Expected 2 flat items initially, got %d", len(model.flatItems))
+	}
+
+	// Search and exit
+	model.EnterSearch()
+	model.SetSearchQuery("job")
+	model.ExitSearch()
+
+	// Should restore to 2 items (tree-based flat, not the "all nodes" list)
+	if len(model.flatItems) != 2 {
+		t.Errorf("Expected 2 items after exiting search (stages collapsed), got %d", len(model.flatItems))
+	}
+}
+
 // Helper functions
 
 func strPtr(s string) *string {

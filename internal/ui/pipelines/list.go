@@ -122,10 +122,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		// When the detail view is searching, let it handle all keys
+		// except enter (which should still toggle expand / open logs)
 		if adapter, ok := m.list.Detail().(*detailAdapter); ok && adapter.model.IsSearching() {
-			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
-			return m, cmd
+			if keyMsg.String() != "enter" {
+				var cmd tea.Cmd
+				m.list, cmd = m.list.Update(msg)
+				return m, cmd
+			}
 		}
 
 		switch keyMsg.String() {

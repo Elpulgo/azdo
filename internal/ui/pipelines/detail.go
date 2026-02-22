@@ -453,6 +453,9 @@ func (m *DetailModel) updateSearch(msg tea.KeyMsg) (*DetailModel, tea.Cmd) {
 	case "esc":
 		m.ExitSearch()
 		return m, nil
+	case "enter":
+		// Don't pass enter to text input; let parent handle expand/collapse
+		return m, nil
 	case "up", "k":
 		m.MoveUp()
 		return m, nil
@@ -489,19 +492,19 @@ func (m *DetailModel) EnterSearch() {
 	m.searching = true
 	m.searchInput.SetValue("")
 	m.searchQuery = ""
-	m.allFlatItems = m.flatItems
+	// Store all tree nodes (regardless of expand state) for total count display
+	m.allFlatItems = allTreeNodes(m.tree)
 	m.searchInput.Focus()
 }
 
-// ExitSearch exits search mode and restores all items.
+// ExitSearch exits search mode and restores all items from the tree.
 func (m *DetailModel) ExitSearch() {
 	m.searching = false
 	m.searchQuery = ""
 	m.searchInput.Blur()
-	if m.allFlatItems != nil {
-		m.flatItems = m.allFlatItems
-		m.allFlatItems = nil
-	}
+	// Restore from tree (respects current expand/collapse state)
+	m.flatItems = flattenTree(m.tree)
+	m.allFlatItems = nil
 	m.selectedIndex = 0
 	if m.ready {
 		m.updateViewportContent()
@@ -518,18 +521,36 @@ func (m *DetailModel) SetSearchQuery(query string) {
 // searchBarHeight is the vertical space consumed by the search bar.
 const detailSearchBarHeight = 1
 
-func (m *DetailModel) applySearchFilter() {
-	source := m.allFlatItems
-	if source == nil {
-		source = m.flatItems
+// allTreeNodes returns every node in the tree regardless of expand/collapse state,
+// skipping filtered intermediary types (Phase, Checkpoint).
+func allTreeNodes(roots []*TimelineNode) []*TimelineNode {
+	var result []*TimelineNode
+	var walk func(nodes []*TimelineNode, depth int)
+	walk = func(nodes []*TimelineNode, depth int) {
+		for _, node := range nodes {
+			if isFilteredRecordType(node.Record.Type) {
+				walk(node.Children, depth)
+				continue
+			}
+			node.VisualDepth = depth
+			result = append(result, node)
+			walk(node.Children, depth+1)
+		}
 	}
+	walk(roots, 0)
+	return result
+}
 
+func (m *DetailModel) applySearchFilter() {
 	if m.searchQuery == "" {
-		m.flatItems = source
+		// Restore from tree (respects expand/collapse state)
+		m.flatItems = flattenTree(m.tree)
 	} else {
+		// Search ALL nodes in the tree, not just currently visible ones
+		all := allTreeNodes(m.tree)
 		q := strings.ToLower(m.searchQuery)
-		filtered := make([]*TimelineNode, 0, len(source))
-		for _, node := range source {
+		filtered := make([]*TimelineNode, 0, len(all))
+		for _, node := range all {
 			if strings.Contains(strings.ToLower(node.Record.Name), q) {
 				filtered = append(filtered, node)
 			}
