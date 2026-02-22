@@ -43,14 +43,10 @@ type Column struct {
 // KeyMap defines keybindings. It satisfies to the help.KeyMap interface, which
 // is used to render the help menu.
 type KeyMap struct {
-	LineUp       key.Binding
-	LineDown     key.Binding
-	PageUp       key.Binding
-	PageDown     key.Binding
-	HalfPageUp   key.Binding
-	HalfPageDown key.Binding
-	GotoTop      key.Binding
-	GotoBottom   key.Binding
+	LineUp   key.Binding
+	LineDown key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
 }
 
 // ShortHelp implements the KeyMap interface.
@@ -61,14 +57,13 @@ func (km KeyMap) ShortHelp() []key.Binding {
 // FullHelp implements the KeyMap interface.
 func (km KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{km.LineUp, km.LineDown, km.GotoTop, km.GotoBottom},
-		{km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown},
+		{km.LineUp, km.LineDown},
+		{km.PageUp, km.PageDown},
 	}
 }
 
 // DefaultKeyMap returns a default set of keybindings.
 func DefaultKeyMap() KeyMap {
-	const spacebar = " "
 	return KeyMap{
 		LineUp: key.NewBinding(
 			key.WithKeys("up", "k"),
@@ -79,28 +74,12 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("↓/j", "down"),
 		),
 		PageUp: key.NewBinding(
-			key.WithKeys("b", "pgup"),
-			key.WithHelp("b/pgup", "page up"),
+			key.WithKeys("pgup"),
+			key.WithHelp("pgup", "page up"),
 		),
 		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", spacebar),
-			key.WithHelp("pgdn/space", "page down"),
-		),
-		HalfPageUp: key.NewBinding(
-			key.WithKeys("u", "ctrl+u"),
-			key.WithHelp("u", "½ page up"),
-		),
-		HalfPageDown: key.NewBinding(
-			key.WithKeys("d", "ctrl+d"),
-			key.WithHelp("d", "½ page down"),
-		),
-		GotoTop: key.NewBinding(
-			key.WithKeys("home", "g"),
-			key.WithHelp("g/home", "go to start"),
-		),
-		GotoBottom: key.NewBinding(
-			key.WithKeys("end", "G"),
-			key.WithHelp("G/end", "go to end"),
+			key.WithKeys("pgdown"),
+			key.WithHelp("pgdn", "page down"),
 		),
 	}
 }
@@ -219,14 +198,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.MoveUp(m.viewport.Height)
 		case key.Matches(msg, m.KeyMap.PageDown):
 			m.MoveDown(m.viewport.Height)
-		case key.Matches(msg, m.KeyMap.HalfPageUp):
-			m.MoveUp(m.viewport.Height / 2) //nolint:mnd
-		case key.Matches(msg, m.KeyMap.HalfPageDown):
-			m.MoveDown(m.viewport.Height / 2) //nolint:mnd
-		case key.Matches(msg, m.KeyMap.GotoTop):
-			m.GotoTop()
-		case key.Matches(msg, m.KeyMap.GotoBottom):
-			m.GotoBottom()
 		}
 	}
 
