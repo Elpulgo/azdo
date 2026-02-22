@@ -46,26 +46,6 @@ type WorkItemsResponse struct {
 	Value []WorkItem `json:"value"`
 }
 
-// TypeIcon returns an icon for the work item type
-func (wi *WorkItem) TypeIcon() string {
-	switch wi.Fields.WorkItemType {
-	case "Bug":
-		return "🐛"
-	case "Task":
-		return "📋"
-	case "User Story":
-		return "📖"
-	case "Feature":
-		return "⭐"
-	case "Epic":
-		return "🎯"
-	case "Issue":
-		return "❗"
-	default:
-		return "📄"
-	}
-}
-
 // StateIcon returns an icon for the work item state
 // Workflow: New → Active → Resolved/Ready for Test → Closed
 func (wi *WorkItem) StateIcon() string {
@@ -172,8 +152,10 @@ func (c *Client) ListWorkItems(top int) ([]WorkItem, error) {
 	}
 
 	// WIQL query to get active work items assigned to current user
+	// @project scopes to the project in the API URL context, preventing
+	// duplicates when multiple project clients query simultaneously
 	query := `SELECT [System.Id] FROM WorkItems
-WHERE [System.AssignedTo] = @Me
+WHERE [System.TeamProject] = @project
   AND [System.State] <> 'Closed'
   AND [System.State] <> 'Removed'
 ORDER BY [System.ChangedDate] DESC`

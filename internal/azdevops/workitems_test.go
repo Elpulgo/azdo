@@ -2,36 +2,12 @@ package azdevops
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
-
-func TestWorkItem_TypeIcon(t *testing.T) {
-	tests := []struct {
-		workItemType string
-		want         string
-	}{
-		{"Bug", "🐛"},
-		{"Task", "📋"},
-		{"User Story", "📖"},
-		{"Feature", "⭐"},
-		{"Epic", "🎯"},
-		{"Issue", "❗"},
-		{"Unknown", "📄"},
-		{"", "📄"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.workItemType, func(t *testing.T) {
-			wi := WorkItem{Fields: WorkItemFields{WorkItemType: tt.workItemType}}
-			got := wi.TypeIcon()
-			if got != tt.want {
-				t.Errorf("TypeIcon() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestWorkItem_StateIcon(t *testing.T) {
 	tests := []struct {
@@ -220,6 +196,51 @@ func TestClient_GetWorkItems_EmptyIDs(t *testing.T) {
 
 	if len(workItems) != 0 {
 		t.Errorf("Expected empty slice, got %d items", len(workItems))
+	}
+}
+
+func TestClient_ListWorkItems_QueryScopedToProject(t *testing.T) {
+	// Verify the WIQL query includes project scoping to prevent duplicates
+	// when multiple project clients query simultaneously
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{
+				WorkItems: []WorkItemReference{
+					{ID: 100, URL: "http://example.com/100"},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else {
+			response := WorkItemsResponse{
+				Count: 1,
+				Value: []WorkItem{
+					{ID: 100, Fields: WorkItemFields{Title: "Item 1", State: "Active"}},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListWorkItems(50)
+	if err != nil {
+		t.Fatalf("ListWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedBody, "@project") {
+		t.Errorf("WIQL query must scope to @project to prevent duplicates in multi-project mode.\nGot query body: %s", capturedBody)
 	}
 }
 
