@@ -93,15 +93,8 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	// Fill available height
-	availableHeight := m.height - 5
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
-
 	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
+		Width(m.width)
 
 	return contentStyle.Render(sb.String())
 }
@@ -159,14 +152,15 @@ func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	viewportHeight := height - 8
+	// Account for header lines rendered in View(): title (1) + type/state (1) + separator (1) = 3
+	headerLines := 3
+	viewportHeight := height - headerLines
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}
 
 	if !m.ready {
 		m.viewport = viewport.New(width, viewportHeight)
-		m.viewport.HighPerformanceRendering = false
 		m.ready = true
 	} else {
 		m.viewport.Width = width

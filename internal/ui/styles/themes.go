@@ -43,9 +43,9 @@ func GetThemeByNameWithFallback(name string) Theme {
 	return theme
 }
 
-// GetDefaultTheme returns the default dark theme.
+// GetDefaultTheme returns the default gruvbox theme.
 func GetDefaultTheme() Theme {
-	return darkTheme
+	return gruvboxTheme
 }
 
 // ListAvailableThemes returns a sorted list of all available theme names.
@@ -240,7 +240,6 @@ var darkTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("229"), // Yellow
 	TabActiveBackground:   lipgloss.Color("57"),  // Dark blue
 	TabInactiveForeground: lipgloss.Color("252"), // Light gray
-	TabInactiveBackground: lipgloss.Color("236"), // Dark gray
 }
 
 // Gruvbox dark theme
@@ -281,7 +280,6 @@ var gruvboxTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#fabd2f"), // Yellow
 	TabActiveBackground:   lipgloss.Color("#504945"), // bg2
 	TabInactiveForeground: lipgloss.Color("#a89984"), // fg4
-	TabInactiveBackground: lipgloss.Color("#282828"), // bg0
 }
 
 // Nord theme
@@ -322,7 +320,6 @@ var nordTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#eceff4"), // Nord6
 	TabActiveBackground:   lipgloss.Color("#5e81ac"), // Nord10
 	TabInactiveForeground: lipgloss.Color("#d8dee9"), // Nord4
-	TabInactiveBackground: lipgloss.Color("#3b4252"), // Nord1
 }
 
 // Dracula theme
@@ -363,7 +360,6 @@ var draculaTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#f8f8f2"), // Foreground
 	TabActiveBackground:   lipgloss.Color("#bd93f9"), // Purple
 	TabInactiveForeground: lipgloss.Color("#f8f8f2"), // Foreground
-	TabInactiveBackground: lipgloss.Color("#44475a"), // Current line
 }
 
 // Catppuccin Mocha theme
@@ -404,7 +400,6 @@ var catppuccinTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#1e1e2e"), // Base
 	TabActiveBackground:   lipgloss.Color("#89b4fa"), // Blue
 	TabInactiveForeground: lipgloss.Color("#bac2de"), // Subtext1
-	TabInactiveBackground: lipgloss.Color("#313244"), // Surface0
 }
 
 // GitHub Dark theme
@@ -445,5 +440,4 @@ var githubTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#f0f6fc"), // Bright text
 	TabActiveBackground:   lipgloss.Color("#58a6ff"), // Blue
 	TabInactiveForeground: lipgloss.Color("#8b949e"), // Muted text
-	TabInactiveBackground: lipgloss.Color("#21262d"), // Selection
 }

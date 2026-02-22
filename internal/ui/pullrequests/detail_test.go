@@ -11,6 +11,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
+	// The height passed to SetSize is already the content area (after app-level
+	// borders and footer are subtracted). The PR detail view should only subtract
+	// its own header lines (title + branch + separator = 3 lines).
+	pr := azdevops.PullRequest{
+		ID:            101,
+		Title:         "Test PR",
+		SourceRefName: "refs/heads/feature/test",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+
+	height := 30
+	model.SetSize(80, height)
+
+	// Create enough threads to fill viewport
+	threads := make([]azdevops.Thread, 30)
+	for i := range threads {
+		threads[i] = azdevops.Thread{
+			ID: i + 1, Status: "active",
+			Comments: []azdevops.Comment{
+				{ID: i + 1, Content: fmt.Sprintf("Comment %d", i+1), Author: azdevops.Identity{DisplayName: "User"}},
+			},
+		}
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+
+	// Total output lines should equal the height passed in.
+	if len(lines) != height {
+		t.Errorf("PR detail view output has %d lines, want %d (height passed to SetSize). "+
+			"Viewport is not using full available height.", len(lines), height)
+	}
+}
+
 func TestDetailModel_HasStyles(t *testing.T) {
 	pr := azdevops.PullRequest{ID: 123, Title: "Test"}
 	m := NewDetailModel(nil, pr)
@@ -431,9 +469,9 @@ func TestReviewerVoteIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewerVoteIcon(tt.vote)
+			got := reviewerVoteIconWithStyles(tt.vote, styles.DefaultStyles())
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("reviewerVoteIcon(%d) = %q, want to contain %q", tt.vote, got, tt.wantContains)
+				t.Errorf("reviewerVoteIconWithStyles(%d) = %q, want to contain %q", tt.vote, got, tt.wantContains)
 			}
 		})
 	}
@@ -478,9 +516,9 @@ func TestThreadStatusIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := threadStatusIcon(tt.status)
+			got := threadStatusIconWithStyles(tt.status, styles.DefaultStyles())
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("threadStatusIcon(%q) = %q, want to contain %q", tt.status, got, tt.wantContains)
+				t.Errorf("threadStatusIconWithStyles(%q) = %q, want to contain %q", tt.status, got, tt.wantContains)
 			}
 		})
 	}

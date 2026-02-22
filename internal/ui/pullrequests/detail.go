@@ -115,15 +115,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 
 // View renders the detail view
 func (m *DetailModel) View() string {
-	// Helper to wrap content with proper height
+	// Helper to wrap content with consistent width
 	wrapContent := func(content string) string {
-		availableHeight := m.height - 5
-		if availableHeight < 1 {
-			availableHeight = 10
-		}
 		contentStyle := lipgloss.NewStyle().
-			Width(m.width).
-			Height(availableHeight)
+			Width(m.width)
 		return contentStyle.Render(content)
 	}
 
@@ -156,15 +151,8 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
-	// Fill available height
-	availableHeight := m.height - 5 // Account for tab bar and status bar
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
-
 	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
+		Width(m.width)
 
 	return contentStyle.Render(sb.String())
 }
@@ -261,15 +249,15 @@ func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// Account for header (4 lines) and footer (2 lines)
-	viewportHeight := height - 8
+	// Account for header lines rendered in View(): title (1) + branch (1) + separator (1) = 3
+	headerLines := 3
+	viewportHeight := height - headerLines
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}
 
 	if !m.ready {
 		m.viewport = viewport.New(width, viewportHeight)
-		m.viewport.HighPerformanceRendering = false
 		m.ready = true
 	} else {
 		m.viewport.Width = width
@@ -621,11 +609,6 @@ func shortenFilePath(path string) string {
 	return path
 }
 
-// reviewerVoteIcon returns an icon for the reviewer's vote using default styles
-func reviewerVoteIcon(vote int) string {
-	return reviewerVoteIconWithStyles(vote, styles.DefaultStyles())
-}
-
 // reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles
 func reviewerVoteIconWithStyles(vote int, s *styles.Styles) string {
 	switch vote {
@@ -660,11 +643,6 @@ func reviewerVoteDescription(vote int) string {
 	default:
 		return "Unknown"
 	}
-}
-
-// threadStatusIcon returns an icon for the thread status using default styles
-func threadStatusIcon(status string) string {
-	return threadStatusIconWithStyles(status, styles.DefaultStyles())
 }
 
 // threadStatusIconWithStyles returns an icon for the thread status using provided styles

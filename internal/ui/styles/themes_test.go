@@ -99,14 +99,14 @@ func TestGetThemeByNameWithFallback(t *testing.T) {
 			wantName:  "nord",
 		},
 		{
-			name:      "invalid theme falls back to dark",
+			name:      "invalid theme falls back to default",
 			themeName: "nonexistent",
-			wantName:  "dark",
+			wantName:  "gruvbox",
 		},
 		{
-			name:      "empty theme falls back to dark",
+			name:      "empty theme falls back to default",
 			themeName: "",
-			wantName:  "dark",
+			wantName:  "gruvbox",
 		},
 	}
 
@@ -175,7 +175,6 @@ func TestThemeHasAllRequiredColors(t *testing.T) {
 				{"TabActiveForeground", theme.TabActiveForeground},
 				{"TabActiveBackground", theme.TabActiveBackground},
 				{"TabInactiveForeground", theme.TabInactiveForeground},
-				{"TabInactiveBackground", theme.TabInactiveBackground},
 			}
 
 			for _, check := range colorChecks {
@@ -210,12 +209,12 @@ func TestListAvailableThemes(t *testing.T) {
 	}
 }
 
-// TestDefaultTheme tests that GetDefaultTheme returns the dark theme
+// TestDefaultTheme tests that GetDefaultTheme returns the gruvbox theme
 func TestDefaultTheme(t *testing.T) {
 	theme := GetDefaultTheme()
 
-	if theme.Name != "dark" {
-		t.Errorf("GetDefaultTheme() returned theme %q, want %q", theme.Name, "dark")
+	if theme.Name != "gruvbox" {
+		t.Errorf("GetDefaultTheme() returned theme %q, want %q", theme.Name, "gruvbox")
 	}
 
 	if err := theme.Validate(); err != nil {

@@ -67,15 +67,15 @@ func (m *LogViewerModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// Account for header and footer
-	viewportHeight := height - 4
+	// Account for header lines rendered in View(): title (1) + separator (1) = 2
+	headerLines := 2
+	viewportHeight := height - headerLines
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}
 
 	if !m.ready {
 		m.viewport = viewport.New(width, viewportHeight)
-		m.viewport.HighPerformanceRendering = false
 		m.ready = true
 	} else {
 		m.viewport.Width = width
@@ -183,15 +183,10 @@ func (m *LogViewerModel) Update(msg tea.Msg) (*LogViewerModel, tea.Cmd) {
 
 // View renders the log viewer
 func (m *LogViewerModel) View() string {
-	// Helper to wrap content with proper height so footer stays at bottom
+	// Helper to wrap content with consistent width
 	wrapContent := func(content string) string {
-		availableHeight := m.height - 4 // Account for header and footer
-		if availableHeight < 1 {
-			availableHeight = 10
-		}
 		contentStyle := lipgloss.NewStyle().
-			Width(m.width).
-			Height(availableHeight)
+			Width(m.width)
 		return contentStyle.Render(content)
 	}
 

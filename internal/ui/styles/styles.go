@@ -17,16 +17,15 @@ type Styles struct {
 	// Box and container styles
 	Box        lipgloss.Style
 	BoxRounded lipgloss.Style
+	ContentBox lipgloss.Style
 	ModalBox   lipgloss.Style
 
 	// Text styles
 	Header   lipgloss.Style
 	Title    lipgloss.Style
-	Subtitle lipgloss.Style
-	Label    lipgloss.Style
-	Value    lipgloss.Style
-	Muted    lipgloss.Style
-	Bold     lipgloss.Style
+	Label lipgloss.Style
+	Value lipgloss.Style
+	Muted lipgloss.Style
 
 	// Status styles
 	Success lipgloss.Style
@@ -75,11 +74,11 @@ func NewStyles(theme Theme) *Styles {
 
 	s.TabInactive = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.TabInactiveForeground)).
-		Background(lipgloss.Color(theme.TabInactiveBackground)).
 		Padding(0, 2)
 
 	s.TabBar = lipgloss.NewStyle().
-		Background(lipgloss.Color(theme.Background))
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Border))
 
 	// Box styles
 	s.Box = lipgloss.NewStyle().
@@ -91,6 +90,10 @@ func NewStyles(theme Theme) *Styles {
 		BorderForeground(lipgloss.Color(theme.Accent)).
 		Background(lipgloss.Color(theme.Background)).
 		Padding(0, 1)
+
+	s.ContentBox = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Border))
 
 	s.ModalBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -107,9 +110,6 @@ func NewStyles(theme Theme) *Styles {
 		Foreground(lipgloss.Color(theme.Primary)).
 		Bold(true)
 
-	s.Subtitle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.Secondary))
-
 	s.Label = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Warning)).
 		Bold(true)
@@ -119,10 +119,6 @@ func NewStyles(theme Theme) *Styles {
 
 	s.Muted = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.ForegroundMuted))
-
-	s.Bold = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.ForegroundBold)).
-		Bold(true)
 
 	// Status styles
 	s.Success = lipgloss.NewStyle().

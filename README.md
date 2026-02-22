@@ -142,8 +142,7 @@ You can create your own custom themes by placing JSON theme files in the themes 
      "spinner": "#bb9af7",
      "tab_active_foreground": "#ffffff",
      "tab_active_background": "#0088ff",
-     "tab_inactive_foreground": "#787c99",
-     "tab_inactive_background": "#1a1b26"
+     "tab_inactive_foreground": "#787c99"
    }
    ```
 
@@ -197,7 +196,8 @@ azdo-tui
 | `↑/↓` or `j/k` | Navigate up/down |
 | `pgup/pgdn` | Page up/down |
 | `enter` | View details / expand |
-| `esc` | Go back |
+| `f` | Search / filter |
+| `esc` | Go back / dismiss search |
 | `?` | Toggle help modal |
 | `t` | Select theme |
 | `q` or `Ctrl+C` | Quit |

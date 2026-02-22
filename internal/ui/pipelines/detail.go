@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,9 +18,30 @@ import (
 
 // TimelineNode represents a node in the timeline tree with its children
 type TimelineNode struct {
-	Record   azdevops.TimelineRecord
-	Children []*TimelineNode
-	Depth    int
+	Record      azdevops.TimelineRecord
+	Children    []*TimelineNode
+	VisualDepth int // depth in the displayed tree (skips filtered types)
+	Expanded    bool
+}
+
+// HasChildren returns true if the node has visible (non-filtered) child nodes.
+// Looks through filtered intermediary types (Phase, Checkpoint) to find real children.
+func (n *TimelineNode) HasChildren() bool {
+	return hasVisibleChildren(n.Children)
+}
+
+// hasVisibleChildren checks if any nodes in the slice (or their filtered descendants) are visible
+func hasVisibleChildren(nodes []*TimelineNode) bool {
+	for _, child := range nodes {
+		if !isFilteredRecordType(child.Record.Type) {
+			return true
+		}
+		// Look through filtered nodes for visible grandchildren
+		if hasVisibleChildren(child.Children) {
+			return true
+		}
+	}
+	return false
 }
 
 // DetailModel represents the pipeline detail view showing timeline
@@ -29,7 +51,11 @@ type DetailModel struct {
 	timeline      *azdevops.Timeline
 	tree          []*TimelineNode
 	flatItems     []*TimelineNode
+	allFlatItems  []*TimelineNode // unfiltered items, set when searching
 	selectedIndex int
+	searching     bool
+	searchInput   textinput.Model
+	searchQuery   string
 	loading       bool
 	err           error
 	width         int
@@ -50,10 +76,15 @@ func NewDetailModelWithStyles(client *azdevops.Client, run azdevops.PipelineRun,
 	spinner := components.NewLoadingIndicator(s)
 	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
 
+	ti := textinput.New()
+	ti.Prompt = "/ "
+	ti.CharLimit = 100
+
 	return &DetailModel{
 		client:        client,
 		run:           run,
 		selectedIndex: 0,
+		searchInput:   ti,
 		spinner:       spinner,
 		styles:        s,
 	}
@@ -99,15 +130,15 @@ func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// Account for header (2 lines) and footer (2 lines)
-	viewportHeight := height - 6
+	// Account for header lines rendered in View(): title (1) + separator (1) = 2
+	headerLines := 2
+	viewportHeight := height - headerLines
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}
 
 	if !m.ready {
 		m.viewport = viewport.New(width, viewportHeight)
-		m.viewport.HighPerformanceRendering = false
 		m.ready = true
 	} else {
 		m.viewport.Width = width
@@ -136,6 +167,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.searching {
+			return m.updateSearch(msg)
+		}
+
 		switch msg.String() {
 		case "up", "k":
 			m.MoveUp()
@@ -145,6 +180,11 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.PageUp()
 		case "pgdown":
 			m.PageDown()
+		case "f":
+			if len(m.flatItems) > 0 {
+				m.EnterSearch()
+				return m, m.searchInput.Focus()
+			}
 		case "r":
 			m.loading = true
 			m.spinner.SetVisible(true)
@@ -166,15 +206,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 
 // View renders the detail view
 func (m *DetailModel) View() string {
-	// Helper to wrap content with proper height so footer stays at bottom
+	// Helper to wrap content with consistent width
 	wrapContent := func(content string) string {
-		availableHeight := m.height - 4 // Account for header and footer
-		if availableHeight < 1 {
-			availableHeight = 10
-		}
 		contentStyle := lipgloss.NewStyle().
-			Width(m.width).
-			Height(availableHeight)
+			Width(m.width)
 		return contentStyle.Render(content)
 	}
 
@@ -203,17 +238,37 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.viewport.View())
 	}
 
+	if m.searching {
+		total := 0
+		if m.allFlatItems != nil {
+			total = len(m.allFlatItems)
+		}
+		matched := len(m.flatItems)
+		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("%s %d/%d", m.searchInput.View(), matched, total))
+	}
+
 	return wrapContent(sb.String())
 }
 
 // renderRecord renders a single timeline record
 func (m *DetailModel) renderRecord(node *TimelineNode, selected bool) string {
-	indent := indentForType(node.Record.Type)
+	indent := strings.Repeat("  ", node.VisualDepth)
 	icon := recordIconWithStyles(node.Record.State, node.Record.Result, m.styles)
 	duration := formatRecordDuration(node.Record.StartTime, node.Record.FinishTime)
 
-	// Format: [indent][icon] [name] [duration]
-	line := fmt.Sprintf("%s%s %s", indent, icon, node.Record.Name)
+	// Expand/collapse indicator for nodes with children
+	expandIndicator := " "
+	if node.HasChildren() {
+		if node.Expanded {
+			expandIndicator = "▼"
+		} else {
+			expandIndicator = "▶"
+		}
+	}
+
+	// Format: [indent][icon] [expand] [name] [duration]
+	line := fmt.Sprintf("%s%s %s %s", indent, icon, expandIndicator, node.Record.Name)
 
 	if duration != "-" {
 		line = fmt.Sprintf("%s (%s)", line, duration)
@@ -259,6 +314,45 @@ func (m *DetailModel) MoveDown() {
 		m.selectedIndex++
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
+	}
+}
+
+// ToggleExpand toggles the expanded state of the selected node
+func (m *DetailModel) ToggleExpand() {
+	selected := m.SelectedItem()
+	if selected == nil || !selected.HasChildren() {
+		return
+	}
+
+	selected.Expanded = !selected.Expanded
+
+	// When expanding, also expand any filtered intermediary children
+	// so visible descendants are reachable
+	if selected.Expanded {
+		expandFilteredChildren(selected.Children)
+	}
+
+	m.flatItems = flattenTree(m.tree)
+
+	// Clamp selection if it's out of bounds after collapse
+	if m.selectedIndex >= len(m.flatItems) {
+		m.selectedIndex = len(m.flatItems) - 1
+	}
+
+	if m.ready {
+		m.updateViewportContent()
+		m.ensureSelectedVisible()
+	}
+}
+
+// expandFilteredChildren auto-expands filtered intermediary nodes so their
+// visible children become reachable when the parent is expanded
+func expandFilteredChildren(nodes []*TimelineNode) {
+	for _, node := range nodes {
+		if isFilteredRecordType(node.Record.Type) {
+			node.Expanded = true
+			expandFilteredChildren(node.Children)
+		}
 	}
 }
 
@@ -341,7 +435,7 @@ func (m *DetailModel) GetRun() azdevops.PipelineRun {
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓/pgup/pgdn", Description: "navigate"},
-		{Key: "enter", Description: "view logs"},
+		{Key: "enter", Description: "expand/collapse or view logs"},
 	}
 }
 
@@ -352,6 +446,122 @@ func (m *DetailModel) GetScrollPercent() float64 {
 		return 0
 	}
 	return float64(m.selectedIndex) / float64(len(m.flatItems)-1) * 100
+}
+
+func (m *DetailModel) updateSearch(msg tea.KeyMsg) (*DetailModel, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.ExitSearch()
+		return m, nil
+	case "enter":
+		// Don't pass enter to text input; let parent handle expand/collapse
+		return m, nil
+	case "up", "k":
+		m.MoveUp()
+		return m, nil
+	case "down", "j":
+		m.MoveDown()
+		return m, nil
+	case "pgup":
+		m.PageUp()
+		return m, nil
+	case "pgdown":
+		m.PageDown()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+
+	newQuery := m.searchInput.Value()
+	if newQuery != m.searchQuery {
+		m.searchQuery = newQuery
+		m.applySearchFilter()
+	}
+
+	return m, cmd
+}
+
+// IsSearching returns whether the detail view is in search mode.
+func (m *DetailModel) IsSearching() bool {
+	return m.searching
+}
+
+// EnterSearch enters search mode.
+func (m *DetailModel) EnterSearch() {
+	m.searching = true
+	m.searchInput.SetValue("")
+	m.searchQuery = ""
+	// Store all tree nodes (regardless of expand state) for total count display
+	m.allFlatItems = allTreeNodes(m.tree)
+	m.searchInput.Focus()
+}
+
+// ExitSearch exits search mode and restores all items from the tree.
+func (m *DetailModel) ExitSearch() {
+	m.searching = false
+	m.searchQuery = ""
+	m.searchInput.Blur()
+	// Restore from tree (respects current expand/collapse state)
+	m.flatItems = flattenTree(m.tree)
+	m.allFlatItems = nil
+	m.selectedIndex = 0
+	if m.ready {
+		m.updateViewportContent()
+	}
+}
+
+// SetSearchQuery sets the search query and filters items.
+func (m *DetailModel) SetSearchQuery(query string) {
+	m.searchQuery = query
+	m.searchInput.SetValue(query)
+	m.applySearchFilter()
+}
+
+// searchBarHeight is the vertical space consumed by the search bar.
+const detailSearchBarHeight = 1
+
+// allTreeNodes returns every node in the tree regardless of expand/collapse state,
+// skipping filtered intermediary types (Phase, Checkpoint).
+func allTreeNodes(roots []*TimelineNode) []*TimelineNode {
+	var result []*TimelineNode
+	var walk func(nodes []*TimelineNode, depth int)
+	walk = func(nodes []*TimelineNode, depth int) {
+		for _, node := range nodes {
+			if isFilteredRecordType(node.Record.Type) {
+				walk(node.Children, depth)
+				continue
+			}
+			node.VisualDepth = depth
+			result = append(result, node)
+			walk(node.Children, depth+1)
+		}
+	}
+	walk(roots, 0)
+	return result
+}
+
+func (m *DetailModel) applySearchFilter() {
+	if m.searchQuery == "" {
+		// Restore from tree (respects expand/collapse state)
+		m.flatItems = flattenTree(m.tree)
+	} else {
+		// Search ALL nodes in the tree, not just currently visible ones
+		all := allTreeNodes(m.tree)
+		q := strings.ToLower(m.searchQuery)
+		filtered := make([]*TimelineNode, 0, len(all))
+		for _, node := range all {
+			if strings.Contains(strings.ToLower(node.Record.Name), q) {
+				filtered = append(filtered, node)
+			}
+		}
+		m.flatItems = filtered
+	}
+
+	m.selectedIndex = 0
+	if m.ready {
+		m.updateViewportContent()
+	}
 }
 
 // Messages
@@ -370,11 +580,6 @@ func (m *DetailModel) fetchTimeline() tea.Cmd {
 
 // Helper functions
 
-// recordIcon returns an icon based on state and result using default styles
-func recordIcon(state, result string) string {
-	return recordIconWithStyles(state, result, styles.DefaultStyles())
-}
-
 // recordIconWithStyles returns an icon based on state and result using provided styles
 func recordIconWithStyles(state, result string, s *styles.Styles) string {
 	stateLower := strings.ToLower(state)
@@ -388,27 +593,13 @@ func recordIconWithStyles(state, result string, s *styles.Styles) string {
 	case resultLower == "succeeded":
 		return s.Success.Render("✓")
 	case resultLower == "succeededwithissues":
-		return s.Warning.Render("⚠")
+		return s.Warning.Render("◐")
 	case resultLower == "failed":
 		return s.Error.Render("✗")
 	case resultLower == "canceled", resultLower == "skipped", resultLower == "abandoned":
 		return s.Muted.Render("○")
 	default:
 		return s.Muted.Render("○")
-	}
-}
-
-// indentForType returns the indentation string for a record type
-func indentForType(recordType string) string {
-	switch recordType {
-	case "Stage":
-		return ""
-	case "Job", "Phase":
-		return "  "
-	case "Task":
-		return "    "
-	default:
-		return "    "
 	}
 }
 
@@ -439,6 +630,13 @@ func formatDuration(d time.Duration) string {
 	mins := int(d.Minutes()) % 60
 	secs := int(d.Seconds()) % 60
 	return fmt.Sprintf("%dh%dm%ds", hours, mins, secs)
+}
+
+// isFilteredRecordType returns true for record types that are intermediary
+// Azure DevOps nodes (Phase, Checkpoint) which should be hidden in the UI.
+// These nodes are kept in the tree for structure but skipped during display.
+func isFilteredRecordType(recordType string) bool {
+	return recordType == "Phase" || recordType == "Checkpoint"
 }
 
 // buildTimelineTree builds a tree structure from flat timeline records
@@ -479,9 +677,6 @@ func buildTimelineTree(timeline *azdevops.Timeline) []*TimelineNode {
 		sortNodesRecursive(root)
 	}
 
-	// Set depth for all nodes
-	setDepth(roots, 0)
-
 	return roots
 }
 
@@ -500,28 +695,34 @@ func sortNodesRecursive(node *TimelineNode) {
 	}
 }
 
-// setDepth sets the depth for all nodes in the tree
-func setDepth(nodes []*TimelineNode, depth int) {
-	for _, node := range nodes {
-		node.Depth = depth
-		setDepth(node.Children, depth+1)
-	}
-}
-
-// flattenTree converts a tree to a flat list (depth-first)
+// flattenTree converts a tree to a flat list (depth-first), skipping filtered types
 func flattenTree(roots []*TimelineNode) []*TimelineNode {
 	var result []*TimelineNode
 	for _, root := range roots {
-		result = append(result, flattenNode(root)...)
+		result = append(result, flattenNodeAtDepth(root, 0)...)
 	}
 	return result
 }
 
-// flattenNode flattens a single node and its children
-func flattenNode(node *TimelineNode) []*TimelineNode {
+// flattenNodeAtDepth flattens a node and its visible children, tracking visual depth.
+// Filtered types (Phase, Checkpoint) are skipped but their children are included
+// at the same visual depth (as if they were direct children of the grandparent).
+func flattenNodeAtDepth(node *TimelineNode, visualDepth int) []*TimelineNode {
+	// Skip filtered types — always recurse into their children at same depth
+	if isFilteredRecordType(node.Record.Type) {
+		var result []*TimelineNode
+		for _, child := range node.Children {
+			result = append(result, flattenNodeAtDepth(child, visualDepth)...)
+		}
+		return result
+	}
+
+	node.VisualDepth = visualDepth
 	result := []*TimelineNode{node}
-	for _, child := range node.Children {
-		result = append(result, flattenNode(child)...)
+	if node.Expanded {
+		for _, child := range node.Children {
+			result = append(result, flattenNodeAtDepth(child, visualDepth+1)...)
+		}
 	}
 	return result
 }

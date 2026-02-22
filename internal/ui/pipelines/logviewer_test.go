@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestLogViewerModel_ViewportUsesFullAvailableHeight(t *testing.T) {
+	// The height passed to SetSize is already the content area (after app-level
+	// borders and footer are subtracted). The log viewer should only subtract
+	// its own header lines (title + separator = 2 lines).
+	model := NewLogViewerModel(nil, 123, 5, "npm install")
+
+	height := 30
+	model.SetSize(80, height)
+
+	// Set enough content to fill viewport
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, "Log line "+string(rune('A'+i%26)))
+	}
+	model.SetContent(strings.Join(lines, "\n"))
+
+	view := model.View()
+	outputLines := strings.Split(view, "\n")
+
+	// Total output lines should equal the height passed in.
+	if len(outputLines) != height {
+		t.Errorf("Log viewer output has %d lines, want %d (height passed to SetSize). "+
+			"Viewport is not using full available height.", len(outputLines), height)
+	}
+}
+
 func TestLogViewerModel_SetContent(t *testing.T) {
 	model := NewLogViewerModel(nil, 123, 5, "Test Task")
 

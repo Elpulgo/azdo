@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -36,6 +37,23 @@ const (
 	TabWorkItems               // Work Items tab (key '3')
 )
 
+// Layout constants for the bordered content area.
+const (
+	// borderWidth is the horizontal space consumed by box side borders (left + right).
+	borderWidth = 2
+
+	// boxBorderRows is the vertical space consumed by the box border itself:
+	// top border (1) + bottom border (1) = 2.
+	boxBorderRows = 2
+
+	// tabBarRows is the vertical space consumed by the bordered tab bar:
+	// top border (1) + tab row (1) + bottom border (1) = 3.
+	tabBarRows = 3
+
+	// contextBarJoinNewline accounts for the newline joining context bar and status bar.
+	contextBarJoinNewline = 1
+)
+
 // Model is the root application model for the TUI
 type Model struct {
 	client           *azdevops.Client
@@ -51,9 +69,10 @@ type Model struct {
 	themePicker      components.ThemePicker
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
-	width            int
-	height           int
-	err              error
+	width      int
+	height     int
+	footerRows int
+	err        error
 }
 
 // NewModel creates a new application model with the given Azure DevOps client and config
@@ -190,6 +209,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When a child view is in search mode, skip all global shortcuts
+		// so keystrokes reach the search input instead.
+		if m.isActiveViewSearching() {
+			break
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.poller.Stop()
@@ -204,10 +229,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "1":
 			m.activeTab = TabPipelines
+			m.resizeActiveViewIfNeeded()
 			return m, nil
 		case "2":
 			if m.activeTab != TabPullRequests {
 				m.activeTab = TabPullRequests
+				m.resizeActiveViewIfNeeded()
 				// Trigger initial load when switching to PR tab
 				return m, m.pullRequestsView.Init()
 			}
@@ -215,6 +242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "3":
 			if m.activeTab != TabWorkItems {
 				m.activeTab = TabWorkItems
+				m.resizeActiveViewIfNeeded()
 				// Trigger initial load when switching to Work Items tab
 				return m, m.workItemsView.Init()
 			}
@@ -224,12 +252,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.activeTab {
 			case TabPipelines:
 				m.activeTab = TabWorkItems
+				m.resizeActiveViewIfNeeded()
 				return m, m.workItemsView.Init()
 			case TabPullRequests:
 				m.activeTab = TabPipelines
+				m.resizeActiveViewIfNeeded()
 				return m, nil
 			case TabWorkItems:
 				m.activeTab = TabPullRequests
+				m.resizeActiveViewIfNeeded()
 				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
@@ -238,12 +269,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.activeTab {
 			case TabPipelines:
 				m.activeTab = TabPullRequests
+				m.resizeActiveViewIfNeeded()
 				return m, m.pullRequestsView.Init()
 			case TabPullRequests:
 				m.activeTab = TabWorkItems
+				m.resizeActiveViewIfNeeded()
 				return m, m.workItemsView.Init()
 			case TabWorkItems:
 				m.activeTab = TabPipelines
+				m.resizeActiveViewIfNeeded()
 				return m, nil
 			}
 			return m, nil
@@ -297,11 +331,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
 
 		// CRITICAL: Set window size for all views before they try to render
+		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
 		if m.width > 0 && m.height > 0 {
-			sizeMsg := tea.WindowSizeMsg{Width: m.width, Height: m.height}
-			m.pipelinesView, _ = m.pipelinesView.Update(sizeMsg)
-			m.pullRequestsView, _ = m.pullRequestsView.Update(sizeMsg)
-			m.workItemsView, _ = m.workItemsView.Update(sizeMsg)
+			m.footerRows = m.measureFooterHeight()
+			contentSize := m.contentViewSize()
+			m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
+			m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
+			m.workItemsView, _ = m.workItemsView.Update(contentSize)
 		}
 
 		// Re-initialize views to fetch data again
@@ -322,10 +358,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contextBar.SetWidth(msg.Width)
 		m.helpModal.SetSize(msg.Width, msg.Height)
 		m.themePicker.SetSize(msg.Width, msg.Height)
-		// Pass size to all views so they're ready when switched to
-		m.pipelinesView, _ = m.pipelinesView.Update(msg)
-		m.pullRequestsView, _ = m.pullRequestsView.Update(msg)
-		m.workItemsView, _ = m.workItemsView.Update(msg)
+		// Measure actual footer height at current width
+		m.footerRows = m.measureFooterHeight()
+		contentSize := m.contentViewSize()
+		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
+		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
+		m.workItemsView, _ = m.workItemsView.Update(contentSize)
+		return m, nil
 
 	case polling.TickMsg:
 		// Time to poll for updates
@@ -370,13 +409,101 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
+	// Re-measure footer height after view update — if the view switched
+	// between list/detail mode, the footer height changes and we need to
+	// resize the active view to match.
+	m.resizeActiveViewIfNeeded()
+
 	return m, tea.Batch(cmds...)
+}
+
+// isActiveViewSearching returns true if the currently active tab's view is in search mode.
+func (m Model) isActiveViewSearching() bool {
+	switch m.activeTab {
+	case TabPipelines:
+		return m.pipelinesView.IsSearching()
+	case TabPullRequests:
+		return m.pullRequestsView.IsSearching()
+	case TabWorkItems:
+		return m.workItemsView.IsSearching()
+	}
+	return false
 }
 
 // Note: Tab styles are now provided by the styles package and accessed via m.styles
 
-// renderTabBar renders the tab header
-func (m Model) renderTabBar() string {
+// contentViewSize returns the size available for content views inside the
+// bordered content box. It subtracts all chrome from the terminal height:
+// the tab bar (with its own border), the content box borders, and the footer.
+//
+// The "\n" joins between tabBar, contentBox, and footer in View() do not
+// consume extra lines — they only prevent adjacent components from merging
+// on the same line (e.g. "╰──╯╭──╮" becoming one line instead of two).
+func (m Model) contentViewSize() tea.WindowSizeMsg {
+	const minContentWidth = 20
+	const minContentHeight = 5
+
+	width := m.width - borderWidth
+	if width < minContentWidth {
+		width = minContentWidth
+	}
+
+	height := m.height - tabBarRows - boxBorderRows - m.footerRows
+	if height < minContentHeight {
+		height = minContentHeight
+	}
+
+	return tea.WindowSizeMsg{
+		Width:  width,
+		Height: height,
+	}
+}
+
+// resizeActiveViewIfNeeded re-measures the footer height and resizes
+// the active content view if it changed (e.g., after tab switch or
+// view mode change).
+func (m *Model) resizeActiveViewIfNeeded() {
+	newFooterRows := m.measureFooterHeight()
+	if newFooterRows == m.footerRows {
+		return
+	}
+	m.footerRows = newFooterRows
+	contentSize := m.contentViewSize()
+	switch m.activeTab {
+	case TabPullRequests:
+		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
+	case TabWorkItems:
+		m.workItemsView, _ = m.workItemsView.Update(contentSize)
+	default:
+		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
+	}
+}
+
+// measureFooterHeight measures the actual footer height based on the
+// active view's context bar state. Returns the number of lines the footer
+// will occupy when rendered.
+func (m Model) measureFooterHeight() int {
+	statusRows := strings.Count(m.statusBar.View(), "\n") + 1
+
+	hasContextBar := false
+	switch m.activeTab {
+	case TabPullRequests:
+		hasContextBar = m.pullRequestsView.HasContextBar()
+	case TabWorkItems:
+		hasContextBar = m.workItemsView.HasContextBar()
+	default:
+		hasContextBar = m.pipelinesView.HasContextBar()
+	}
+
+	if hasContextBar {
+		contextRows := strings.Count(m.contextBar.View(), "\n") + 1
+		return contextRows + contextBarJoinNewline + statusRows
+	}
+	return statusRows
+}
+
+// renderTabBar renders the tab header content wrapped in its own bordered box.
+func (m Model) renderTabBar(innerWidth int) string {
 	var tab1, tab2, tab3 string
 
 	switch m.activeTab {
@@ -394,7 +521,7 @@ func (m Model) renderTabBar() string {
 		tab3 = m.styles.TabActive.Render("3: Work Items")
 	}
 
-	return m.styles.TabBar.Render(tab1+" "+tab2+" "+tab3) + "\n"
+	return m.styles.TabBar.Width(innerWidth).Render(tab1 + " " + tab2 + " " + tab3)
 }
 
 // View renders the application UI
@@ -413,8 +540,9 @@ func (m Model) View() string {
 		return m.themePicker.View()
 	}
 
-	// Render tab bar
-	tabBar := m.renderTabBar()
+	// Render tab bar in its own bordered box
+	contentSize := m.contentViewSize()
+	tabBar := m.renderTabBar(contentSize.Width)
 
 	// Render content based on active tab
 	var content string
@@ -472,5 +600,12 @@ func (m Model) View() string {
 		footer = m.statusBar.View()
 	}
 
-	return tabBar + content + "\n" + footer
+	// Render content in its own bordered box, using the same dimensions
+	// that were used to size the content views.
+	contentBox := m.styles.ContentBox.
+		Width(contentSize.Width).
+		Height(contentSize.Height).
+		Render(content)
+
+	return tabBar + "\n" + contentBox + "\n" + footer
 }

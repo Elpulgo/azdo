@@ -6,58 +6,26 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
-	"github.com/Elpulgo/azdo/internal/ui/styles"
-	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
-// ViewMode represents the current view in the pull requests UI
-type ViewMode int
+// ViewMode re-exports listview.ViewMode for backward compatibility.
+type ViewMode = listview.ViewMode
 
 const (
-	ViewList   ViewMode = iota // PR list view
-	ViewDetail                 // PR detail view with threads
+	ViewList   = listview.ViewList
+	ViewDetail = listview.ViewDetail
 )
-
-// baseStyle is used for consistent styling (no border - table handles its own)
-var baseStyle = lipgloss.NewStyle()
 
 // Model represents the pull request list view with sub-views
 type Model struct {
-	table    table.Model
-	client   *azdevops.Client
-	prs      []azdevops.PullRequest
-	loading  bool
-	err      error
-	width    int
-	height   int
-	viewMode ViewMode
-	detail   *DetailModel
-	spinner  *components.LoadingIndicator
-	styles   *styles.Styles
+	list   listview.Model[azdevops.PullRequest]
+	client *azdevops.Client
+	styles *styles.Styles
 }
-
-// Column width ratios (percentages of available width)
-const (
-	statusWidthPct  = 10 // Status column percentage
-	titleWidthPct   = 30 // Title column percentage
-	branchWidthPct  = 20 // Branch column percentage
-	authorWidthPct  = 15 // Author column percentage
-	repoWidthPct    = 15 // Repository column percentage
-	reviewsWidthPct = 10 // Reviews column percentage
-)
-
-// Minimum column widths
-const (
-	minStatusWidth  = 8
-	minTitleWidth   = 15
-	minBranchWidth  = 12
-	minAuthorWidth  = 10
-	minRepoWidth    = 10
-	minReviewsWidth = 6
-)
 
 // NewModel creates a new pull request list model with default styles
 func NewModel(client *azdevops.Client) Model {
@@ -66,248 +34,145 @@ func NewModel(client *azdevops.Client) Model {
 
 // NewModelWithStyles creates a new pull request list model with custom styles
 func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
-	// Start with minimum widths, will be resized on first WindowSizeMsg
-	columns := makeColumns(80)
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithFocused(true),
-		table.WithHeight(10),
-	)
-
-	ts := table.DefaultStyles()
-	ts.Header = s.TableHeader
-	ts.Cell = s.TableCell
-	ts.Selected = s.TableSelected
-	t.SetStyles(ts)
-
-	spinner := components.NewLoadingIndicator(s)
-	spinner.SetMessage("Loading pull requests...")
+	cfg := listview.Config[azdevops.PullRequest]{
+		Columns: []listview.ColumnSpec{
+			{Title: "Status", WidthPct: 10, MinWidth: 8},
+			{Title: "Title", WidthPct: 30, MinWidth: 15},
+			{Title: "Branches", WidthPct: 20, MinWidth: 12},
+			{Title: "Author", WidthPct: 15, MinWidth: 10},
+			{Title: "Repo", WidthPct: 15, MinWidth: 10},
+			{Title: "Reviews", WidthPct: 10, MinWidth: 6},
+		},
+		LoadingMessage: "Loading pull requests...",
+		EntityName:     "pull requests",
+		MinWidth:       70,
+		ToRows:         prsToRows,
+		Fetch: func() tea.Cmd {
+			return fetchPullRequests(client)
+		},
+		EnterDetail: func(item azdevops.PullRequest, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
+			d := NewDetailModelWithStyles(client, item, st)
+			d.SetSize(w, h)
+			return &detailAdapter{d}, d.Init()
+		},
+		FilterFunc: filterPR,
+	}
 
 	return Model{
-		table:    t,
-		client:   client,
-		prs:      []azdevops.PullRequest{},
-		viewMode: ViewList,
-		spinner:  spinner,
-		styles:   s,
-	}
-}
-
-// makeColumns creates table columns sized for the given width
-func makeColumns(width int) []table.Column {
-	// Account for table structure:
-	// - 6 chars for column separators (between 6 columns)
-	// - Some padding for cell content
-	// Total overhead: ~10 chars
-	available := width - 10
-	if available < 70 {
-		available = 70 // Minimum usable width
-	}
-
-	// Calculate widths based on percentages
-	statusW := max(minStatusWidth, available*statusWidthPct/100)
-	titleW := max(minTitleWidth, available*titleWidthPct/100)
-	branchW := max(minBranchWidth, available*branchWidthPct/100)
-	authorW := max(minAuthorWidth, available*authorWidthPct/100)
-	repoW := max(minRepoWidth, available*repoWidthPct/100)
-	reviewsW := max(minReviewsWidth, available*reviewsWidthPct/100)
-
-	return []table.Column{
-		{Title: "Status", Width: statusW},
-		{Title: "Title", Width: titleW},
-		{Title: "Branches", Width: branchW},
-		{Title: "Author", Width: authorW},
-		{Title: "Repo", Width: repoW},
-		{Title: "Reviews", Width: reviewsW},
+		list:   listview.New(cfg, s),
+		client: client,
+		styles: s,
 	}
 }
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	m.spinner.SetVisible(true)
-	return tea.Batch(fetchPullRequests(m.client), m.spinner.Init())
+	return m.list.Init()
 }
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	// Handle window resize for all views
-	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
-		m.width = wmsg.Width
-		m.height = wmsg.Height
-	}
-
-	// Route to the appropriate view
-	switch m.viewMode {
-	case ViewDetail:
-		return m.updateDetail(msg)
-	default:
-		return m.updateList(msg)
-	}
-}
-
-// updateList handles updates for the list view
-func (m Model) updateList(msg tea.Msg) (Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.table.SetHeight(msg.Height - 5)
-		m.table.SetColumns(makeColumns(msg.Width))
-
-	case spinner.TickMsg:
-		// Forward spinner tick messages
-		if m.loading {
-			var spinnerCmd tea.Cmd
-			m.spinner, spinnerCmd = m.spinner.Update(msg)
-			return m, spinnerCmd
-		}
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "r":
-			// Manual refresh
-			m.loading = true
-			m.spinner.SetVisible(true)
-			return m, tea.Batch(fetchPullRequests(m.client), m.spinner.Tick())
-		case "enter":
-			// Navigate to detail view
-			return m.enterDetailView()
-		}
-
 	case pullRequestsMsg:
-		m.loading = false
-		m.spinner.SetVisible(false)
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.prs = msg.prs
-		m.table.SetRows(m.prsToRows())
+		m.list = m.list.HandleFetchResult(msg.prs, msg.err)
 		return m, nil
-
 	case SetPRsMsg:
-		// Direct update from polling - clear loading and error states
-		m.loading = false
-		m.spinner.SetVisible(false)
-		m.err = nil
-		m.prs = msg.PRs
-		m.table.SetRows(m.prsToRows())
+		m.list = m.list.SetItems(msg.PRs)
 		return m, nil
-	}
-
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-// updateDetail handles updates for the detail view
-func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
-	if m.detail == nil {
-		m.viewMode = ViewList
-		return m, nil
-	}
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		// Detail model handles its own sizing
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			// Go back to list
-			m.viewMode = ViewList
-			m.detail = nil
-			return m, nil
-		}
 	}
 
 	var cmd tea.Cmd
-	m.detail, cmd = m.detail.Update(msg)
+	m.list, cmd = m.list.Update(msg)
 	return m, cmd
-}
-
-// enterDetailView navigates to the detail view for the selected PR
-func (m Model) enterDetailView() (Model, tea.Cmd) {
-	idx := m.table.Cursor()
-	if idx < 0 || idx >= len(m.prs) {
-		return m, nil
-	}
-
-	selectedPR := m.prs[idx]
-	m.detail = NewDetailModelWithStyles(m.client, selectedPR, m.styles)
-	m.detail.SetSize(m.width, m.height)
-	m.viewMode = ViewDetail
-
-	return m, m.detail.Init()
 }
 
 // View renders the view
 func (m Model) View() string {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.View()
-		}
-	}
-
-	// Default: list view
-	return m.viewList()
+	return m.list.View()
 }
 
-// viewList renders the pull request list view
-func (m Model) viewList() string {
-	var content string
+// GetViewMode returns the current view mode (for testing)
+func (m Model) GetViewMode() ViewMode {
+	return m.list.GetViewMode()
+}
 
-	if m.err != nil {
-		content = fmt.Sprintf("Error loading pull requests: %v\n\nPress r to retry, q to quit", m.err)
-	} else if m.loading {
-		content = m.spinner.View() + "\n\nPress q to quit"
-	} else if len(m.prs) == 0 {
-		content = "No pull requests found.\n\nPress r to refresh, q to quit"
-	} else {
-		return baseStyle.Render(m.table.View())
-	}
+// GetContextItems returns context bar items for the current view
+func (m Model) GetContextItems() []components.ContextItem {
+	return m.list.GetContextItems()
+}
 
-	// For non-table content, fill available height
-	availableHeight := m.height - 5 // Account for tab bar and status bar
-	if availableHeight < 1 {
-		availableHeight = 10
-	}
+// GetScrollPercent returns the scroll percentage for the current view
+func (m Model) GetScrollPercent() float64 {
+	return m.list.GetScrollPercent()
+}
 
-	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(availableHeight)
+// GetStatusMessage returns the status message for the current view
+func (m Model) GetStatusMessage() string {
+	return m.list.GetStatusMessage()
+}
 
-	return contentStyle.Render(content)
+// HasContextBar returns true if the current view should show a context bar
+func (m Model) HasContextBar() bool {
+	return m.list.HasContextBar()
+}
+
+// IsSearching returns true if the list is currently in search/filter mode.
+func (m Model) IsSearching() bool {
+	return m.list.IsSearching()
+}
+
+// detailAdapter wraps *DetailModel to satisfy listview.DetailView
+type detailAdapter struct {
+	model *DetailModel
+}
+
+func (a *detailAdapter) Update(msg tea.Msg) (listview.DetailView, tea.Cmd) {
+	var cmd tea.Cmd
+	a.model, cmd = a.model.Update(msg)
+	return a, cmd
+}
+
+func (a *detailAdapter) View() string {
+	return a.model.View()
+}
+
+func (a *detailAdapter) SetSize(width, height int) {
+	a.model.SetSize(width, height)
+}
+
+func (a *detailAdapter) GetContextItems() []components.ContextItem {
+	return a.model.GetContextItems()
+}
+
+func (a *detailAdapter) GetScrollPercent() float64 {
+	return a.model.GetScrollPercent()
+}
+
+func (a *detailAdapter) GetStatusMessage() string {
+	return a.model.GetStatusMessage()
 }
 
 // prsToRows converts pull requests to table rows
-func (m Model) prsToRows() []table.Row {
-	rows := make([]table.Row, len(m.prs))
-	for i, pr := range m.prs {
+func prsToRows(items []azdevops.PullRequest, s *styles.Styles) []table.Row {
+	rows := make([]table.Row, len(items))
+	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
 		rows[i] = table.Row{
-			statusIconWithStyles(pr.Status, pr.IsDraft, m.styles),
+			statusIconWithStyles(pr.Status, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
 			pr.CreatedBy.DisplayName,
 			pr.Repository.Name,
-			voteIconWithStyles(pr.Reviewers, m.styles),
+			voteIconWithStyles(pr.Reviewers, s),
 		}
 	}
 	return rows
-}
-
-// statusIcon returns a colored status icon for the pull request using default styles
-func statusIcon(status string, isDraft bool) string {
-	return statusIconWithStyles(status, isDraft, styles.DefaultStyles())
 }
 
 // statusIconWithStyles returns a colored status icon using the provided styles
 func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string {
 	statusLower := strings.ToLower(status)
 
-	// Draft takes precedence
 	if isDraft {
 		return s.Warning.Render("◐ Draft")
 	}
@@ -324,18 +189,12 @@ func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string 
 	}
 }
 
-// voteIcon returns a summary icon for reviewer votes using default styles
-func voteIcon(reviewers []azdevops.Reviewer) string {
-	return voteIconWithStyles(reviewers, styles.DefaultStyles())
-}
-
 // voteIconWithStyles returns a summary icon for reviewer votes using provided styles
 func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string {
 	if len(reviewers) == 0 {
 		return s.Muted.Render("-")
 	}
 
-	// Find the most significant vote (rejected > waiting > approved with suggestions > approved > no vote)
 	hasRejected := false
 	hasWaiting := false
 	hasApprovedWithSuggestions := false
@@ -375,49 +234,17 @@ func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string 
 	}
 }
 
-// GetViewMode returns the current view mode (for testing)
-func (m Model) GetViewMode() ViewMode {
-	return m.viewMode
-}
-
-// GetContextItems returns context bar items for the current view
-func (m Model) GetContextItems() []components.ContextItem {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.GetContextItems()
-		}
+// filterPR returns true if the pull request matches the search query.
+func filterPR(pr azdevops.PullRequest, query string) bool {
+	if query == "" {
+		return true
 	}
-	// List view has no specific context items (uses main footer)
-	return nil
-}
-
-// GetScrollPercent returns the scroll percentage for the current view
-func (m Model) GetScrollPercent() float64 {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.GetScrollPercent()
-		}
-	}
-	return 0
-}
-
-// GetStatusMessage returns the status message for the current view
-func (m Model) GetStatusMessage() string {
-	switch m.viewMode {
-	case ViewDetail:
-		if m.detail != nil {
-			return m.detail.GetStatusMessage()
-		}
-	}
-	return ""
-}
-
-// HasContextBar returns true if the current view should show a context bar
-// PR detail view no longer shows context bar - scroll % is shown in status bar instead
-func (m Model) HasContextBar() bool {
-	return false
+	q := strings.ToLower(query)
+	return strings.Contains(strings.ToLower(pr.Title), q) ||
+		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
+		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||
+		strings.Contains(strings.ToLower(pr.SourceRefName), q) ||
+		strings.Contains(strings.ToLower(pr.TargetRefName), q)
 }
 
 // Messages
