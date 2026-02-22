@@ -23,39 +23,64 @@ const (
 // Model represents the pull request list view with sub-views
 type Model struct {
 	list   listview.Model[azdevops.PullRequest]
-	client *azdevops.Client
+	client *azdevops.MultiClient
 	styles *styles.Styles
 }
 
 // NewModel creates a new pull request list model with default styles
-func NewModel(client *azdevops.Client) Model {
+func NewModel(client *azdevops.MultiClient) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
 // NewModelWithStyles creates a new pull request list model with custom styles
-func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
+func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
+	isMulti := client != nil && client.IsMultiProject()
+
+	columns := []listview.ColumnSpec{
+		{Title: "Status", WidthPct: 10, MinWidth: 8},
+		{Title: "Title", WidthPct: 30, MinWidth: 15},
+		{Title: "Branches", WidthPct: 20, MinWidth: 12},
+		{Title: "Author", WidthPct: 15, MinWidth: 10},
+		{Title: "Repo", WidthPct: 15, MinWidth: 10},
+		{Title: "Reviews", WidthPct: 10, MinWidth: 6},
+	}
+
+	if isMulti {
+		columns = append(
+			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}},
+			columns...,
+		)
+	}
+
+	toRows := prsToRows
+	if isMulti {
+		toRows = prsToRowsMulti
+	}
+
+	filterFunc := filterPR
+	if isMulti {
+		filterFunc = filterPRMulti
+	}
+
 	cfg := listview.Config[azdevops.PullRequest]{
-		Columns: []listview.ColumnSpec{
-			{Title: "Status", WidthPct: 10, MinWidth: 8},
-			{Title: "Title", WidthPct: 30, MinWidth: 15},
-			{Title: "Branches", WidthPct: 20, MinWidth: 12},
-			{Title: "Author", WidthPct: 15, MinWidth: 10},
-			{Title: "Repo", WidthPct: 15, MinWidth: 10},
-			{Title: "Reviews", WidthPct: 10, MinWidth: 6},
-		},
+		Columns:        columns,
 		LoadingMessage: "Loading pull requests...",
 		EntityName:     "pull requests",
 		MinWidth:       70,
-		ToRows:         prsToRows,
+		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
-			return fetchPullRequests(client)
+			return fetchPullRequestsMulti(client)
 		},
 		EnterDetail: func(item azdevops.PullRequest, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			d := NewDetailModelWithStyles(client, item, st)
+			var projectClient *azdevops.Client
+			if client != nil {
+				projectClient = client.ClientFor(item.ProjectName)
+			}
+			d := NewDetailModelWithStyles(projectClient, item, st)
 			d.SetSize(w, h)
 			return &detailAdapter{d}, d.Init()
 		},
-		FilterFunc: filterPR,
+		FilterFunc: filterFunc,
 	}
 
 	return Model{
@@ -234,6 +259,24 @@ func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string 
 	}
 }
 
+// prsToRowsMulti converts pull requests to table rows with a Project column.
+func prsToRowsMulti(items []azdevops.PullRequest, s *styles.Styles) []table.Row {
+	rows := make([]table.Row, len(items))
+	for i, pr := range items {
+		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
+		rows[i] = table.Row{
+			pr.ProjectName,
+			statusIconWithStyles(pr.Status, pr.IsDraft, s),
+			pr.Title,
+			branchInfo,
+			pr.CreatedBy.DisplayName,
+			pr.Repository.Name,
+			voteIconWithStyles(pr.Reviewers, s),
+		}
+	}
+	return rows
+}
+
 // filterPR returns true if the pull request matches the search query.
 func filterPR(pr azdevops.PullRequest, query string) bool {
 	if query == "" {
@@ -241,6 +284,20 @@ func filterPR(pr azdevops.PullRequest, query string) bool {
 	}
 	q := strings.ToLower(query)
 	return strings.Contains(strings.ToLower(pr.Title), q) ||
+		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
+		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||
+		strings.Contains(strings.ToLower(pr.SourceRefName), q) ||
+		strings.Contains(strings.ToLower(pr.TargetRefName), q)
+}
+
+// filterPRMulti matches PR fields including project name.
+func filterPRMulti(pr azdevops.PullRequest, query string) bool {
+	if query == "" {
+		return true
+	}
+	q := strings.ToLower(query)
+	return strings.Contains(strings.ToLower(pr.ProjectName), q) ||
+		strings.Contains(strings.ToLower(pr.Title), q) ||
 		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
 		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||
 		strings.Contains(strings.ToLower(pr.SourceRefName), q) ||
@@ -259,8 +316,8 @@ type SetPRsMsg struct {
 	PRs []azdevops.PullRequest
 }
 
-// fetchPullRequests fetches pull requests from Azure DevOps
-func fetchPullRequests(client *azdevops.Client) tea.Cmd {
+// fetchPullRequestsMulti fetches pull requests from all projects via MultiClient.
+func fetchPullRequestsMulti(client *azdevops.MultiClient) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return pullRequestsMsg{prs: nil, err: nil}

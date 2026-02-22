@@ -10,10 +10,11 @@ import (
 
 // WorkItem represents a work item in Azure DevOps
 type WorkItem struct {
-	ID     int            `json:"id"`
-	Rev    int            `json:"rev"`
-	Fields WorkItemFields `json:"fields"`
-	URL    string         `json:"url"`
+	ID          int            `json:"id"`
+	Rev         int            `json:"rev"`
+	Fields      WorkItemFields `json:"fields"`
+	URL         string         `json:"url"`
+	ProjectName string         `json:"-"` // Set by MultiClient, not from API
 }
 
 // WorkItemFields represents the fields of a work item

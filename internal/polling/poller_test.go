@@ -22,6 +22,9 @@ func (m *MockClient) ListPipelineRuns(top int) ([]azdevops.PipelineRun, error) {
 	return m.Runs, m.Err
 }
 
+// Compile-time check: MultiClient must satisfy PipelineClient interface.
+var _ PipelineClient = (*azdevops.MultiClient)(nil)
+
 func TestPoller_New(t *testing.T) {
 	client := &MockClient{}
 	p := NewPoller(client, 30*time.Second)

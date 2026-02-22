@@ -14,7 +14,8 @@ func TestConfigSave(t *testing.T) {
 
 	// Create initial config
 	initialConfig := `organization: testorg
-project: testproject
+projects:
+  - testproject
 polling_interval: 60
 theme: dark
 `
@@ -54,8 +55,8 @@ theme: dark
 	if reloadedCfg.Organization != "testorg" {
 		t.Errorf("Expected organization 'testorg', got '%s'", reloadedCfg.Organization)
 	}
-	if reloadedCfg.Project != "testproject" {
-		t.Errorf("Expected project 'testproject', got '%s'", reloadedCfg.Project)
+	if len(reloadedCfg.Projects) != 1 || reloadedCfg.Projects[0] != "testproject" {
+		t.Errorf("Expected projects ['testproject'], got %v", reloadedCfg.Projects)
 	}
 	if reloadedCfg.PollingInterval != 60 {
 		t.Errorf("Expected polling_interval 60, got %d", reloadedCfg.PollingInterval)
@@ -70,7 +71,8 @@ func TestConfigUpdateTheme(t *testing.T) {
 
 	// Create initial config
 	initialConfig := `organization: testorg
-project: testproject
+projects:
+  - testproject
 polling_interval: 60
 theme: dark
 `
@@ -108,7 +110,8 @@ func TestConfigSaveValidation(t *testing.T) {
 
 	// Create initial config
 	initialConfig := `organization: testorg
-project: testproject
+projects:
+  - testproject
 polling_interval: 60
 theme: dark
 `
@@ -150,7 +153,8 @@ func TestConfigUpdateThemeValidation(t *testing.T) {
 
 	// Create initial config
 	initialConfig := `organization: testorg
-project: testproject
+projects:
+  - testproject
 polling_interval: 60
 theme: dark
 `

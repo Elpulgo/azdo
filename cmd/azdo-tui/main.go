@@ -26,12 +26,12 @@ func run() error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Verify organization and project are configured
+	// Verify organization and projects are configured
 	if cfg.Organization == "" {
 		return fmt.Errorf("organization not configured\nHint: Set 'organization' in ~/.config/azdo-tui/config.yaml")
 	}
-	if cfg.Project == "" {
-		return fmt.Errorf("project not configured\nHint: Set 'project' in ~/.config/azdo-tui/config.yaml")
+	if len(cfg.Projects) == 0 {
+		return fmt.Errorf("no projects configured\nHint: Set 'projects' list in ~/.config/azdo-tui/config.yaml")
 	}
 
 	// Get PAT from keyring
@@ -49,8 +49,8 @@ func run() error {
 		}
 	}
 
-	// Create Azure DevOps client
-	client, err := azdevops.NewClient(cfg.Organization, cfg.Project, pat)
+	// Create multi-project Azure DevOps client
+	client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat)
 	if err != nil {
 		return fmt.Errorf("failed to create Azure DevOps client: %w", err)
 	}

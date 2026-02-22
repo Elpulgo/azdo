@@ -24,7 +24,7 @@ const (
 // Model represents the pipeline list view with sub-views
 type Model struct {
 	list      listview.Model[azdevops.PipelineRun]
-	client    *azdevops.Client
+	client    *azdevops.MultiClient
 	logViewer *LogViewerModel
 	viewMode  ViewMode
 	width     int
@@ -33,39 +33,62 @@ type Model struct {
 }
 
 // NewModel creates a new pipeline list model with default styles
-func NewModel(client *azdevops.Client) Model {
+func NewModel(client *azdevops.MultiClient) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
 // NewModelWithStyles creates a new pipeline list model with custom styles
-func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
+func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
+	isMulti := client != nil && client.IsMultiProject()
+
+	columns := []listview.ColumnSpec{
+		{Title: "Status", WidthPct: 10, MinWidth: 10},
+		{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
+		{Title: "Branch", WidthPct: 20, MinWidth: 10},
+		{Title: "Build", WidthPct: 24, MinWidth: 8},
+		{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
+		{Title: "Duration", WidthPct: 10, MinWidth: 8},
+	}
+
+	if isMulti {
+		columns = append(
+			[]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}},
+			columns...,
+		)
+	}
+
+	toRows := runsToRows
+	if isMulti {
+		toRows = runsToRowsMulti
+	}
+
+	filterFunc := filterPipelineRun
+	if isMulti {
+		filterFunc = filterPipelineRunMulti
+	}
+
 	cfg := listview.Config[azdevops.PipelineRun]{
-		Columns: []listview.ColumnSpec{
-			{Title: "Status", WidthPct: 10, MinWidth: 10},
-			{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
-			{Title: "Branch", WidthPct: 20, MinWidth: 10},
-			{Title: "Build", WidthPct: 24, MinWidth: 8},
-			{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
-			{Title: "Duration", WidthPct: 10, MinWidth: 8},
-		},
+		Columns:        columns,
 		LoadingMessage: "Loading pipeline runs...",
 		EntityName:     "pipeline runs",
 		MinWidth:       80,
-		ToRows:         runsToRows,
+		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
-			return fetchPipelineRuns(client)
+			return fetchPipelineRunsMulti(client)
 		},
 		EnterDetail: func(item azdevops.PipelineRun, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			d := NewDetailModelWithStyles(client, item, st)
+			var projectClient *azdevops.Client
+			if client != nil {
+				projectClient = client.ClientFor(item.Project.Name)
+			}
+			d := NewDetailModelWithStyles(projectClient, item, st)
 			d.SetSize(w, h)
 			return &detailAdapter{d}, d.Init()
 		},
 		HasContextBar: func(mode listview.ViewMode) bool {
-			// Pipeline always shows context bar in detail mode
-			// ViewLogs is handled separately by the wrapper
 			return mode == listview.ViewDetail
 		},
-		FilterFunc: filterPipelineRun,
+		FilterFunc: filterFunc,
 	}
 
 	return Model{
@@ -189,8 +212,12 @@ func (m Model) enterLogView(adapter *detailAdapter) (Model, tea.Cmd) {
 	}
 
 	run := detail.GetRun()
+	var projectClient *azdevops.Client
+	if m.client != nil {
+		projectClient = m.client.ClientFor(run.Project.Name)
+	}
 	m.logViewer = NewLogViewerModelWithStyles(
-		m.client,
+		projectClient,
 		run.ID,
 		selected.Record.Log.ID,
 		selected.Record.Name,
@@ -329,6 +356,23 @@ func statusIconWithStyles(status, result string, s *styles.Styles) string {
 	}
 }
 
+// runsToRowsMulti converts pipeline runs to table rows with a Project column.
+func runsToRowsMulti(items []azdevops.PipelineRun, s *styles.Styles) []table.Row {
+	rows := make([]table.Row, len(items))
+	for i, run := range items {
+		rows[i] = table.Row{
+			run.Project.Name,
+			statusIconWithStyles(run.Status, run.Result, s),
+			run.Definition.Name,
+			run.BranchShortName(),
+			run.BuildNumber,
+			run.Timestamp(),
+			run.Duration(),
+		}
+	}
+	return rows
+}
+
 // filterPipelineRun returns true if the pipeline run matches the search query.
 func filterPipelineRun(run azdevops.PipelineRun, query string) bool {
 	if query == "" {
@@ -336,6 +380,18 @@ func filterPipelineRun(run azdevops.PipelineRun, query string) bool {
 	}
 	q := strings.ToLower(query)
 	return strings.Contains(strings.ToLower(run.Definition.Name), q) ||
+		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
+		strings.Contains(strings.ToLower(run.BuildNumber), q)
+}
+
+// filterPipelineRunMulti matches pipeline run fields including project name.
+func filterPipelineRunMulti(run azdevops.PipelineRun, query string) bool {
+	if query == "" {
+		return true
+	}
+	q := strings.ToLower(query)
+	return strings.Contains(strings.ToLower(run.Project.Name), q) ||
+		strings.Contains(strings.ToLower(run.Definition.Name), q) ||
 		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
 		strings.Contains(strings.ToLower(run.BuildNumber), q)
 }
@@ -352,9 +408,12 @@ type SetRunsMsg struct {
 	Runs []azdevops.PipelineRun
 }
 
-// fetchPipelineRuns fetches pipeline runs from Azure DevOps
-func fetchPipelineRuns(client *azdevops.Client) tea.Cmd {
+// fetchPipelineRunsMulti fetches pipeline runs from all projects via MultiClient.
+func fetchPipelineRunsMulti(client *azdevops.MultiClient) tea.Cmd {
 	return func() tea.Msg {
+		if client == nil {
+			return pipelineRunsMsg{runs: nil, err: nil}
+		}
 		runs, err := client.ListPipelineRuns(30)
 		return pipelineRunsMsg{runs: runs, err: err}
 	}
