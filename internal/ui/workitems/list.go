@@ -41,8 +41,8 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 	columns := []listview.ColumnSpec{
 		{Title: "Type", WidthPct: 10, MinWidth: 8},
 		{Title: "ID", WidthPct: 8, MinWidth: 6},
-		{Title: "Title", WidthPct: 32, MinWidth: 15},
-		{Title: "State", WidthPct: 18, MinWidth: 16},
+		{Title: "Title", WidthPct: 40, MinWidth: 25},
+		{Title: "State", WidthPct: 10, MinWidth: 10},
 		{Title: "Prio", WidthPct: 6, MinWidth: 4},
 		{Title: "Assigned", WidthPct: 26, MinWidth: 10},
 	}
@@ -53,6 +53,8 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 			columns...,
 		)
 	}
+
+	listview.NormalizeWidths(columns)
 
 	toRows := workItemsToRows
 	if isMulti {
@@ -68,7 +70,7 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		Columns:        columns,
 		LoadingMessage: "Loading work items...",
 		EntityName:     "work items",
-		MinWidth:       70,
+		MinWidth:       50,
 		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
 			return fetchWorkItemsMulti(client)

@@ -52,6 +52,8 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		)
 	}
 
+	listview.NormalizeWidths(columns)
+
 	toRows := prsToRows
 	if isMulti {
 		toRows = prsToRowsMulti
@@ -66,7 +68,7 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		Columns:        columns,
 		LoadingMessage: "Loading pull requests...",
 		EntityName:     "pull requests",
-		MinWidth:       70,
+		MinWidth:       50,
 		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
 			return fetchPullRequestsMulti(client)

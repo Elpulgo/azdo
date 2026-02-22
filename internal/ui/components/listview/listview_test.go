@@ -446,6 +446,63 @@ func TestMakeColumns(t *testing.T) {
 	}
 }
 
+func TestMakeColumns_MinWidthClampDoesNotOverflow(t *testing.T) {
+	// 7 columns simulating multi-project pipelines at a narrow terminal.
+	// Several columns have MinWidth larger than their percentage-based width.
+	// The total should never exceed available space.
+	specs := []ColumnSpec{
+		{Title: "Project", WidthPct: 11, MinWidth: 10},
+		{Title: "Status", WidthPct: 9, MinWidth: 10},
+		{Title: "Pipeline", WidthPct: 11, MinWidth: 15},
+		{Title: "Branch", WidthPct: 19, MinWidth: 10},
+		{Title: "Build", WidthPct: 23, MinWidth: 8},
+		{Title: "Timestamp", WidthPct: 14, MinWidth: 16},
+		{Title: "Duration", WidthPct: 13, MinWidth: 8},
+	}
+
+	// width=94 simulates ~96 col terminal minus border.
+	// available = 94 - 7*2 = 80
+	columns := makeColumns(specs, 94, 50)
+
+	total := 0
+	for _, col := range columns {
+		total += col.Width
+	}
+	available := 94 - len(specs)*cellPadding
+
+	if total > available {
+		t.Errorf("total column widths %d exceeds available %d", total, available)
+		for _, col := range columns {
+			t.Logf("  %s: %d", col.Title, col.Width)
+		}
+	}
+}
+
+func TestMakeColumns_WideTerminalUnchanged(t *testing.T) {
+	// At a wide terminal, MinWidth should never kick in,
+	// so behavior should be identical to the old implementation.
+	specs := []ColumnSpec{
+		{Title: "ID", WidthPct: 30, MinWidth: 6},
+		{Title: "Name", WidthPct: 70, MinWidth: 10},
+	}
+
+	columns := makeColumns(specs, 200, 70)
+	available := 200 - len(specs)*cellPadding
+
+	// 30% of 196 = 58, 70% of 196 = 137 → total 195 ≤ 196
+	total := 0
+	for _, col := range columns {
+		total += col.Width
+	}
+	if total > available {
+		t.Errorf("total %d exceeds available %d", total, available)
+	}
+	// ID should get ~30% of available
+	if columns[0].Width < 50 {
+		t.Errorf("ID column too narrow: %d", columns[0].Width)
+	}
+}
+
 func TestDetailView_ReceivesSize(t *testing.T) {
 	s := styles.DefaultStyles()
 	cfg := testConfig()

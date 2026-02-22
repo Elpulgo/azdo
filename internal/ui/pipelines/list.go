@@ -57,6 +57,8 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		)
 	}
 
+	listview.NormalizeWidths(columns)
+
 	toRows := runsToRows
 	if isMulti {
 		toRows = runsToRowsMulti
@@ -71,7 +73,7 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		Columns:        columns,
 		LoadingMessage: "Loading pipeline runs...",
 		EntityName:     "pipeline runs",
-		MinWidth:       80,
+		MinWidth:       50,
 		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
 			return fetchPipelineRunsMulti(client)
