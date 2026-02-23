@@ -3,6 +3,8 @@ package azdevops
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -265,6 +267,201 @@ func escapeJSONString(s string) string {
 	// Use json.Marshal to properly escape the string
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// Iteration represents a single iteration (push) on a pull request
+type Iteration struct {
+	ID          int    `json:"id"`
+	Description string `json:"description"`
+}
+
+// IterationsResponse represents the API response for listing iterations
+type IterationsResponse struct {
+	Count int         `json:"count"`
+	Value []Iteration `json:"value"`
+}
+
+// IterationChange represents a file changed in a PR iteration
+type IterationChange struct {
+	ChangeID     int        `json:"changeId"`
+	Item         ChangeItem `json:"item"`
+	ChangeType   string     `json:"changeType"` // "add", "edit", "delete", "rename"
+	OriginalPath string     `json:"originalPath,omitempty"`
+}
+
+// ChangeItem represents the item details in an iteration change
+type ChangeItem struct {
+	ObjectID string `json:"objectId"`
+	Path     string `json:"path"`
+}
+
+// IterationChangesResponse represents the API response for iteration changes
+type IterationChangesResponse struct {
+	ChangeEntries []IterationChange `json:"changeEntries"`
+}
+
+// GetPRIterations retrieves iterations for a pull request
+// repositoryID: the ID of the repository
+// pullRequestID: the ID of the pull request
+func (c *Client) GetPRIterations(repositoryID string, pullRequestID int) ([]Iteration, error) {
+	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/iterations?api-version=7.1", repositoryID, pullRequestID)
+
+	body, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get PR iterations: %w", err)
+	}
+
+	var response IterationsResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PR iterations response: %w", err)
+	}
+
+	return response.Value, nil
+}
+
+// GetPRIterationChanges retrieves files changed in a specific PR iteration
+// repositoryID: the ID of the repository
+// pullRequestID: the ID of the pull request
+// iterationID: the iteration to get changes for
+func (c *Client) GetPRIterationChanges(repositoryID string, pullRequestID int, iterationID int) ([]IterationChange, error) {
+	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/iterations/%d/changes?api-version=7.1&$compareTo=0",
+		repositoryID, pullRequestID, iterationID)
+
+	body, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get PR iteration changes: %w", err)
+	}
+
+	var response IterationChangesResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PR iteration changes response: %w", err)
+	}
+
+	return response.ChangeEntries, nil
+}
+
+// GetFileContent retrieves raw file content at a specific branch version
+// repositoryID: the ID of the repository
+// filePath: the path of the file in the repository
+// branchName: the short branch name (e.g., "main", not "refs/heads/main")
+func (c *Client) GetFileContent(repositoryID string, filePath string, branchName string) (string, error) {
+	path := fmt.Sprintf("/git/repositories/%s/items?path=%s&versionType=branch&version=%s&api-version=7.1",
+		repositoryID, filePath, branchName)
+
+	// Use doRequest directly to set Accept header for raw text
+	url := c.baseURL + path
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Accept", "text/plain")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", formatHTTPError(resp.StatusCode, respBody)
+	}
+
+	return string(respBody), nil
+}
+
+// ReplyToThread adds a reply comment to an existing thread
+// repositoryID: the ID of the repository
+// pullRequestID: the ID of the pull request
+// threadID: the ID of the thread to reply to
+// content: the reply text
+func (c *Client) ReplyToThread(repositoryID string, pullRequestID int, threadID int, content string) (*Comment, error) {
+	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/threads/%d/comments?api-version=7.1",
+		repositoryID, pullRequestID, threadID)
+
+	payload := fmt.Sprintf(`{"content": %s, "parentCommentId": 1, "commentType": "text"}`,
+		escapeJSONString(content))
+
+	body, err := c.post(path, strings.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to reply to thread: %w", err)
+	}
+
+	var comment Comment
+	err = json.Unmarshal(body, &comment)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse reply response: %w", err)
+	}
+
+	return &comment, nil
+}
+
+// UpdateThreadStatus updates the status of a thread (e.g., resolve it)
+// repositoryID: the ID of the repository
+// pullRequestID: the ID of the pull request
+// threadID: the ID of the thread to update
+// status: the new status ("active", "fixed", "wontFix", "closed", "pending")
+func (c *Client) UpdateThreadStatus(repositoryID string, pullRequestID int, threadID int, status string) error {
+	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/threads/%d?api-version=7.1",
+		repositoryID, pullRequestID, threadID)
+
+	payload := fmt.Sprintf(`{"status": %s}`, escapeJSONString(status))
+
+	_, err := c.patch(path, strings.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to update thread status: %w", err)
+	}
+
+	return nil
+}
+
+// AddPRCodeComment creates a new comment thread attached to a specific file and line
+// repositoryID: the ID of the repository
+// pullRequestID: the ID of the pull request
+// filePath: the path of the file to comment on
+// line: the line number in the new file to attach the comment to
+// content: the comment text
+func (c *Client) AddPRCodeComment(repositoryID string, pullRequestID int, filePath string, line int, content string) (*Thread, error) {
+	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/threads?api-version=7.1",
+		repositoryID, pullRequestID)
+
+	payload := fmt.Sprintf(`{
+		"comments": [
+			{
+				"parentCommentId": 0,
+				"content": %s,
+				"commentType": "text"
+			}
+		],
+		"status": "active",
+		"threadContext": {
+			"filePath": %s,
+			"rightFileStart": {"line": %d, "offset": 1},
+			"rightFileEnd": {"line": %d, "offset": 1}
+		}
+	}`, escapeJSONString(content), escapeJSONString(filePath), line, line)
+
+	body, err := c.post(path, strings.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to add code comment: %w", err)
+	}
+
+	var thread Thread
+	err = json.Unmarshal(body, &thread)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse code comment response: %w", err)
+	}
+
+	return &thread, nil
 }
 
 // FilterSystemThreads filters out threads that are system-generated comments

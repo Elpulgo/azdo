@@ -12,19 +12,24 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ViewMode re-exports listview.ViewMode for backward compatibility.
-type ViewMode = listview.ViewMode
+// ViewMode represents the current view in the pull requests UI
+type ViewMode int
 
 const (
-	ViewList   = listview.ViewList
-	ViewDetail = listview.ViewDetail
+	ViewList   ViewMode = iota // PR list view
+	ViewDetail                 // PR detail view (description + threads)
+	ViewDiff                   // Diff view (changed files + file diffs)
 )
 
 // Model represents the pull request list view with sub-views
 type Model struct {
-	list   listview.Model[azdevops.PullRequest]
-	client *azdevops.MultiClient
-	styles *styles.Styles
+	list     listview.Model[azdevops.PullRequest]
+	client   *azdevops.MultiClient
+	diffView *DiffModel
+	viewMode ViewMode
+	width    int
+	height   int
+	styles   *styles.Styles
 }
 
 // NewModel creates a new pull request list model with default styles
@@ -82,13 +87,17 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 			d.SetSize(w, h)
 			return &detailAdapter{d}, d.Init()
 		},
+		HasContextBar: func(mode listview.ViewMode) bool {
+			return mode == listview.ViewDetail
+		},
 		FilterFunc: filterFunc,
 	}
 
 	return Model{
-		list:   listview.New(cfg, s),
-		client: client,
-		styles: s,
+		list:     listview.New(cfg, s),
+		client:   client,
+		viewMode: ViewList,
+		styles:   s,
 	}
 }
 
@@ -99,6 +108,13 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	// Track window size
+	if wmsg, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = wmsg.Width
+		m.height = wmsg.Height
+	}
+
+	// Handle domain-specific messages
 	switch msg := msg.(type) {
 	case pullRequestsMsg:
 		m.list = m.list.HandleFetchResult(msg.prs, msg.err)
@@ -108,38 +124,124 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Route by view mode
+	switch m.viewMode {
+	case ViewDiff:
+		return m.updateDiffView(msg)
+	case ViewDetail:
+		return m.updateDetail(msg)
+	default:
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		// Sync viewMode from generic model
+		if m.list.GetViewMode() == listview.ViewDetail {
+			m.viewMode = ViewDetail
+		} else {
+			m.viewMode = ViewList
+		}
+		return m, cmd
+	}
+}
+
+// updateDetail intercepts detail-mode messages for the 'd' key to enter diff view
+func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case enterDiffViewMsg:
+		// Get the detail adapter to access threads and PR
+		if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+			detail := adapter.model
+			pr := detail.GetPR()
+			threads := detail.GetThreads()
+			var projectClient *azdevops.Client
+			if m.client != nil {
+				projectClient = m.client.ClientFor(pr.ProjectName)
+			}
+			m.diffView = NewDiffModel(projectClient, pr, threads, m.styles)
+			m.diffView.SetSize(m.width, m.height)
+			m.viewMode = ViewDiff
+			return m, m.diffView.Init()
+		}
+		return m, nil
+
+	case tea.KeyMsg:
+		if msg.String() == "esc" {
+			// Delegate to generic model which handles esc -> list
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			m.viewMode = ViewList
+			return m, cmd
+		}
+	}
+
+	// Delegate to generic model
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
 }
 
+// updateDiffView handles messages when in diff view mode
+func (m Model) updateDiffView(msg tea.Msg) (Model, tea.Cmd) {
+	if m.diffView == nil {
+		m.viewMode = ViewDetail
+		return m, nil
+	}
+
+	switch msg := msg.(type) {
+	case exitDiffViewMsg:
+		m.viewMode = ViewDetail
+		m.diffView = nil
+		return m, nil
+	case tea.WindowSizeMsg:
+		m.diffView.SetSize(msg.Width, msg.Height)
+	}
+
+	var cmd tea.Cmd
+	m.diffView, cmd = m.diffView.Update(msg)
+	return m, cmd
+}
+
 // View renders the view
 func (m Model) View() string {
+	if m.viewMode == ViewDiff && m.diffView != nil {
+		return m.diffView.View()
+	}
 	return m.list.View()
 }
 
 // GetViewMode returns the current view mode (for testing)
 func (m Model) GetViewMode() ViewMode {
-	return m.list.GetViewMode()
+	return m.viewMode
 }
 
 // GetContextItems returns context bar items for the current view
 func (m Model) GetContextItems() []components.ContextItem {
+	if m.viewMode == ViewDiff && m.diffView != nil {
+		return m.diffView.GetContextItems()
+	}
 	return m.list.GetContextItems()
 }
 
 // GetScrollPercent returns the scroll percentage for the current view
 func (m Model) GetScrollPercent() float64 {
+	if m.viewMode == ViewDiff && m.diffView != nil {
+		return m.diffView.GetScrollPercent()
+	}
 	return m.list.GetScrollPercent()
 }
 
 // GetStatusMessage returns the status message for the current view
 func (m Model) GetStatusMessage() string {
+	if m.viewMode == ViewDiff && m.diffView != nil {
+		return m.diffView.GetStatusMessage()
+	}
 	return m.list.GetStatusMessage()
 }
 
 // HasContextBar returns true if the current view should show a context bar
 func (m Model) HasContextBar() bool {
+	if m.viewMode == ViewDiff {
+		return true
+	}
 	return m.list.HasContextBar()
 }
 

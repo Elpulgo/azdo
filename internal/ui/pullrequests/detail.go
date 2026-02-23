@@ -83,6 +83,8 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.PageUp()
 		case "pgdown":
 			m.PageDown()
+		case "d":
+			return m, func() tea.Msg { return enterDiffViewMsg{} }
 		case "r":
 			m.loading = true
 			m.spinner.SetVisible(true)
@@ -509,9 +511,15 @@ func (m *DetailModel) SelectedThread() *azdevops.Thread {
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓", Description: "navigate"},
+		{Key: "d", Description: "diff"},
 		{Key: "r", Description: "refresh"},
 		{Key: "esc", Description: "back"},
 	}
+}
+
+// GetThreads returns the current threads (for passing to DiffModel)
+func (m *DetailModel) GetThreads() []azdevops.Thread {
+	return m.threads
 }
 
 // GetScrollPercent returns the scroll percentage based on viewport position

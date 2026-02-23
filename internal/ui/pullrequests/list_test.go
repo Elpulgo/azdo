@@ -430,7 +430,7 @@ func TestHasContextBar(t *testing.T) {
 		t.Error("List view should not have context bar")
 	}
 
-	// PR detail view also doesn't have context bar
+	// PR detail view should have context bar (shows diff, navigate, etc.)
 	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
 			ID:            123,
@@ -444,8 +444,8 @@ func TestHasContextBar(t *testing.T) {
 	})
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if model.HasContextBar() {
-		t.Error("Detail view should not have context bar (scroll % is in status bar)")
+	if !model.HasContextBar() {
+		t.Error("Detail view should have context bar")
 	}
 }
 

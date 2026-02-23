@@ -103,6 +103,11 @@ func (c *Client) put(path string, body io.Reader) ([]byte, error) {
 	return c.doRequest("PUT", path, body)
 }
 
+// patch performs a PATCH request to the Azure DevOps API
+func (c *Client) patch(path string, body io.Reader) ([]byte, error) {
+	return c.doRequest("PATCH", path, body)
+}
+
 // post performs a POST request to the Azure DevOps API
 func (c *Client) post(path string, body io.Reader) ([]byte, error) {
 	return c.doRequest("POST", path, body)
