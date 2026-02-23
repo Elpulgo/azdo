@@ -25,39 +25,66 @@ const (
 // Model represents the work items list view with sub-views
 type Model struct {
 	list   listview.Model[azdevops.WorkItem]
-	client *azdevops.Client
+	client *azdevops.MultiClient
 	styles *styles.Styles
 }
 
 // NewModel creates a new work items list model with default styles
-func NewModel(client *azdevops.Client) Model {
+func NewModel(client *azdevops.MultiClient) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
 // NewModelWithStyles creates a new work items list model with custom styles
-func NewModelWithStyles(client *azdevops.Client, s *styles.Styles) Model {
+func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
+	isMulti := client != nil && client.IsMultiProject()
+
+	columns := []listview.ColumnSpec{
+		{Title: "Type", WidthPct: 10, MinWidth: 8},
+		{Title: "ID", WidthPct: 8, MinWidth: 6},
+		{Title: "Title", WidthPct: 40, MinWidth: 25},
+		{Title: "State", WidthPct: 10, MinWidth: 10},
+		{Title: "Prio", WidthPct: 6, MinWidth: 4},
+		{Title: "Assigned", WidthPct: 26, MinWidth: 10},
+	}
+
+	if isMulti {
+		columns = append(
+			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 8}},
+			columns...,
+		)
+	}
+
+	listview.NormalizeWidths(columns)
+
+	toRows := workItemsToRows
+	if isMulti {
+		toRows = workItemsToRowsMulti
+	}
+
+	filterFunc := filterWorkItem
+	if isMulti {
+		filterFunc = filterWorkItemMulti
+	}
+
 	cfg := listview.Config[azdevops.WorkItem]{
-		Columns: []listview.ColumnSpec{
-			{Title: "Type", WidthPct: 10, MinWidth: 8},
-			{Title: "ID", WidthPct: 8, MinWidth: 6},
-			{Title: "Title", WidthPct: 32, MinWidth: 15},
-			{Title: "State", WidthPct: 18, MinWidth: 16},
-			{Title: "Prio", WidthPct: 6, MinWidth: 4},
-			{Title: "Assigned", WidthPct: 26, MinWidth: 10},
-		},
+		Columns:        columns,
 		LoadingMessage: "Loading work items...",
 		EntityName:     "work items",
-		MinWidth:       70,
-		ToRows:         workItemsToRows,
+		MinWidth:       50,
+		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
-			return fetchWorkItems(client)
+			return fetchWorkItemsMulti(client)
 		},
 		EnterDetail: func(item azdevops.WorkItem, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			d := NewDetailModelWithStyles(client, item, st)
+			var projectClient *azdevops.Client
+			if client != nil {
+				projectClient = client.ClientFor(item.ProjectName)
+			}
+			d := NewDetailModelWithStyles(projectClient, item, st)
 			d.SetSize(w, h)
 			return &detailAdapter{d}, nil
 		},
-		FilterFunc: filterWorkItem,
+		FilterFunc: filterFunc,
 	}
 
 	return Model{
@@ -170,6 +197,23 @@ func workItemsToRows(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
 	return rows
 }
 
+// workItemsToRowsMulti converts work items to table rows with a Project column.
+func workItemsToRowsMulti(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
+	rows := make([]table.Row, len(items))
+	for i, wi := range items {
+		rows[i] = table.Row{
+			wi.ProjectName,
+			typeIconWithStyles(wi.Fields.WorkItemType, s),
+			strconv.Itoa(wi.ID),
+			wi.Fields.Title,
+			stateTextWithStyles(wi.Fields.State, s),
+			priorityTextWithStyles(wi.Fields.Priority, s),
+			wi.AssignedToName(),
+		}
+	}
+	return rows
+}
+
 // filterWorkItem returns true if the work item matches the search query.
 func filterWorkItem(wi azdevops.WorkItem, query string) bool {
 	if query == "" {
@@ -190,6 +234,17 @@ func filterWorkItem(wi azdevops.WorkItem, query string) bool {
 	return false
 }
 
+// filterWorkItemMulti matches work item fields including project name.
+func filterWorkItemMulti(wi azdevops.WorkItem, query string) bool {
+	if query == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(wi.ProjectName), strings.ToLower(query)) {
+		return true
+	}
+	return filterWorkItem(wi, query)
+}
+
 // Messages
 
 type workItemsMsg struct {
@@ -202,8 +257,8 @@ type SetWorkItemsMsg struct {
 	WorkItems []azdevops.WorkItem
 }
 
-// fetchWorkItems fetches work items from Azure DevOps
-func fetchWorkItems(client *azdevops.Client) tea.Cmd {
+// fetchWorkItemsMulti fetches work items from all projects via MultiClient.
+func fetchWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return workItemsMsg{workItems: nil, err: nil}

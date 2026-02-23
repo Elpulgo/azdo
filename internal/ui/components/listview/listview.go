@@ -73,6 +73,26 @@ type Model[T any] struct {
 	config        Config[T]
 }
 
+func NormalizeWidths(cols []ColumnSpec) {
+    total := 0
+    for _, c := range cols {
+        total += c.WidthPct
+    }
+    if total == 0 {
+        return
+    }
+
+    assigned := 0
+    for i := range cols {
+        if i == len(cols)-1 {
+            cols[i].WidthPct = 100 - assigned // absorb rounding remainder
+        } else {
+            cols[i].WidthPct = cols[i].WidthPct * 100 / total
+            assigned += cols[i].WidthPct
+        }
+    }
+}
+
 // New creates a new generic list model.
 func New[T any](cfg Config[T], s *styles.Styles) Model[T] {
 	minW := cfg.MinWidth
@@ -436,6 +456,8 @@ func (m Model[T]) Detail() DetailView {
 const cellPadding = 2
 
 // makeColumns creates table columns from specs, sized for the given width.
+// When MinWidth clamps cause the total to exceed available space, the
+// non-clamped columns are proportionally shrunk to compensate.
 func makeColumns(specs []ColumnSpec, width, minWidth int) []table.Column {
 	// Subtract cell padding per column so the total rendered width fits
 	available := width - len(specs)*cellPadding
@@ -443,13 +465,63 @@ func makeColumns(specs []ColumnSpec, width, minWidth int) []table.Column {
 		available = minWidth
 	}
 
-	columns := make([]table.Column, len(specs))
+	widths := make([]int, len(specs))
+	clamped := make([]bool, len(specs))
+
+	// First pass: compute percentage-based widths, clamp to MinWidth
 	for i, spec := range specs {
 		w := available * spec.WidthPct / 100
 		if w < spec.MinWidth {
 			w = spec.MinWidth
+			clamped[i] = true
 		}
-		columns[i] = table.Column{Title: spec.Title, Width: w}
+		widths[i] = w
+	}
+
+	// Second pass: if total exceeds available, shrink non-clamped columns
+	total := 0
+	for _, w := range widths {
+		total += w
+	}
+
+	if total > available {
+		overflow := total - available
+		// Sum of non-clamped column widths (the budget we can shrink from)
+		flexTotal := 0
+		for i, w := range widths {
+			if !clamped[i] {
+				flexTotal += w
+			}
+		}
+
+		if flexTotal > 0 {
+			// Shrink each flexible column proportionally
+			shrunk := 0
+			lastFlex := -1
+			for i := range widths {
+				if !clamped[i] {
+					lastFlex = i
+				}
+			}
+			for i := range widths {
+				if !clamped[i] {
+					reduction := overflow * widths[i] / flexTotal
+					if i == lastFlex {
+						reduction = overflow - shrunk // absorb rounding remainder
+					}
+					widths[i] -= reduction
+					if widths[i] < 1 {
+						widths[i] = 1
+					}
+					shrunk += reduction
+				}
+			}
+		}
+	}
+
+	columns := make([]table.Column, len(specs))
+	for i, spec := range specs {
+		columns[i] = table.Column{Title: spec.Title, Width: widths[i]}
 	}
 	return columns
 }

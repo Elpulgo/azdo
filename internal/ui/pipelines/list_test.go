@@ -453,3 +453,48 @@ func TestMakeColumnsHasSixColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestRunsToRowsMulti_IncludesProjectColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+	items := []azdevops.PipelineRun{
+		{
+			ID:           1,
+			BuildNumber:  "20240210.1",
+			Status:       "completed",
+			Result:       "succeeded",
+			SourceBranch: "refs/heads/main",
+			QueueTime:    time.Now(),
+			Definition:   azdevops.PipelineDefinition{Name: "CI"},
+			Project:      azdevops.Project{Name: "alpha"},
+		},
+	}
+
+	rows := runsToRowsMulti(items, s)
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+
+	row := rows[0]
+	if len(row) != 7 {
+		t.Fatalf("Expected 7 columns (with Project), got %d", len(row))
+	}
+	if row[0] != "alpha" {
+		t.Errorf("Project column = %q, want 'alpha'", row[0])
+	}
+}
+
+func TestFilterPipelineRunMulti_MatchesProjectName(t *testing.T) {
+	run := azdevops.PipelineRun{
+		BuildNumber:  "20240210.1",
+		SourceBranch: "refs/heads/main",
+		Definition:   azdevops.PipelineDefinition{Name: "CI"},
+		Project:      azdevops.Project{Name: "alpha"},
+	}
+
+	if !filterPipelineRunMulti(run, "alpha") {
+		t.Error("filterPipelineRunMulti should match project name 'alpha'")
+	}
+	if filterPipelineRunMulti(run, "beta") {
+		t.Error("filterPipelineRunMulti should not match 'beta'")
+	}
+}

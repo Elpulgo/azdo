@@ -10,10 +10,11 @@ import (
 
 // WorkItem represents a work item in Azure DevOps
 type WorkItem struct {
-	ID     int            `json:"id"`
-	Rev    int            `json:"rev"`
-	Fields WorkItemFields `json:"fields"`
-	URL    string         `json:"url"`
+	ID          int            `json:"id"`
+	Rev         int            `json:"rev"`
+	Fields      WorkItemFields `json:"fields"`
+	URL         string         `json:"url"`
+	ProjectName string         `json:"-"` // Set by MultiClient, not from API
 }
 
 // WorkItemFields represents the fields of a work item
@@ -43,26 +44,6 @@ type WIQLResponse struct {
 type WorkItemsResponse struct {
 	Count int        `json:"count"`
 	Value []WorkItem `json:"value"`
-}
-
-// TypeIcon returns an icon for the work item type
-func (wi *WorkItem) TypeIcon() string {
-	switch wi.Fields.WorkItemType {
-	case "Bug":
-		return "🐛"
-	case "Task":
-		return "📋"
-	case "User Story":
-		return "📖"
-	case "Feature":
-		return "⭐"
-	case "Epic":
-		return "🎯"
-	case "Issue":
-		return "❗"
-	default:
-		return "📄"
-	}
 }
 
 // StateIcon returns an icon for the work item state
@@ -171,8 +152,10 @@ func (c *Client) ListWorkItems(top int) ([]WorkItem, error) {
 	}
 
 	// WIQL query to get active work items assigned to current user
+	// @project scopes to the project in the API URL context, preventing
+	// duplicates when multiple project clients query simultaneously
 	query := `SELECT [System.Id] FROM WorkItems
-WHERE [System.AssignedTo] = @Me
+WHERE [System.TeamProject] = @project
   AND [System.State] <> 'Closed'
   AND [System.State] <> 'Removed'
 ORDER BY [System.ChangedDate] DESC`

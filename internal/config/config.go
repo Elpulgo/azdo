@@ -10,11 +10,17 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Organization    string `mapstructure:"organization"`
-	Project         string `mapstructure:"project"`
-	PollingInterval int    `mapstructure:"polling_interval"`
-	Theme           string `mapstructure:"theme"`
-	configPath      string // internal field to store config path for saving
+	Organization    string   `mapstructure:"organization"`
+	Project         string   `mapstructure:"project"`  // deprecated: use Projects
+	Projects        []string `mapstructure:"projects"`
+	PollingInterval int      `mapstructure:"polling_interval"`
+	Theme           string   `mapstructure:"theme"`
+	configPath      string   // internal field to store config path for saving
+}
+
+// IsMultiProject returns true when more than one project is configured.
+func (c *Config) IsMultiProject() bool {
+	return len(c.Projects) > 1
 }
 
 // Default configuration values
@@ -72,7 +78,7 @@ func LoadFrom(configPath string) (*Config, error) {
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			return nil, fmt.Errorf("config file not found at: %s\nPlease create a config.yaml file with 'organization' and 'project' settings", configPath)
+			return nil, fmt.Errorf("config file not found at: %s\nPlease create a config.yaml file with 'organization' and 'projects' settings", configPath)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -86,6 +92,12 @@ func LoadFrom(configPath string) (*Config, error) {
 	// Store the config path for saving
 	cfg.configPath = configPath
 
+	// Backward compatibility: migrate single "project" to "projects" list
+	if len(cfg.Projects) == 0 && cfg.Project != "" {
+		cfg.Projects = []string{cfg.Project}
+	}
+	cfg.Project = "" // clear deprecated field
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -96,6 +108,16 @@ func LoadFrom(configPath string) (*Config, error) {
 
 // Validate checks if the configuration values are valid
 func (c *Config) Validate() error {
+	if len(c.Projects) == 0 {
+		return fmt.Errorf("at least one project must be configured")
+	}
+
+	for i, p := range c.Projects {
+		if p == "" {
+			return fmt.Errorf("project name at index %d cannot be empty", i)
+		}
+	}
+
 	if c.PollingInterval <= 0 {
 		return fmt.Errorf("polling_interval must be greater than 0, got %d", c.PollingInterval)
 	}
@@ -140,7 +162,7 @@ func (c *Config) Save() error {
 
 	// Set all config values
 	v.Set("organization", c.Organization)
-	v.Set("project", c.Project)
+	v.Set("projects", c.Projects)
 	v.Set("polling_interval", c.PollingInterval)
 	v.Set("theme", c.Theme)
 

@@ -13,10 +13,12 @@ import (
 
 func TestNewModel_WithConfig(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 
@@ -30,10 +32,12 @@ func TestNewModel_WithConfig(t *testing.T) {
 
 func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "myorg",
-		Project:      "myproject",
+		Organization:    "myorg",
+		Projects:        []string{"myproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -55,10 +59,12 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 
 func TestModel_HandlesPollingTick(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 
@@ -73,10 +79,12 @@ func TestModel_HandlesPollingTick(t *testing.T) {
 
 func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -100,10 +108,12 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 
 func TestModel_HandlesPipelineRunsUpdated_Error(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -129,10 +139,11 @@ func (e *testError) Error() string { return "test error" }
 func TestModel_Init_StartsPolling(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
-		Project:         "testproject",
+		Projects:        []string{"testproject"},
 		PollingInterval: 30,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	cmd := m.Init()
@@ -145,10 +156,12 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 
 func TestModel_DefaultTab_IsPipelines(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 
@@ -159,10 +172,12 @@ func TestModel_DefaultTab_IsPipelines(t *testing.T) {
 
 func TestModel_TabSwitching_To_PullRequests(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -179,10 +194,12 @@ func TestModel_TabSwitching_To_PullRequests(t *testing.T) {
 
 func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -203,10 +220,12 @@ func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
 
 func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -226,10 +245,12 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 
 func TestModel_StatusBarShowsConfigPath(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 200
@@ -249,10 +270,12 @@ func TestModel_StatusBarShowsConfigPath(t *testing.T) {
 
 func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -269,10 +292,12 @@ func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
 
 func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -292,10 +317,12 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 
 func TestModel_View_HasBorderedTabBar(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -314,10 +341,12 @@ func TestModel_View_HasBorderedTabBar(t *testing.T) {
 
 func TestModel_View_HasBorderedContent(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -338,10 +367,12 @@ func TestModel_View_HasBorderedContent(t *testing.T) {
 
 func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100
@@ -366,10 +397,12 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 
 func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 
@@ -429,10 +462,12 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 
 func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	terminalHeight := 40
 	m := NewModel(client, cfg)
@@ -507,10 +542,12 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 
 func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	terminalHeights := []int{24, 30, 40, 50}
 	for _, termHeight := range terminalHeights {
@@ -554,10 +591,12 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 
 func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 
@@ -616,10 +655,12 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 
 func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	cfg := &config.Config{
-		Organization: "testorg",
-		Project:      "testproject",
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
 	}
-	client := &azdevops.Client{}
+	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg)
 	m.width = 100

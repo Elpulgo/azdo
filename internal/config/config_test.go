@@ -70,10 +70,12 @@ func TestLoad_WithConfigFile(t *testing.T) {
 		t.Fatalf("Failed to create config directory: %v", err)
 	}
 
-	// Write a test config file
+	// Write a test config file with projects list
 	configFile := filepath.Join(configDir, "config.yaml")
 	configContent := `organization: test-org
-project: test-project
+projects:
+  - project-alpha
+  - project-beta
 polling_interval: 120
 theme: dark
 `
@@ -96,8 +98,14 @@ theme: dark
 		t.Errorf("Expected Organization to be 'test-org', got %s", cfg.Organization)
 	}
 
-	if cfg.Project != "test-project" {
-		t.Errorf("Expected Project to be 'test-project', got %s", cfg.Project)
+	if len(cfg.Projects) != 2 {
+		t.Fatalf("Expected 2 projects, got %d", len(cfg.Projects))
+	}
+	if cfg.Projects[0] != "project-alpha" {
+		t.Errorf("Expected Projects[0] to be 'project-alpha', got %s", cfg.Projects[0])
+	}
+	if cfg.Projects[1] != "project-beta" {
+		t.Errorf("Expected Projects[1] to be 'project-beta', got %s", cfg.Projects[1])
 	}
 
 	if cfg.PollingInterval != 120 {
@@ -106,6 +114,61 @@ theme: dark
 
 	if cfg.Theme != "dark" {
 		t.Errorf("Expected Theme to be 'dark', got %s", cfg.Theme)
+	}
+}
+
+func TestLoad_BackwardCompatSingleProject(t *testing.T) {
+	// Old config format with single "project:" field should still work
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, ".config", "azdo-tui")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config directory: %v", err)
+	}
+
+	configFile := filepath.Join(configDir, "config.yaml")
+	configContent := `organization: test-org
+project: legacy-project
+polling_interval: 60
+theme: dark
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cleanup := setTestHome(t, tempDir)
+	defer cleanup()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if len(cfg.Projects) != 1 {
+		t.Fatalf("Expected 1 project from backward compat, got %d", len(cfg.Projects))
+	}
+	if cfg.Projects[0] != "legacy-project" {
+		t.Errorf("Expected Projects[0] to be 'legacy-project', got %s", cfg.Projects[0])
+	}
+}
+
+func TestConfig_IsMultiProject(t *testing.T) {
+	tests := []struct {
+		name     string
+		projects []string
+		want     bool
+	}{
+		{"single project", []string{"alpha"}, false},
+		{"multiple projects", []string{"alpha", "beta"}, true},
+		{"three projects", []string{"a", "b", "c"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Projects: tt.projects, PollingInterval: 60, Theme: "dark"}
+			if got := cfg.IsMultiProject(); got != tt.want {
+				t.Errorf("IsMultiProject() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -157,17 +220,57 @@ func TestConfig_Validate(t *testing.T) {
 			name: "valid config",
 			config: Config{
 				Organization:    "test-org",
-				Project:         "test-project",
+				Projects:        []string{"test-project"},
 				PollingInterval: 60,
 				Theme:           "light",
 			},
 			wantErr: false,
 		},
 		{
+			name: "valid config multiple projects",
+			config: Config{
+				Organization:    "test-org",
+				Projects:        []string{"alpha", "beta"},
+				PollingInterval: 60,
+				Theme:           "light",
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty projects list",
+			config: Config{
+				Organization:    "test-org",
+				Projects:        []string{},
+				PollingInterval: 60,
+				Theme:           "light",
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil projects list",
+			config: Config{
+				Organization:    "test-org",
+				Projects:        nil,
+				PollingInterval: 60,
+				Theme:           "light",
+			},
+			wantErr: true,
+		},
+		{
+			name: "project with empty name",
+			config: Config{
+				Organization:    "test-org",
+				Projects:        []string{"alpha", ""},
+				PollingInterval: 60,
+				Theme:           "light",
+			},
+			wantErr: true,
+		},
+		{
 			name: "invalid polling interval - zero",
 			config: Config{
 				Organization:    "test-org",
-				Project:         "test-project",
+				Projects:        []string{"test-project"},
 				PollingInterval: 0,
 				Theme:           "light",
 			},
@@ -177,7 +280,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "invalid polling interval - negative",
 			config: Config{
 				Organization:    "test-org",
-				Project:         "test-project",
+				Projects:        []string{"test-project"},
 				PollingInterval: -10,
 				Theme:           "light",
 			},
@@ -187,7 +290,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "empty theme",
 			config: Config{
 				Organization:    "test-org",
-				Project:         "test-project",
+				Projects:        []string{"test-project"},
 				PollingInterval: 60,
 				Theme:           "",
 			},

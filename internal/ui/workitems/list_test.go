@@ -369,3 +369,42 @@ func TestFilterWorkItem_NilAssignedTo(t *testing.T) {
 		t.Error("Expected no match on nonexistent assignee")
 	}
 }
+
+func TestWorkItemsToRowsMulti_IncludesProjectColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+	items := []azdevops.WorkItem{
+		{
+			ID:          100,
+			Fields:      azdevops.WorkItemFields{Title: "Test Item", WorkItemType: "Task", State: "Active", Priority: 2},
+			ProjectName: "alpha",
+		},
+	}
+
+	rows := workItemsToRowsMulti(items, s)
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+
+	row := rows[0]
+	if len(row) != 7 {
+		t.Fatalf("Expected 7 columns (with Project), got %d", len(row))
+	}
+	if row[0] != "alpha" {
+		t.Errorf("Project column = %q, want 'alpha'", row[0])
+	}
+}
+
+func TestFilterWorkItemMulti_MatchesProjectName(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID:          100,
+		Fields:      azdevops.WorkItemFields{Title: "Test", WorkItemType: "Task"},
+		ProjectName: "alpha",
+	}
+
+	if !filterWorkItemMulti(wi, "alpha") {
+		t.Error("filterWorkItemMulti should match project name 'alpha'")
+	}
+	if filterWorkItemMulti(wi, "beta") {
+		t.Error("filterWorkItemMulti should not match 'beta'")
+	}
+}

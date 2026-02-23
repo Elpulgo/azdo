@@ -73,6 +73,8 @@ type PipelineRun struct {
 	Definition    PipelineDefinition `json:"definition"`
 	Project       Project            `json:"project"`
 	Links         Links              `json:"_links"`
+	ProjectName   string             `json:"-"` // Set by MultiClient, not from API
+
 }
 
 // PipelineDefinition represents a pipeline definition

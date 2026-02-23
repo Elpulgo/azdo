@@ -497,3 +497,46 @@ func TestSpinnerIntegration(t *testing.T) {
 		t.Errorf("Loading view should contain loading message, got: %q", view)
 	}
 }
+
+func TestPrsToRowsMulti_IncludesProjectColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+	prs := []azdevops.PullRequest{
+		{
+			ID:            101,
+			Title:         "Test PR",
+			Status:        "active",
+			SourceRefName: "refs/heads/feature/x",
+			TargetRefName: "refs/heads/main",
+			CreatedBy:     azdevops.Identity{DisplayName: "John"},
+			Repository:    azdevops.Repository{Name: "repo"},
+			ProjectName:   "alpha",
+		},
+	}
+
+	rows := prsToRowsMulti(prs, s)
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+
+	row := rows[0]
+	if len(row) != 7 {
+		t.Fatalf("Expected 7 columns (with Project), got %d", len(row))
+	}
+	if row[0] != "alpha" {
+		t.Errorf("Project column = %q, want 'alpha'", row[0])
+	}
+}
+
+func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
+	pr := azdevops.PullRequest{
+		Title:       "Test PR",
+		ProjectName: "alpha",
+	}
+
+	if !filterPRMulti(pr, "alpha") {
+		t.Error("filterPRMulti should match project name 'alpha'")
+	}
+	if filterPRMulti(pr, "beta") {
+		t.Error("filterPRMulti should not match 'beta'")
+	}
+}

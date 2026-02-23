@@ -56,7 +56,7 @@ const (
 
 // Model is the root application model for the TUI
 type Model struct {
-	client           *azdevops.Client
+	client           *azdevops.MultiClient
 	config           *config.Config
 	styles           *styles.Styles
 	activeTab        Tab
@@ -76,7 +76,7 @@ type Model struct {
 }
 
 // NewModel creates a new application model with the given Azure DevOps client and config
-func NewModel(client *azdevops.Client, cfg *config.Config) Model {
+func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 	// Create error handler early to capture initialization errors
 	errorHandler := polling.NewErrorHandler()
 
@@ -106,7 +106,11 @@ func NewModel(client *azdevops.Client, cfg *config.Config) Model {
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
-	statusBar.SetProject(cfg.Project)
+	if cfg.IsMultiProject() {
+		statusBar.SetProject(fmt.Sprintf("%d projects", len(cfg.Projects)))
+	} else {
+		statusBar.SetProject(cfg.Projects[0])
+	}
 
 	// Set config path if available
 	if configPath, err := config.GetPath(); err == nil {
@@ -309,7 +313,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update all components with new styles
 		m.statusBar = components.NewStatusBar(m.styles)
 		m.statusBar.SetOrganization(m.config.Organization)
-		m.statusBar.SetProject(m.config.Project)
+		if m.config.IsMultiProject() {
+			m.statusBar.SetProject(fmt.Sprintf("%d projects", len(m.config.Projects)))
+		} else {
+			m.statusBar.SetProject(m.config.Projects[0])
+		}
 		m.statusBar.SetWidth(m.width)
 		if configPath, err := config.GetPath(); err == nil {
 			m.statusBar.SetConfigPath(configPath)

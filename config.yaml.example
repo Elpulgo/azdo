@@ -4,8 +4,13 @@
 # Azure DevOps organization name (required)
 organization: your-org-name
 
-# Azure DevOps project name (required)
-project: your-project-name
+# Azure DevOps project name(s) (required)
+# Single project:
+#   projects:
+#     - your-project-name
+# Multiple projects (shows combined view with "Project" column):
+projects:
+  - your-project-name
 
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
