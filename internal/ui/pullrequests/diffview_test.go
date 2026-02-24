@@ -2,7 +2,9 @@ package pullrequests
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/diff"
@@ -237,6 +239,173 @@ func TestDiffModel_BuildDiffLines_WithComments(t *testing.T) {
 	}
 	if m.diffLines[4].CommentIdx != 1 {
 		t.Errorf("diffLines[4].CommentIdx = %d, want 1", m.diffLines[4].CommentIdx)
+	}
+}
+
+func TestDiffModel_BuildDiffLines_CommentTimestamps(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+
+	commentTime := time.Date(2026, 2, 24, 14, 30, 0, 0, time.UTC)
+	replyTime := time.Date(2026, 2, 24, 15, 45, 0, 0, time.UTC)
+
+	m.currentDiff = &diff.FileDiff{
+		Path:       "/src/main.go",
+		ChangeType: "edit",
+		Hunks: []diff.Hunk{
+			{
+				OldStart: 9, OldCount: 3,
+				NewStart: 9, NewCount: 3,
+				Lines: []diff.Line{
+					{Type: diff.Context, Content: "line9", OldNum: 9, NewNum: 9},
+					{Type: diff.Context, Content: "line10", OldNum: 10, NewNum: 10},
+					{Type: diff.Context, Content: "line11", OldNum: 11, NewNum: 11},
+				},
+			},
+		},
+	}
+	m.fileThreads = map[int][]azdevops.Thread{
+		10: {
+			{
+				ID:     1,
+				Status: "active",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}, PublishedDate: commentTime},
+					{ID: 2, Content: "Will do", Author: azdevops.Identity{DisplayName: "Bob"}, ParentCommentID: 1, PublishedDate: replyTime},
+				},
+			},
+		},
+	}
+
+	m.buildDiffLines()
+
+	// Comment at index 3 should include Alice's timestamp
+	comment1 := m.diffLines[3]
+	if !strings.Contains(comment1.Content, "2026-02-24 14:30") {
+		t.Errorf("Comment content should contain timestamp, got: %s", comment1.Content)
+	}
+	if !strings.Contains(comment1.Content, "Alice") {
+		t.Errorf("Comment content should contain author, got: %s", comment1.Content)
+	}
+
+	// Reply at index 4 should include Bob's timestamp
+	comment2 := m.diffLines[4]
+	if !strings.Contains(comment2.Content, "2026-02-24 15:45") {
+		t.Errorf("Reply content should contain timestamp, got: %s", comment2.Content)
+	}
+	if !strings.Contains(comment2.Content, "Bob") {
+		t.Errorf("Reply content should contain author, got: %s", comment2.Content)
+	}
+}
+
+func TestDiffModel_BuildDiffLines_ThreadResolvedStatus(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+
+	commentTime := time.Date(2026, 2, 24, 14, 30, 0, 0, time.UTC)
+
+	m.currentDiff = &diff.FileDiff{
+		Path:       "/src/main.go",
+		ChangeType: "edit",
+		Hunks: []diff.Hunk{
+			{
+				OldStart: 9, OldCount: 3,
+				NewStart: 9, NewCount: 5,
+				Lines: []diff.Line{
+					{Type: diff.Context, Content: "line9", OldNum: 9, NewNum: 9},
+					{Type: diff.Context, Content: "line10", OldNum: 10, NewNum: 10},
+					{Type: diff.Context, Content: "line11", OldNum: 11, NewNum: 11},
+					{Type: diff.Context, Content: "line12", OldNum: 12, NewNum: 12},
+					{Type: diff.Context, Content: "line13", OldNum: 13, NewNum: 13},
+				},
+			},
+		},
+	}
+	m.fileThreads = map[int][]azdevops.Thread{
+		10: {
+			{
+				ID:     1,
+				Status: "fixed",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}, PublishedDate: commentTime},
+				},
+			},
+		},
+		12: {
+			{
+				ID:     2,
+				Status: "active",
+				Comments: []azdevops.Comment{
+					{ID: 3, Content: "Looks good", Author: azdevops.Identity{DisplayName: "Bob"}, PublishedDate: commentTime},
+				},
+			},
+		},
+	}
+
+	m.buildDiffLines()
+
+	// Find the resolved thread comment
+	var resolvedComment, activeComment *diffLine
+	for i := range m.diffLines {
+		if m.diffLines[i].Type == diffLineComment && m.diffLines[i].ThreadID == 1 {
+			resolvedComment = &m.diffLines[i]
+		}
+		if m.diffLines[i].Type == diffLineComment && m.diffLines[i].ThreadID == 2 {
+			activeComment = &m.diffLines[i]
+		}
+	}
+
+	if resolvedComment == nil {
+		t.Fatal("Expected to find resolved thread comment")
+	}
+	if activeComment == nil {
+		t.Fatal("Expected to find active thread comment")
+	}
+
+	// Resolved thread should carry the status
+	if resolvedComment.ThreadStatus != "fixed" {
+		t.Errorf("Resolved comment ThreadStatus = %q, want %q", resolvedComment.ThreadStatus, "fixed")
+	}
+
+	// Active thread should carry the status
+	if activeComment.ThreadStatus != "active" {
+		t.Errorf("Active comment ThreadStatus = %q, want %q", activeComment.ThreadStatus, "active")
+	}
+}
+
+func TestDiffModel_RenderResolvedComment(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+
+	commentTime := time.Date(2026, 2, 24, 14, 30, 0, 0, time.UTC)
+
+	// Build a resolved comment line
+	line := diffLine{
+		Type:         diffLineComment,
+		Content:      fmt.Sprintf("@[Alice] %s: Fix this", commentTime.Format("2006-01-02 15:04")),
+		ThreadID:     1,
+		CommentIdx:   0,
+		ThreadStatus: "fixed",
+	}
+
+	rendered := m.renderDiffLine(line, false)
+
+	// Resolved comment content should include a [Resolved] prefix
+	if !strings.Contains(rendered, "Resolved") {
+		t.Errorf("Resolved comment should contain 'Resolved' indicator, got: %s", rendered)
+	}
+
+	// Active comment should NOT include [Resolved] prefix
+	activeLine := diffLine{
+		Type:         diffLineComment,
+		Content:      line.Content,
+		ThreadID:     2,
+		CommentIdx:   0,
+		ThreadStatus: "active",
+	}
+	activeRendered := m.renderDiffLine(activeLine, false)
+	if strings.Contains(activeRendered, "Resolved") {
+		t.Errorf("Active comment should not contain 'Resolved' indicator, got: %s", activeRendered)
 	}
 }
 

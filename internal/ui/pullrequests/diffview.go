@@ -46,12 +46,13 @@ const (
 
 // diffLine is a flattened rendering line in the diff view
 type diffLine struct {
-	Type       diffLineType
-	Content    string
-	OldNum     int
-	NewNum     int
-	ThreadID   int // non-zero if this is a comment line
-	CommentIdx int
+	Type         diffLineType
+	Content      string
+	OldNum       int
+	NewNum       int
+	ThreadID     int // non-zero if this is a comment line
+	CommentIdx   int
+	ThreadStatus string // thread status: "active", "fixed", etc.
 }
 
 // DiffModel is the diff viewer component
@@ -577,11 +578,13 @@ func (m *DiffModel) buildDiffLines() {
 			if threads, ok := m.fileThreads[lineNum]; ok && line.Type != diff.Removed {
 				for _, thread := range threads {
 					for ci, comment := range thread.Comments {
+						timestamp := comment.PublishedDate.Format("2006-01-02 15:04")
 						m.diffLines = append(m.diffLines, diffLine{
-							Type:       diffLineComment,
-							Content:    fmt.Sprintf("@[%s]: %s", comment.Author.DisplayName, comment.Content),
-							ThreadID:   thread.ID,
-							CommentIdx: ci,
+							Type:         diffLineComment,
+							Content:      fmt.Sprintf("@[%s] (%s): %s", comment.Author.DisplayName, timestamp, comment.Content),
+							ThreadID:     thread.ID,
+							CommentIdx:   ci,
+							ThreadStatus: thread.Status,
 						})
 					}
 				}
@@ -641,10 +644,14 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 		result = gutter + m.styles.DiffRemoved.Render(" -"+line.Content)
 
 	case diffLineComment:
+		isResolved := line.ThreadStatus == "fixed" || line.ThreadStatus == "wontFix" || line.ThreadStatus == "closed"
 		var firstIndent, contIndent string
 		if line.CommentIdx > 0 {
 			firstIndent = "  └ "
 			contIndent = "    "
+		} else if isResolved {
+			firstIndent = "[Resolved] "
+			contIndent = "           "
 		} else {
 			firstIndent = ""
 			contIndent = ""
@@ -657,7 +664,11 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 				contentLines[i] = contIndent + l
 			}
 		}
-		result = m.styles.Info.Render(strings.Join(contentLines, "\n"))
+		if isResolved {
+			result = m.styles.Info.Render(strings.Join(contentLines, "\n"))
+		} else {
+			result = m.styles.Info.Render(strings.Join(contentLines, "\n"))
+		}
 
 	case diffLineFileHeader:
 		result = m.styles.DiffHeader.Render(line.Content)
