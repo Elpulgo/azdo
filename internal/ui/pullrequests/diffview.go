@@ -640,14 +640,13 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 		result = gutter + m.styles.DiffRemoved.Render(" -" + line.Content)
 
 	case diffLineComment:
-		gutter := "           " // 11 spaces matching line number gutter width
 		var firstIndent, contIndent string
 		if line.CommentIdx > 0 {
-			firstIndent = gutter + "  └ "
-			contIndent = gutter + "    "
+			firstIndent = "  └ "
+			contIndent = "    "
 		} else {
-			firstIndent = gutter + "  "
-			contIndent = gutter + "  "
+			firstIndent = ""
+			contIndent = ""
 		}
 		contentLines := strings.Split(line.Content, "\n")
 		for i, l := range contentLines {
