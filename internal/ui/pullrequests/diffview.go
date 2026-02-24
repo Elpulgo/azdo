@@ -669,16 +669,30 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 	return result
 }
 
+// visualLineForDiffLine returns the visual line number for a given diffLine index.
+// Multi-line comments occupy more than one visual line, so diffLine index != visual line.
+func (m *DiffModel) visualLineForDiffLine(idx int) int {
+	vis := 0
+	for i := 0; i < idx && i < len(m.diffLines); i++ {
+		vis++ // the line separator between entries
+		if m.diffLines[i].Type == diffLineComment {
+			vis += strings.Count(m.diffLines[i].Content, "\n")
+		}
+	}
+	return vis
+}
+
 // ensureDiffLineVisible scrolls the viewport to keep selected line visible
 func (m *DiffModel) ensureDiffLineVisible() {
 	if !m.ready || len(m.diffLines) == 0 {
 		return
 	}
 
-	if m.selectedLine < m.viewport.YOffset {
-		m.viewport.SetYOffset(m.selectedLine)
-	} else if m.selectedLine >= m.viewport.YOffset+m.viewport.Height {
-		m.viewport.SetYOffset(m.selectedLine - m.viewport.Height + 1)
+	visLine := m.visualLineForDiffLine(m.selectedLine)
+	if visLine < m.viewport.YOffset {
+		m.viewport.SetYOffset(visLine)
+	} else if visLine >= m.viewport.YOffset+m.viewport.Height {
+		m.viewport.SetYOffset(visLine - m.viewport.Height + 1)
 	}
 }
 

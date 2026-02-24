@@ -852,3 +852,67 @@ func TestDiffModel_ChangedFilesMsgDoesNotOverwriteDiffViewport(t *testing.T) {
 		t.Errorf("changedFiles length = %d, want 2", len(m.changedFiles))
 	}
 }
+
+func TestDiffModel_VisualLineForDiffLine(t *testing.T) {
+	m := newTestDiffModel()
+	m.diffLines = []diffLine{
+		{Type: diffLineHunkHeader, Content: "@@ -1,3 +1,3 @@"},
+		{Type: diffLineContext, Content: "line1", OldNum: 1, NewNum: 1},
+		{Type: diffLineComment, Content: "Alice: first\nsecond\nthird", ThreadID: 1, CommentIdx: 0},
+		{Type: diffLineContext, Content: "line2", OldNum: 2, NewNum: 2},
+	}
+
+	// Index 0: visual line 0
+	if got := m.visualLineForDiffLine(0); got != 0 {
+		t.Errorf("visualLineForDiffLine(0) = %d, want 0", got)
+	}
+	// Index 1: visual line 1 (hunk header is 1 visual line)
+	if got := m.visualLineForDiffLine(1); got != 1 {
+		t.Errorf("visualLineForDiffLine(1) = %d, want 1", got)
+	}
+	// Index 2: visual line 2 (context line is 1 visual line)
+	if got := m.visualLineForDiffLine(2); got != 2 {
+		t.Errorf("visualLineForDiffLine(2) = %d, want 2", got)
+	}
+	// Index 3: visual line 5 (comment has 3 visual lines: 1 base + 2 newlines)
+	if got := m.visualLineForDiffLine(3); got != 5 {
+		t.Errorf("visualLineForDiffLine(3) = %d, want 5", got)
+	}
+}
+
+func TestDiffModel_ScrollPastMultiLineComments(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6) // 5 viewport lines
+	m.viewMode = DiffFileView
+
+	// Build diffLines with a multi-line comment in the middle
+	m.diffLines = make([]diffLine, 0)
+	for i := 1; i <= 5; i++ {
+		m.diffLines = append(m.diffLines, diffLine{
+			Type: diffLineContext, Content: fmt.Sprintf("line%d", i), OldNum: i, NewNum: i,
+		})
+	}
+	// Insert a 5-line comment after line 5
+	m.diffLines = append(m.diffLines, diffLine{
+		Type: diffLineComment, Content: "Alice: L1\nL2\nL3\nL4\nL5", ThreadID: 1, CommentIdx: 0,
+	})
+	for i := 6; i <= 15; i++ {
+		m.diffLines = append(m.diffLines, diffLine{
+			Type: diffLineContext, Content: fmt.Sprintf("line%d", i), OldNum: i, NewNum: i,
+		})
+	}
+	m.updateDiffViewport()
+
+	// Scroll all the way to the bottom
+	for i := 0; i < len(m.diffLines)-1; i++ {
+		m.selectedLine = i + 1
+		m.updateDiffViewport()
+		m.ensureDiffLineVisible()
+	}
+
+	// Should be able to reach 100% scroll
+	pct := m.GetScrollPercent()
+	if pct < 99 {
+		t.Errorf("After scrolling to bottom, scroll percent = %.0f%%, want ~100%%", pct)
+	}
+}
