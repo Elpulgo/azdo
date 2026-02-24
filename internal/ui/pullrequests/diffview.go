@@ -579,7 +579,7 @@ func (m *DiffModel) buildDiffLines() {
 					for ci, comment := range thread.Comments {
 						m.diffLines = append(m.diffLines, diffLine{
 							Type:       diffLineComment,
-							Content:    fmt.Sprintf("@ %s: %s", comment.Author.DisplayName, comment.Content),
+							Content:    fmt.Sprintf("@[%s]: %s", comment.Author.DisplayName, comment.Content),
 							ThreadID:   thread.ID,
 							CommentIdx: ci,
 						})
