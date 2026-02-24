@@ -262,7 +262,7 @@ func (m *DetailModel) renderFileEntry(change azdevops.IterationChange, selected 
 	// Add comment count if there are comments for this file
 	count := m.commentCounts[change.Item.Path]
 	if count > 0 {
-		line += " " + m.styles.Info.Render(fmt.Sprintf("(%d)", count))
+		line += " " + m.styles.DiffCommentCount.Render(fmt.Sprintf("(%d)", count))
 	}
 
 	if selected {

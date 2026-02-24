@@ -149,7 +149,9 @@ func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 		}
 		m.changedFiles = filterFileChanges(msg.changes)
 		m.fileIndex = 0
-		m.updateFileListViewport()
+		if m.viewMode == DiffFileList {
+			m.updateFileListViewport()
+		}
 
 	case fileDiffMsg:
 		m.loading = false
@@ -638,13 +640,24 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 		result = gutter + m.styles.DiffRemoved.Render(" -" + line.Content)
 
 	case diffLineComment:
-		indent := "           "
+		gutter := "           " // 11 spaces matching line number gutter width
+		var firstIndent, contIndent string
 		if line.CommentIdx > 0 {
-			indent += "  └ "
+			firstIndent = gutter + "  └ "
+			contIndent = gutter + "    "
 		} else {
-			indent += "  "
+			firstIndent = gutter + "  "
+			contIndent = gutter + "  "
 		}
-		result = m.styles.Info.Render(indent + line.Content)
+		contentLines := strings.Split(line.Content, "\n")
+		for i, l := range contentLines {
+			if i == 0 {
+				contentLines[i] = firstIndent + l
+			} else {
+				contentLines[i] = contIndent + l
+			}
+		}
+		result = m.styles.Info.Render(strings.Join(contentLines, "\n"))
 
 	case diffLineFileHeader:
 		result = m.styles.DiffHeader.Render(line.Content)

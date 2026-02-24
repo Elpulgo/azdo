@@ -797,3 +797,58 @@ func TestDiffModel_FiltersEmptyPathEntries(t *testing.T) {
 		t.Errorf("Expected /src/main.go, got %q", m.changedFiles[0].Item.Path)
 	}
 }
+
+func TestDiffModel_ChangedFilesMsgDoesNotOverwriteDiffViewport(t *testing.T) {
+	// Regression: when InitWithFile fires both fetchChangedFiles and fetchFileDiff
+	// concurrently, if fileDiffMsg arrives first the viewport shows the diff.
+	// Then changedFilesMsg must NOT overwrite the viewport with file list content.
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+
+	// 1. Simulate fileDiffMsg arriving first
+	testDiff := &diff.FileDiff{
+		Path:       "/src/main.go",
+		ChangeType: "edit",
+		Hunks: []diff.Hunk{
+			{
+				OldStart: 1, OldCount: 2,
+				NewStart: 1, NewCount: 2,
+				Lines: []diff.Line{
+					{Type: diff.Context, Content: "line1", OldNum: 1, NewNum: 1},
+					{Type: diff.Added, Content: "new line", OldNum: 0, NewNum: 2},
+				},
+			},
+		},
+	}
+	m.Update(fileDiffMsg{diff: testDiff, fileThreads: make(map[int][]azdevops.Thread)})
+
+	if m.viewMode != DiffFileView {
+		t.Fatalf("viewMode = %d after fileDiffMsg, want DiffFileView", m.viewMode)
+	}
+
+	// Capture the viewport content after diff was set
+	diffContent := m.viewport.View()
+
+	// 2. Simulate changedFilesMsg arriving second (the late response)
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/other.go"}, ChangeType: "add"},
+	}
+	m.Update(changedFilesMsg{changes: changes})
+
+	// viewMode should still be DiffFileView
+	if m.viewMode != DiffFileView {
+		t.Errorf("viewMode = %d after changedFilesMsg, want DiffFileView", m.viewMode)
+	}
+
+	// Viewport content should NOT have changed (still showing diff, not file list)
+	afterContent := m.viewport.View()
+	if afterContent != diffContent {
+		t.Errorf("changedFilesMsg overwrote diff viewport content;\nbefore: %q\nafter:  %q", diffContent, afterContent)
+	}
+
+	// Changed files data should still be stored
+	if len(m.changedFiles) != 2 {
+		t.Errorf("changedFiles length = %d, want 2", len(m.changedFiles))
+	}
+}
