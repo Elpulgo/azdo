@@ -527,6 +527,50 @@ func TestPrsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	}
 }
 
+func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
+	model := NewModel(nil)
+
+	// Set up PR data and navigate to diff view
+	model.list = model.list.SetItems([]azdevops.PullRequest{
+		{
+			ID:            123,
+			Title:         "Test PR",
+			Status:        "active",
+			SourceRefName: "refs/heads/test",
+			TargetRefName: "refs/heads/main",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{Name: "repo"},
+		},
+	})
+
+	// Without diff view, IsSearching should be false
+	if model.IsSearching() {
+		t.Error("IsSearching() should be false without active diff view")
+	}
+
+	// Simulate having an active diff view with input mode
+	s := styles.DefaultStyles()
+	model.diffView = NewDiffModel(nil, azdevops.PullRequest{}, nil, s)
+	model.viewMode = ViewDiff
+
+	// Without input active, IsSearching should still be false
+	if model.IsSearching() {
+		t.Error("IsSearching() should be false when diff view has no active input")
+	}
+
+	// With input active, IsSearching should be true
+	model.diffView.inputMode = InputNewComment
+	if !model.IsSearching() {
+		t.Error("IsSearching() should be true when diff view has active input (InputNewComment)")
+	}
+
+	// With reply input active, IsSearching should also be true
+	model.diffView.inputMode = InputReply
+	if !model.IsSearching() {
+		t.Error("IsSearching() should be true when diff view has active input (InputReply)")
+	}
+}
+
 func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
 	pr := azdevops.PullRequest{
 		Title:       "Test PR",

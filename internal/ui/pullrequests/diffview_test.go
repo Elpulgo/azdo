@@ -880,6 +880,59 @@ func TestDiffModel_VisualLineForDiffLine(t *testing.T) {
 	}
 }
 
+func TestDiffModel_IsInputActive(t *testing.T) {
+	tests := []struct {
+		name      string
+		inputMode InputMode
+		want      bool
+	}{
+		{"InputNone returns false", InputNone, false},
+		{"InputNewComment returns true", InputNewComment, true},
+		{"InputReply returns true", InputReply, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestDiffModel()
+			m.inputMode = tt.inputMode
+
+			got := m.IsInputActive()
+			if got != tt.want {
+				t.Errorf("IsInputActive() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiffModel_InputMode_BlocksKeystrokes(t *testing.T) {
+	// When inputMode is active, typing 'h' or '?' should go to the text input,
+	// not trigger global shortcuts. This tests that the diff view routes
+	// keystrokes to updateInput when inputMode != InputNone.
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.inputMode = InputNewComment
+	m.textInput.Focus()
+
+	// Type 'h' — should be captured by text input, not leaked to global shortcuts
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	if m.textInput.Value() != "h" {
+		t.Errorf("After typing 'h' in input mode, textInput.Value() = %q, want %q", m.textInput.Value(), "h")
+	}
+
+	// Type '?' — should also be captured
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	if m.textInput.Value() != "h?" {
+		t.Errorf("After typing '?', textInput.Value() = %q, want %q", m.textInput.Value(), "h?")
+	}
+
+	// Type 't' — should also be captured
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	if m.textInput.Value() != "h?t" {
+		t.Errorf("After typing 't', textInput.Value() = %q, want %q", m.textInput.Value(), "h?t")
+	}
+}
+
 func TestDiffModel_ScrollPastMultiLineComments(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6) // 5 viewport lines

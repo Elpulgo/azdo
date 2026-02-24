@@ -245,9 +245,17 @@ func (m Model) HasContextBar() bool {
 	return m.list.HasContextBar()
 }
 
-// IsSearching returns true if the list is currently in search/filter mode.
+// IsSearching returns true if the view has an active text input that should
+// suppress global keyboard shortcuts. This includes search/filter mode and
+// comment/reply input in the diff view.
 func (m Model) IsSearching() bool {
-	return m.list.IsSearching()
+	if m.list.IsSearching() {
+		return true
+	}
+	if m.viewMode == ViewDiff && m.diffView != nil && m.diffView.IsInputActive() {
+		return true
+	}
+	return false
 }
 
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView

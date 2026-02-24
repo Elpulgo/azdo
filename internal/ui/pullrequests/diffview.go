@@ -489,6 +489,12 @@ func (m *DiffModel) GetStatusMessage() string {
 	return m.statusMessage
 }
 
+// IsInputActive returns true when a text input (comment or reply) is active,
+// so that global keyboard shortcuts can be suppressed.
+func (m *DiffModel) IsInputActive() bool {
+	return m.inputMode != InputNone
+}
+
 // --- Rendering helpers ---
 
 // updateFileListViewport rebuilds the file list viewport content
