@@ -143,11 +143,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 }
 
-// updateDetail intercepts detail-mode messages for the 'd' key to enter diff view
+// updateDetail intercepts detail-mode messages for file selection to enter diff view
 func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case enterDiffViewMsg:
-		// Get the detail adapter to access threads and PR
+	case openFileDiffMsg:
+		// User pressed Enter on a file in the detail view - open diff for that file
 		if adapter, ok := m.list.Detail().(*detailAdapter); ok {
 			detail := adapter.model
 			pr := detail.GetPR()
@@ -159,13 +159,13 @@ func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 			m.diffView = NewDiffModel(projectClient, pr, threads, m.styles)
 			m.diffView.SetSize(m.width, m.height)
 			m.viewMode = ViewDiff
-			return m, m.diffView.Init()
+			// Initialize and immediately open the selected file
+			return m, m.diffView.InitWithFile(msg.file)
 		}
 		return m, nil
 
 	case tea.KeyMsg:
 		if msg.String() == "esc" {
-			// Delegate to generic model which handles esc -> list
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(msg)
 			m.viewMode = ViewList

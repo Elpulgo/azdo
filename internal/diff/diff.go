@@ -213,6 +213,20 @@ func buildHunks(ops []editOp, contextLines int) []Hunk {
 	return hunks
 }
 
+// CountCommentsPerFile counts the total number of comments per file path
+// across all threads. Threads without a file context (general comments) are excluded.
+// Returns a map from file path to total comment count.
+func CountCommentsPerFile(threads []azdevops.Thread) map[string]int {
+	result := make(map[string]int)
+	for _, thread := range threads {
+		if thread.ThreadContext == nil || thread.ThreadContext.FilePath == "" {
+			continue
+		}
+		result[thread.ThreadContext.FilePath] += len(thread.Comments)
+	}
+	return result
+}
+
 // MapThreadsToLines maps PR threads to line numbers for a specific file.
 // Returns a map from new-file line number to threads at that line.
 func MapThreadsToLines(threads []azdevops.Thread, filePath string) map[int][]azdevops.Thread {

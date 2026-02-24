@@ -120,7 +120,7 @@ func TestDiffModel_FileListNavigation_UpDown(t *testing.T) {
 }
 
 func TestDiffModel_ChangeTypeDisplay(t *testing.T) {
-	m := newTestDiffModel()
+	s := styles.DefaultStyles()
 
 	tests := []struct {
 		changeType string
@@ -135,7 +135,7 @@ func TestDiffModel_ChangeTypeDisplay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.changeType, func(t *testing.T) {
-			icon, _ := m.changeTypeDisplay(tt.changeType)
+			icon, _ := changeTypeDisplay(tt.changeType, s)
 			if icon != tt.wantIcon {
 				t.Errorf("changeTypeDisplay(%q) icon = %q, want %q", tt.changeType, icon, tt.wantIcon)
 			}
@@ -440,13 +440,15 @@ func TestDiffModel_EscFromDiffView(t *testing.T) {
 	m.viewMode = DiffFileView
 	m.currentFile = &azdevops.IterationChange{Item: azdevops.ChangeItem{Path: "/test.go"}}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-
-	if m.viewMode != DiffFileList {
-		t.Errorf("After esc from diff view, viewMode = %d, want DiffFileList", m.viewMode)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("Expected esc from diff view to produce a command")
 	}
-	if m.currentFile != nil {
-		t.Error("After esc from diff view, currentFile should be nil")
+
+	// Should emit exitDiffViewMsg (back to detail view)
+	msg := cmd()
+	if _, ok := msg.(exitDiffViewMsg); !ok {
+		t.Errorf("Expected exitDiffViewMsg, got %T", msg)
 	}
 }
 

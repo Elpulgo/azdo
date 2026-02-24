@@ -465,3 +465,97 @@ func TestMapThreadsToLines_NoMatchingFile(t *testing.T) {
 		t.Errorf("Expected empty map for non-matching file, got %d entries", len(result))
 	}
 }
+
+func TestCountCommentsPerFile(t *testing.T) {
+	threads := []azdevops.Thread{
+		{
+			ID: 1,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Fix this"},
+				{ID: 2, Content: "Will do", ParentCommentID: 1},
+			},
+		},
+		{
+			ID: 2,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 25},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 3, Content: "Nice"},
+			},
+		},
+		{
+			ID: 3,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/other.go",
+				RightFileStart: &azdevops.FilePosition{Line: 5},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 4, Content: "Check this"},
+			},
+		},
+		{
+			ID:            4,
+			ThreadContext: nil, // general comment, no file
+			Comments: []azdevops.Comment{
+				{ID: 5, Content: "Looks good overall"},
+			},
+		},
+		{
+			ID: 5,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: nil, // missing position - should still count
+			},
+			Comments: []azdevops.Comment{
+				{ID: 6, Content: "General file comment"},
+			},
+		},
+	}
+
+	result := CountCommentsPerFile(threads)
+
+	// /src/main.go: threads 1 (2 comments) + 2 (1 comment) + 5 (1 comment) = 4 comments
+	if result["/src/main.go"] != 4 {
+		t.Errorf("/src/main.go: expected 4 comments, got %d", result["/src/main.go"])
+	}
+
+	// /src/other.go: thread 3 (1 comment) = 1 comment
+	if result["/src/other.go"] != 1 {
+		t.Errorf("/src/other.go: expected 1 comment, got %d", result["/src/other.go"])
+	}
+
+	// Should only have 2 file entries (general comments excluded)
+	if len(result) != 2 {
+		t.Errorf("Expected 2 file entries, got %d", len(result))
+	}
+}
+
+func TestCountCommentsPerFile_Empty(t *testing.T) {
+	result := CountCommentsPerFile(nil)
+	if len(result) != 0 {
+		t.Errorf("Expected empty map for nil threads, got %d entries", len(result))
+	}
+}
+
+func TestCountCommentsPerFile_NoCodeComments(t *testing.T) {
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			ThreadContext: nil,
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "General comment"},
+			},
+		},
+	}
+
+	result := CountCommentsPerFile(threads)
+	if len(result) != 0 {
+		t.Errorf("Expected empty map for threads without file context, got %d entries", len(result))
+	}
+}

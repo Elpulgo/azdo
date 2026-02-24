@@ -117,6 +117,15 @@ func (m *DiffModel) Init() tea.Cmd {
 	return tea.Batch(m.fetchChangedFiles(), m.spinner.Init())
 }
 
+// InitWithFile initializes the diff model and immediately opens a specific file's diff
+func (m *DiffModel) InitWithFile(file azdevops.IterationChange) tea.Cmd {
+	m.currentFile = &file
+	m.loading = true
+	m.spinner.SetMessage("Loading diff...")
+	m.spinner.SetVisible(true)
+	return tea.Batch(m.fetchChangedFiles(), m.fetchFileDiff(file), m.spinner.Init())
+}
+
 // Update handles messages
 func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -303,11 +312,8 @@ func (m *DiffModel) updateDiffView(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 		m.updateDiffViewport()
 		m.ensureDiffLineVisible()
 	case "esc":
-		m.viewMode = DiffFileList
-		m.currentFile = nil
-		m.currentDiff = nil
-		m.diffLines = nil
-		m.updateFileListViewport()
+		// Exit diff view entirely, back to detail
+		return m, func() tea.Msg { return exitDiffViewMsg{} }
 	}
 	return m, nil
 }
@@ -491,7 +497,7 @@ func (m *DiffModel) updateFileListViewport() {
 
 	var sb strings.Builder
 	for i, change := range m.changedFiles {
-		icon, style := m.changeTypeDisplay(change.ChangeType)
+		icon, style := changeTypeDisplay(change.ChangeType, m.styles)
 		line := fmt.Sprintf("  %s %s", icon, change.Item.Path)
 		if change.ChangeType == "rename" && change.OriginalPath != "" {
 			line = fmt.Sprintf("  %s %s -> %s", icon, change.OriginalPath, change.Item.Path)
@@ -708,21 +714,6 @@ func (m *DiffModel) jumpToNextComment(direction int) {
 	}
 }
 
-// changeTypeDisplay returns an icon and style for a change type
-func (m *DiffModel) changeTypeDisplay(changeType string) (string, lipgloss.Style) {
-	switch changeType {
-	case "add":
-		return "+", m.styles.Success
-	case "edit":
-		return "~", m.styles.Info
-	case "delete":
-		return "-", m.styles.Error
-	case "rename":
-		return "→", m.styles.Warning
-	default:
-		return "?", m.styles.Muted
-	}
-}
 
 // filterFileChanges removes folder/tree entries and entries with empty paths
 func filterFileChanges(changes []azdevops.IterationChange) []azdevops.IterationChange {
@@ -761,9 +752,6 @@ type threadsRefreshMsg struct {
 	threads []azdevops.Thread
 	err     error
 }
-
-// enterDiffViewMsg signals that the user wants to enter the diff view
-type enterDiffViewMsg struct{}
 
 // exitDiffViewMsg signals that the user wants to leave the diff view
 type exitDiffViewMsg struct{}
