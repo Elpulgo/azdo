@@ -182,3 +182,30 @@ ORDER BY [System.ChangedDate] DESC`
 
 	return c.GetWorkItems(ids)
 }
+
+// ListMyWorkItems retrieves work items assigned to the authenticated user
+// using the @Me WIQL macro, which Azure DevOps resolves server-side from the PAT.
+// top: maximum number of work items to return (max 50 enforced)
+func (c *Client) ListMyWorkItems(top int) ([]WorkItem, error) {
+	if top > 50 {
+		top = 50
+	}
+
+	query := `SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project
+  AND [System.AssignedTo] = @Me
+  AND [System.State] <> 'Closed'
+  AND [System.State] <> 'Removed'
+ORDER BY [System.ChangedDate] DESC`
+
+	ids, err := c.QueryWorkItemIDs(query, top)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ids) == 0 {
+		return []WorkItem{}, nil
+	}
+
+	return c.GetWorkItems(ids)
+}

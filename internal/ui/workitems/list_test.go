@@ -408,3 +408,179 @@ func TestFilterWorkItemMulti_MatchesProjectName(t *testing.T) {
 		t.Error("filterWorkItemMulti should not match 'beta'")
 	}
 }
+
+// --- My Items Toggle Tests ---
+
+func TestMyItems_Toggle(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	if m.myItemsOnly {
+		t.Error("myItemsOnly should be false initially")
+	}
+	if m.IsMyItemsActive() {
+		t.Error("IsMyItemsActive should be false initially")
+	}
+
+	// Add items
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Other task"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Press 'm' to toggle ON — fires a fetch command
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if !m.myItemsOnly {
+		t.Error("myItemsOnly should be true after pressing m")
+	}
+	if !m.IsMyItemsActive() {
+		t.Error("IsMyItemsActive should be true after pressing m")
+	}
+	if cmd == nil {
+		t.Error("expected a fetch command when toggling on")
+	}
+
+	// Simulate @Me results arriving
+	myItems := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task"}},
+	}
+	m, _ = m.Update(myWorkItemsMsg{workItems: myItems})
+
+	if len(m.list.Items()) != 1 {
+		t.Errorf("expected 1 item after @Me fetch, got %d", len(m.list.Items()))
+	}
+
+	// Press 'm' to toggle OFF — restores all items
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if m.myItemsOnly {
+		t.Error("myItemsOnly should be false after second press")
+	}
+
+	// Should show all items again
+	if len(m.list.Items()) != 2 {
+		t.Errorf("expected 2 items after toggle off, got %d", len(m.list.Items()))
+	}
+}
+
+func TestMyItems_ToggleIgnoredDuringSearch(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Enter search mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	if !m.IsSearching() {
+		t.Fatal("should be in search mode")
+	}
+
+	// Try to toggle 'm' - should be ignored during search
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if m.myItemsOnly {
+		t.Error("m key should be ignored during search mode")
+	}
+}
+
+func TestMyItems_ToggleIgnoredInDetailView(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item", WorkItemType: "Task"}},
+	}
+	m.list = m.list.SetItems(items)
+
+	// Enter detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.GetViewMode() != ViewDetail {
+		t.Fatal("should be in detail view")
+	}
+
+	// Try to toggle 'm' - should be ignored in detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if m.myItemsOnly {
+		t.Error("m key should be ignored in detail view")
+	}
+}
+
+func TestMyItems_PollingWhileFilterActive_DoesNotChangeVisible(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Set initial items
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Toggle on — fires fetch command
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	// Simulate @Me results
+	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+	}})
+
+	if len(m.list.Items()) != 1 {
+		t.Fatalf("expected 1 @Me item, got %d", len(m.list.Items()))
+	}
+
+	// New items arrive via polling while filter is active
+	newItems := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Title: "New item"}},
+		{ID: 4, Fields: azdevops.WorkItemFields{Title: "Another new"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: newItems})
+
+	// Visible list should not change (still showing @Me results)
+	if !m.myItemsOnly {
+		t.Error("myItemsOnly should still be true")
+	}
+	if len(m.list.Items()) != 1 {
+		t.Errorf("expected 1 visible item (unchanged), got %d", len(m.list.Items()))
+	}
+
+	// But allItems should be updated
+	if len(m.allItems) != 3 {
+		t.Errorf("expected 3 allItems after polling, got %d", len(m.allItems))
+	}
+
+	// Toggle off → should show updated allItems
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if len(m.list.Items()) != 3 {
+		t.Errorf("expected 3 items after toggle off, got %d", len(m.list.Items()))
+	}
+}
+
+func TestMyItems_FetchError_FallsBack(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Toggle on
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	// Simulate fetch error
+	m, _ = m.Update(myWorkItemsMsg{err: tea.ErrInterrupted})
+
+	// Should fall back: myItemsOnly should be false
+	if m.myItemsOnly {
+		t.Error("myItemsOnly should be false after fetch error")
+	}
+}

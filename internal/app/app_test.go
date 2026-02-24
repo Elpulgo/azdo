@@ -8,6 +8,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -650,6 +651,63 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 
 	if m.activeTab != TabPullRequests {
 		t.Error("After exiting search, '2' should switch to PR tab")
+	}
+}
+
+func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg)
+
+	// Set up window size
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Switch to work items tab
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
+	// Simulate work items arriving
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task", WorkItemType: "Task", State: "Active"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Other task", WorkItemType: "Task", State: "Active"}},
+	}
+	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: items})
+	m = updated.(Model)
+
+	// Press 'm' to toggle my items filter — fires @Me fetch
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+
+	// Verify filter is active
+	if !m.workItemsView.IsMyItemsActive() {
+		t.Error("expected my items filter to be active after pressing 'm'")
+	}
+
+	// Verify status bar shows "My Items" badge
+	view := m.View()
+	if !strings.Contains(view, "My Items") {
+		t.Error("status bar should show 'My Items' badge when filter is active")
+	}
+
+	// Press 'm' again to toggle off
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+
+	if m.workItemsView.IsMyItemsActive() {
+		t.Error("expected my items filter to be deactivated after second 'm' press")
+	}
+
+	// Verify "My Items" badge is removed
+	view = m.View()
+	if strings.Contains(view, "My Items") {
+		t.Error("status bar should NOT show 'My Items' badge when filter is inactive")
 	}
 }
 

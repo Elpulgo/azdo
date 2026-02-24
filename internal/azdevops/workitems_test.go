@@ -416,6 +416,40 @@ func TestClient_ListWorkItems(t *testing.T) {
 	}
 }
 
+func TestClient_ListMyWorkItems_QueryContainsAtMe(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListMyWorkItems(50)
+	if err != nil {
+		t.Fatalf("ListMyWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedBody, "@Me") {
+		t.Errorf("WIQL query must contain @Me macro.\nGot query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@project") {
+		t.Errorf("WIQL query must scope to @project.\nGot query body: %s", capturedBody)
+	}
+}
+
 func TestClient_ListWorkItems_NoResults(t *testing.T) {
 	// Create mock server that returns empty WIQL results
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

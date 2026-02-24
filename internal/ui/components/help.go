@@ -59,6 +59,7 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 				Title: "Actions",
 				Bindings: []HelpBinding{
 					{Key: "f", Description: "Search / filter"},
+					{Key: "m", Description: "Toggle my items (work items)"},
 					{Key: "r", Description: "Refresh data"},
 					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},

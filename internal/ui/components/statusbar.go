@@ -24,6 +24,7 @@ type StatusBar struct {
 	showScroll    bool
 	width         int
 	errorMessage  string
+	filterLabel string
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -85,6 +86,17 @@ func (s *StatusBar) ClearErrorMessage() {
 	s.errorMessage = ""
 }
 
+// SetFilterLabel sets a filter indicator label to display in the status bar.
+func (s *StatusBar) SetFilterLabel(label string) {
+	s.filterLabel = label
+}
+
+// ClearFilterLabel removes the filter indicator label.
+func (s *StatusBar) ClearFilterLabel() {
+	s.filterLabel = ""
+}
+
+
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
 	return nil
@@ -121,6 +133,15 @@ func (s *StatusBar) View() string {
 		parts = append(parts, errorStyle.Render(s.errorMessage))
 	} else {
 		parts = append(parts, s.renderKeybindings())
+	}
+
+	if s.filterLabel != "" {
+		filterStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.Background)).
+			Background(lipgloss.Color(s.styles.Theme.Accent)).
+			Bold(true).
+			Padding(0, 1)
+		parts = append(parts, filterStyle.Render(s.filterLabel))
 	}
 
 	if orgProj := s.renderOrgProject(); orgProj != "" {

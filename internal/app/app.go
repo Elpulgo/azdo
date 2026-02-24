@@ -580,6 +580,13 @@ func (m Model) View() string {
 		statusMessage = m.pipelinesView.GetStatusMessage()
 	}
 
+	// Update filter label badge on status bar
+	if m.activeTab == TabWorkItems && m.workItemsView.IsMyItemsActive() {
+		m.statusBar.SetFilterLabel("My Items")
+	} else {
+		m.statusBar.ClearFilterLabel()
+	}
+
 	// Build footer section
 	var footer string
 

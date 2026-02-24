@@ -24,9 +24,11 @@ const (
 
 // Model represents the work items list view with sub-views
 type Model struct {
-	list   listview.Model[azdevops.WorkItem]
-	client *azdevops.MultiClient
-	styles *styles.Styles
+	list        listview.Model[azdevops.WorkItem]
+	client      *azdevops.MultiClient
+	styles      *styles.Styles
+	myItemsOnly bool
+	allItems    []azdevops.WorkItem
 }
 
 // NewModel creates a new work items list model with default styles
@@ -103,11 +105,39 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case workItemsMsg:
-		m.list = m.list.HandleFetchResult(msg.workItems, msg.err)
+		if msg.err != nil {
+			m.list = m.list.HandleFetchResult(msg.workItems, msg.err)
+			return m, nil
+		}
+		m.allItems = msg.workItems
+		if !m.myItemsOnly {
+			m.list = m.list.HandleFetchResult(msg.workItems, nil)
+		}
+		return m, nil
+	case myWorkItemsMsg:
+		if msg.err != nil {
+			// On error, fall back to showing all items
+			m.myItemsOnly = false
+			return m, nil
+		}
+		m.list = m.list.SetItems(msg.workItems)
 		return m, nil
 	case SetWorkItemsMsg:
-		m.list = m.list.SetItems(msg.WorkItems)
+		m.allItems = msg.WorkItems
+		if !m.myItemsOnly {
+			m.list = m.list.SetItems(msg.WorkItems)
+		}
 		return m, nil
+	case tea.KeyMsg:
+		if msg.String() == "m" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
+			m.myItemsOnly = !m.myItemsOnly
+			if m.myItemsOnly {
+				return m, fetchMyWorkItemsMulti(m.client)
+			}
+			// Toggle OFF: restore all items
+			m.list = m.list.SetItems(m.allItems)
+			return m, nil
+		}
 	}
 
 	var cmd tea.Cmd
@@ -148,6 +178,11 @@ func (m Model) HasContextBar() bool {
 // IsSearching returns true if the list is currently in search/filter mode.
 func (m Model) IsSearching() bool {
 	return m.list.IsSearching()
+}
+
+// IsMyItemsActive returns true if the "my items" filter is active.
+func (m Model) IsMyItemsActive() bool {
+	return m.myItemsOnly
 }
 
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
@@ -252,6 +287,11 @@ type workItemsMsg struct {
 	err       error
 }
 
+type myWorkItemsMsg struct {
+	workItems []azdevops.WorkItem
+	err       error
+}
+
 // SetWorkItemsMsg is a message to directly set the work items (from polling)
 type SetWorkItemsMsg struct {
 	WorkItems []azdevops.WorkItem
@@ -265,6 +305,18 @@ func fetchWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 		}
 		workItems, err := client.ListWorkItems(50)
 		return workItemsMsg{workItems: workItems, err: err}
+	}
+}
+
+// fetchMyWorkItemsMulti fetches work items assigned to the authenticated user
+// using the @Me WIQL macro.
+func fetchMyWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return myWorkItemsMsg{workItems: nil, err: nil}
+		}
+		workItems, err := client.ListMyWorkItems(50)
+		return myWorkItemsMsg{workItems: workItems, err: err}
 	}
 }
 
