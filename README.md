@@ -95,7 +95,7 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 - `organization`: Your Azure DevOps organization name (required)
 - `project`: Your Azure DevOps project name (required)
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
-- `theme`: Color theme for the UI (optional, default: dark)
+- `theme`: Color theme for the UI (optional, default: Dracula)
 
 **Available Themes:**
 - `dark` - Default dark theme with blue and cyan accents

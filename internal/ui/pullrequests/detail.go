@@ -452,12 +452,7 @@ func (m *DetailModel) SelectedFile() *azdevops.IterationChange {
 
 // GetContextItems returns context items for the detail view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
-	return []components.ContextItem{
-		{Key: "↑↓", Description: "navigate"},
-		{Key: "enter", Description: "open diff"},
-		{Key: "r", Description: "refresh"},
-		{Key: "esc", Description: "back"},
-	}
+	return []components.ContextItem{}
 }
 
 // GetThreads returns the current threads (for passing to DiffModel)

@@ -36,7 +36,7 @@ const (
 type diffLineType int
 
 const (
-	diffLineContext    diffLineType = iota
+	diffLineContext diffLineType = iota
 	diffLineAdded
 	diffLineRemoved
 	diffLineHunkHeader
@@ -100,12 +100,12 @@ func NewDiffModel(client *azdevops.Client, pr azdevops.PullRequest, threads []az
 	ti.CharLimit = 500
 
 	return &DiffModel{
-		client:   client,
-		pr:       pr,
-		threads:  threads,
-		viewMode: DiffFileList,
-		spinner:  sp,
-		styles:   s,
+		client:    client,
+		pr:        pr,
+		threads:   threads,
+		viewMode:  DiffFileList,
+		spinner:   sp,
+		styles:    s,
 		textInput: ti,
 	}
 }
@@ -457,20 +457,15 @@ func (m *DiffModel) GetContextItems() []components.ContextItem {
 	switch m.viewMode {
 	case DiffFileList:
 		return []components.ContextItem{
-			{Key: "↑↓", Description: "navigate"},
 			{Key: "pgup/pgdn", Description: "page"},
 			{Key: "enter", Description: "open"},
-			{Key: "r", Description: "refresh"},
-			{Key: "esc", Description: "back"},
 		}
 	case DiffFileView:
 		return []components.ContextItem{
-			{Key: "↑↓", Description: "scroll"},
 			{Key: "c", Description: "comment"},
 			{Key: "p", Description: "reply"},
 			{Key: "x", Description: "resolve"},
 			{Key: "n/N", Description: "next/prev comment"},
-			{Key: "esc", Description: "back"},
 		}
 	}
 	return nil
@@ -584,7 +579,7 @@ func (m *DiffModel) buildDiffLines() {
 					for ci, comment := range thread.Comments {
 						m.diffLines = append(m.diffLines, diffLine{
 							Type:       diffLineComment,
-							Content:    fmt.Sprintf("%s: %s", comment.Author.DisplayName, comment.Content),
+							Content:    fmt.Sprintf("@ %s: %s", comment.Author.DisplayName, comment.Content),
 							ThreadID:   thread.ID,
 							CommentIdx: ci,
 						})
@@ -637,13 +632,13 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 		oldNum := "    "
 		newNum := fmt.Sprintf("%4d", line.NewNum)
 		gutter := m.styles.DiffLineNum.Render(oldNum) + " " + m.styles.DiffLineNum.Render(newNum)
-		result = gutter + m.styles.DiffAdded.Render(" +" + line.Content)
+		result = gutter + m.styles.DiffAdded.Render(" +"+line.Content)
 
 	case diffLineRemoved:
 		oldNum := fmt.Sprintf("%4d", line.OldNum)
 		newNum := "    "
 		gutter := m.styles.DiffLineNum.Render(oldNum) + " " + m.styles.DiffLineNum.Render(newNum)
-		result = gutter + m.styles.DiffRemoved.Render(" -" + line.Content)
+		result = gutter + m.styles.DiffRemoved.Render(" -"+line.Content)
 
 	case diffLineComment:
 		var firstIndent, contIndent string
@@ -745,7 +740,6 @@ func (m *DiffModel) jumpToNextComment(direction int) {
 		}
 	}
 }
-
 
 // filterFileChanges removes folder/tree entries and entries with empty paths
 func filterFileChanges(changes []azdevops.IterationChange) []azdevops.IterationChange {
