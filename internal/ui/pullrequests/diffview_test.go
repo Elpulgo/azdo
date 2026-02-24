@@ -346,12 +346,16 @@ func TestDiffModel_GetContextItems_FileList(t *testing.T) {
 		t.Error("Expected context items for file list mode")
 	}
 
-	// Should have navigate, open, refresh, back
+	// Should have navigate, page, open, refresh, back
 	hasNavigate := false
+	hasPage := false
 	hasBack := false
 	for _, item := range items {
 		if item.Description == "navigate" {
 			hasNavigate = true
+		}
+		if item.Description == "page" {
+			hasPage = true
 		}
 		if item.Description == "back" {
 			hasBack = true
@@ -359,6 +363,9 @@ func TestDiffModel_GetContextItems_FileList(t *testing.T) {
 	}
 	if !hasNavigate {
 		t.Error("Missing 'navigate' context item")
+	}
+	if !hasPage {
+		t.Error("Missing 'page' context item")
 	}
 	if !hasBack {
 		t.Error("Missing 'back' context item")
@@ -514,5 +521,277 @@ func TestDiffModel_ChangedFilesMsg_Error(t *testing.T) {
 	}
 	if m.err == nil {
 		t.Error("Expected error to be set")
+	}
+}
+
+func TestDiffModel_FileListScrollsToKeepSelectionVisible(t *testing.T) {
+	m := newTestDiffModel()
+	// Small viewport: only 5 lines visible
+	m.SetSize(80, 6) // 6 - 1 header = 5 viewport lines
+
+	// Create 10 files, more than fit in the viewport
+	files := make([]azdevops.IterationChange, 10)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 0
+	m.updateFileListViewport()
+
+	// Navigate down past the viewport boundary
+	for i := 0; i < 7; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+
+	if m.fileIndex != 7 {
+		t.Fatalf("fileIndex = %d, want 7", m.fileIndex)
+	}
+
+	// The viewport should have scrolled so that fileIndex 7 is visible
+	yOffset := m.viewport.YOffset
+	viewBottom := yOffset + m.viewport.Height - 1
+	if m.fileIndex < yOffset || m.fileIndex > viewBottom {
+		t.Errorf("fileIndex %d not visible in viewport (yOffset=%d, height=%d, viewBottom=%d)",
+			m.fileIndex, yOffset, m.viewport.Height, viewBottom)
+	}
+}
+
+func TestDiffModel_FileListScrollsBackUp(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6) // 5 viewport lines
+
+	files := make([]azdevops.IterationChange, 10)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 0
+	m.updateFileListViewport()
+
+	// Navigate to bottom
+	for i := 0; i < 9; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+	// Navigate back to top
+	for i := 0; i < 9; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	}
+
+	if m.fileIndex != 0 {
+		t.Fatalf("fileIndex = %d, want 0", m.fileIndex)
+	}
+
+	// Viewport should have scrolled back so file 0 is visible
+	if m.viewport.YOffset > 0 {
+		t.Errorf("viewport.YOffset = %d, want 0 (should scroll back to top)", m.viewport.YOffset)
+	}
+}
+
+func TestDiffModel_FiltersFolderEntries(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.loading = true
+
+	// Simulate API response with folder/tree entries mixed in
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/", GitObjectType: "tree"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go", GitObjectType: "blob"}, ChangeType: "edit"},
+		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src", GitObjectType: "tree"}, ChangeType: "edit"},
+		{ChangeID: 4, Item: azdevops.ChangeItem{Path: "/src/utils.go", GitObjectType: "blob"}, ChangeType: "add"},
+	}
+
+	m.Update(changedFilesMsg{changes: changes})
+
+	// Should only have the blob entries (actual files)
+	if len(m.changedFiles) != 2 {
+		t.Errorf("Expected 2 file entries after filtering, got %d", len(m.changedFiles))
+		for i, f := range m.changedFiles {
+			t.Logf("  [%d] path=%q type=%q", i, f.Item.Path, f.Item.GitObjectType)
+		}
+	}
+}
+
+func TestFilterFileChanges(t *testing.T) {
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/", GitObjectType: "tree"}},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go", GitObjectType: "blob"}, ChangeType: "edit"},
+		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src", GitObjectType: "tree"}},
+		{ChangeID: 4, Item: azdevops.ChangeItem{Path: "/src/utils.go"}, ChangeType: "add"},
+		{ChangeID: 5, Item: azdevops.ChangeItem{Path: ""}},
+	}
+
+	filtered := filterFileChanges(changes)
+
+	if len(filtered) != 2 {
+		t.Fatalf("Expected 2 entries, got %d", len(filtered))
+	}
+	if filtered[0].Item.Path != "/src/main.go" {
+		t.Errorf("filtered[0].Path = %q, want /src/main.go", filtered[0].Item.Path)
+	}
+	if filtered[1].Item.Path != "/src/utils.go" {
+		t.Errorf("filtered[1].Path = %q, want /src/utils.go", filtered[1].Item.Path)
+	}
+}
+
+func TestDiffModel_FileListPageDown(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6) // 5 viewport lines
+
+	files := make([]azdevops.IterationChange, 20)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 0
+	m.updateFileListViewport()
+
+	// Page down should jump by viewport height
+	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.fileIndex != m.viewport.Height {
+		t.Errorf("After pgdown, fileIndex = %d, want %d", m.fileIndex, m.viewport.Height)
+	}
+
+	// Should be visible
+	yOffset := m.viewport.YOffset
+	viewBottom := yOffset + m.viewport.Height - 1
+	if m.fileIndex < yOffset || m.fileIndex > viewBottom {
+		t.Errorf("fileIndex %d not visible after pgdown (yOffset=%d, viewBottom=%d)",
+			m.fileIndex, yOffset, viewBottom)
+	}
+}
+
+func TestDiffModel_FileListPageUp(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6) // 5 viewport lines
+
+	files := make([]azdevops.IterationChange, 20)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 15
+	m.updateFileListViewport()
+
+	// Page up should jump back by viewport height
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	expected := 15 - m.viewport.Height
+	if m.fileIndex != expected {
+		t.Errorf("After pgup from 15, fileIndex = %d, want %d", m.fileIndex, expected)
+	}
+}
+
+func TestDiffModel_FileListPageDown_ClampsAtEnd(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6)
+
+	files := make([]azdevops.IterationChange, 8)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 6
+	m.updateFileListViewport()
+
+	// Page down near the end should clamp to last item
+	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.fileIndex != 7 {
+		t.Errorf("After pgdown near end, fileIndex = %d, want 7", m.fileIndex)
+	}
+}
+
+func TestDiffModel_FileListPageUp_ClampsAtStart(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6)
+
+	files := make([]azdevops.IterationChange, 10)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 2
+	m.updateFileListViewport()
+
+	// Page up near the top should clamp to 0
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.fileIndex != 0 {
+		t.Errorf("After pgup near start, fileIndex = %d, want 0", m.fileIndex)
+	}
+}
+
+func TestDiffModel_FileListScrollPercent(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 6) // 5 viewport lines
+
+	files := make([]azdevops.IterationChange, 20)
+	for i := range files {
+		files[i] = azdevops.IterationChange{
+			ChangeID:   i + 1,
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			ChangeType: "edit",
+		}
+	}
+	m.changedFiles = files
+	m.fileIndex = 0
+	m.updateFileListViewport()
+
+	// At top, scroll percent should be 0
+	pct := m.GetScrollPercent()
+	if pct != 0 {
+		t.Errorf("At top, scroll percent = %f, want 0", pct)
+	}
+
+	// Navigate to bottom
+	for i := 0; i < 19; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+
+	// At bottom, scroll percent should be 100
+	pct = m.GetScrollPercent()
+	if pct != 100 {
+		t.Errorf("At bottom, scroll percent = %f, want 100", pct)
+	}
+}
+
+func TestDiffModel_FiltersEmptyPathEntries(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.loading = true
+
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: ""}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+
+	m.Update(changedFilesMsg{changes: changes})
+
+	if len(m.changedFiles) != 1 {
+		t.Errorf("Expected 1 file entry after filtering empty paths, got %d", len(m.changedFiles))
+	}
+	if len(m.changedFiles) > 0 && m.changedFiles[0].Item.Path != "/src/main.go" {
+		t.Errorf("Expected /src/main.go, got %q", m.changedFiles[0].Item.Path)
 	}
 }

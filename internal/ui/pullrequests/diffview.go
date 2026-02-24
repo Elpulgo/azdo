@@ -138,7 +138,7 @@ func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.changedFiles = msg.changes
+		m.changedFiles = filterFileChanges(msg.changes)
 		m.fileIndex = 0
 		m.updateFileListViewport()
 
@@ -203,6 +203,18 @@ func (m *DiffModel) updateFileList(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 			m.fileIndex++
 			m.updateFileListViewport()
 		}
+	case "pgup":
+		m.fileIndex -= m.viewport.Height
+		if m.fileIndex < 0 {
+			m.fileIndex = 0
+		}
+		m.updateFileListViewport()
+	case "pgdown":
+		m.fileIndex += m.viewport.Height
+		if m.fileIndex >= len(m.changedFiles) {
+			m.fileIndex = len(m.changedFiles) - 1
+		}
+		m.updateFileListViewport()
 	case "enter":
 		if len(m.changedFiles) > 0 && m.fileIndex < len(m.changedFiles) {
 			change := m.changedFiles[m.fileIndex]
@@ -438,6 +450,7 @@ func (m *DiffModel) GetContextItems() []components.ContextItem {
 	case DiffFileList:
 		return []components.ContextItem{
 			{Key: "↑↓", Description: "navigate"},
+			{Key: "pgup/pgdn", Description: "page"},
 			{Key: "enter", Description: "open"},
 			{Key: "r", Description: "refresh"},
 			{Key: "esc", Description: "back"},
@@ -498,6 +511,20 @@ func (m *DiffModel) updateFileListViewport() {
 	}
 
 	m.viewport.SetContent(sb.String())
+	m.ensureFileIndexVisible()
+}
+
+// ensureFileIndexVisible scrolls the viewport to keep the selected file visible
+func (m *DiffModel) ensureFileIndexVisible() {
+	if !m.ready || len(m.changedFiles) == 0 {
+		return
+	}
+
+	if m.fileIndex < m.viewport.YOffset {
+		m.viewport.SetYOffset(m.fileIndex)
+	} else if m.fileIndex >= m.viewport.YOffset+m.viewport.Height {
+		m.viewport.SetYOffset(m.fileIndex - m.viewport.Height + 1)
+	}
 }
 
 // buildDiffLines flattens hunks + inline comments into diffLines slice
@@ -695,6 +722,21 @@ func (m *DiffModel) changeTypeDisplay(changeType string) (string, lipgloss.Style
 	default:
 		return "?", m.styles.Muted
 	}
+}
+
+// filterFileChanges removes folder/tree entries and entries with empty paths
+func filterFileChanges(changes []azdevops.IterationChange) []azdevops.IterationChange {
+	filtered := make([]azdevops.IterationChange, 0, len(changes))
+	for _, c := range changes {
+		if c.Item.Path == "" || c.Item.Path == "/" {
+			continue
+		}
+		if c.Item.GitObjectType == "tree" {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	return filtered
 }
 
 // --- Messages ---

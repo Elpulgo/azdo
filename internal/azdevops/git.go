@@ -291,8 +291,9 @@ type IterationChange struct {
 
 // ChangeItem represents the item details in an iteration change
 type ChangeItem struct {
-	ObjectID string `json:"objectId"`
-	Path     string `json:"path"`
+	ObjectID      string `json:"objectId"`
+	Path          string `json:"path"`
+	GitObjectType string `json:"gitObjectType,omitempty"` // "blob" for files, "tree" for folders
 }
 
 // IterationChangesResponse represents the API response for iteration changes
