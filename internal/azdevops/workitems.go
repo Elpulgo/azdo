@@ -27,6 +27,7 @@ type WorkItemFields struct {
 	ChangedDate   time.Time `json:"System.ChangedDate"`
 	IterationPath string    `json:"System.IterationPath"`
 	Description   string    `json:"System.Description"`
+	ReproSteps    string    `json:"Microsoft.VSTS.TCM.ReproSteps"`
 }
 
 // WorkItemReference represents a reference to a work item from WIQL queries
@@ -65,6 +66,15 @@ func (wi *WorkItem) StateIcon() string {
 	default:
 		return "○"
 	}
+}
+
+// EffectiveDescription returns the appropriate description field based on work item type.
+// Bugs use Microsoft.VSTS.TCM.ReproSteps; other types use System.Description.
+func (wi *WorkItem) EffectiveDescription() string {
+	if wi.Fields.WorkItemType == "Bug" && wi.Fields.ReproSteps != "" {
+		return wi.Fields.ReproSteps
+	}
+	return wi.Fields.Description
 }
 
 // AssignedToName returns the display name of the assigned user, or "-" if unassigned
@@ -125,6 +135,7 @@ func (c *Client) GetWorkItems(ids []int) ([]WorkItem, error) {
 		"System.ChangedDate",
 		"System.IterationPath",
 		"System.Description",
+		"Microsoft.VSTS.TCM.ReproSteps",
 	}, ",")
 
 	path := fmt.Sprintf("/wit/workitems?ids=%s&fields=%s&api-version=7.1", idsParam, fields)

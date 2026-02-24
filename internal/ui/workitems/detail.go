@@ -123,10 +123,12 @@ func (m *DetailModel) updateViewportContent() {
 	}
 
 	// Description (with HTML stripped)
-	if wi.Fields.Description != "" {
+	// Bugs use ReproSteps field; other types use Description
+	effectiveDesc := wi.EffectiveDescription()
+	if effectiveDesc != "" {
 		sb.WriteString(m.styles.Label.Render("Description"))
 		sb.WriteString("\n")
-		cleanDesc := stripHTMLTags(wi.Fields.Description)
+		cleanDesc := stripHTMLTags(effectiveDesc)
 		sb.WriteString(m.styles.Value.Render(cleanDesc))
 		sb.WriteString("\n")
 	} else {
