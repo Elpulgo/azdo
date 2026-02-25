@@ -167,7 +167,11 @@ On first run, the application will prompt you to enter your Azure DevOps PAT. Th
 - **Linux**: Secret Service (gnome-keyring, KWallet, etc.)
 
 **Required PAT Scopes:**
-- `Build` - Read (for pipeline runs and logs)
+| Scope | Access | Used For |
+|-------|--------|----------|
+| **Build** | Read | Pipeline runs, build timelines, and logs |
+| **Code** | Read & Write | List PRs, view threads/iterations/diffs, vote on PRs, add comments, and update thread status |
+| **Work Items** | Read & Write | Query and view work items, fetch available states, and change work item state |
 
 To create a PAT:
 1. Go to Azure DevOps → User Settings → Personal Access Tokens
