@@ -1,6 +1,7 @@
 package workitems
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -340,5 +341,144 @@ func TestGetWorkItem(t *testing.T) {
 	}
 	if got.Fields.Title != "Test WI" {
 		t.Errorf("Expected title 'Test WI', got '%s'", got.Fields.Title)
+	}
+}
+
+func TestDetailModel_SKeyStartsLoading(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 123,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "Active",
+			WorkItemType: "Bug",
+		},
+	}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(80, 30)
+
+	// Press 's' should start loading states
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+
+	if !m.loading {
+		t.Error("Expected loading to be true after pressing 's'")
+	}
+	if cmd == nil {
+		t.Error("Expected command to be returned for fetching states")
+	}
+}
+
+func TestDetailModel_StatesLoadedOpensStatePicker(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 123,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "Active",
+			WorkItemType: "Bug",
+		},
+	}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(80, 30)
+
+	// Simulate states being loaded
+	m, _ = m.Update(statesLoadedMsg{
+		states: []azdevops.WorkItemTypeState{
+			{Name: "New", Color: "b2b2b2", Category: "Proposed"},
+			{Name: "Active", Color: "007acc", Category: "InProgress"},
+			{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
+			{Name: "Closed", Color: "339933", Category: "Completed"},
+		},
+	})
+
+	if !m.statePicker.IsVisible() {
+		t.Error("Expected state picker to be visible after states loaded")
+	}
+}
+
+func TestDetailModel_StateUpdateSuccess(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 123,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "Active",
+			WorkItemType: "Bug",
+		},
+	}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(80, 30)
+
+	// Simulate successful state update
+	m, _ = m.Update(stateUpdateResultMsg{newState: "Resolved"})
+
+	if m.workItem.Fields.State != "Resolved" {
+		t.Errorf("Expected state 'Resolved', got %q", m.workItem.Fields.State)
+	}
+	if m.statusMessage == "" {
+		t.Error("Expected status message after state update")
+	}
+}
+
+func TestDetailModel_StateUpdateError(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 123,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "Active",
+			WorkItemType: "Bug",
+		},
+	}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(80, 30)
+
+	// Simulate failed state update
+	m, _ = m.Update(stateUpdateResultMsg{err: fmt.Errorf("access denied")})
+
+	if m.workItem.Fields.State != "Active" {
+		t.Errorf("Expected state to remain 'Active' after error, got %q", m.workItem.Fields.State)
+	}
+	if !strings.Contains(m.statusMessage, "Error") {
+		t.Error("Expected error in status message")
+	}
+}
+
+func TestDetailModel_StatePickerRoutesInput(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 123,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test item",
+			State:        "Active",
+			WorkItemType: "Bug",
+		},
+	}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(80, 30)
+
+	// Open state picker
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+
+	// Navigate down in the picker
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	// Escape should close the picker
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.statePicker.IsVisible() {
+		t.Error("Expected state picker to be hidden after escape")
+	}
+}
+
+func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 123}
+	m := NewDetailModel(nil, wi)
+
+	items := m.GetContextItems()
+	found := false
+	for _, item := range items {
+		if item.Key == "s" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected context items to include 's' keybinding for state change")
 	}
 }

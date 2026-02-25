@@ -584,3 +584,81 @@ func TestMyItems_FetchError_FallsBack(t *testing.T) {
 		t.Error("myItemsOnly should be false after fetch error")
 	}
 }
+
+func TestStatePickerEscClosesPickerNotDetailView(t *testing.T) {
+	m := NewModel(nil)
+
+	// Set up work items
+	m.list = m.list.SetItems([]azdevops.WorkItem{
+		{
+			ID: 123,
+			Fields: azdevops.WorkItemFields{
+				Title:        "Test WI",
+				State:        "Active",
+				WorkItemType: "Bug",
+			},
+		},
+	})
+
+	// Enter detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.GetViewMode() != ViewDetail {
+		t.Fatalf("Expected ViewDetail, got %d", m.GetViewMode())
+	}
+
+	// Simulate states loaded (which opens the state picker)
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		adapter.model, _ = adapter.model.Update(statesLoadedMsg{
+			states: []azdevops.WorkItemTypeState{
+				{Name: "New", Color: "b2b2b2", Category: "Proposed"},
+				{Name: "Active", Color: "007acc", Category: "InProgress"},
+				{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
+			},
+		})
+		if !adapter.model.statePicker.IsVisible() {
+			t.Fatal("State picker should be visible after states loaded")
+		}
+	} else {
+		t.Fatal("Expected detailAdapter")
+	}
+
+	// Press Esc to close state picker (not the detail view)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Should still be in detail view (Esc closed the picker, not the view)
+	if m.GetViewMode() != ViewDetail {
+		t.Error("Esc should close state picker, not exit detail view")
+	}
+
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		if adapter.model.statePicker.IsVisible() {
+			t.Error("State picker should be hidden after Esc")
+		}
+	}
+
+	// Now pressing Esc again should exit detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.GetViewMode() != ViewList {
+		t.Error("Second Esc should exit detail view back to list")
+	}
+}
+
+func TestHasContextBar_DetailView(t *testing.T) {
+	m := NewModel(nil)
+
+	// In list mode, no context bar
+	if m.HasContextBar() {
+		t.Error("Expected no context bar in list mode")
+	}
+
+	// Set up items and enter detail
+	m.list = m.list.SetItems([]azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Test", WorkItemType: "Bug"}},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// In detail mode, context bar should be shown
+	if !m.HasContextBar() {
+		t.Error("Expected context bar in detail mode")
+	}
+}

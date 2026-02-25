@@ -86,6 +86,9 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 			d.SetSize(w, h)
 			return &detailAdapter{d}, nil
 		},
+		HasContextBar: func(mode listview.ViewMode) bool {
+			return mode == listview.ViewDetail
+		},
 		FilterFunc: filterFunc,
 	}
 
@@ -137,6 +140,21 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			// Toggle OFF: restore all items
 			m.list = m.list.SetItems(m.allItems)
 			return m, nil
+		}
+	}
+
+	// When in detail view, intercept esc to check for modals first
+	if m.GetViewMode() == ViewDetail {
+		if kmsg, ok := msg.(tea.KeyMsg); ok && kmsg.String() == "esc" {
+			// If the detail view has a modal open (e.g. state picker),
+			// route esc directly to the detail model to close the modal,
+			// bypassing the listview which would close the entire detail view
+			if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+				if adapter.model.statePicker.IsVisible() {
+					adapter.model, _ = adapter.model.Update(msg)
+					return m, nil
+				}
+			}
 		}
 	}
 

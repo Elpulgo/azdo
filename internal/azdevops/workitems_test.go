@@ -477,3 +477,154 @@ func TestClient_ListWorkItems_NoResults(t *testing.T) {
 		t.Errorf("Expected 0 work items, got %d", len(workItems))
 	}
 }
+
+func TestClient_GetWorkItemTypeStates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/wit/workitemtypes/Bug/states") {
+			t.Errorf("Unexpected path: %s", r.URL.Path)
+		}
+
+		response := WorkItemTypeStatesResponse{
+			Count: 4,
+			Value: []WorkItemTypeState{
+				{Name: "New", Color: "b2b2b2", Category: "Proposed"},
+				{Name: "Active", Color: "007acc", Category: "InProgress"},
+				{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
+				{Name: "Closed", Color: "339933", Category: "Completed"},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	states, err := client.GetWorkItemTypeStates("Bug")
+	if err != nil {
+		t.Fatalf("GetWorkItemTypeStates() error = %v", err)
+	}
+
+	if len(states) != 4 {
+		t.Fatalf("Expected 4 states, got %d", len(states))
+	}
+	if states[0].Name != "New" {
+		t.Errorf("Expected first state 'New', got %q", states[0].Name)
+	}
+	if states[0].Category != "Proposed" {
+		t.Errorf("Expected category 'Proposed', got %q", states[0].Category)
+	}
+}
+
+func TestClient_GetWorkItemTypeStates_ExcludesRemovedCategory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := WorkItemTypeStatesResponse{
+			Count: 5,
+			Value: []WorkItemTypeState{
+				{Name: "New", Color: "b2b2b2", Category: "Proposed"},
+				{Name: "Active", Color: "007acc", Category: "InProgress"},
+				{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
+				{Name: "Closed", Color: "339933", Category: "Completed"},
+				{Name: "Removed", Color: "ffffff", Category: "Removed"},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	states, err := client.GetWorkItemTypeStates("Bug")
+	if err != nil {
+		t.Fatalf("GetWorkItemTypeStates() error = %v", err)
+	}
+
+	for _, s := range states {
+		if s.Category == "Removed" {
+			t.Errorf("GetWorkItemTypeStates should exclude 'Removed' category, but found state %q", s.Name)
+		}
+	}
+}
+
+func TestClient_UpdateWorkItemState(t *testing.T) {
+	var capturedBody string
+	var capturedContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			t.Errorf("Expected PATCH, got %s", r.Method)
+		}
+		capturedContentType = r.Header.Get("Content-Type")
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
+
+		response := WorkItem{
+			ID:  123,
+			Rev: 2,
+			Fields: WorkItemFields{
+				Title: "Fix bug",
+				State: "Resolved",
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	err := client.UpdateWorkItemState(123, "Resolved")
+	if err != nil {
+		t.Fatalf("UpdateWorkItemState() error = %v", err)
+	}
+
+	if capturedContentType != "application/json-patch+json" {
+		t.Errorf("Expected Content-Type 'application/json-patch+json', got %q", capturedContentType)
+	}
+
+	if !strings.Contains(capturedBody, "/fields/System.State") {
+		t.Errorf("Expected body to contain '/fields/System.State', got %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "Resolved") {
+		t.Errorf("Expected body to contain 'Resolved', got %s", capturedBody)
+	}
+}
+
+func TestClient_UpdateWorkItemState_APIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	err := client.UpdateWorkItemState(123, "InvalidState")
+	if err == nil {
+		t.Error("Expected error for bad request, got nil")
+	}
+}

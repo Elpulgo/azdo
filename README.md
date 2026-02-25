@@ -31,6 +31,7 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 ### Work Items
 - List view of work items with status and type information
 - Detailed view showing work item details
+- Change work item state directly from the detail view (dynamically fetches available states)
 
 ### User Experience
 - Help modal with all keyboard shortcuts (press `?`)
@@ -208,6 +209,11 @@ azdo-tui
 |-----|--------|
 | `v` | Vote on pull request |
 
+### Work Item Detail View
+| Key | Action |
+|-----|--------|
+| `s` | Change work item state |
+
 ### Log Viewer
 | Key | Action |
 |-----|--------|
@@ -334,6 +340,7 @@ Binaries will be available in the `dist/` directory after running GoReleaser loc
 - [ ] Multi-project support
 - [x] Theme switching within the app
 - [x] PR voting (approve, reject, suggestions, wait, reset)
+- [x] Work item state changes
 
 ## Contributing
 

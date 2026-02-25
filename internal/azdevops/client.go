@@ -115,6 +115,36 @@ func (c *Client) post(path string, body io.Reader) ([]byte, error) {
 	return c.doRequest("POST", path, body)
 }
 
+// doRequestWithContentType performs an HTTP request with a custom Content-Type header.
+func (c *Client) doRequestWithContentType(method, path string, body io.Reader, contentType string) ([]byte, error) {
+	url := c.baseURL + path
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, formatHTTPError(resp.StatusCode, respBody)
+	}
+
+	return respBody, nil
+}
+
 // doRequest performs an HTTP request with the given method
 func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, error) {
 	url := c.baseURL + path
