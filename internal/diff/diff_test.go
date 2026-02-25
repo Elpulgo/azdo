@@ -559,3 +559,136 @@ func TestCountCommentsPerFile_NoCodeComments(t *testing.T) {
 		t.Errorf("Expected empty map for threads without file context, got %d entries", len(result))
 	}
 }
+
+func TestFilterGeneralThreads(t *testing.T) {
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			ThreadContext: nil, // general comment
+			Comments:      []azdevops.Comment{{ID: 1, Content: "Looks good"}},
+		},
+		{
+			ID: 2,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{{ID: 2, Content: "Fix this"}},
+		},
+		{
+			ID:            3,
+			ThreadContext: nil, // another general comment
+			Comments:      []azdevops.Comment{{ID: 3, Content: "Nice PR"}},
+		},
+		{
+			ID: 4,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath: "", // empty path treated as general
+			},
+			Comments: []azdevops.Comment{{ID: 4, Content: "Empty path"}},
+		},
+	}
+
+	result := FilterGeneralThreads(threads)
+
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 general threads, got %d", len(result))
+	}
+	if result[0].ID != 1 {
+		t.Errorf("First thread ID = %d, want 1", result[0].ID)
+	}
+	if result[1].ID != 3 {
+		t.Errorf("Second thread ID = %d, want 3", result[1].ID)
+	}
+	if result[2].ID != 4 {
+		t.Errorf("Third thread ID = %d, want 4", result[2].ID)
+	}
+}
+
+func TestFilterGeneralThreads_Empty(t *testing.T) {
+	result := FilterGeneralThreads(nil)
+	if result != nil {
+		t.Errorf("Expected nil for nil input, got %v", result)
+	}
+}
+
+func TestFilterGeneralThreads_NoGeneralComments(t *testing.T) {
+	threads := []azdevops.Thread{
+		{
+			ID: 1,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+		},
+	}
+
+	result := FilterGeneralThreads(threads)
+	if result != nil {
+		t.Errorf("Expected nil when no general threads, got %d entries", len(result))
+	}
+}
+
+func TestFilterGeneralThreads_AllGeneral(t *testing.T) {
+	threads := []azdevops.Thread{
+		{ID: 1, ThreadContext: nil},
+		{ID: 2, ThreadContext: nil},
+	}
+
+	result := FilterGeneralThreads(threads)
+	if len(result) != 2 {
+		t.Errorf("Expected 2 general threads, got %d", len(result))
+	}
+}
+
+func TestCountGeneralComments(t *testing.T) {
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			ThreadContext: nil,
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Looks good"},
+				{ID: 2, Content: "Thanks", ParentCommentID: 1},
+			},
+		},
+		{
+			ID: 2,
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath: "/src/main.go",
+			},
+			Comments: []azdevops.Comment{{ID: 3, Content: "Fix"}},
+		},
+		{
+			ID:            3,
+			ThreadContext: nil,
+			Comments:      []azdevops.Comment{{ID: 4, Content: "Nice"}},
+		},
+	}
+
+	count := CountGeneralComments(threads)
+	if count != 3 {
+		t.Errorf("Expected 3 general comments, got %d", count)
+	}
+}
+
+func TestCountGeneralComments_Empty(t *testing.T) {
+	count := CountGeneralComments(nil)
+	if count != 0 {
+		t.Errorf("Expected 0 for nil threads, got %d", count)
+	}
+}
+
+func TestCountGeneralComments_NoGeneral(t *testing.T) {
+	threads := []azdevops.Thread{
+		{
+			ID: 1,
+			ThreadContext: &azdevops.ThreadContext{FilePath: "/src/main.go"},
+			Comments:      []azdevops.Comment{{ID: 1, Content: "Code comment"}},
+		},
+	}
+
+	count := CountGeneralComments(threads)
+	if count != 0 {
+		t.Errorf("Expected 0 for no general threads, got %d", count)
+	}
+}

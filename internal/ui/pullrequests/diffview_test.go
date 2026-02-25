@@ -63,32 +63,37 @@ func TestDiffModel_FileListNavigation(t *testing.T) {
 	}
 	m.updateFileListViewport()
 
+	// Index 0 = General comments (virtual entry), 1-3 = files
 	if m.fileIndex != 0 {
 		t.Errorf("Initial fileIndex = %d, want 0", m.fileIndex)
 	}
 
-	// Navigate down
+	// Navigate down through all items (general + 3 files = 4 total)
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.fileIndex != 1 {
 		t.Errorf("After j, fileIndex = %d, want 1", m.fileIndex)
 	}
 
-	// Navigate down again
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.fileIndex != 2 {
 		t.Errorf("After j, fileIndex = %d, want 2", m.fileIndex)
 	}
 
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.fileIndex != 3 {
+		t.Errorf("After j, fileIndex = %d, want 3", m.fileIndex)
+	}
+
 	// Navigate down at bottom (should stay)
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.fileIndex != 2 {
-		t.Errorf("After j at bottom, fileIndex = %d, want 2", m.fileIndex)
+	if m.fileIndex != 3 {
+		t.Errorf("After j at bottom, fileIndex = %d, want 3", m.fileIndex)
 	}
 
 	// Navigate up
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.fileIndex != 1 {
-		t.Errorf("After k, fileIndex = %d, want 1", m.fileIndex)
+	if m.fileIndex != 2 {
+		t.Errorf("After k, fileIndex = %d, want 2", m.fileIndex)
 	}
 }
 
@@ -866,13 +871,14 @@ func TestDiffModel_FileListPageDown_ClampsAtEnd(t *testing.T) {
 		}
 	}
 	m.changedFiles = files
-	m.fileIndex = 6
+	// Total items = 1 (general) + 8 files = 9, max index = 8
+	m.fileIndex = 7
 	m.updateFileListViewport()
 
 	// Page down near the end should clamp to last item
 	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.fileIndex != 7 {
-		t.Errorf("After pgdown near end, fileIndex = %d, want 7", m.fileIndex)
+	if m.fileIndex != 8 {
+		t.Errorf("After pgdown near end, fileIndex = %d, want 8", m.fileIndex)
 	}
 }
 
@@ -921,8 +927,8 @@ func TestDiffModel_FileListScrollPercent(t *testing.T) {
 		t.Errorf("At top, scroll percent = %f, want 0", pct)
 	}
 
-	// Navigate to bottom
-	for i := 0; i < 19; i++ {
+	// Navigate to bottom (1 general + 20 files = 21 items, max index 20)
+	for i := 0; i < 20; i++ {
 		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	}
 
@@ -1086,6 +1092,303 @@ func TestDiffModel_InputMode_BlocksKeystrokes(t *testing.T) {
 	if m.textInput.Value() != "h?t" {
 		t.Errorf("After typing 't', textInput.Value() = %q, want %q", m.textInput.Value(), "h?t")
 	}
+}
+
+// --- General comments tests ---
+
+func newTestDiffModelWithGeneralComments() *DiffModel {
+	pr := azdevops.PullRequest{
+		ID:            101,
+		Title:         "Test PR",
+		SourceRefName: "refs/heads/feature/test",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123", Name: "test-repo"},
+	}
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}},
+			},
+		},
+		{
+			ID:            2,
+			Status:        "active",
+			ThreadContext: nil, // general comment
+			Comments: []azdevops.Comment{
+				{ID: 2, Content: "Looks good overall", Author: azdevops.Identity{DisplayName: "Bob"}},
+				{ID: 3, Content: "Thanks!", Author: azdevops.Identity{DisplayName: "Alice"}, ParentCommentID: 2},
+			},
+		},
+		{
+			ID:            3,
+			Status:        "fixed",
+			ThreadContext: nil, // resolved general comment
+			Comments: []azdevops.Comment{
+				{ID: 4, Content: "Add docs?", Author: azdevops.Identity{DisplayName: "Charlie"}},
+			},
+		},
+	}
+	s := styles.DefaultStyles()
+	return NewDiffModel(nil, pr, threads, s)
+}
+
+func TestDiffModel_GeneralThreadsComputed(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+
+	if len(m.generalThreads) != 2 {
+		t.Errorf("Expected 2 general threads, got %d", len(m.generalThreads))
+	}
+	if m.generalThreads[0].ID != 2 {
+		t.Errorf("First general thread ID = %d, want 2", m.generalThreads[0].ID)
+	}
+	if m.generalThreads[1].ID != 3 {
+		t.Errorf("Second general thread ID = %d, want 3", m.generalThreads[1].ID)
+	}
+}
+
+func TestDiffModel_FileListAlwaysShowsGeneralComments(t *testing.T) {
+	// Even with no general comments, the entry should appear
+	m := newTestDiffModel() // has no general comments
+	m.SetSize(80, 24)
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	m.updateFileListViewport()
+
+	view := m.viewFileList()
+	if !strings.Contains(view, "General comments") {
+		t.Error("File list should always contain 'General comments' entry")
+	}
+}
+
+func TestDiffModel_FileListShowsGeneralCommentCount(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	m.updateFileListViewport()
+
+	view := m.viewFileList()
+	// Should show count of general comment threads
+	if !strings.Contains(view, "General comments (2)") {
+		t.Errorf("File list should show 'General comments (2)', got:\n%s", view)
+	}
+}
+
+func TestDiffModel_FileListIndexOffset(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
+	}
+	m.updateFileListViewport()
+
+	// Index 0 should be general comments
+	if m.fileIndex != 0 {
+		t.Errorf("Initial fileIndex = %d, want 0", m.fileIndex)
+	}
+	if !m.isGeneralCommentsSelected() {
+		t.Error("Index 0 should be general comments")
+	}
+
+	// Navigate down to first file
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.fileIndex != 1 {
+		t.Errorf("After j, fileIndex = %d, want 1", m.fileIndex)
+	}
+	if m.isGeneralCommentsSelected() {
+		t.Error("Index 1 should NOT be general comments")
+	}
+
+	// Navigate down to second file
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.fileIndex != 2 {
+		t.Errorf("After j, fileIndex = %d, want 2", m.fileIndex)
+	}
+
+	// Can't go further
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.fileIndex != 2 {
+		t.Errorf("After j at bottom, fileIndex = %d, want 2", m.fileIndex)
+	}
+}
+
+func TestDiffModel_EnterGeneralComments(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+	}
+	m.updateFileListViewport()
+
+	// At index 0 (general comments), press enter
+	m.fileIndex = 0
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.viewMode != DiffFileView {
+		t.Errorf("viewMode = %d, want DiffFileView", m.viewMode)
+	}
+	if !m.viewingGeneralComments {
+		t.Error("Should be viewing general comments")
+	}
+}
+
+func TestDiffModel_BuildGeneralCommentLines(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.viewingGeneralComments = true
+
+	m.buildGeneralCommentLines()
+
+	if len(m.diffLines) == 0 {
+		t.Fatal("Expected diffLines to be populated with general comments")
+	}
+
+	// Should have comment lines for all comments across general threads
+	commentCount := 0
+	for _, line := range m.diffLines {
+		if line.Type == diffLineComment {
+			commentCount++
+		}
+	}
+
+	// Thread 2 has 2 comments, thread 3 has 1 comment = 3 total
+	if commentCount != 3 {
+		t.Errorf("Expected 3 comment lines, got %d", commentCount)
+	}
+
+	// First comment should be from thread 2
+	firstComment := findFirstComment(m.diffLines)
+	if firstComment == nil {
+		t.Fatal("No comment lines found")
+	}
+	if firstComment.ThreadID != 2 {
+		t.Errorf("First comment ThreadID = %d, want 2", firstComment.ThreadID)
+	}
+}
+
+func TestDiffModel_GeneralCommentsViewHeader(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.viewingGeneralComments = true
+	m.viewMode = DiffFileView
+
+	m.buildGeneralCommentLines()
+	m.updateDiffViewport()
+
+	view := m.viewFileDiff()
+	if !strings.Contains(view, "General comments") {
+		t.Errorf("General comments view should show header, got:\n%s", view)
+	}
+}
+
+func TestDiffModel_EscFromGeneralComments(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.viewingGeneralComments = true
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.viewMode != DiffFileList {
+		t.Errorf("After esc, viewMode = %d, want DiffFileList", m.viewMode)
+	}
+	if m.viewingGeneralComments {
+		t.Error("After esc, viewingGeneralComments should be false")
+	}
+}
+
+func TestDiffModel_GeneralComments_NewCommentKey(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.viewingGeneralComments = true
+	m.diffLines = []diffLine{
+		{Type: diffLineComment, Content: "test", ThreadID: 2},
+	}
+	m.selectedLine = 0
+
+	// Press 'c' to create new general comment
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+
+	if m.inputMode != InputNewComment {
+		t.Errorf("After 'c' in general comments, inputMode = %d, want InputNewComment", m.inputMode)
+	}
+}
+
+func TestDiffModel_GeneralComments_ContextItems(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.viewMode = DiffFileView
+	m.viewingGeneralComments = true
+
+	items := m.GetContextItems()
+
+	hasComment := false
+	hasReply := false
+	hasResolve := false
+	for _, item := range items {
+		if item.Description == "comment" {
+			hasComment = true
+		}
+		if item.Description == "reply" {
+			hasReply = true
+		}
+		if item.Description == "resolve" {
+			hasResolve = true
+		}
+	}
+
+	if !hasComment {
+		t.Error("Missing 'comment' context item for general comments view")
+	}
+	if !hasReply {
+		t.Error("Missing 'reply' context item for general comments view")
+	}
+	if !hasResolve {
+		t.Error("Missing 'resolve' context item for general comments view")
+	}
+}
+
+func TestDiffModel_ThreadsRefresh_UpdatesGeneralThreads(t *testing.T) {
+	m := newTestDiffModelWithGeneralComments()
+	m.SetSize(80, 24)
+
+	// Initially has 2 general threads
+	if len(m.generalThreads) != 2 {
+		t.Fatalf("Expected 2 general threads initially, got %d", len(m.generalThreads))
+	}
+
+	// Simulate threads refresh with an additional general thread
+	newThreads := append(m.threads, azdevops.Thread{
+		ID:            10,
+		Status:        "active",
+		ThreadContext: nil,
+		Comments:      []azdevops.Comment{{ID: 10, Content: "New general comment"}},
+	})
+
+	m.Update(threadsRefreshMsg{threads: newThreads})
+
+	if len(m.generalThreads) != 3 {
+		t.Errorf("After refresh, expected 3 general threads, got %d", len(m.generalThreads))
+	}
+}
+
+// helper to find the first comment diffLine
+func findFirstComment(lines []diffLine) *diffLine {
+	for i := range lines {
+		if lines[i].Type == diffLineComment {
+			return &lines[i]
+		}
+	}
+	return nil
 }
 
 func TestDiffModel_ScrollPastMultiLineComments(t *testing.T) {

@@ -61,6 +61,10 @@ type DiffModel struct {
 	pr      azdevops.PullRequest
 	threads []azdevops.Thread
 
+	// General comments (threads without file context)
+	generalThreads         []azdevops.Thread
+	viewingGeneralComments bool
+
 	// File list state
 	changedFiles []azdevops.IterationChange
 	fileIndex    int
@@ -101,13 +105,14 @@ func NewDiffModel(client *azdevops.Client, pr azdevops.PullRequest, threads []az
 	ti.CharLimit = 500
 
 	return &DiffModel{
-		client:    client,
-		pr:        pr,
-		threads:   threads,
-		viewMode:  DiffFileList,
-		spinner:   sp,
-		styles:    s,
-		textInput: ti,
+		client:         client,
+		pr:             pr,
+		threads:        threads,
+		generalThreads: diff.FilterGeneralThreads(threads),
+		viewMode:       DiffFileList,
+		spinner:        sp,
+		styles:         s,
+		textInput:      ti,
 	}
 }
 
@@ -180,7 +185,11 @@ func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 	case threadsRefreshMsg:
 		if msg.err == nil {
 			m.threads = msg.threads
-			if m.viewMode == DiffFileView && m.currentFile != nil {
+			m.generalThreads = diff.FilterGeneralThreads(msg.threads)
+			if m.viewMode == DiffFileView && m.viewingGeneralComments {
+				m.buildGeneralCommentLines()
+				m.updateDiffViewport()
+			} else if m.viewMode == DiffFileView && m.currentFile != nil {
 				m.fileThreads = diff.MapThreadsToLines(m.threads, m.currentFile.Item.Path)
 				m.buildDiffLines()
 				m.updateDiffViewport()
@@ -204,6 +213,8 @@ func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 
 // updateFileList handles key events in file list mode
 func (m *DiffModel) updateFileList(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
+	maxIndex := m.fileListItemCount() - 1
+
 	switch msg.String() {
 	case "up", "k":
 		if m.fileIndex > 0 {
@@ -211,7 +222,7 @@ func (m *DiffModel) updateFileList(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 			m.updateFileListViewport()
 		}
 	case "down", "j":
-		if m.fileIndex < len(m.changedFiles)-1 {
+		if m.fileIndex < maxIndex {
 			m.fileIndex++
 			m.updateFileListViewport()
 		}
@@ -223,13 +234,23 @@ func (m *DiffModel) updateFileList(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 		m.updateFileListViewport()
 	case "pgdown":
 		m.fileIndex += m.viewport.Height
-		if m.fileIndex >= len(m.changedFiles) {
-			m.fileIndex = len(m.changedFiles) - 1
+		if m.fileIndex > maxIndex {
+			m.fileIndex = maxIndex
 		}
 		m.updateFileListViewport()
 	case "enter":
-		if len(m.changedFiles) > 0 && m.fileIndex < len(m.changedFiles) {
-			change := m.changedFiles[m.fileIndex]
+		if m.isGeneralCommentsSelected() {
+			// Open general comments view
+			m.viewingGeneralComments = true
+			m.viewMode = DiffFileView
+			m.selectedLine = 0
+			m.buildGeneralCommentLines()
+			m.updateDiffViewport()
+			return m, nil
+		}
+		fi := m.selectedFileIndex()
+		if fi >= 0 && fi < len(m.changedFiles) {
+			change := m.changedFiles[fi]
 			m.currentFile = &change
 			m.loading = true
 			m.spinner.SetMessage("Loading diff...")
@@ -278,6 +299,14 @@ func (m *DiffModel) updateDiffView(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 		m.updateDiffViewport()
 		m.ensureDiffLineVisible()
 	case "c":
+		if m.viewingGeneralComments {
+			// Create new general comment thread
+			m.inputMode = InputNewComment
+			m.textInput.SetValue("")
+			m.textInput.Focus()
+			m.textInput.Placeholder = "New comment..."
+			return m, m.textInput.Focus()
+		}
 		// Create new comment on current line
 		line := m.currentDiffLine()
 		if line != nil && (line.Type == diffLineAdded || line.Type == diffLineContext || line.Type == diffLineRemoved) {
@@ -315,6 +344,14 @@ func (m *DiffModel) updateDiffView(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 		m.updateDiffViewport()
 		m.ensureDiffLineVisible()
 	case "esc":
+		if m.viewingGeneralComments {
+			// Go back to file list
+			m.viewingGeneralComments = false
+			m.viewMode = DiffFileList
+			m.currentFile = nil
+			m.updateFileListViewport()
+			return m, nil
+		}
 		// Exit diff view entirely, back to detail
 		return m, func() tea.Msg { return exitDiffViewMsg{} }
 	}
@@ -339,6 +376,9 @@ func (m *DiffModel) updateInput(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 
 		switch mode {
 		case InputNewComment:
+			if m.viewingGeneralComments {
+				return m, m.createGeneralComment(content)
+			}
 			line := m.currentDiffLine()
 			if line != nil && m.currentFile != nil {
 				lineNum := line.NewNum
@@ -400,8 +440,11 @@ func (m *DiffModel) viewFileDiff() string {
 
 	var sb strings.Builder
 
-	// File header
-	if m.currentFile != nil {
+	// Header
+	if m.viewingGeneralComments {
+		sb.WriteString(m.styles.DiffHeader.Render(" General comments "))
+		sb.WriteString("\n")
+	} else if m.currentFile != nil {
 		sb.WriteString(m.styles.DiffHeader.Render(fmt.Sprintf(" %s ", m.currentFile.Item.Path)))
 		sb.WriteString("\n")
 	}
@@ -500,23 +543,32 @@ func (m *DiffModel) updateFileListViewport() {
 	}
 
 	var sb strings.Builder
+
+	// Virtual "General comments" entry (always shown at index 0)
+	generalLabel := fmt.Sprintf("  💬 General comments (%d)", len(m.generalThreads))
+	if m.fileIndex == 0 {
+		sb.WriteString(m.styles.Selected.Render(generalLabel))
+	} else {
+		sb.WriteString(m.styles.Info.Render(generalLabel))
+	}
+
+	// Changed files (index offset by 1)
 	for i, change := range m.changedFiles {
+		sb.WriteString("\n")
 		icon, style := changeTypeDisplay(change.ChangeType, m.styles)
 		line := fmt.Sprintf("  %s %s", icon, change.Item.Path)
 		if change.ChangeType == "rename" && change.OriginalPath != "" {
 			line = fmt.Sprintf("  %s %s -> %s", icon, change.OriginalPath, change.Item.Path)
 		}
-		if i == m.fileIndex {
+		if i+1 == m.fileIndex { // +1 for the general comments entry
 			sb.WriteString(m.styles.Selected.Render(line))
 		} else {
 			sb.WriteString(style.Render(line))
 		}
-		if i < len(m.changedFiles)-1 {
-			sb.WriteString("\n")
-		}
 	}
 
 	if len(m.changedFiles) == 0 {
+		sb.WriteString("\n")
 		sb.WriteString(m.styles.Muted.Render("  No changed files"))
 	}
 
@@ -591,6 +643,48 @@ func (m *DiffModel) buildDiffLines() {
 				// Remove from map to avoid duplicates if same line appears in multiple hunks
 				delete(m.fileThreads, lineNum)
 			}
+		}
+	}
+}
+
+// isGeneralCommentsSelected returns true if the general comments virtual entry is selected
+func (m *DiffModel) isGeneralCommentsSelected() bool {
+	return m.fileIndex == 0
+}
+
+// fileListItemCount returns the total number of items in the file list (including the virtual general comments entry)
+func (m *DiffModel) fileListItemCount() int {
+	return 1 + len(m.changedFiles) // 1 for the general comments entry
+}
+
+// selectedFileIndex returns the index into changedFiles for the currently selected item.
+// Returns -1 if the general comments entry is selected.
+func (m *DiffModel) selectedFileIndex() int {
+	return m.fileIndex - 1
+}
+
+// buildGeneralCommentLines builds diffLines from general comment threads
+func (m *DiffModel) buildGeneralCommentLines() {
+	m.diffLines = nil
+
+	for ti, thread := range m.generalThreads {
+		// Add separator between threads (blank line)
+		if ti > 0 {
+			m.diffLines = append(m.diffLines, diffLine{
+				Type:    diffLineHunkHeader,
+				Content: "───",
+			})
+		}
+
+		for ci, comment := range thread.Comments {
+			timestamp := comment.PublishedDate.Format("2006-01-02 15:04")
+			m.diffLines = append(m.diffLines, diffLine{
+				Type:         diffLineComment,
+				Content:      fmt.Sprintf("@[%s] (%s): %s", comment.Author.DisplayName, timestamp, comment.Content),
+				ThreadID:     thread.ID,
+				CommentIdx:   ci,
+				ThreadStatus: thread.Status,
+			})
 		}
 	}
 }
@@ -894,6 +988,20 @@ func (m *DiffModel) createCodeComment(filePath string, line int, content string)
 			return commentResultMsg{err: fmt.Errorf("no client available")}
 		}
 		_, err := m.client.AddPRCodeComment(m.pr.Repository.ID, m.pr.ID, filePath, line, content)
+		if err != nil {
+			return commentResultMsg{err: err}
+		}
+		return commentResultMsg{message: "Comment added"}
+	}
+}
+
+// createGeneralComment creates a new general (non-file) comment thread on the PR
+func (m *DiffModel) createGeneralComment(content string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return commentResultMsg{err: fmt.Errorf("no client available")}
+		}
+		_, err := m.client.AddPRComment(m.pr.Repository.ID, m.pr.ID, content)
 		if err != nil {
 			return commentResultMsg{err: err}
 		}
