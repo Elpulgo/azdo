@@ -366,3 +366,29 @@ func TestStatusBar_View_ErrorMessageReplacesKeybindings(t *testing.T) {
 		t.Error("view should not contain detailed navigate keybinding when showing error")
 	}
 }
+
+func TestStatusBar_SetFilterLabel(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetFilterLabel("My Items")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "My Items") {
+		t.Error("view should contain filter label 'My Items'")
+	}
+}
+
+func TestStatusBar_ClearFilterLabel(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetFilterLabel("My Items")
+	sb.ClearFilterLabel()
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if strings.Contains(view, "My Items") {
+		t.Error("view should NOT contain filter label after ClearFilterLabel()")
+	}
+}
+

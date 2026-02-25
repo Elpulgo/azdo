@@ -794,6 +794,534 @@ func TestVoteValue(t *testing.T) {
 	}
 }
 
+func TestPatch_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			t.Errorf("Expected PATCH request, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "fixed"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	body, err := client.patch("/test", nil)
+	if err != nil {
+		t.Fatalf("patch() error = %v", err)
+	}
+	if string(body) != `{"status": "fixed"}` {
+		t.Errorf("patch() body = %s, want %s", string(body), `{"status": "fixed"}`)
+	}
+}
+
+func TestGetPRIterations_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+
+		expectedPath := "/git/repositories/repo-123/pullRequests/101/iterations"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"count": 2,
+			"value": [
+				{"id": 1, "description": "Initial push"},
+				{"id": 2, "description": "Address review comments"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	iterations, err := client.GetPRIterations("repo-123", 101)
+	if err != nil {
+		t.Fatalf("GetPRIterations() error = %v", err)
+	}
+
+	if len(iterations) != 2 {
+		t.Fatalf("Expected 2 iterations, got %d", len(iterations))
+	}
+	if iterations[0].ID != 1 {
+		t.Errorf("iterations[0].ID = %d, want 1", iterations[0].ID)
+	}
+	if iterations[0].Description != "Initial push" {
+		t.Errorf("iterations[0].Description = %s, want 'Initial push'", iterations[0].Description)
+	}
+	if iterations[1].ID != 2 {
+		t.Errorf("iterations[1].ID = %d, want 2", iterations[1].ID)
+	}
+}
+
+func TestGetPRIterations_EmptyList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"count": 0, "value": []}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	iterations, err := client.GetPRIterations("repo-123", 101)
+	if err != nil {
+		t.Fatalf("GetPRIterations() error = %v", err)
+	}
+	if len(iterations) != 0 {
+		t.Errorf("Expected 0 iterations, got %d", len(iterations))
+	}
+}
+
+func TestGetPRIterations_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.GetPRIterations("repo-123", 101)
+	if err == nil {
+		t.Error("Expected error for 404 response, got nil")
+	}
+}
+
+func TestGetPRIterationChanges_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+
+		expectedPath := "/git/repositories/repo-123/pullRequests/101/iterations/2/changes"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		query := r.URL.Query()
+		if query.Get("$compareTo") != "0" {
+			t.Errorf("Expected $compareTo=0, got %s", query.Get("$compareTo"))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"changeEntries": [
+				{
+					"changeId": 1,
+					"item": {"objectId": "abc123", "path": "/src/main.go"},
+					"changeType": "edit"
+				},
+				{
+					"changeId": 2,
+					"item": {"objectId": "def456", "path": "/src/new-file.go"},
+					"changeType": "add"
+				},
+				{
+					"changeId": 3,
+					"item": {"objectId": "ghi789", "path": "/src/old.go"},
+					"changeType": "delete"
+				},
+				{
+					"changeId": 4,
+					"item": {"objectId": "jkl012", "path": "/src/renamed.go"},
+					"changeType": "rename",
+					"originalPath": "/src/original.go"
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	changes, err := client.GetPRIterationChanges("repo-123", 101, 2)
+	if err != nil {
+		t.Fatalf("GetPRIterationChanges() error = %v", err)
+	}
+
+	if len(changes) != 4 {
+		t.Fatalf("Expected 4 changes, got %d", len(changes))
+	}
+
+	// Verify edit change
+	if changes[0].ChangeType != "edit" {
+		t.Errorf("changes[0].ChangeType = %s, want 'edit'", changes[0].ChangeType)
+	}
+	if changes[0].Item.Path != "/src/main.go" {
+		t.Errorf("changes[0].Item.Path = %s, want '/src/main.go'", changes[0].Item.Path)
+	}
+
+	// Verify add change
+	if changes[1].ChangeType != "add" {
+		t.Errorf("changes[1].ChangeType = %s, want 'add'", changes[1].ChangeType)
+	}
+
+	// Verify delete change
+	if changes[2].ChangeType != "delete" {
+		t.Errorf("changes[2].ChangeType = %s, want 'delete'", changes[2].ChangeType)
+	}
+
+	// Verify rename change
+	if changes[3].ChangeType != "rename" {
+		t.Errorf("changes[3].ChangeType = %s, want 'rename'", changes[3].ChangeType)
+	}
+	if changes[3].OriginalPath != "/src/original.go" {
+		t.Errorf("changes[3].OriginalPath = %s, want '/src/original.go'", changes[3].OriginalPath)
+	}
+}
+
+func TestGetPRIterationChanges_EmptyChanges(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"changeEntries": []}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	changes, err := client.GetPRIterationChanges("repo-123", 101, 1)
+	if err != nil {
+		t.Fatalf("GetPRIterationChanges() error = %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("Expected 0 changes, got %d", len(changes))
+	}
+}
+
+func TestGetPRIterationChanges_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.GetPRIterationChanges("repo-123", 101, 1)
+	if err == nil {
+		t.Error("Expected error for 404 response, got nil")
+	}
+}
+
+func TestGetFileContent_Success(t *testing.T) {
+	expectedContent := "package main\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+
+		expectedPath := "/git/repositories/repo-123/items"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		query := r.URL.Query()
+		if query.Get("path") != "/src/main.go" {
+			t.Errorf("Expected path=/src/main.go, got %s", query.Get("path"))
+		}
+		if query.Get("versionType") != "branch" {
+			t.Errorf("Expected versionType=branch, got %s", query.Get("versionType"))
+		}
+		if query.Get("version") != "main" {
+			t.Errorf("Expected version=main, got %s", query.Get("version"))
+		}
+
+		// Verify Accept header
+		accept := r.Header.Get("Accept")
+		if accept != "text/plain" {
+			t.Errorf("Expected Accept=text/plain, got %s", accept)
+		}
+
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(expectedContent))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	content, err := client.GetFileContent("repo-123", "/src/main.go", "main")
+	if err != nil {
+		t.Fatalf("GetFileContent() error = %v", err)
+	}
+
+	if content != expectedContent {
+		t.Errorf("GetFileContent() = %q, want %q", content, expectedContent)
+	}
+}
+
+func TestGetFileContent_EmptyFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(""))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	content, err := client.GetFileContent("repo-123", "/src/empty.go", "main")
+	if err != nil {
+		t.Fatalf("GetFileContent() error = %v", err)
+	}
+	if content != "" {
+		t.Errorf("GetFileContent() = %q, want empty string", content)
+	}
+}
+
+func TestGetFileContent_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.GetFileContent("repo-123", "/src/nonexistent.go", "main")
+	if err == nil {
+		t.Error("Expected error for 404 response, got nil")
+	}
+}
+
+func TestReplyToThread_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+		}
+
+		expectedPath := "/git/repositories/repo-123/pullRequests/101/threads/5/comments"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{
+			"id": 3,
+			"parentCommentId": 1,
+			"content": "Good point, will fix!",
+			"commentType": "text",
+			"author": {"displayName": "Jane Smith"}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	comment, err := client.ReplyToThread("repo-123", 101, 5, "Good point, will fix!")
+	if err != nil {
+		t.Fatalf("ReplyToThread() error = %v", err)
+	}
+
+	if comment.ID != 3 {
+		t.Errorf("Comment.ID = %d, want 3", comment.ID)
+	}
+	if comment.Content != "Good point, will fix!" {
+		t.Errorf("Comment.Content = %s, want 'Good point, will fix!'", comment.Content)
+	}
+}
+
+func TestReplyToThread_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.ReplyToThread("repo-123", 101, 5, "reply")
+	if err == nil {
+		t.Error("Expected error for 400 response, got nil")
+	}
+}
+
+func TestUpdateThreadStatus_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			t.Errorf("Expected PATCH request, got %s", r.Method)
+		}
+
+		expectedPath := "/git/repositories/repo-123/pullRequests/101/threads/5"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id": 5, "status": "fixed"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	err = client.UpdateThreadStatus("repo-123", 101, 5, "fixed")
+	if err != nil {
+		t.Fatalf("UpdateThreadStatus() error = %v", err)
+	}
+}
+
+func TestUpdateThreadStatus_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	err = client.UpdateThreadStatus("repo-123", 101, 5, "fixed")
+	if err == nil {
+		t.Error("Expected error for 403 response, got nil")
+	}
+}
+
+func TestAddPRCodeComment_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+		}
+
+		expectedPath := "/git/repositories/repo-123/pullRequests/101/threads"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{
+			"id": 10,
+			"status": "active",
+			"threadContext": {
+				"filePath": "/src/main.go",
+				"rightFileStart": {"line": 42, "offset": 1},
+				"rightFileEnd": {"line": 42, "offset": 1}
+			},
+			"comments": [
+				{
+					"id": 1,
+					"content": "Should we add error handling here?",
+					"author": {"displayName": "Test User"}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	thread, err := client.AddPRCodeComment("repo-123", 101, "/src/main.go", 42, "Should we add error handling here?")
+	if err != nil {
+		t.Fatalf("AddPRCodeComment() error = %v", err)
+	}
+
+	if thread.ID != 10 {
+		t.Errorf("Thread.ID = %d, want 10", thread.ID)
+	}
+	if thread.ThreadContext == nil {
+		t.Fatal("Thread.ThreadContext should not be nil")
+	}
+	if thread.ThreadContext.FilePath != "/src/main.go" {
+		t.Errorf("ThreadContext.FilePath = %s, want '/src/main.go'", thread.ThreadContext.FilePath)
+	}
+	if thread.ThreadContext.RightFileStart.Line != 42 {
+		t.Errorf("ThreadContext.RightFileStart.Line = %d, want 42", thread.ThreadContext.RightFileStart.Line)
+	}
+	if len(thread.Comments) != 1 {
+		t.Errorf("Comments length = %d, want 1", len(thread.Comments))
+	}
+}
+
+func TestAddPRCodeComment_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.AddPRCodeComment("repo-123", 101, "/src/main.go", 10, "comment")
+	if err == nil {
+		t.Error("Expected error for 400 response, got nil")
+	}
+}
+
 func TestFilterSystemThreads(t *testing.T) {
 	tests := []struct {
 		name    string

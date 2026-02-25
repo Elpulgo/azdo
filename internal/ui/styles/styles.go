@@ -56,6 +56,15 @@ type Styles struct {
 	TableHeader   lipgloss.Style
 	TableCell     lipgloss.Style
 	TableSelected lipgloss.Style
+
+	// Diff styles
+	DiffAdded        lipgloss.Style // Success color (green) — added lines
+	DiffRemoved      lipgloss.Style // Error color (red) — removed lines
+	DiffContext      lipgloss.Style // ForegroundMuted — unchanged context lines
+	DiffHeader       lipgloss.Style // Primary + BackgroundAlt + Bold — file path header
+	DiffHunkHeader   lipgloss.Style // Info color — @@ hunk markers
+	DiffLineNum      lipgloss.Style // ForegroundMuted, right-aligned — line number gutter
+	DiffCommentCount lipgloss.Style // Accent color — comment count badges
 }
 
 // NewStyles creates a new Styles instance from the given theme.
@@ -192,6 +201,33 @@ func NewStyles(theme Theme) *Styles {
 		Foreground(lipgloss.Color(theme.SelectForeground)).
 		Background(lipgloss.Color(theme.SelectBackground)).
 		Bold(false)
+
+	// Diff styles
+	s.DiffAdded = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Success))
+
+	s.DiffRemoved = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Error))
+
+	s.DiffContext = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.ForegroundMuted))
+
+	s.DiffHeader = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Primary)).
+		Background(lipgloss.Color(theme.BackgroundAlt)).
+		Bold(true)
+
+	s.DiffHunkHeader = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Info))
+
+	s.DiffLineNum = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.ForegroundMuted)).
+		Width(5).
+		Align(lipgloss.Right)
+
+	s.DiffCommentCount = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true)
 
 	return s
 }

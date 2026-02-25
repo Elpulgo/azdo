@@ -76,6 +76,127 @@ func TestWorkItem_AssignedToName(t *testing.T) {
 	}
 }
 
+func TestWorkItemFields_ReproStepsDeserialization(t *testing.T) {
+	// Bug work items in Azure DevOps use Microsoft.VSTS.TCM.ReproSteps
+	// instead of System.Description for their description content
+	jsonData := `{
+		"System.Title": "A bug",
+		"System.WorkItemType": "Bug",
+		"Microsoft.VSTS.TCM.ReproSteps": "<div>Steps to reproduce</div>"
+	}`
+
+	var fields WorkItemFields
+	if err := json.Unmarshal([]byte(jsonData), &fields); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if fields.ReproSteps != "<div>Steps to reproduce</div>" {
+		t.Errorf("ReproSteps = %q, want %q", fields.ReproSteps, "<div>Steps to reproduce</div>")
+	}
+}
+
+func TestWorkItem_EffectiveDescription(t *testing.T) {
+	tests := []struct {
+		name         string
+		workItemType string
+		description  string
+		reproSteps   string
+		want         string
+	}{
+		{
+			name:         "Bug with ReproSteps uses ReproSteps",
+			workItemType: "Bug",
+			description:  "",
+			reproSteps:   "Steps to reproduce the bug",
+			want:         "Steps to reproduce the bug",
+		},
+		{
+			name:         "Bug with both fields uses ReproSteps",
+			workItemType: "Bug",
+			description:  "Some description",
+			reproSteps:   "Steps to reproduce",
+			want:         "Steps to reproduce",
+		},
+		{
+			name:         "Bug with only Description falls back to Description",
+			workItemType: "Bug",
+			description:  "Bug description",
+			reproSteps:   "",
+			want:         "Bug description",
+		},
+		{
+			name:         "Task uses Description",
+			workItemType: "Task",
+			description:  "Task description",
+			reproSteps:   "",
+			want:         "Task description",
+		},
+		{
+			name:         "User Story uses Description",
+			workItemType: "User Story",
+			description:  "Story description",
+			reproSteps:   "",
+			want:         "Story description",
+		},
+		{
+			name:         "Bug with neither field returns empty",
+			workItemType: "Bug",
+			description:  "",
+			reproSteps:   "",
+			want:         "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wi := WorkItem{
+				Fields: WorkItemFields{
+					WorkItemType: tt.workItemType,
+					Description:  tt.description,
+					ReproSteps:   tt.reproSteps,
+				},
+			}
+			got := wi.EffectiveDescription()
+			if got != tt.want {
+				t.Errorf("EffectiveDescription() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_GetWorkItems_RequestsReproStepsField(t *testing.T) {
+	var capturedPath string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.String()
+		response := WorkItemsResponse{
+			Count: 1,
+			Value: []WorkItem{
+				{ID: 1, Fields: WorkItemFields{Title: "Bug", WorkItemType: "Bug"}},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.GetWorkItems([]int{1})
+	if err != nil {
+		t.Fatalf("GetWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedPath, "Microsoft.VSTS.TCM.ReproSteps") {
+		t.Errorf("GetWorkItems request must include Microsoft.VSTS.TCM.ReproSteps field.\nGot path: %s", capturedPath)
+	}
+}
+
 func TestClient_QueryWorkItemIDs(t *testing.T) {
 	// Create mock server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -292,6 +413,40 @@ func TestClient_ListWorkItems(t *testing.T) {
 	}
 	if callCount != 2 {
 		t.Errorf("Expected 2 API calls (WIQL + GetWorkItems), got %d", callCount)
+	}
+}
+
+func TestClient_ListMyWorkItems_QueryContainsAtMe(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListMyWorkItems(50)
+	if err != nil {
+		t.Fatalf("ListMyWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedBody, "@Me") {
+		t.Errorf("WIQL query must contain @Me macro.\nGot query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@project") {
+		t.Errorf("WIQL query must scope to @project.\nGot query body: %s", capturedBody)
 	}
 }
 

@@ -348,3 +348,45 @@ func TestPipelineRunsResponse_Exists(t *testing.T) {
 	_ = PipelineRunsResponse{}
 	_ = fmt.Sprintf("%v", PipelineRunsResponse{})
 }
+
+func TestMultiClient_ListMyWorkItems_MergedSortedAndTagged(t *testing.T) {
+	now := time.Now()
+	alphaItems := []WorkItem{
+		{ID: 100, Fields: WorkItemFields{Title: "Alpha My WI", ChangedDate: now.Add(-2 * time.Hour)}},
+	}
+	betaItems := []WorkItem{
+		{ID: 200, Fields: WorkItemFields{Title: "Beta My WI", ChangedDate: now}},
+	}
+
+	alphaServer := newWorkItemServer(t, alphaItems)
+	defer alphaServer.Close()
+	betaServer := newWorkItemServer(t, betaItems)
+	defer betaServer.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"alpha": alphaServer,
+		"beta":  betaServer,
+	})
+
+	items, err := mc.ListMyWorkItems(50)
+	if err != nil {
+		t.Fatalf("ListMyWorkItems failed: %v", err)
+	}
+
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+
+	// Sorted by ChangedDate descending
+	if items[0].ID != 200 {
+		t.Errorf("expected first item ID=200 (newest), got %d", items[0].ID)
+	}
+
+	// Project tagging
+	if items[0].ProjectName != "beta" {
+		t.Errorf("expected items[0].ProjectName = 'beta', got %q", items[0].ProjectName)
+	}
+	if items[1].ProjectName != "alpha" {
+		t.Errorf("expected items[1].ProjectName = 'alpha', got %q", items[1].ProjectName)
+	}
+}

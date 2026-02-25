@@ -43,9 +43,9 @@ func GetThemeByNameWithFallback(name string) Theme {
 	return theme
 }
 
-// GetDefaultTheme returns the default gruvbox theme.
+// GetDefaultTheme returns the default dracula theme.
 func GetDefaultTheme() Theme {
-	return gruvboxTheme
+	return draculaTheme
 }
 
 // ListAvailableThemes returns a sorted list of all available theme names.

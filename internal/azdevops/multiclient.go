@@ -200,3 +200,54 @@ func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {
 
 	return allItems, nil
 }
+
+// ListMyWorkItems fetches work items assigned to the authenticated user (@Me)
+// from all projects concurrently, tags each with ProjectName, merges and sorts
+// by ChangedDate descending.
+func (mc *MultiClient) ListMyWorkItems(top int) ([]WorkItem, error) {
+	type result struct {
+		project string
+		items   []WorkItem
+		err     error
+	}
+
+	var wg sync.WaitGroup
+	ch := make(chan result, len(mc.clients))
+
+	for project, client := range mc.clients {
+		wg.Add(1)
+		go func(p string, c *Client) {
+			defer wg.Done()
+			items, err := c.ListMyWorkItems(top)
+			ch <- result{p, items, err}
+		}(project, client)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	var allItems []WorkItem
+	var errs []error
+	for r := range ch {
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		for i := range r.items {
+			r.items[i].ProjectName = r.project
+		}
+		allItems = append(allItems, r.items...)
+	}
+
+	if len(errs) == len(mc.clients) {
+		return nil, fmt.Errorf("all projects failed: %v", errs)
+	}
+
+	sort.Slice(allItems, func(i, j int) bool {
+		return allItems[i].Fields.ChangedDate.After(allItems[j].Fields.ChangedDate)
+	})
+
+	return allItems, nil
+}

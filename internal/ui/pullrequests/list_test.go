@@ -430,7 +430,7 @@ func TestHasContextBar(t *testing.T) {
 		t.Error("List view should not have context bar")
 	}
 
-	// PR detail view also doesn't have context bar
+	// PR detail view should have context bar (shows diff, navigate, etc.)
 	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
 			ID:            123,
@@ -444,8 +444,8 @@ func TestHasContextBar(t *testing.T) {
 	})
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if model.HasContextBar() {
-		t.Error("Detail view should not have context bar (scroll % is in status bar)")
+	if !model.HasContextBar() {
+		t.Error("Detail view should have context bar")
 	}
 }
 
@@ -524,6 +524,50 @@ func TestPrsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	}
 	if row[0] != "alpha" {
 		t.Errorf("Project column = %q, want 'alpha'", row[0])
+	}
+}
+
+func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
+	model := NewModel(nil)
+
+	// Set up PR data and navigate to diff view
+	model.list = model.list.SetItems([]azdevops.PullRequest{
+		{
+			ID:            123,
+			Title:         "Test PR",
+			Status:        "active",
+			SourceRefName: "refs/heads/test",
+			TargetRefName: "refs/heads/main",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{Name: "repo"},
+		},
+	})
+
+	// Without diff view, IsSearching should be false
+	if model.IsSearching() {
+		t.Error("IsSearching() should be false without active diff view")
+	}
+
+	// Simulate having an active diff view with input mode
+	s := styles.DefaultStyles()
+	model.diffView = NewDiffModel(nil, azdevops.PullRequest{}, nil, s)
+	model.viewMode = ViewDiff
+
+	// Without input active, IsSearching should still be false
+	if model.IsSearching() {
+		t.Error("IsSearching() should be false when diff view has no active input")
+	}
+
+	// With input active, IsSearching should be true
+	model.diffView.inputMode = InputNewComment
+	if !model.IsSearching() {
+		t.Error("IsSearching() should be true when diff view has active input (InputNewComment)")
+	}
+
+	// With reply input active, IsSearching should also be true
+	model.diffView.inputMode = InputReply
+	if !model.IsSearching() {
+		t.Error("IsSearching() should be true when diff view has active input (InputReply)")
 	}
 }
 

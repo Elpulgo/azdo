@@ -103,6 +103,75 @@ func TestDetailView_ShowsTitle(t *testing.T) {
 	}
 }
 
+func TestDetailView_BugShowsReproSteps(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 100,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Login crash",
+			State:        "Active",
+			WorkItemType: "Bug",
+			Priority:     1,
+			ReproSteps:   "1. Open app\n2. Click login\n3. App crashes",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if !strings.Contains(view, "Open app") {
+		t.Error("Expected Bug detail view to show ReproSteps content, but it was missing")
+	}
+	if strings.Contains(view, "No description") {
+		t.Error("Bug with ReproSteps should not show 'No description'")
+	}
+}
+
+func TestDetailView_BugWithoutReproStepsFallsBackToDescription(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 101,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Minor issue",
+			State:        "New",
+			WorkItemType: "Bug",
+			Priority:     3,
+			Description:  "This is a bug description fallback",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if !strings.Contains(view, "bug description fallback") {
+		t.Error("Bug without ReproSteps should fall back to Description")
+	}
+}
+
+func TestDetailView_TaskShowsDescription(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 102,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Implement feature",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Description:  "Task description content here",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if !strings.Contains(view, "Task description content here") {
+		t.Error("Task should show Description field content")
+	}
+}
+
 func TestDetailView_NoTypeIconInTitle(t *testing.T) {
 	wi := azdevops.WorkItem{
 		ID: 789,

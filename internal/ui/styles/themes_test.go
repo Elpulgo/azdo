@@ -101,12 +101,12 @@ func TestGetThemeByNameWithFallback(t *testing.T) {
 		{
 			name:      "invalid theme falls back to default",
 			themeName: "nonexistent",
-			wantName:  "gruvbox",
+			wantName:  "dracula",
 		},
 		{
 			name:      "empty theme falls back to default",
 			themeName: "",
-			wantName:  "gruvbox",
+			wantName:  "dracula",
 		},
 	}
 
@@ -213,7 +213,7 @@ func TestListAvailableThemes(t *testing.T) {
 func TestDefaultTheme(t *testing.T) {
 	theme := GetDefaultTheme()
 
-	if theme.Name != "gruvbox" {
+	if theme.Name != "dracula" {
 		t.Errorf("GetDefaultTheme() returned theme %q, want %q", theme.Name, "gruvbox")
 	}
 
