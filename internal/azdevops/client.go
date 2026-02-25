@@ -235,7 +235,7 @@ func formatHTTPError(statusCode int, _ []byte) error {
 			"Please generate a new PAT in Azure DevOps and update your configuration")
 	case http.StatusForbidden:
 		return fmt.Errorf("access denied (HTTP 403): your PAT does not have sufficient permissions. " +
-			"Required scopes: Code (Read), Build (Read), Work Items (Read)")
+			"Required scopes: Code (Read), Build (Read), Work Items (Read & Write)")
 	case http.StatusNotFound:
 		return fmt.Errorf("resource not found (HTTP 404): the requested resource does not exist. " +
 			"Please verify your organization and project names are correct in your configuration")
