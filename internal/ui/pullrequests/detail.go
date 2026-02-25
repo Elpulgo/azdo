@@ -90,10 +90,16 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		case "pgdown":
 			m.PageDown()
 		case "enter":
-			if len(m.changedFiles) > 0 && m.fileIndex < len(m.changedFiles) {
+			if m.isGeneralCommentsSelected() {
+				return m, func() tea.Msg {
+					return openGeneralCommentsMsg{}
+				}
+			}
+			fi := m.fileIndex - m.generalCommentsOffset()
+			if fi >= 0 && fi < len(m.changedFiles) {
 				return m, func() tea.Msg {
 					return openFileDiffMsg{
-						file: m.changedFiles[m.fileIndex],
+						file: m.changedFiles[fi],
 					}
 				}
 			}
@@ -230,13 +236,25 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n")
 	}
 
+	// General comments entry (selectable, navigable like files)
+	generalThreads := diff.FilterGeneralThreads(m.threads)
+	if len(generalThreads) > 0 {
+		generalLine := fmt.Sprintf("  💬 General comments (%d)", len(generalThreads))
+		if m.fileIndex == 0 {
+			sb.WriteString(m.styles.Selected.Render(generalLine))
+		} else {
+			sb.WriteString(m.styles.Info.Render(generalLine))
+		}
+		sb.WriteString("\n\n")
+	}
+
 	// Changed files section
 	sb.WriteString(m.styles.Label.Render(fmt.Sprintf("Changed files (%d)", len(m.changedFiles))))
 	sb.WriteString("\n")
 
 	if len(m.changedFiles) > 0 {
 		for i, change := range m.changedFiles {
-			line := m.renderFileEntry(change, i == m.fileIndex)
+			line := m.renderFileEntry(change, i+m.generalCommentsOffset() == m.fileIndex)
 			sb.WriteString(line)
 			sb.WriteString("\n")
 		}
@@ -310,13 +328,13 @@ func (m *DetailModel) SetSize(width, height int) {
 	m.updateViewportContent()
 }
 
-// ensureSelectedVisible scrolls the viewport to keep the selected file visible
+// ensureSelectedVisible scrolls the viewport to keep the selected item visible
 func (m *DetailModel) ensureSelectedVisible() {
-	if !m.ready || len(m.changedFiles) == 0 {
+	if !m.ready || m.totalSelectableItems() == 0 {
 		return
 	}
 
-	selectedLine := m.getFileListLineOffset() + m.fileIndex
+	selectedLine := m.getSelectedItemLineOffset()
 	if selectedLine < m.viewport.YOffset {
 		m.viewport.SetYOffset(selectedLine)
 	} else if selectedLine >= m.viewport.YOffset+m.viewport.Height {
@@ -366,7 +384,8 @@ func (m *DetailModel) MoveDown() {
 	if !m.ready {
 		return
 	}
-	if len(m.changedFiles) > 0 && m.fileIndex < len(m.changedFiles)-1 {
+	maxIndex := m.totalSelectableItems() - 1
+	if maxIndex >= 0 && m.fileIndex < maxIndex {
 		m.fileIndex++
 		savedOffset := m.viewport.YOffset
 		m.updateViewportContent()
@@ -395,33 +414,32 @@ func (m *DetailModel) PageDown() {
 	m.updateSelectionFromViewport()
 }
 
-// updateSelectionFromViewport updates the selected file based on viewport position
+// updateSelectionFromViewport updates the selected item based on viewport position
 func (m *DetailModel) updateSelectionFromViewport() {
-	if len(m.changedFiles) == 0 {
+	total := m.totalSelectableItems()
+	if total == 0 {
 		return
 	}
 
-	fileListStart := m.getFileListLineOffset()
+	// Find which selectable item is closest to the viewport top
 	targetLine := m.viewport.YOffset + 2 // small margin from top
-
-	if targetLine < fileListStart {
-		m.fileIndex = 0
-	} else {
-		idx := targetLine - fileListStart
-		if idx >= len(m.changedFiles) {
-			idx = len(m.changedFiles) - 1
+	bestIdx := 0
+	for i := 0; i < total; i++ {
+		m.fileIndex = i
+		itemLine := m.getSelectedItemLineOffset()
+		if itemLine <= targetLine {
+			bestIdx = i
 		}
-		m.fileIndex = idx
 	}
+	m.fileIndex = bestIdx
 
 	savedOffset := m.viewport.YOffset
 	m.updateViewportContent()
 	m.viewport.SetYOffset(savedOffset)
 }
 
-// getFileListLineOffset returns the line number where the file list items start
-// (after the "Changed files (N)" header)
-func (m *DetailModel) getFileListLineOffset() int {
+// getSelectedItemLineOffset returns the visual line number for the currently selected item
+func (m *DetailModel) getSelectedItemLineOffset() int {
 	lineOffset := 0
 	if m.pr.Description != "" {
 		lineOffset += strings.Count(m.pr.Description, "\n") + 2
@@ -432,9 +450,44 @@ func (m *DetailModel) getFileListLineOffset() int {
 	if len(m.pr.Reviewers) > 0 {
 		lineOffset += 1 + len(m.pr.Reviewers) + 1
 	}
+
+	gcOffset := m.generalCommentsOffset()
+	if gcOffset > 0 && m.fileIndex == 0 {
+		// General comments entry is selected — it's at this line
+		return lineOffset
+	}
+
+	// Skip past general comments entry + blank line
+	if gcOffset > 0 {
+		lineOffset += 2
+	}
+
 	// "Changed files (N)" header line
 	lineOffset += 1
+
+	// File index within the file list
+	fi := m.fileIndex - gcOffset
+	lineOffset += fi
 	return lineOffset
+}
+
+// generalCommentsOffset returns 1 if there are general comments (taking index 0), 0 otherwise
+func (m *DetailModel) generalCommentsOffset() int {
+	generalThreads := diff.FilterGeneralThreads(m.threads)
+	if len(generalThreads) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// isGeneralCommentsSelected returns true if the general comments entry is selected
+func (m *DetailModel) isGeneralCommentsSelected() bool {
+	return m.generalCommentsOffset() > 0 && m.fileIndex == 0
+}
+
+// totalSelectableItems returns the total navigable items (general comments entry + files)
+func (m *DetailModel) totalSelectableItems() int {
+	return m.generalCommentsOffset() + len(m.changedFiles)
 }
 
 // SelectedIndex returns the current file selection index
@@ -444,10 +497,11 @@ func (m *DetailModel) SelectedIndex() int {
 
 // SelectedFile returns the currently selected changed file
 func (m *DetailModel) SelectedFile() *azdevops.IterationChange {
-	if len(m.changedFiles) == 0 || m.fileIndex >= len(m.changedFiles) {
+	fi := m.fileIndex - m.generalCommentsOffset()
+	if fi < 0 || fi >= len(m.changedFiles) {
 		return nil
 	}
-	return &m.changedFiles[m.fileIndex]
+	return &m.changedFiles[fi]
 }
 
 // GetContextItems returns context items for the detail view
@@ -620,6 +674,9 @@ type voteResultMsg struct {
 type openFileDiffMsg struct {
 	file azdevops.IterationChange
 }
+
+// openGeneralCommentsMsg signals that the user wants to view general PR comments
+type openGeneralCommentsMsg struct{}
 
 // fetchThreads fetches PR threads from Azure DevOps
 func (m *DetailModel) fetchThreads() tea.Cmd {

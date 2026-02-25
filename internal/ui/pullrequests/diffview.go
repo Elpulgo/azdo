@@ -123,6 +123,18 @@ func (m *DiffModel) Init() tea.Cmd {
 	return tea.Batch(m.fetchChangedFiles(), m.spinner.Init())
 }
 
+// InitGeneralComments initializes the diff model and immediately opens the general comments view
+func (m *DiffModel) InitGeneralComments() tea.Cmd {
+	m.viewingGeneralComments = true
+	m.viewMode = DiffFileView
+	m.selectedLine = 0
+	m.buildGeneralCommentLines()
+	if m.ready {
+		m.updateDiffViewport()
+	}
+	return m.fetchChangedFiles()
+}
+
 // InitWithFile initializes the diff model and immediately opens a specific file's diff
 func (m *DiffModel) InitWithFile(file azdevops.IterationChange) tea.Cmd {
 	m.currentFile = &file
@@ -147,16 +159,23 @@ func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 		}
 
 	case changedFilesMsg:
-		m.loading = false
-		m.spinner.SetVisible(false)
 		if msg.err != nil {
+			m.loading = false
+			m.spinner.SetVisible(false)
 			m.err = msg.err
 			return m, nil
 		}
 		m.changedFiles = filterFileChanges(msg.changes)
 		m.fileIndex = 0
-		if m.viewMode == DiffFileList {
-			m.updateFileListViewport()
+		// Only clear loading and update viewport if we're in file list mode.
+		// When InitWithFile was used, currentFile is set and we're waiting for
+		// fileDiffMsg — clearing loading here would briefly flash the file list.
+		if m.currentFile == nil {
+			m.loading = false
+			m.spinner.SetVisible(false)
+			if m.viewMode == DiffFileList {
+				m.updateFileListViewport()
+			}
 		}
 
 	case fileDiffMsg:
@@ -345,12 +364,9 @@ func (m *DiffModel) updateDiffView(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 		m.ensureDiffLineVisible()
 	case "esc":
 		if m.viewingGeneralComments {
-			// Go back to file list
+			// Exit back to detail view
 			m.viewingGeneralComments = false
-			m.viewMode = DiffFileList
-			m.currentFile = nil
-			m.updateFileListViewport()
-			return m, nil
+			return m, func() tea.Msg { return exitDiffViewMsg{} }
 		}
 		// Exit diff view entirely, back to detail
 		return m, func() tea.Msg { return exitDiffViewMsg{} }

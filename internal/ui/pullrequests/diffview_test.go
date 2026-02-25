@@ -1296,13 +1296,18 @@ func TestDiffModel_EscFromGeneralComments(t *testing.T) {
 	m.viewMode = DiffFileView
 	m.viewingGeneralComments = true
 
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 
-	if m.viewMode != DiffFileList {
-		t.Errorf("After esc, viewMode = %d, want DiffFileList", m.viewMode)
-	}
 	if m.viewingGeneralComments {
 		t.Error("After esc, viewingGeneralComments should be false")
+	}
+	// Should emit exitDiffViewMsg to go back to detail view
+	if cmd == nil {
+		t.Fatal("Expected esc to produce a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(exitDiffViewMsg); !ok {
+		t.Errorf("Expected exitDiffViewMsg, got %T", msg)
 	}
 }
 

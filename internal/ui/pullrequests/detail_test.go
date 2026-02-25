@@ -991,6 +991,175 @@ func TestShortenFilePath(t *testing.T) {
 	}
 }
 
+func TestDetailModel_View_ShowsGeneralComments(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			Status:        "active",
+			ThreadContext: nil, // general comment
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Looks good overall", Author: azdevops.Identity{DisplayName: "Bob"}},
+			},
+		},
+		{
+			ID:     2,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 3, Content: "Fix this"},
+			},
+		},
+		{
+			ID:            3,
+			Status:        "fixed",
+			ThreadContext: nil, // resolved general comment
+			Comments: []azdevops.Comment{
+				{ID: 4, Content: "Add docs?", Author: azdevops.Identity{DisplayName: "Charlie"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should show general comments entry with count
+	if !strings.Contains(view, "General comments (2)") {
+		t.Error("View should contain 'General comments (2)' selectable entry")
+	}
+}
+
+func TestDetailModel_View_NoGeneralCommentsSection(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Only code comments, no general comments
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Fix this"},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should NOT show general comments section when there are none
+	if strings.Contains(view, "General comments") {
+		t.Error("View should NOT contain 'General comments' section when there are no general comments")
+	}
+}
+
+func TestDetailModel_EnterOnGeneralCommentsEmitsMsg(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			Status:        "active",
+			ThreadContext: nil,
+			Comments:      []azdevops.Comment{{ID: 1, Content: "General comment"}},
+		},
+	}
+	model.SetThreads(threads)
+
+	// fileIndex should be 0 (general comments entry)
+	if model.fileIndex != 0 {
+		t.Fatalf("Initial fileIndex = %d, want 0", model.fileIndex)
+	}
+
+	// Press Enter — should emit openGeneralCommentsMsg
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Expected Enter to produce a command")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(openGeneralCommentsMsg); !ok {
+		t.Errorf("Expected openGeneralCommentsMsg, got %T", msg)
+	}
+}
+
+func TestDetailModel_NavigationWithGeneralComments(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	threads := []azdevops.Thread{
+		{ID: 1, ThreadContext: nil, Comments: []azdevops.Comment{{ID: 1, Content: "General"}}},
+	}
+	model.SetThreads(threads)
+
+	// Index 0 = general comments, 1 = /a.go, 2 = /b.go
+	if !model.isGeneralCommentsSelected() {
+		t.Error("Initial selection should be general comments")
+	}
+
+	// Move down to first file
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if model.isGeneralCommentsSelected() {
+		t.Error("After j, should not be on general comments")
+	}
+	if model.fileIndex != 1 {
+		t.Errorf("After j, fileIndex = %d, want 1", model.fileIndex)
+	}
+
+	// Enter on a file should emit openFileDiffMsg
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Expected Enter to produce a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(openFileDiffMsg); !ok {
+		t.Errorf("Expected openFileDiffMsg, got %T", msg)
+	}
+}
+
 func TestChangeTypeDisplay(t *testing.T) {
 	s := styles.DefaultStyles()
 	tests := []struct {
