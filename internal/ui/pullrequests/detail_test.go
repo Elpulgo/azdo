@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -1157,6 +1158,143 @@ func TestDetailModel_NavigationWithGeneralComments(t *testing.T) {
 	msg := cmd()
 	if _, ok := msg.(openFileDiffMsg); !ok {
 		t.Errorf("Expected openFileDiffMsg, got %T", msg)
+	}
+}
+
+func TestDetailModel_VKeyOpensVotePicker(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Vote picker should be hidden initially
+	if model.votePicker.IsVisible() {
+		t.Error("Vote picker should be hidden initially")
+	}
+
+	// Press 'v' to open vote picker
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	if cmd != nil {
+		t.Error("Opening vote picker should not produce a command")
+	}
+
+	if !model.votePicker.IsVisible() {
+		t.Error("Vote picker should be visible after pressing 'v'")
+	}
+}
+
+func TestDetailModel_VotePickerRoutesInput(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+
+	// While vote picker is visible, key input should route to it
+	// Move cursor down in picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	// File index should not change (input went to vote picker)
+	if model.fileIndex != 0 {
+		t.Errorf("fileIndex = %d, want 0 (input should route to vote picker)", model.fileIndex)
+	}
+}
+
+func TestDetailModel_VotePickerEscCloses(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	// Open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	if !model.votePicker.IsVisible() {
+		t.Fatal("Vote picker should be visible")
+	}
+
+	// Press Esc to close
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if model.votePicker.IsVisible() {
+		t.Error("Vote picker should be hidden after Esc")
+	}
+}
+
+func TestDetailModel_VoteSelectedMsgTriggersVote(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	// Send VoteSelectedMsg directly
+	model, cmd := model.Update(components.VoteSelectedMsg{Vote: azdevops.VoteApprove})
+
+	if cmd == nil {
+		t.Error("VoteSelectedMsg should produce a command")
+	}
+
+	if !model.loading {
+		t.Error("Model should be in loading state after vote")
+	}
+}
+
+func TestDetailModel_VotePRAllVoteTypes(t *testing.T) {
+	tests := []struct {
+		vote        int
+		wantMessage string
+	}{
+		{azdevops.VoteApprove, "PR approved"},
+		{azdevops.VoteApproveWithSuggestions, "PR approved with suggestions"},
+		{azdevops.VoteWaitForAuthor, "Waiting for author"},
+		{azdevops.VoteReject, "PR rejected"},
+		{azdevops.VoteNoVote, "Vote reset"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("vote_%d", tt.vote), func(t *testing.T) {
+			// voteResultDescription is tested separately since votePR
+			// with nil client short-circuits before generating the message.
+			got := voteResultDescription(tt.vote)
+			if got != tt.wantMessage {
+				t.Errorf("voteResultDescription(%d) = %q, want %q", tt.vote, got, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestDetailModel_ViewShowsVotePicker(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Normal view should not show vote picker content
+	normalView := model.View()
+
+	// Open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	voteView := model.View()
+
+	// Vote picker view should be different from normal view
+	if voteView == normalView {
+		t.Error("View with vote picker should differ from normal view")
+	}
+
+	// Vote picker view should contain vote option text
+	if !strings.Contains(voteView, "Approve") {
+		t.Error("Vote picker view should contain 'Approve'")
 	}
 }
 

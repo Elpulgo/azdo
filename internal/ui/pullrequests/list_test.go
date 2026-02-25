@@ -571,6 +571,61 @@ func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
 	}
 }
 
+func TestModel_VoteFlowThroughDetailView(t *testing.T) {
+	model := NewModel(nil)
+
+	// Set up PR data and navigate to detail view
+	model.list = model.list.SetItems([]azdevops.PullRequest{
+		{
+			ID:            123,
+			Title:         "Test PR",
+			Status:        "active",
+			SourceRefName: "refs/heads/test",
+			TargetRefName: "refs/heads/main",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{Name: "repo"},
+		},
+	})
+
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewDetail {
+		t.Fatalf("Expected ViewDetail, got %d", model.GetViewMode())
+	}
+
+	// Press 'v' to open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+
+	// Verify vote picker is visible through the detail adapter
+	if adapter, ok := model.list.Detail().(*detailAdapter); ok {
+		if !adapter.model.votePicker.IsVisible() {
+			t.Error("Vote picker should be visible after pressing 'v' in detail view")
+		}
+	} else {
+		t.Fatal("Expected detailAdapter")
+	}
+
+	// Press Esc to close vote picker (not the detail view)
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Should still be in detail view (Esc closed the picker, not the view)
+	if model.GetViewMode() != ViewDetail {
+		t.Error("Esc should close vote picker, not exit detail view")
+	}
+
+	if adapter, ok := model.list.Detail().(*detailAdapter); ok {
+		if adapter.model.votePicker.IsVisible() {
+			t.Error("Vote picker should be hidden after Esc")
+		}
+	}
+
+	// Now pressing Esc again should exit detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.GetViewMode() != ViewList {
+		t.Error("Second Esc should exit detail view back to list")
+	}
+}
+
 func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
 	pr := azdevops.PullRequest{
 		Title:       "Test PR",

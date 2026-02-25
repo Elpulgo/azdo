@@ -33,6 +33,7 @@ type DetailModel struct {
 	statusMessage string
 	spinner       *components.LoadingIndicator
 	styles        *styles.Styles
+	votePicker    components.VotePicker
 }
 
 // NewDetailModel creates a new PR detail model with default styles
@@ -53,6 +54,7 @@ func NewDetailModelWithStyles(client *azdevops.Client, pr azdevops.PullRequest, 
 		fileIndex:     0,
 		spinner:       spinner,
 		styles:        s,
+		votePicker:    components.NewVotePicker(s),
 	}
 }
 
@@ -67,7 +69,19 @@ func (m *DetailModel) Init() tea.Cmd {
 
 // Update handles messages for the detail view
 func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
+	// Route input to vote picker when visible
+	if m.votePicker.IsVisible() {
+		var cmd tea.Cmd
+		m.votePicker, cmd = m.votePicker.Update(msg)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
+	case components.VoteSelectedMsg:
+		m.loading = true
+		m.spinner.SetVisible(true)
+		return m, tea.Batch(m.votePR(msg.Vote), m.spinner.Tick())
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -103,6 +117,10 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 					}
 				}
 			}
+		case "v":
+			m.votePicker.SetSize(m.width, m.height)
+			m.votePicker.Show()
+			return m, nil
 		case "r":
 			m.loading = true
 			m.threadsLoaded = false
@@ -159,6 +177,10 @@ func (m *DetailModel) finishLoading() {
 
 // View renders the detail view
 func (m *DetailModel) View() string {
+	if m.votePicker.IsVisible() {
+		return m.votePicker.View()
+	}
+
 	wrapContent := func(content string) string {
 		contentStyle := lipgloss.NewStyle().
 			Width(m.width)
@@ -506,7 +528,9 @@ func (m *DetailModel) SelectedFile() *azdevops.IterationChange {
 
 // GetContextItems returns context items for the detail view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
-	return []components.ContextItem{}
+	return []components.ContextItem{
+		{Key: "v", Description: "Vote"},
+	}
 }
 
 // GetThreads returns the current threads (for passing to DiffModel)
@@ -642,6 +666,24 @@ func reviewerVoteDescription(vote int) string {
 	}
 }
 
+// voteResultDescription returns a human-readable result message for a vote action
+func voteResultDescription(vote int) string {
+	switch vote {
+	case azdevops.VoteApprove:
+		return "PR approved"
+	case azdevops.VoteApproveWithSuggestions:
+		return "PR approved with suggestions"
+	case azdevops.VoteWaitForAuthor:
+		return "Waiting for author"
+	case azdevops.VoteReject:
+		return "PR rejected"
+	case azdevops.VoteNoVote:
+		return "Vote reset"
+	default:
+		return "Vote submitted"
+	}
+}
+
 // threadStatusIconWithStyles returns an icon for the thread status using provided styles
 func threadStatusIconWithStyles(status string, s *styles.Styles) string {
 	switch status {
@@ -725,15 +767,6 @@ func (m *DetailModel) votePR(vote int) tea.Cmd {
 			return voteResultMsg{message: "", err: err}
 		}
 
-		var message string
-		switch vote {
-		case azdevops.VoteApprove:
-			message = "PR approved"
-		case azdevops.VoteReject:
-			message = "PR rejected"
-		default:
-			message = "Vote submitted"
-		}
-		return voteResultMsg{message: message, err: nil}
+		return voteResultMsg{message: voteResultDescription(vote), err: nil}
 	}
 }

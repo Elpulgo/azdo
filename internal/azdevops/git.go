@@ -217,10 +217,15 @@ const (
 // pullRequestID: the ID of the pull request
 // vote: the vote value (use VoteApprove, VoteReject, etc. constants)
 func (c *Client) VotePullRequest(repositoryID string, pullRequestID int, vote int) error {
-	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/reviewers/me?api-version=7.1", repositoryID, pullRequestID)
+	userID, err := c.GetCurrentUserID()
+	if err != nil {
+		return fmt.Errorf("failed to get current user ID: %w", err)
+	}
+
+	path := fmt.Sprintf("/git/repositories/%s/pullRequests/%d/reviewers/%s?api-version=7.1", repositoryID, pullRequestID, userID)
 
 	payload := fmt.Sprintf(`{"vote": %d}`, vote)
-	_, err := c.put(path, strings.NewReader(payload))
+	_, err = c.put(path, strings.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to vote on PR: %w", err)
 	}

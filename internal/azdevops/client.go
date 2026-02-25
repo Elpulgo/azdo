@@ -2,6 +2,7 @@ package azdevops
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ type Client struct {
 	pat        string
 	baseURL    string
 	httpClient *http.Client
+	userID     string // cached authenticated user ID
 }
 
 // GetOrg returns the organization name
@@ -141,6 +143,58 @@ func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, error) 
 	}
 
 	return respBody, nil
+}
+
+// connectionDataResponse holds the response from the connection data API
+type connectionDataResponse struct {
+	AuthenticatedUser struct {
+		ID string `json:"id"`
+	} `json:"authenticatedUser"`
+}
+
+// GetCurrentUserID returns the authenticated user's ID, fetching and caching it on first call
+func (c *Client) GetCurrentUserID() (string, error) {
+	if c.userID != "" {
+		return c.userID, nil
+	}
+
+	// Connection data is at org level, not project-scoped
+	url := fmt.Sprintf("https://dev.azure.com/%s/_apis/connectionData", c.org)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch connection data: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", formatHTTPError(resp.StatusCode, body)
+	}
+
+	var data connectionDataResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", fmt.Errorf("failed to parse connection data: %w", err)
+	}
+
+	if data.AuthenticatedUser.ID == "" {
+		return "", fmt.Errorf("connection data did not contain a user ID")
+	}
+
+	c.userID = data.AuthenticatedUser.ID
+	return c.userID, nil
 }
 
 // formatHTTPError creates a user-friendly error message based on the HTTP status code

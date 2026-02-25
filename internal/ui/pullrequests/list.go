@@ -184,6 +184,15 @@ func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "esc" {
+			// If the detail view has a modal open (e.g. vote picker),
+			// let it handle esc first instead of navigating back
+			if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+				if adapter.model.votePicker.IsVisible() {
+					var cmd tea.Cmd
+					m.list, cmd = m.list.Update(msg)
+					return m, cmd
+				}
+			}
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(msg)
 			m.viewMode = ViewList

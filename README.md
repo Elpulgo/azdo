@@ -26,6 +26,7 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 ### Pull Requests
 - List view of pull requests with status indicators
 - Detailed view showing PR information and metadata
+- Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
 
 ### Work Items
 - List view of work items with status and type information
@@ -202,6 +203,11 @@ azdo-tui
 | `t` | Select theme |
 | `q` or `Ctrl+C` | Quit |
 
+### PR Detail View
+| Key | Action |
+|-----|--------|
+| `v` | Vote on pull request |
+
 ### Log Viewer
 | Key | Action |
 |-----|--------|
@@ -326,7 +332,8 @@ Binaries will be available in the `dist/` directory after running GoReleaser loc
 - [ ] Pipeline filtering and search
 - [ ] Trigger pipeline runs
 - [ ] Multi-project support
-- [ ] Theme switching within the app
+- [x] Theme switching within the app
+- [x] PR voting (approve, reject, suggestions, wait, reset)
 
 ## Contributing
 
