@@ -84,12 +84,13 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		m.spinner.SetVisible(false)
 		if msg.err != nil {
 			m.statusMessage = fmt.Sprintf("Error: %v", msg.err)
-		} else {
-			m.workItem.Fields.State = msg.newState
-			m.statusMessage = fmt.Sprintf("State changed to %s", msg.newState)
-			m.updateViewportContent()
+			return m, nil
 		}
-		return m, nil
+		m.workItem.Fields.State = msg.newState
+		m.statusMessage = fmt.Sprintf("State changed to %s", msg.newState)
+		m.updateViewportContent()
+		// Signal the list to refresh so the new state is visible
+		return m, func() tea.Msg { return WorkItemStateChangedMsg{} }
 
 	case statesLoadedMsg:
 		m.loading = false

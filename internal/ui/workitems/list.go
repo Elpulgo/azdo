@@ -113,18 +113,24 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.allItems = msg.workItems
-		if !m.myItemsOnly {
-			m.list = m.list.HandleFetchResult(msg.workItems, nil)
+		if m.myItemsOnly {
+			// Chain to my-items fetch so loading state is eventually cleared
+			return m, fetchMyWorkItemsMulti(m.client)
 		}
+		m.list = m.list.HandleFetchResult(msg.workItems, nil)
 		return m, nil
 	case myWorkItemsMsg:
 		if msg.err != nil {
-			// On error, fall back to showing all items
+			// On error, fall back to showing all items and clear loading state
 			m.myItemsOnly = false
+			m.list = m.list.SetItems(m.allItems)
 			return m, nil
 		}
 		m.list = m.list.SetItems(msg.workItems)
 		return m, nil
+	case WorkItemStateChangedMsg:
+		// Re-fetch work items so the list reflects the updated state
+		return m, fetchWorkItemsMulti(m.client)
 	case SetWorkItemsMsg:
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
@@ -297,6 +303,10 @@ func filterWorkItemMulti(wi azdevops.WorkItem, query string) bool {
 	}
 	return filterWorkItem(wi, query)
 }
+
+// WorkItemStateChangedMsg is emitted after a work item state is successfully updated.
+// The list model uses it to trigger a data refresh.
+type WorkItemStateChangedMsg struct{}
 
 // Messages
 
