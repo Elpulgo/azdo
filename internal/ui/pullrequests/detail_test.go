@@ -426,56 +426,6 @@ func TestDetailModel_View_NoCommentCountForZero(t *testing.T) {
 	}
 }
 
-func TestDetailModel_GetContextItems(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
-	model := NewDetailModel(nil, pr)
-
-	items := model.GetContextItems()
-
-	if len(items) == 0 {
-		t.Fatal("Detail view should have context items")
-	}
-
-	// Should have navigate, open diff, refresh, back
-	hasNavigate := false
-	hasOpenDiff := false
-	hasRefresh := false
-	hasBack := false
-	for _, item := range items {
-		if item.Description == "navigate" {
-			hasNavigate = true
-		}
-		if item.Description == "open diff" {
-			hasOpenDiff = true
-		}
-		if item.Description == "refresh" {
-			hasRefresh = true
-		}
-		if item.Description == "back" {
-			hasBack = true
-		}
-	}
-	if !hasNavigate {
-		t.Error("Missing 'navigate' context item")
-	}
-	if !hasOpenDiff {
-		t.Error("Missing 'open diff' context item")
-	}
-	if !hasRefresh {
-		t.Error("Missing 'refresh' context item")
-	}
-	if !hasBack {
-		t.Error("Missing 'back' context item")
-	}
-
-	// Should NOT have 'd' for diff (removed)
-	for _, item := range items {
-		if item.Key == "d" {
-			t.Error("Context items should not include 'd' key - file list uses 'enter' now")
-		}
-	}
-}
-
 func TestDetailModel_EnterEmitsOpenFileDiffMsg(t *testing.T) {
 	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)

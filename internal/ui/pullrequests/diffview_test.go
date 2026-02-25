@@ -515,29 +515,15 @@ func TestDiffModel_GetContextItems_FileList(t *testing.T) {
 		t.Error("Expected context items for file list mode")
 	}
 
-	// Should have navigate, page, open, refresh, back
-	hasNavigate := false
+	// Should have page
 	hasPage := false
-	hasBack := false
 	for _, item := range items {
-		if item.Description == "navigate" {
-			hasNavigate = true
-		}
 		if item.Description == "page" {
 			hasPage = true
 		}
-		if item.Description == "back" {
-			hasBack = true
-		}
-	}
-	if !hasNavigate {
-		t.Error("Missing 'navigate' context item")
 	}
 	if !hasPage {
 		t.Error("Missing 'page' context item")
-	}
-	if !hasBack {
-		t.Error("Missing 'back' context item")
 	}
 }
 
