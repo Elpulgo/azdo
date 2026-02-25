@@ -412,6 +412,11 @@ func TestDiffModel_RenderResolvedComment(t *testing.T) {
 	if strings.Contains(activeRendered, "Resolved") {
 		t.Errorf("Active comment should not contain 'Resolved' indicator, got: %s", activeRendered)
 	}
+
+	// Resolved prefix [Resolved] should be styled differently (contains ANSI escape codes from DiffCommentResolved style)
+	if rendered == activeRendered {
+		t.Error("Resolved comment should be rendered differently from active comment (styled [Resolved] prefix)")
+	}
 }
 
 func TestDiffModel_DiffViewNavigation(t *testing.T) {

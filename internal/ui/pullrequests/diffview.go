@@ -760,7 +760,7 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 			firstIndent = "  └ "
 			contIndent = "    "
 		} else if isResolved {
-			firstIndent = "[Resolved] "
+			firstIndent = ""
 			contIndent = "           "
 		} else {
 			firstIndent = ""
@@ -774,10 +774,11 @@ func (m *DiffModel) renderDiffLine(line diffLine, selected bool) string {
 				contentLines[i] = contIndent + l
 			}
 		}
-		if isResolved {
-			result = m.styles.Info.Render(strings.Join(contentLines, "\n"))
+		rendered := m.styles.Info.Render(strings.Join(contentLines, "\n"))
+		if isResolved && line.CommentIdx == 0 {
+			result = m.styles.DiffCommentResolved.Render("[Resolved]") + " " + rendered
 		} else {
-			result = m.styles.Info.Render(strings.Join(contentLines, "\n"))
+			result = rendered
 		}
 
 	case diffLineFileHeader:
