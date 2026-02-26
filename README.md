@@ -38,7 +38,7 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 - Secure PAT storage using system keyring
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
-- Six built-in themes with true color support
+- Seven built-in themes with true color support
 
 ## Installation
 
@@ -75,7 +75,7 @@ project: your-project-name
 polling_interval: 60
 
 # Theme (optional, default: dark)
-# Available themes: dark, gruvbox, nord, dracula, catppuccin, github
+# Available themes: dark, gruvbox, nord, dracula, catppuccin, github, retro
 theme: dark
 ```
 
@@ -106,6 +106,7 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 - `dracula` - Dark theme with purple and pink accents
 - `catppuccin` - Soothing pastel theme (Mocha variant)
 - `github` - GitHub Dark theme
+- `retro` - Matrix-inspired green phosphor on black
 
 ### Custom Themes
 
