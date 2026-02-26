@@ -50,7 +50,7 @@ func run() error {
 	}
 
 	// Create multi-project Azure DevOps client
-	client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat)
+	client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat, cfg.DisplayNames)
 	if err != nil {
 		return fmt.Errorf("failed to create Azure DevOps client: %w", err)
 	}

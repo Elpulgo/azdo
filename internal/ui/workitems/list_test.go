@@ -374,9 +374,10 @@ func TestWorkItemsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
 	items := []azdevops.WorkItem{
 		{
-			ID:          100,
-			Fields:      azdevops.WorkItemFields{Title: "Test Item", WorkItemType: "Task", State: "Active", Priority: 2},
-			ProjectName: "alpha",
+			ID:                 100,
+			Fields:             azdevops.WorkItemFields{Title: "Test Item", WorkItemType: "Task", State: "Active", Priority: 2},
+			ProjectName:        "alpha",
+			ProjectDisplayName: "alpha",
 		},
 	}
 

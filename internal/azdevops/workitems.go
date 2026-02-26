@@ -27,7 +27,8 @@ type WorkItem struct {
 	Rev         int            `json:"rev"`
 	Fields      WorkItemFields `json:"fields"`
 	URL         string         `json:"url"`
-	ProjectName string         `json:"-"` // Set by MultiClient, not from API
+	ProjectName        string         `json:"-"` // Set by MultiClient, not from API
+	ProjectDisplayName string         `json:"-"` // Set by MultiClient, display name for UI
 }
 
 // WorkItemFields represents the fields of a work item

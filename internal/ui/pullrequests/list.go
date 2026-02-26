@@ -404,7 +404,7 @@ func prsToRowsMulti(items []azdevops.PullRequest, s *styles.Styles) []table.Row 
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
 		rows[i] = table.Row{
-			pr.ProjectName,
+			pr.ProjectDisplayName,
 			statusIconWithStyles(pr.Status, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
@@ -435,7 +435,8 @@ func filterPRMulti(pr azdevops.PullRequest, query string) bool {
 		return true
 	}
 	q := strings.ToLower(query)
-	return strings.Contains(strings.ToLower(pr.ProjectName), q) ||
+	return strings.Contains(strings.ToLower(pr.ProjectDisplayName), q) ||
+		strings.Contains(strings.ToLower(pr.ProjectName), q) ||
 		strings.Contains(strings.ToLower(pr.Title), q) ||
 		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
 		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||

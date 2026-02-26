@@ -458,14 +458,15 @@ func TestRunsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
 	items := []azdevops.PipelineRun{
 		{
-			ID:           1,
-			BuildNumber:  "20240210.1",
-			Status:       "completed",
-			Result:       "succeeded",
-			SourceBranch: "refs/heads/main",
-			QueueTime:    time.Now(),
-			Definition:   azdevops.PipelineDefinition{Name: "CI"},
-			Project:      azdevops.Project{Name: "alpha"},
+			ID:                 1,
+			BuildNumber:        "20240210.1",
+			Status:             "completed",
+			Result:             "succeeded",
+			SourceBranch:       "refs/heads/main",
+			QueueTime:          time.Now(),
+			Definition:         azdevops.PipelineDefinition{Name: "CI"},
+			Project:            azdevops.Project{Name: "alpha"},
+			ProjectDisplayName: "alpha",
 		},
 	}
 

@@ -502,14 +502,15 @@ func TestPrsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
 	prs := []azdevops.PullRequest{
 		{
-			ID:            101,
-			Title:         "Test PR",
-			Status:        "active",
-			SourceRefName: "refs/heads/feature/x",
-			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "John"},
-			Repository:    azdevops.Repository{Name: "repo"},
-			ProjectName:   "alpha",
+			ID:                 101,
+			Title:              "Test PR",
+			Status:             "active",
+			SourceRefName:      "refs/heads/feature/x",
+			TargetRefName:      "refs/heads/main",
+			CreatedBy:          azdevops.Identity{DisplayName: "John"},
+			Repository:         azdevops.Repository{Name: "repo"},
+			ProjectName:        "alpha",
+			ProjectDisplayName: "alpha",
 		},
 	}
 

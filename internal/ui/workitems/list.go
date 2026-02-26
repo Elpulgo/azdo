@@ -261,7 +261,7 @@ func workItemsToRowsMulti(items []azdevops.WorkItem, s *styles.Styles) []table.R
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
 		rows[i] = table.Row{
-			wi.ProjectName,
+			wi.ProjectDisplayName,
 			typeIconWithStyles(wi.Fields.WorkItemType, s),
 			strconv.Itoa(wi.ID),
 			wi.Fields.Title,
@@ -298,7 +298,9 @@ func filterWorkItemMulti(wi azdevops.WorkItem, query string) bool {
 	if query == "" {
 		return true
 	}
-	if strings.Contains(strings.ToLower(wi.ProjectName), strings.ToLower(query)) {
+	q := strings.ToLower(query)
+	if strings.Contains(strings.ToLower(wi.ProjectDisplayName), q) ||
+		strings.Contains(strings.ToLower(wi.ProjectName), q) {
 		return true
 	}
 	return filterWorkItem(wi, query)

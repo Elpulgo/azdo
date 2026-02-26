@@ -68,8 +68,16 @@ Create a configuration file at the following location:
 # Azure DevOps organization name (required)
 organization: your-org-name
 
-# Azure DevOps project name (required)
-project: your-project-name
+# Azure DevOps project name(s) (required)
+# Simple format:
+projects:
+  - your-project-name
+
+# With display names (friendly name shown in UI):
+#   projects:
+#     - name: ugly-api-project-name
+#       display_name: My Project
+#     - simple-project
 
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
@@ -95,9 +103,9 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 
 **Configuration Options:**
 - `organization`: Your Azure DevOps organization name (required)
-- `project`: Your Azure DevOps project name (required)
+- `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
-- `theme`: Color theme for the UI (optional, default: Dracula)
+- `theme`: Color theme for the UI (optional, default: dark)
 
 **Available Themes:**
 - `dark` - Default dark theme with blue and cyan accents
@@ -342,7 +350,7 @@ Binaries will be available in the `dist/` directory after running GoReleaser loc
 - [x] Multiple theme support
 - [ ] Pipeline filtering and search
 - [ ] Trigger pipeline runs
-- [ ] Multi-project support
+- [x] Multi-project support
 - [x] Theme switching within the app
 - [x] PR voting (approve, reject, suggestions, wait, reset)
 - [x] Work item state changes

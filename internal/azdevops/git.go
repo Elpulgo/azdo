@@ -22,7 +22,8 @@ type PullRequest struct {
 	CreatedBy     Identity   `json:"createdBy"`
 	Repository    Repository `json:"repository"`
 	Reviewers     []Reviewer `json:"reviewers"`
-	ProjectName   string     `json:"-"` // Set by MultiClient, not from API
+	ProjectName        string     `json:"-"` // Set by MultiClient, not from API
+	ProjectDisplayName string     `json:"-"` // Set by MultiClient, display name for UI
 }
 
 // Identity represents a user identity in Azure DevOps

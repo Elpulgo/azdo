@@ -13,7 +13,7 @@ import (
 
 func TestNewMultiClient(t *testing.T) {
 	t.Run("creates clients for each project", func(t *testing.T) {
-		mc, err := NewMultiClient("myorg", []string{"alpha", "beta"}, "pat123")
+		mc, err := NewMultiClient("myorg", []string{"alpha", "beta"}, "pat123", nil)
 		if err != nil {
 			t.Fatalf("NewMultiClient failed: %v", err)
 		}
@@ -30,14 +30,14 @@ func TestNewMultiClient(t *testing.T) {
 	})
 
 	t.Run("returns error for empty project name", func(t *testing.T) {
-		_, err := NewMultiClient("myorg", []string{"alpha", ""}, "pat123")
+		_, err := NewMultiClient("myorg", []string{"alpha", ""}, "pat123", nil)
 		if err == nil {
 			t.Fatal("expected error for empty project name")
 		}
 	})
 
 	t.Run("returns error for empty projects list", func(t *testing.T) {
-		_, err := NewMultiClient("myorg", []string{}, "pat123")
+		_, err := NewMultiClient("myorg", []string{}, "pat123", nil)
 		if err == nil {
 			t.Fatal("expected error for empty projects list")
 		}
@@ -53,7 +53,7 @@ func TestMultiClient_IsMultiProject(t *testing.T) {
 		{[]string{"alpha", "beta"}, true},
 	}
 	for _, tt := range tests {
-		mc, err := NewMultiClient("org", tt.projects, "pat")
+		mc, err := NewMultiClient("org", tt.projects, "pat", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +64,7 @@ func TestMultiClient_IsMultiProject(t *testing.T) {
 }
 
 func TestMultiClient_ClientFor(t *testing.T) {
-	mc, err := NewMultiClient("org", []string{"alpha", "beta"}, "pat")
+	mc, err := NewMultiClient("org", []string{"alpha", "beta"}, "pat", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +347,115 @@ func TestMultiClient_SingleProject_BehavesLikeSingleClient(t *testing.T) {
 func TestPipelineRunsResponse_Exists(t *testing.T) {
 	_ = PipelineRunsResponse{}
 	_ = fmt.Sprintf("%v", PipelineRunsResponse{})
+}
+
+func TestNewMultiClient_WithDisplayNames(t *testing.T) {
+	mc, err := NewMultiClient("myorg", []string{"ugly-api"}, "pat123", map[string]string{"ugly-api": "Friendly"})
+	if err != nil {
+		t.Fatalf("NewMultiClient failed: %v", err)
+	}
+
+	if got := mc.DisplayNameFor("ugly-api"); got != "Friendly" {
+		t.Errorf("DisplayNameFor(ugly-api) = %q, want %q", got, "Friendly")
+	}
+
+	// Unknown project returns API name
+	if got := mc.DisplayNameFor("other"); got != "other" {
+		t.Errorf("DisplayNameFor(other) = %q, want %q", got, "other")
+	}
+}
+
+func TestNewMultiClient_NilDisplayNames(t *testing.T) {
+	mc, err := NewMultiClient("myorg", []string{"proj"}, "pat123", nil)
+	if err != nil {
+		t.Fatalf("NewMultiClient failed: %v", err)
+	}
+
+	// Should return API name when no display names configured
+	if got := mc.DisplayNameFor("proj"); got != "proj" {
+		t.Errorf("DisplayNameFor(proj) = %q, want %q", got, "proj")
+	}
+}
+
+func TestMultiClient_ListPipelineRuns_TagsDisplayName(t *testing.T) {
+	now := time.Now()
+	runs := []PipelineRun{
+		{ID: 1, QueueTime: now, Project: Project{Name: "ugly-api"}},
+	}
+
+	server := newPipelineRunServer(t, "ugly-api", runs)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"ugly-api": server,
+	})
+	mc.displayNames = map[string]string{"ugly-api": "Friendly"}
+
+	result, err := mc.ListPipelineRuns(10)
+	if err != nil {
+		t.Fatalf("ListPipelineRuns failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(result))
+	}
+	if result[0].ProjectName != "ugly-api" {
+		t.Errorf("ProjectName = %q, want %q", result[0].ProjectName, "ugly-api")
+	}
+	if result[0].ProjectDisplayName != "Friendly" {
+		t.Errorf("ProjectDisplayName = %q, want %q", result[0].ProjectDisplayName, "Friendly")
+	}
+}
+
+func TestMultiClient_ListPullRequests_TagsDisplayName(t *testing.T) {
+	now := time.Now()
+	prs := []PullRequest{
+		{ID: 10, Title: "Test PR", CreationDate: now},
+	}
+
+	server := newPRServer(t, prs)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"ugly-api": server,
+	})
+	mc.displayNames = map[string]string{"ugly-api": "Friendly"}
+
+	result, err := mc.ListPullRequests(25)
+	if err != nil {
+		t.Fatalf("ListPullRequests failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(result))
+	}
+	if result[0].ProjectDisplayName != "Friendly" {
+		t.Errorf("ProjectDisplayName = %q, want %q", result[0].ProjectDisplayName, "Friendly")
+	}
+}
+
+func TestMultiClient_ListWorkItems_TagsDisplayName(t *testing.T) {
+	now := time.Now()
+	items := []WorkItem{
+		{ID: 100, Fields: WorkItemFields{Title: "Test WI", ChangedDate: now}},
+	}
+
+	server := newWorkItemServer(t, items)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"ugly-api": server,
+	})
+	mc.displayNames = map[string]string{"ugly-api": "Friendly"}
+
+	result, err := mc.ListWorkItems(50)
+	if err != nil {
+		t.Fatalf("ListWorkItems failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result))
+	}
+	if result[0].ProjectDisplayName != "Friendly" {
+		t.Errorf("ProjectDisplayName = %q, want %q", result[0].ProjectDisplayName, "Friendly")
+	}
 }
 
 func TestMultiClient_ListMyWorkItems_MergedSortedAndTagged(t *testing.T) {

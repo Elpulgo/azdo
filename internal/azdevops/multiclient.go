@@ -8,13 +8,15 @@ import (
 
 // MultiClient wraps multiple project-scoped clients for concurrent fetching.
 type MultiClient struct {
-	org     string
-	pat     string
-	clients map[string]*Client // project name → client
+	org          string
+	pat          string
+	clients      map[string]*Client // project name → client
+	displayNames map[string]string  // API name → display name
 }
 
 // NewMultiClient creates clients for each project.
-func NewMultiClient(org string, projects []string, pat string) (*MultiClient, error) {
+// displayNames is an optional map of API name → display name for UI rendering.
+func NewMultiClient(org string, projects []string, pat string, displayNames map[string]string) (*MultiClient, error) {
 	if len(projects) == 0 {
 		return nil, fmt.Errorf("at least one project is required")
 	}
@@ -27,7 +29,18 @@ func NewMultiClient(org string, projects []string, pat string) (*MultiClient, er
 		}
 		clients[project] = c
 	}
-	return &MultiClient{org: org, pat: pat, clients: clients}, nil
+	return &MultiClient{org: org, pat: pat, clients: clients, displayNames: displayNames}, nil
+}
+
+// DisplayNameFor returns the display name for a project API name.
+// If no display name is configured, returns the API name itself.
+func (mc *MultiClient) DisplayNameFor(project string) string {
+	if mc.displayNames != nil {
+		if dn, ok := mc.displayNames[project]; ok {
+			return dn
+		}
+	}
+	return project
 }
 
 // ClientFor returns the project-specific client (for detail views).
@@ -86,6 +99,7 @@ func (mc *MultiClient) ListPipelineRuns(top int) ([]PipelineRun, error) {
 		}
 		for i := range r.runs {
 			r.runs[i].ProjectName = r.project
+			r.runs[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
 		}
 		allRuns = append(allRuns, r.runs...)
 	}
@@ -136,6 +150,7 @@ func (mc *MultiClient) ListPullRequests(top int) ([]PullRequest, error) {
 		}
 		for i := range r.prs {
 			r.prs[i].ProjectName = r.project
+			r.prs[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
 		}
 		allPRs = append(allPRs, r.prs...)
 	}
@@ -186,6 +201,7 @@ func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {
 		}
 		for i := range r.items {
 			r.items[i].ProjectName = r.project
+			r.items[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
 		}
 		allItems = append(allItems, r.items...)
 	}
@@ -237,6 +253,7 @@ func (mc *MultiClient) ListMyWorkItems(top int) ([]WorkItem, error) {
 		}
 		for i := range r.items {
 			r.items[i].ProjectName = r.project
+			r.items[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
 		}
 		allItems = append(allItems, r.items...)
 	}

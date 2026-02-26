@@ -5,9 +5,14 @@
 organization: your-org-name
 
 # Azure DevOps project name(s) (required)
-# Single project:
+# Simple format (API name shown in UI):
 #   projects:
 #     - your-project-name
+# With display names (friendly name shown in UI, API name used for requests):
+#   projects:
+#     - name: ugly-api-project-name
+#       display_name: My Project
+#     - simple-project
 # Multiple projects (shows combined view with "Project" column):
 projects:
   - your-project-name
