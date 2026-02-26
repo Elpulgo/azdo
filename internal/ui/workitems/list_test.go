@@ -374,9 +374,10 @@ func TestWorkItemsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
 	items := []azdevops.WorkItem{
 		{
-			ID:          100,
-			Fields:      azdevops.WorkItemFields{Title: "Test Item", WorkItemType: "Task", State: "Active", Priority: 2},
-			ProjectName: "alpha",
+			ID:                 100,
+			Fields:             azdevops.WorkItemFields{Title: "Test Item", WorkItemType: "Task", State: "Active", Priority: 2},
+			ProjectName:        "alpha",
+			ProjectDisplayName: "alpha",
 		},
 	}
 
@@ -582,5 +583,211 @@ func TestMyItems_FetchError_FallsBack(t *testing.T) {
 	// Should fall back: myItemsOnly should be false
 	if m.myItemsOnly {
 		t.Error("myItemsOnly should be false after fetch error")
+	}
+}
+
+func TestRefresh_WhileMyItemsActive_ClearsLoading(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Set initial items and toggle my-items filter on
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{items[0]}})
+
+	if !m.myItemsOnly {
+		t.Fatal("myItemsOnly should be true")
+	}
+
+	// Press 'r' to refresh — this sets loading=true on the listview
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+
+	// Simulate the all-items fetch returning (workItemsMsg)
+	newItems := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine (updated)"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Title: "New item"}},
+	}
+	m, cmd := m.Update(workItemsMsg{workItems: newItems})
+
+	// allItems should be updated
+	if len(m.allItems) != 3 {
+		t.Errorf("expected 3 allItems, got %d", len(m.allItems))
+	}
+
+	// A follow-up command should be returned to fetch my items
+	if cmd == nil {
+		t.Fatal("expected a command to fetch my items")
+	}
+
+	// Simulate my-items fetch returning
+	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{newItems[0]}})
+
+	// View should NOT be stuck on "Loading work items..."
+	view := m.View()
+	if strings.Contains(view, "Loading work items") {
+		t.Error("view should not be stuck on loading after refresh with my-items active")
+	}
+}
+
+func TestRefresh_AfterStateChange_UpdatesList(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Bug", State: "Active", WorkItemType: "Bug"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Enter detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.GetViewMode() != ViewDetail {
+		t.Fatal("expected detail view")
+	}
+
+	// Simulate a successful state change in detail view
+	m, cmd := m.Update(WorkItemStateChangedMsg{})
+
+	// Should return a command to re-fetch work items
+	if cmd == nil {
+		t.Fatal("expected a refresh command after state change")
+	}
+}
+
+func TestRefresh_AfterStateChange_WithMyItems_UpdatesList(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Bug", State: "Active", WorkItemType: "Bug"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Task", State: "New", WorkItemType: "Task"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Toggle my-items on
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{items[0]}})
+
+	// Enter detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Simulate a successful state change
+	m, cmd := m.Update(WorkItemStateChangedMsg{})
+
+	// Should return a refresh command even with my-items filter active
+	if cmd == nil {
+		t.Fatal("expected a refresh command after state change with my-items active")
+	}
+}
+
+func TestMyItems_FetchError_ClearsLoading(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Toggle my-items on, then press 'r' to refresh
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m, _ = m.Update(myWorkItemsMsg{workItems: items})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+
+	// All-items fetch returns, chains to my-items fetch
+	m, _ = m.Update(workItemsMsg{workItems: items})
+
+	// My-items fetch errors
+	m, _ = m.Update(myWorkItemsMsg{err: tea.ErrInterrupted})
+
+	// Should fall back to all items and NOT be stuck loading
+	if m.myItemsOnly {
+		t.Error("myItemsOnly should be false after fetch error")
+	}
+	view := m.View()
+	if strings.Contains(view, "Loading work items") {
+		t.Error("view should not be stuck on loading after my-items fetch error")
+	}
+}
+
+func TestStatePickerEscClosesPickerNotDetailView(t *testing.T) {
+	m := NewModel(nil)
+
+	// Set up work items
+	m.list = m.list.SetItems([]azdevops.WorkItem{
+		{
+			ID: 123,
+			Fields: azdevops.WorkItemFields{
+				Title:        "Test WI",
+				State:        "Active",
+				WorkItemType: "Bug",
+			},
+		},
+	})
+
+	// Enter detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.GetViewMode() != ViewDetail {
+		t.Fatalf("Expected ViewDetail, got %d", m.GetViewMode())
+	}
+
+	// Simulate states loaded (which opens the state picker)
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		adapter.model, _ = adapter.model.Update(statesLoadedMsg{
+			states: []azdevops.WorkItemTypeState{
+				{Name: "New", Color: "b2b2b2", Category: "Proposed"},
+				{Name: "Active", Color: "007acc", Category: "InProgress"},
+				{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
+			},
+		})
+		if !adapter.model.statePicker.IsVisible() {
+			t.Fatal("State picker should be visible after states loaded")
+		}
+	} else {
+		t.Fatal("Expected detailAdapter")
+	}
+
+	// Press Esc to close state picker (not the detail view)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Should still be in detail view (Esc closed the picker, not the view)
+	if m.GetViewMode() != ViewDetail {
+		t.Error("Esc should close state picker, not exit detail view")
+	}
+
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		if adapter.model.statePicker.IsVisible() {
+			t.Error("State picker should be hidden after Esc")
+		}
+	}
+
+	// Now pressing Esc again should exit detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.GetViewMode() != ViewList {
+		t.Error("Second Esc should exit detail view back to list")
+	}
+}
+
+func TestHasContextBar_DetailView(t *testing.T) {
+	m := NewModel(nil)
+
+	// In list mode, no context bar
+	if m.HasContextBar() {
+		t.Error("Expected no context bar in list mode")
+	}
+
+	// Set up items and enter detail
+	m.list = m.list.SetItems([]azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Test", WorkItemType: "Bug"}},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// In detail mode, context bar should be shown
+	if !m.HasContextBar() {
+		t.Error("Expected context bar in detail mode")
 	}
 }

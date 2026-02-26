@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -988,6 +989,312 @@ func TestShortenFilePath(t *testing.T) {
 				t.Errorf("shortenFilePath(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDetailModel_View_ShowsGeneralComments(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			Status:        "active",
+			ThreadContext: nil, // general comment
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Looks good overall", Author: azdevops.Identity{DisplayName: "Bob"}},
+			},
+		},
+		{
+			ID:     2,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 3, Content: "Fix this"},
+			},
+		},
+		{
+			ID:            3,
+			Status:        "fixed",
+			ThreadContext: nil, // resolved general comment
+			Comments: []azdevops.Comment{
+				{ID: 4, Content: "Add docs?", Author: azdevops.Identity{DisplayName: "Charlie"}},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should show general comments entry with count
+	if !strings.Contains(view, "General comments (2)") {
+		t.Error("View should contain 'General comments (2)' selectable entry")
+	}
+}
+
+func TestDetailModel_View_NoGeneralCommentsSection(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:         101,
+		Title:      "Test PR",
+		Repository: azdevops.Repository{ID: "repo-123"},
+	}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Only code comments, no general comments
+	threads := []azdevops.Thread{
+		{
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Fix this"},
+			},
+		},
+	}
+	model.SetThreads(threads)
+
+	view := model.View()
+
+	// Should NOT show general comments section when there are none
+	if strings.Contains(view, "General comments") {
+		t.Error("View should NOT contain 'General comments' section when there are no general comments")
+	}
+}
+
+func TestDetailModel_EnterOnGeneralCommentsEmitsMsg(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	threads := []azdevops.Thread{
+		{
+			ID:            1,
+			Status:        "active",
+			ThreadContext: nil,
+			Comments:      []azdevops.Comment{{ID: 1, Content: "General comment"}},
+		},
+	}
+	model.SetThreads(threads)
+
+	// fileIndex should be 0 (general comments entry)
+	if model.fileIndex != 0 {
+		t.Fatalf("Initial fileIndex = %d, want 0", model.fileIndex)
+	}
+
+	// Press Enter — should emit openGeneralCommentsMsg
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Expected Enter to produce a command")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(openGeneralCommentsMsg); !ok {
+		t.Errorf("Expected openGeneralCommentsMsg, got %T", msg)
+	}
+}
+
+func TestDetailModel_NavigationWithGeneralComments(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	threads := []azdevops.Thread{
+		{ID: 1, ThreadContext: nil, Comments: []azdevops.Comment{{ID: 1, Content: "General"}}},
+	}
+	model.SetThreads(threads)
+
+	// Index 0 = general comments, 1 = /a.go, 2 = /b.go
+	if !model.isGeneralCommentsSelected() {
+		t.Error("Initial selection should be general comments")
+	}
+
+	// Move down to first file
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if model.isGeneralCommentsSelected() {
+		t.Error("After j, should not be on general comments")
+	}
+	if model.fileIndex != 1 {
+		t.Errorf("After j, fileIndex = %d, want 1", model.fileIndex)
+	}
+
+	// Enter on a file should emit openFileDiffMsg
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Expected Enter to produce a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(openFileDiffMsg); !ok {
+		t.Errorf("Expected openFileDiffMsg, got %T", msg)
+	}
+}
+
+func TestDetailModel_VKeyOpensVotePicker(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Vote picker should be hidden initially
+	if model.votePicker.IsVisible() {
+		t.Error("Vote picker should be hidden initially")
+	}
+
+	// Press 'v' to open vote picker
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	if cmd != nil {
+		t.Error("Opening vote picker should not produce a command")
+	}
+
+	if !model.votePicker.IsVisible() {
+		t.Error("Vote picker should be visible after pressing 'v'")
+	}
+}
+
+func TestDetailModel_VotePickerRoutesInput(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+
+	// While vote picker is visible, key input should route to it
+	// Move cursor down in picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	// File index should not change (input went to vote picker)
+	if model.fileIndex != 0 {
+		t.Errorf("fileIndex = %d, want 0 (input should route to vote picker)", model.fileIndex)
+	}
+}
+
+func TestDetailModel_VotePickerEscCloses(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	// Open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	if !model.votePicker.IsVisible() {
+		t.Fatal("Vote picker should be visible")
+	}
+
+	// Press Esc to close
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if model.votePicker.IsVisible() {
+		t.Error("Vote picker should be hidden after Esc")
+	}
+}
+
+func TestDetailModel_VoteSelectedMsgTriggersVote(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	// Send VoteSelectedMsg directly
+	model, cmd := model.Update(components.VoteSelectedMsg{Vote: azdevops.VoteApprove})
+
+	if cmd == nil {
+		t.Error("VoteSelectedMsg should produce a command")
+	}
+
+	if !model.loading {
+		t.Error("Model should be in loading state after vote")
+	}
+}
+
+func TestDetailModel_VotePRAllVoteTypes(t *testing.T) {
+	tests := []struct {
+		vote        int
+		wantMessage string
+	}{
+		{azdevops.VoteApprove, "PR approved"},
+		{azdevops.VoteApproveWithSuggestions, "PR approved with suggestions"},
+		{azdevops.VoteWaitForAuthor, "Waiting for author"},
+		{azdevops.VoteReject, "PR rejected"},
+		{azdevops.VoteNoVote, "Vote reset"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("vote_%d", tt.vote), func(t *testing.T) {
+			// voteResultDescription is tested separately since votePR
+			// with nil client short-circuits before generating the message.
+			got := voteResultDescription(tt.vote)
+			if got != tt.wantMessage {
+				t.Errorf("voteResultDescription(%d) = %q, want %q", tt.vote, got, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestDetailModel_ViewShowsVotePicker(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	files := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	}
+	model.SetChangedFiles(files)
+
+	// Normal view should not show vote picker content
+	normalView := model.View()
+
+	// Open vote picker
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	voteView := model.View()
+
+	// Vote picker view should be different from normal view
+	if voteView == normalView {
+		t.Error("View with vote picker should differ from normal view")
+	}
+
+	// Vote picker view should contain vote option text
+	if !strings.Contains(voteView, "Approve") {
+		t.Error("Vote picker view should contain 'Approve'")
 	}
 }
 

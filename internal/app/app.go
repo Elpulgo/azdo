@@ -109,7 +109,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 	if cfg.IsMultiProject() {
 		statusBar.SetProject(fmt.Sprintf("%d projects", len(cfg.Projects)))
 	} else {
-		statusBar.SetProject(cfg.Projects[0])
+		statusBar.SetProject(cfg.DisplayNameFor(cfg.Projects[0]))
 	}
 
 	// Set config path if available
@@ -316,7 +316,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.config.IsMultiProject() {
 			m.statusBar.SetProject(fmt.Sprintf("%d projects", len(m.config.Projects)))
 		} else {
-			m.statusBar.SetProject(m.config.Projects[0])
+			m.statusBar.SetProject(m.config.DisplayNameFor(m.config.Projects[0]))
 		}
 		m.statusBar.SetWidth(m.width)
 		if configPath, err := config.GetPath(); err == nil {

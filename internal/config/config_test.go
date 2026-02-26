@@ -210,6 +210,200 @@ func TestGetPath_ReturnsExpectedPath(t *testing.T) {
 	}
 }
 
+func TestParseProjects_StringList(t *testing.T) {
+	// Simple string list: display names should equal API names
+	raw := []interface{}{"proj-a", "proj-b"}
+	projects, displayNames := parseProjects(raw)
+
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+	if projects[0] != "proj-a" || projects[1] != "proj-b" {
+		t.Errorf("projects = %v, want [proj-a proj-b]", projects)
+	}
+	if len(displayNames) != 0 {
+		t.Errorf("expected empty displayNames for plain strings, got %v", displayNames)
+	}
+}
+
+func TestParseProjects_ObjectList(t *testing.T) {
+	// Object entries with name + display_name
+	raw := []interface{}{
+		map[interface{}]interface{}{
+			"name":         "ugly-api-name",
+			"display_name": "My Project",
+		},
+		map[interface{}]interface{}{
+			"name":         "another-api",
+			"display_name": "Another",
+		},
+	}
+	projects, displayNames := parseProjects(raw)
+
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+	if projects[0] != "ugly-api-name" || projects[1] != "another-api" {
+		t.Errorf("projects = %v", projects)
+	}
+	if displayNames["ugly-api-name"] != "My Project" {
+		t.Errorf("displayNames[ugly-api-name] = %q, want %q", displayNames["ugly-api-name"], "My Project")
+	}
+	if displayNames["another-api"] != "Another" {
+		t.Errorf("displayNames[another-api] = %q, want %q", displayNames["another-api"], "Another")
+	}
+}
+
+func TestParseProjects_MixedList(t *testing.T) {
+	// Mix of strings and objects
+	raw := []interface{}{
+		"simple-project",
+		map[interface{}]interface{}{
+			"name":         "ugly-api-name",
+			"display_name": "Friendly Name",
+		},
+	}
+	projects, displayNames := parseProjects(raw)
+
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+	if projects[0] != "simple-project" || projects[1] != "ugly-api-name" {
+		t.Errorf("projects = %v", projects)
+	}
+	// Only the object entry should have a display name
+	if len(displayNames) != 1 {
+		t.Errorf("expected 1 displayName entry, got %d", len(displayNames))
+	}
+	if displayNames["ugly-api-name"] != "Friendly Name" {
+		t.Errorf("displayNames[ugly-api-name] = %q", displayNames["ugly-api-name"])
+	}
+}
+
+func TestParseProjects_ObjectWithoutDisplayName(t *testing.T) {
+	// Object entry with only name (no display_name) — display name defaults to API name
+	raw := []interface{}{
+		map[interface{}]interface{}{
+			"name": "just-a-name",
+		},
+	}
+	projects, displayNames := parseProjects(raw)
+
+	if len(projects) != 1 || projects[0] != "just-a-name" {
+		t.Errorf("projects = %v, want [just-a-name]", projects)
+	}
+	if len(displayNames) != 0 {
+		t.Errorf("expected empty displayNames when display_name not set, got %v", displayNames)
+	}
+}
+
+func TestParseProjects_StringMapKeys(t *testing.T) {
+	// Viper sometimes returns map[string]interface{} instead of map[interface{}]interface{}
+	raw := []interface{}{
+		map[string]interface{}{
+			"name":         "api-name",
+			"display_name": "Display",
+		},
+	}
+	projects, displayNames := parseProjects(raw)
+
+	if len(projects) != 1 || projects[0] != "api-name" {
+		t.Errorf("projects = %v, want [api-name]", projects)
+	}
+	if displayNames["api-name"] != "Display" {
+		t.Errorf("displayNames[api-name] = %q, want %q", displayNames["api-name"], "Display")
+	}
+}
+
+func TestConfig_DisplayNameFor(t *testing.T) {
+	cfg := Config{
+		Projects:     []string{"ugly-api", "simple"},
+		DisplayNames: map[string]string{"ugly-api": "Friendly"},
+	}
+
+	// Project with display name
+	if got := cfg.DisplayNameFor("ugly-api"); got != "Friendly" {
+		t.Errorf("DisplayNameFor(ugly-api) = %q, want %q", got, "Friendly")
+	}
+
+	// Project without display name — returns API name
+	if got := cfg.DisplayNameFor("simple"); got != "simple" {
+		t.Errorf("DisplayNameFor(simple) = %q, want %q", got, "simple")
+	}
+
+	// Unknown project — returns as-is
+	if got := cfg.DisplayNameFor("unknown"); got != "unknown" {
+		t.Errorf("DisplayNameFor(unknown) = %q, want %q", got, "unknown")
+	}
+}
+
+func TestLoad_WithDisplayNames(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `organization: test-org
+projects:
+  - name: ugly-api-project
+    display_name: My Project
+  - simple-project
+polling_interval: 60
+theme: dark
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if len(cfg.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(cfg.Projects))
+	}
+	if cfg.Projects[0] != "ugly-api-project" {
+		t.Errorf("Projects[0] = %q, want %q", cfg.Projects[0], "ugly-api-project")
+	}
+	if cfg.Projects[1] != "simple-project" {
+		t.Errorf("Projects[1] = %q, want %q", cfg.Projects[1], "simple-project")
+	}
+	if cfg.DisplayNameFor("ugly-api-project") != "My Project" {
+		t.Errorf("DisplayNameFor(ugly-api-project) = %q, want %q", cfg.DisplayNameFor("ugly-api-project"), "My Project")
+	}
+	if cfg.DisplayNameFor("simple-project") != "simple-project" {
+		t.Errorf("DisplayNameFor(simple-project) = %q, want %q", cfg.DisplayNameFor("simple-project"), "simple-project")
+	}
+}
+
+func TestLoad_PlainStringListStillWorks(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `organization: test-org
+projects:
+  - alpha
+  - beta
+polling_interval: 60
+theme: dark
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if len(cfg.Projects) != 2 || cfg.Projects[0] != "alpha" || cfg.Projects[1] != "beta" {
+		t.Errorf("Projects = %v, want [alpha beta]", cfg.Projects)
+	}
+	// No display names set
+	if cfg.DisplayNameFor("alpha") != "alpha" {
+		t.Errorf("DisplayNameFor(alpha) = %q, want %q", cfg.DisplayNameFor("alpha"), "alpha")
+	}
+}
+
 func TestConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string

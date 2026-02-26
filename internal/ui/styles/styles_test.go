@@ -150,6 +150,17 @@ func TestStylesTabBarHasRoundedBorder(t *testing.T) {
 	}
 }
 
+// TestStylesDiffCommentResolvedUsesSuccessColor tests that resolved comments use the Success color
+func TestStylesDiffCommentResolvedUsesSuccessColor(t *testing.T) {
+	theme := GetDefaultTheme()
+	s := NewStyles(theme)
+
+	fg := s.DiffCommentResolved.GetForeground()
+	if fg != lipgloss.Color(theme.Success) {
+		t.Errorf("DiffCommentResolved foreground = %v, want %v (Success)", fg, theme.Success)
+	}
+}
+
 // TestStylesAllThemes tests that NewStyles works with all built-in themes
 func TestStylesAllThemes(t *testing.T) {
 	themeNames := ListAvailableThemes()

@@ -227,6 +227,30 @@ func CountCommentsPerFile(threads []azdevops.Thread) map[string]int {
 	return result
 }
 
+// FilterGeneralThreads returns only threads without a file context (general PR comments).
+// Threads with a ThreadContext that has an empty FilePath are also considered general.
+func FilterGeneralThreads(threads []azdevops.Thread) []azdevops.Thread {
+	var result []azdevops.Thread
+	for _, thread := range threads {
+		if thread.ThreadContext == nil || thread.ThreadContext.FilePath == "" {
+			result = append(result, thread)
+		}
+	}
+	return result
+}
+
+// CountGeneralComments counts the total number of comments across all general threads
+// (threads without a file context).
+func CountGeneralComments(threads []azdevops.Thread) int {
+	count := 0
+	for _, thread := range threads {
+		if thread.ThreadContext == nil || thread.ThreadContext.FilePath == "" {
+			count += len(thread.Comments)
+		}
+	}
+	return count
+}
+
 // MapThreadsToLines maps PR threads to line numbers for a specific file.
 // Returns a map from new-file line number to threads at that line.
 func MapThreadsToLines(threads []azdevops.Thread, filePath string) map[int][]azdevops.Thread {

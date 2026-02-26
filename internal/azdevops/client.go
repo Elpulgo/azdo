@@ -2,6 +2,7 @@ package azdevops
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ type Client struct {
 	pat        string
 	baseURL    string
 	httpClient *http.Client
+	userID     string // cached authenticated user ID
 }
 
 // GetOrg returns the organization name
@@ -113,6 +115,36 @@ func (c *Client) post(path string, body io.Reader) ([]byte, error) {
 	return c.doRequest("POST", path, body)
 }
 
+// doRequestWithContentType performs an HTTP request with a custom Content-Type header.
+func (c *Client) doRequestWithContentType(method, path string, body io.Reader, contentType string) ([]byte, error) {
+	url := c.baseURL + path
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, formatHTTPError(resp.StatusCode, respBody)
+	}
+
+	return respBody, nil
+}
+
 // doRequest performs an HTTP request with the given method
 func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, error) {
 	url := c.baseURL + path
@@ -143,6 +175,58 @@ func (c *Client) doRequest(method, path string, body io.Reader) ([]byte, error) 
 	return respBody, nil
 }
 
+// connectionDataResponse holds the response from the connection data API
+type connectionDataResponse struct {
+	AuthenticatedUser struct {
+		ID string `json:"id"`
+	} `json:"authenticatedUser"`
+}
+
+// GetCurrentUserID returns the authenticated user's ID, fetching and caching it on first call
+func (c *Client) GetCurrentUserID() (string, error) {
+	if c.userID != "" {
+		return c.userID, nil
+	}
+
+	// Connection data is at org level, not project-scoped
+	url := fmt.Sprintf("https://dev.azure.com/%s/_apis/connectionData", c.org)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch connection data: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", formatHTTPError(resp.StatusCode, body)
+	}
+
+	var data connectionDataResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", fmt.Errorf("failed to parse connection data: %w", err)
+	}
+
+	if data.AuthenticatedUser.ID == "" {
+		return "", fmt.Errorf("connection data did not contain a user ID")
+	}
+
+	c.userID = data.AuthenticatedUser.ID
+	return c.userID, nil
+}
+
 // formatHTTPError creates a user-friendly error message based on the HTTP status code
 func formatHTTPError(statusCode int, _ []byte) error {
 	switch statusCode {
@@ -151,7 +235,7 @@ func formatHTTPError(statusCode int, _ []byte) error {
 			"Please generate a new PAT in Azure DevOps and update your configuration")
 	case http.StatusForbidden:
 		return fmt.Errorf("access denied (HTTP 403): your PAT does not have sufficient permissions. " +
-			"Required scopes: Code (Read), Build (Read), Work Items (Read)")
+			"Required scopes: Code (Read), Build (Read), Work Items (Read & Write)")
 	case http.StatusNotFound:
 		return fmt.Errorf("resource not found (HTTP 404): the requested resource does not exist. " +
 			"Please verify your organization and project names are correct in your configuration")

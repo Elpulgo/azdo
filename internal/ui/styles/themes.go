@@ -18,6 +18,7 @@ var themeRegistry = map[string]Theme{
 	"dracula":    draculaTheme,
 	"catppuccin": catppuccinTheme,
 	"github":     githubTheme,
+	"retro":      retroTheme,
 }
 
 // GetThemeByName returns a theme by name.
@@ -440,4 +441,44 @@ var githubTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#f0f6fc"), // Bright text
 	TabActiveBackground:   lipgloss.Color("#58a6ff"), // Blue
 	TabInactiveForeground: lipgloss.Color("#8b949e"), // Muted text
+}
+
+// Retro theme - Matrix-inspired green phosphor on black
+var retroTheme = Theme{
+	Name: "retro",
+
+	// Matrix green phosphor palette
+	Primary:   lipgloss.Color("#00ff41"), // Bright matrix green
+	Secondary: lipgloss.Color("#00cc33"), // Medium green
+	Accent:    lipgloss.Color("#39ff14"), // Neon green
+
+	// Status colors
+	Success: lipgloss.Color("#00ff41"), // Bright green
+	Warning: lipgloss.Color("#ccff00"), // Yellow-green
+	Error:   lipgloss.Color("#ff003c"), // Red (digital alarm)
+	Info:    lipgloss.Color("#00cc33"), // Medium green
+
+	// Background colors
+	Background:       lipgloss.Color("#0a0a0a"), // Near-black
+	BackgroundAlt:    lipgloss.Color("#050505"), // Deeper black
+	BackgroundSelect: lipgloss.Color("#003300"), // Dark green
+
+	// Foreground colors
+	Foreground:      lipgloss.Color("#00ff41"), // Matrix green
+	ForegroundMuted: lipgloss.Color("#336633"), // Dim green
+	ForegroundBold:  lipgloss.Color("#66ff66"), // Bright green
+
+	// Selection colors
+	SelectForeground: lipgloss.Color("#0a0a0a"), // Black
+	SelectBackground: lipgloss.Color("#00ff41"), // Matrix green
+
+	// UI elements
+	Border:  lipgloss.Color("#004400"), // Dark green border
+	Link:    lipgloss.Color("#39ff14"), // Neon green
+	Spinner: lipgloss.Color("#00ff41"), // Matrix green
+
+	// Tab colors
+	TabActiveForeground:   lipgloss.Color("#0a0a0a"), // Black
+	TabActiveBackground:   lipgloss.Color("#00ff41"), // Matrix green
+	TabInactiveForeground: lipgloss.Color("#336633"), // Dim green
 }

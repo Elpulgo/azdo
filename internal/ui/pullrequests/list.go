@@ -146,6 +146,24 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // updateDetail intercepts detail-mode messages for file selection to enter diff view
 func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case openGeneralCommentsMsg:
+		// User pressed Enter on general comments in the detail view
+		if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+			detail := adapter.model
+			pr := detail.GetPR()
+			threads := detail.GetThreads()
+			var projectClient *azdevops.Client
+			if m.client != nil {
+				projectClient = m.client.ClientFor(pr.ProjectName)
+			}
+			m.diffView = NewDiffModel(projectClient, pr, threads, m.styles)
+			m.diffView.SetSize(m.width, m.height)
+			m.viewMode = ViewDiff
+			// Open directly into general comments view
+			return m, m.diffView.InitGeneralComments()
+		}
+		return m, nil
+
 	case openFileDiffMsg:
 		// User pressed Enter on a file in the detail view - open diff for that file
 		if adapter, ok := m.list.Detail().(*detailAdapter); ok {
@@ -166,6 +184,15 @@ func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "esc" {
+			// If the detail view has a modal open (e.g. vote picker),
+			// let it handle esc first instead of navigating back
+			if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+				if adapter.model.votePicker.IsVisible() {
+					var cmd tea.Cmd
+					m.list, cmd = m.list.Update(msg)
+					return m, cmd
+				}
+			}
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(msg)
 			m.viewMode = ViewList
@@ -377,7 +404,7 @@ func prsToRowsMulti(items []azdevops.PullRequest, s *styles.Styles) []table.Row 
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
 		rows[i] = table.Row{
-			pr.ProjectName,
+			pr.ProjectDisplayName,
 			statusIconWithStyles(pr.Status, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
@@ -408,7 +435,8 @@ func filterPRMulti(pr azdevops.PullRequest, query string) bool {
 		return true
 	}
 	q := strings.ToLower(query)
-	return strings.Contains(strings.ToLower(pr.ProjectName), q) ||
+	return strings.Contains(strings.ToLower(pr.ProjectDisplayName), q) ||
+		strings.Contains(strings.ToLower(pr.ProjectName), q) ||
 		strings.Contains(strings.ToLower(pr.Title), q) ||
 		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
 		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||

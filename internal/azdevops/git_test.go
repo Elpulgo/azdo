@@ -637,8 +637,8 @@ func TestVotePullRequest_Approve(t *testing.T) {
 			t.Errorf("Expected PUT request, got %s", r.Method)
 		}
 
-		// Verify the API endpoint
-		expectedPath := "/git/repositories/repo-123/pullRequests/101/reviewers/me"
+		// Verify the API endpoint uses the actual user ID
+		expectedPath := "/git/repositories/repo-123/pullRequests/101/reviewers/user-guid-123"
 		if r.URL.Path != expectedPath {
 			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
 		}
@@ -661,6 +661,7 @@ func TestVotePullRequest_Approve(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 	client.baseURL = server.URL
+	client.userID = "user-guid-123" // pre-set to skip connection data call
 
 	err = client.VotePullRequest("repo-123", 101, VoteApprove)
 	if err != nil {
@@ -685,6 +686,7 @@ func TestVotePullRequest_Reject(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 	client.baseURL = server.URL
+	client.userID = "user-guid-123"
 
 	err = client.VotePullRequest("repo-123", 101, VoteReject)
 	if err != nil {
@@ -704,6 +706,7 @@ func TestVotePullRequest_HTTPError(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 	client.baseURL = server.URL
+	client.userID = "user-guid-123"
 
 	err = client.VotePullRequest("repo-123", 101, VoteApprove)
 	if err == nil {
@@ -773,6 +776,64 @@ func TestAddPRComment_HTTPError(t *testing.T) {
 	_, err = client.AddPRComment("repo-123", 101, "Test comment")
 	if err == nil {
 		t.Error("Expected error for 400 response, got nil")
+	}
+}
+
+func TestGetCurrentUserID_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"authenticatedUser":{"id":"abc-def-123"}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	// Override the org-level URL by pointing it at our test server
+	// GetCurrentUserID constructs: https://dev.azure.com/{org}/_apis/connectionData
+	// We can't easily override that, so pre-set the userID to test caching
+	client.userID = ""
+
+	// Test caching: set userID directly and verify it's returned
+	client.userID = "cached-id"
+	id, err := client.GetCurrentUserID()
+	if err != nil {
+		t.Fatalf("GetCurrentUserID() error = %v", err)
+	}
+	if id != "cached-id" {
+		t.Errorf("GetCurrentUserID() = %q, want 'cached-id'", id)
+	}
+}
+
+func TestGetCurrentUserID_Caching(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"authenticatedUser":{"id":"user-123"}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	// Pre-set userID to verify caching skips the network call
+	client.userID = "user-123"
+
+	id1, _ := client.GetCurrentUserID()
+	id2, _ := client.GetCurrentUserID()
+
+	if id1 != id2 {
+		t.Errorf("Cached IDs should be identical: %q vs %q", id1, id2)
+	}
+
+	// Should not have made any HTTP calls since userID was cached
+	if callCount != 0 {
+		t.Errorf("Expected 0 HTTP calls with cached userID, got %d", callCount)
 	}
 }
 

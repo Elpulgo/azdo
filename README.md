@@ -26,17 +26,19 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 ### Pull Requests
 - List view of pull requests with status indicators
 - Detailed view showing PR information and metadata
+- Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
 
 ### Work Items
 - List view of work items with status and type information
 - Detailed view showing work item details
+- Change work item state directly from the detail view (dynamically fetches available states)
 
 ### User Experience
 - Help modal with all keyboard shortcuts (press `?`)
 - Secure PAT storage using system keyring
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
-- Six built-in themes with true color support
+- Seven built-in themes with true color support
 
 ## Installation
 
@@ -66,14 +68,22 @@ Create a configuration file at the following location:
 # Azure DevOps organization name (required)
 organization: your-org-name
 
-# Azure DevOps project name (required)
-project: your-project-name
+# Azure DevOps project name(s) (required)
+# Simple format:
+projects:
+  - your-project-name
+
+# With display names (friendly name shown in UI):
+#   projects:
+#     - name: ugly-api-project-name
+#       display_name: My Project
+#     - simple-project
 
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
 
 # Theme (optional, default: dark)
-# Available themes: dark, gruvbox, nord, dracula, catppuccin, github
+# Available themes: dark, gruvbox, nord, dracula, catppuccin, github, retro
 theme: dark
 ```
 
@@ -93,9 +103,9 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 
 **Configuration Options:**
 - `organization`: Your Azure DevOps organization name (required)
-- `project`: Your Azure DevOps project name (required)
+- `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
-- `theme`: Color theme for the UI (optional, default: Dracula)
+- `theme`: Color theme for the UI (optional, default: dark)
 
 **Available Themes:**
 - `dark` - Default dark theme with blue and cyan accents
@@ -104,6 +114,7 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 - `dracula` - Dark theme with purple and pink accents
 - `catppuccin` - Soothing pastel theme (Mocha variant)
 - `github` - GitHub Dark theme
+- `retro` - Matrix-inspired green phosphor on black
 
 ### Custom Themes
 
@@ -165,7 +176,11 @@ On first run, the application will prompt you to enter your Azure DevOps PAT. Th
 - **Linux**: Secret Service (gnome-keyring, KWallet, etc.)
 
 **Required PAT Scopes:**
-- `Build` - Read (for pipeline runs and logs)
+| Scope | Access | Used For |
+|-------|--------|----------|
+| **Build** | Read | Pipeline runs, build timelines, and logs |
+| **Code** | Read & Write | List PRs, view threads/iterations/diffs, vote on PRs, add comments, and update thread status |
+| **Work Items** | Read & Write | Query and view work items, fetch available states, and change work item state |
 
 To create a PAT:
 1. Go to Azure DevOps → User Settings → Personal Access Tokens
@@ -201,6 +216,16 @@ azdo-tui
 | `?` | Toggle help modal |
 | `t` | Select theme |
 | `q` or `Ctrl+C` | Quit |
+
+### PR Detail View
+| Key | Action |
+|-----|--------|
+| `v` | Vote on pull request |
+
+### Work Item Detail View
+| Key | Action |
+|-----|--------|
+| `s` | Change work item state |
 
 ### Log Viewer
 | Key | Action |
@@ -325,8 +350,10 @@ Binaries will be available in the `dist/` directory after running GoReleaser loc
 - [x] Multiple theme support
 - [ ] Pipeline filtering and search
 - [ ] Trigger pipeline runs
-- [ ] Multi-project support
-- [ ] Theme switching within the app
+- [x] Multi-project support
+- [x] Theme switching within the app
+- [x] PR voting (approve, reject, suggestions, wait, reset)
+- [x] Work item state changes
 
 ## Contributing
 

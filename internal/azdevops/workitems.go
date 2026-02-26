@@ -8,13 +8,27 @@ import (
 	"time"
 )
 
+// WorkItemTypeState represents a state available for a work item type
+type WorkItemTypeState struct {
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	Category string `json:"category"`
+}
+
+// WorkItemTypeStatesResponse represents the response from the work item type states API
+type WorkItemTypeStatesResponse struct {
+	Count int                 `json:"count"`
+	Value []WorkItemTypeState `json:"value"`
+}
+
 // WorkItem represents a work item in Azure DevOps
 type WorkItem struct {
 	ID          int            `json:"id"`
 	Rev         int            `json:"rev"`
 	Fields      WorkItemFields `json:"fields"`
 	URL         string         `json:"url"`
-	ProjectName string         `json:"-"` // Set by MultiClient, not from API
+	ProjectName        string         `json:"-"` // Set by MultiClient, not from API
+	ProjectDisplayName string         `json:"-"` // Set by MultiClient, display name for UI
 }
 
 // WorkItemFields represents the fields of a work item
@@ -208,4 +222,43 @@ ORDER BY [System.ChangedDate] DESC`
 	}
 
 	return c.GetWorkItems(ids)
+}
+
+// GetWorkItemTypeStates retrieves the available states for a work item type.
+// States in the "Removed" category are excluded since they are not typical user transitions.
+func (c *Client) GetWorkItemTypeStates(workItemType string) ([]WorkItemTypeState, error) {
+	path := fmt.Sprintf("/wit/workitemtypes/%s/states?api-version=7.1", workItemType)
+
+	body, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get work item type states: %w", err)
+	}
+
+	var response WorkItemTypeStatesResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse work item type states response: %w", err)
+	}
+
+	// Filter out "Removed" category states
+	states := make([]WorkItemTypeState, 0, len(response.Value))
+	for _, s := range response.Value {
+		if s.Category != "Removed" {
+			states = append(states, s)
+		}
+	}
+
+	return states, nil
+}
+
+// UpdateWorkItemState updates the state of a work item using JSON Patch.
+func (c *Client) UpdateWorkItemState(id int, state string) error {
+	path := fmt.Sprintf("/wit/workitems/%d?api-version=7.1", id)
+
+	payload := fmt.Sprintf(`[{"op":"replace","path":"/fields/System.State","value":%s}]`, escapeJSONString(state))
+	_, err := c.doRequestWithContentType("PATCH", path, strings.NewReader(payload), "application/json-patch+json")
+	if err != nil {
+		return fmt.Errorf("failed to update work item state: %w", err)
+	}
+
+	return nil
 }

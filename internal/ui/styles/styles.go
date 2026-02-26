@@ -64,7 +64,8 @@ type Styles struct {
 	DiffHeader       lipgloss.Style // Primary + BackgroundAlt + Bold — file path header
 	DiffHunkHeader   lipgloss.Style // Info color — @@ hunk markers
 	DiffLineNum      lipgloss.Style // ForegroundMuted, right-aligned — line number gutter
-	DiffCommentCount lipgloss.Style // Accent color — comment count badges
+	DiffCommentCount    lipgloss.Style // Accent color — comment count badges
+	DiffCommentResolved lipgloss.Style // Success color — resolved comment text
 }
 
 // NewStyles creates a new Styles instance from the given theme.
@@ -227,6 +228,10 @@ func NewStyles(theme Theme) *Styles {
 
 	s.DiffCommentCount = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true)
+
+	s.DiffCommentResolved = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Success)).
 		Bold(true)
 
 	return s

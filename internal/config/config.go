@@ -10,17 +10,71 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Organization    string   `mapstructure:"organization"`
-	Project         string   `mapstructure:"project"`  // deprecated: use Projects
-	Projects        []string `mapstructure:"projects"`
-	PollingInterval int      `mapstructure:"polling_interval"`
-	Theme           string   `mapstructure:"theme"`
-	configPath      string   // internal field to store config path for saving
+	Organization    string            `mapstructure:"organization"`
+	Project         string            `mapstructure:"project"`  // deprecated: use Projects
+	Projects        []string          `mapstructure:"projects"`
+	DisplayNames    map[string]string `mapstructure:"-"` // API name → display name
+	PollingInterval int               `mapstructure:"polling_interval"`
+	Theme           string            `mapstructure:"theme"`
+	configPath      string            // internal field to store config path for saving
 }
 
 // IsMultiProject returns true when more than one project is configured.
 func (c *Config) IsMultiProject() bool {
 	return len(c.Projects) > 1
+}
+
+// DisplayNameFor returns the display name for a project API name.
+// If no display name is configured, returns the API name itself.
+func (c *Config) DisplayNameFor(apiName string) string {
+	if c.DisplayNames != nil {
+		if dn, ok := c.DisplayNames[apiName]; ok {
+			return dn
+		}
+	}
+	return apiName
+}
+
+// parseProjects parses the raw "projects" value from YAML which can be:
+//   - a list of strings: ["proj-a", "proj-b"]
+//   - a list of objects: [{name: "api-name", display_name: "Friendly"}]
+//   - a mixed list of both
+//
+// Returns the list of API names and a map of API name → display name
+// (only for projects that have a different display name).
+func parseProjects(raw []interface{}) ([]string, map[string]string) {
+	projects := make([]string, 0, len(raw))
+	displayNames := make(map[string]string)
+
+	for _, item := range raw {
+		switch v := item.(type) {
+		case string:
+			projects = append(projects, v)
+		case map[interface{}]interface{}:
+			name, _ := v["name"].(string)
+			if name == "" {
+				continue
+			}
+			projects = append(projects, name)
+			if dn, ok := v["display_name"].(string); ok && dn != "" && dn != name {
+				displayNames[name] = dn
+			}
+		case map[string]interface{}:
+			name, _ := v["name"].(string)
+			if name == "" {
+				continue
+			}
+			projects = append(projects, name)
+			if dn, ok := v["display_name"].(string); ok && dn != "" && dn != name {
+				displayNames[name] = dn
+			}
+		}
+	}
+
+	if len(displayNames) == 0 {
+		displayNames = nil
+	}
+	return projects, displayNames
 }
 
 // Default configuration values
@@ -83,10 +137,41 @@ func LoadFrom(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// Check if "projects" contains object entries (with display_name).
+	// We need to parse the raw value before mapstructure unmarshalling,
+	// which only handles string lists.
+	var parsedProjects []string
+	var parsedDisplayNames map[string]string
+	hasObjectEntries := false
+	if rawProjects := v.Get("projects"); rawProjects != nil {
+		if rawSlice, ok := rawProjects.([]interface{}); ok {
+			parsedProjects, parsedDisplayNames = parseProjects(rawSlice)
+			// Check if any entry was an object (non-string)
+			for _, item := range rawSlice {
+				if _, isStr := item.(string); !isStr {
+					hasObjectEntries = true
+					break
+				}
+			}
+		}
+	}
+
+	// If projects contains object entries, clear it from viper before
+	// unmarshalling so mapstructure doesn't choke on non-string entries.
+	if hasObjectEntries {
+		v.Set("projects", []string{})
+	}
+
 	// Unmarshal config into struct
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Restore parsed projects (always, since we parsed them above)
+	if len(parsedProjects) > 0 {
+		cfg.Projects = parsedProjects
+		cfg.DisplayNames = parsedDisplayNames
 	}
 
 	// Store the config path for saving
@@ -162,7 +247,25 @@ func (c *Config) Save() error {
 
 	// Set all config values
 	v.Set("organization", c.Organization)
-	v.Set("projects", c.Projects)
+
+	// Persist projects in new format when display names are configured
+	if len(c.DisplayNames) > 0 {
+		projectEntries := make([]interface{}, len(c.Projects))
+		for i, p := range c.Projects {
+			if dn, ok := c.DisplayNames[p]; ok {
+				projectEntries[i] = map[string]string{
+					"name":         p,
+					"display_name": dn,
+				}
+			} else {
+				projectEntries[i] = p
+			}
+		}
+		v.Set("projects", projectEntries)
+	} else {
+		v.Set("projects", c.Projects)
+	}
+
 	v.Set("polling_interval", c.PollingInterval)
 	v.Set("theme", c.Theme)
 

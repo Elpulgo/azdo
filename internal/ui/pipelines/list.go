@@ -363,7 +363,7 @@ func runsToRowsMulti(items []azdevops.PipelineRun, s *styles.Styles) []table.Row
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
 		rows[i] = table.Row{
-			run.Project.Name,
+			run.ProjectDisplayName,
 			statusIconWithStyles(run.Status, run.Result, s),
 			run.Definition.Name,
 			run.BranchShortName(),
@@ -392,7 +392,8 @@ func filterPipelineRunMulti(run azdevops.PipelineRun, query string) bool {
 		return true
 	}
 	q := strings.ToLower(query)
-	return strings.Contains(strings.ToLower(run.Project.Name), q) ||
+	return strings.Contains(strings.ToLower(run.ProjectDisplayName), q) ||
+		strings.Contains(strings.ToLower(run.Project.Name), q) ||
 		strings.Contains(strings.ToLower(run.Definition.Name), q) ||
 		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
 		strings.Contains(strings.ToLower(run.BuildNumber), q)

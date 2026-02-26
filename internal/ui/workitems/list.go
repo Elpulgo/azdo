@@ -86,6 +86,9 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 			d.SetSize(w, h)
 			return &detailAdapter{d}, nil
 		},
+		HasContextBar: func(mode listview.ViewMode) bool {
+			return mode == listview.ViewDetail
+		},
 		FilterFunc: filterFunc,
 	}
 
@@ -110,18 +113,24 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.allItems = msg.workItems
-		if !m.myItemsOnly {
-			m.list = m.list.HandleFetchResult(msg.workItems, nil)
+		if m.myItemsOnly {
+			// Chain to my-items fetch so loading state is eventually cleared
+			return m, fetchMyWorkItemsMulti(m.client)
 		}
+		m.list = m.list.HandleFetchResult(msg.workItems, nil)
 		return m, nil
 	case myWorkItemsMsg:
 		if msg.err != nil {
-			// On error, fall back to showing all items
+			// On error, fall back to showing all items and clear loading state
 			m.myItemsOnly = false
+			m.list = m.list.SetItems(m.allItems)
 			return m, nil
 		}
 		m.list = m.list.SetItems(msg.workItems)
 		return m, nil
+	case WorkItemStateChangedMsg:
+		// Re-fetch work items so the list reflects the updated state
+		return m, fetchWorkItemsMulti(m.client)
 	case SetWorkItemsMsg:
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
@@ -137,6 +146,21 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			// Toggle OFF: restore all items
 			m.list = m.list.SetItems(m.allItems)
 			return m, nil
+		}
+	}
+
+	// When in detail view, intercept esc to check for modals first
+	if m.GetViewMode() == ViewDetail {
+		if kmsg, ok := msg.(tea.KeyMsg); ok && kmsg.String() == "esc" {
+			// If the detail view has a modal open (e.g. state picker),
+			// route esc directly to the detail model to close the modal,
+			// bypassing the listview which would close the entire detail view
+			if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+				if adapter.model.statePicker.IsVisible() {
+					adapter.model, _ = adapter.model.Update(msg)
+					return m, nil
+				}
+			}
 		}
 	}
 
@@ -237,7 +261,7 @@ func workItemsToRowsMulti(items []azdevops.WorkItem, s *styles.Styles) []table.R
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
 		rows[i] = table.Row{
-			wi.ProjectName,
+			wi.ProjectDisplayName,
 			typeIconWithStyles(wi.Fields.WorkItemType, s),
 			strconv.Itoa(wi.ID),
 			wi.Fields.Title,
@@ -274,11 +298,17 @@ func filterWorkItemMulti(wi azdevops.WorkItem, query string) bool {
 	if query == "" {
 		return true
 	}
-	if strings.Contains(strings.ToLower(wi.ProjectName), strings.ToLower(query)) {
+	q := strings.ToLower(query)
+	if strings.Contains(strings.ToLower(wi.ProjectDisplayName), q) ||
+		strings.Contains(strings.ToLower(wi.ProjectName), q) {
 		return true
 	}
 	return filterWorkItem(wi, query)
 }
+
+// WorkItemStateChangedMsg is emitted after a work item state is successfully updated.
+// The list model uses it to trigger a data refresh.
+type WorkItemStateChangedMsg struct{}
 
 // Messages
 
