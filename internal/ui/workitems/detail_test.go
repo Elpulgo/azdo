@@ -466,6 +466,38 @@ func TestDetailModel_StatePickerRoutesInput(t *testing.T) {
 	}
 }
 
+func TestDetailView_LinkBeforeDescription(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 200,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Test ordering",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Description:  "This is the description text",
+		},
+	}
+
+	client, _ := azdevops.NewClient("myorg", "myproject", "fake-pat")
+	m := NewDetailModel(client, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	linkIdx := strings.Index(view, "Open in browser")
+	descIdx := strings.Index(view, "Description")
+
+	if linkIdx == -1 {
+		t.Fatal("Expected 'Open in browser' link in view")
+	}
+	if descIdx == -1 {
+		t.Fatal("Expected 'Description' label in view")
+	}
+	if linkIdx >= descIdx {
+		t.Errorf("Expected 'Open in browser' (pos %d) to appear before 'Description' (pos %d)", linkIdx, descIdx)
+	}
+}
+
 func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 	wi := azdevops.WorkItem{ID: 123}
 	m := NewDetailModel(nil, wi)

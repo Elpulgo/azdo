@@ -222,6 +222,15 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n\n")
 	}
 
+	// Link to work item (shown before description for quick access)
+	if m.client != nil {
+		url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), wi.ID)
+		if url != "" {
+			sb.WriteString(hyperlink(m.styles.Link.Render("Open in browser"), url))
+			sb.WriteString("\n\n")
+		}
+	}
+
 	// Description (with HTML stripped)
 	// Bugs use ReproSteps field; other types use Description
 	effectiveDesc := wi.EffectiveDescription()
@@ -234,16 +243,6 @@ func (m *DetailModel) updateViewportContent() {
 	} else {
 		sb.WriteString(m.styles.Muted.Render("No description"))
 		sb.WriteString("\n")
-	}
-
-	// Link to work item
-	if m.client != nil {
-		sb.WriteString("\n")
-		url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), wi.ID)
-		if url != "" {
-			sb.WriteString(hyperlink(m.styles.Link.Render("Open in browser"), url))
-			sb.WriteString("\n")
-		}
 	}
 
 	m.viewport.SetContent(sb.String())
