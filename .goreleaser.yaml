@@ -9,7 +9,7 @@ builds:
     main: ./cmd/azdo-tui
 
     # Binary name (without extension, .exe added automatically on Windows)
-    binary: azdo-tui
+    binary: azdo
 
     # Inject build info
     ldflags:
@@ -95,7 +95,7 @@ release:
     name: azdo
 
   # Draft release (set to false for automatic release)
-  draft: true
+  draft: false
 
   # Prerelease detection
   prerelease: auto

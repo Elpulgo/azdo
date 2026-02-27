@@ -42,6 +42,52 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 
 ## Installation
 
+### Quick Install (Recommended)
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Elpulgo/azdo/main/install.ps1 | iex
+```
+
+The install scripts will automatically:
+- Detect your OS and architecture
+- Download the latest release from GitHub
+- Install the binary to the appropriate location
+- Create a config file with placeholder values
+- Verify the download checksum
+
+**Install options:**
+```bash
+# Install a specific version
+curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh -s -- --version v0.1.0
+
+# Install to a custom directory
+./install.sh --install-dir ~/bin
+
+# Skip config file creation
+./install.sh --skip-config
+```
+
+### Manual Download
+
+Download the latest release for your platform from the [Releases page](https://github.com/Elpulgo/azdo/releases).
+
+| Platform | Architecture | File |
+|----------|-------------|------|
+| Linux    | x86_64      | `azdo-tui_*_Linux_x86_64.tar.gz` |
+| Linux    | ARM64       | `azdo-tui_*_Linux_arm64.tar.gz` |
+| macOS    | x86_64      | `azdo-tui_*_Darwin_x86_64.tar.gz` |
+| macOS    | ARM64 (M1+) | `azdo-tui_*_Darwin_arm64.tar.gz` |
+| Windows  | x86_64      | `azdo-tui_*_Windows_x86_64.zip` |
+| Windows  | ARM64       | `azdo-tui_*_Windows_arm64.zip` |
+
+Extract the archive and move the binary to a directory in your `PATH`.
+
 ### From Source
 
 ```bash
@@ -191,13 +237,13 @@ To create a PAT:
 ## Usage
 
 ```bash
-./azdo-tui
+./azdo
 ```
 
 Or if installed via `go install`:
 
 ```bash
-azdo-tui
+azdo
 ```
 
 ## Keyboard Shortcuts
@@ -306,7 +352,7 @@ go test -cover ./...
 ### Building
 
 ```bash
-go build -o azdo-tui ./cmd/azdo-tui
+go build -o azdo ./cmd/azdo-tui
 ```
 
 ### Releases
@@ -343,17 +389,6 @@ goreleaser release --snapshot --clean
 
 Binaries will be available in the `dist/` directory after running GoReleaser locally, or as GitHub release assets when publishing.
 
-## Roadmap
-
-- [x] Pull requests tab
-- [x] Work items tab
-- [x] Multiple theme support
-- [ ] Pipeline filtering and search
-- [ ] Trigger pipeline runs
-- [x] Multi-project support
-- [x] Theme switching within the app
-- [x] PR voting (approve, reject, suggestions, wait, reset)
-- [x] Work item state changes
 
 ## Contributing
 
