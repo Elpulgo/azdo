@@ -14,7 +14,7 @@ set -e
 
 REPO_OWNER="Elpulgo"
 REPO_NAME="azdo"
-BINARY_NAME="azdo-tui"
+BINARY_NAME="azdo"
 CONFIG_DIR_NAME="azdo-tui"
 GITHUB_API="https://api.github.com"
 GITHUB_DOWNLOAD="https://github.com"
@@ -463,11 +463,11 @@ polling_interval: 60
 
 # Theme (optional, default: dark)
 # Available: dark, gruvbox, nord, dracula, catppuccin, github, retro
-# Custom themes: Place JSON files in ~/.config/azdo-tui/themes/
-theme: dark
+# Custom themes: Place JSON files in ~/.config/<CONFIG_DIR>/themes/
+theme: dracula
 CONFIGEOF
 
-    success "Created configuration file at $CONFIG_FILE"
+    success "Created configuration file at ~/.config/$CONFIG_DIR"
     warn "Edit this file with your Azure DevOps organization and project details before running azdo-tui."
 }
 

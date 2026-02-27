@@ -237,13 +237,13 @@ To create a PAT:
 ## Usage
 
 ```bash
-./azdo-tui
+./azdo
 ```
 
 Or if installed via `go install`:
 
 ```bash
-azdo-tui
+azdo
 ```
 
 ## Keyboard Shortcuts
@@ -352,7 +352,7 @@ go test -cover ./...
 ### Building
 
 ```bash
-go build -o azdo-tui ./cmd/azdo-tui
+go build -o azdo ./cmd/azdo-tui
 ```
 
 ### Releases
@@ -389,17 +389,6 @@ goreleaser release --snapshot --clean
 
 Binaries will be available in the `dist/` directory after running GoReleaser locally, or as GitHub release assets when publishing.
 
-## Roadmap
-
-- [x] Pull requests tab
-- [x] Work items tab
-- [x] Multiple theme support
-- [ ] Pipeline filtering and search
-- [ ] Trigger pipeline runs
-- [x] Multi-project support
-- [x] Theme switching within the app
-- [x] PR voting (approve, reject, suggestions, wait, reset)
-- [x] Work item state changes
 
 ## Contributing
 
