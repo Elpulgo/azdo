@@ -61,6 +61,11 @@ Configuration:
   PAT storage: System keyring (service: azdo-tui)
   PAT fallback: AZDO_PAT environment variable
 
+Required PAT permissions:
+  Build        (Read)         - pipelines, build logs
+  Code         (Read & Write) - pull requests, voting, comments
+  Work Items   (Read & Write) - queries, state changes
+
 Keyboard shortcuts (in TUI):
   1/2/3        Switch tabs (Pipelines, Pull Requests, Work Items)
   r            Refresh data
@@ -94,6 +99,8 @@ func runAuth() error {
 		fmt.Println("Azure DevOps PAT Setup")
 		fmt.Println("This will store your Personal Access Token in the system keyring.")
 	}
+	fmt.Println()
+	fmt.Println(patinput.PermissionInfoPlain())
 	fmt.Println()
 
 	pat, err := promptForPATWithMode(store, isUpdate)

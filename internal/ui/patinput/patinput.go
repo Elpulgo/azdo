@@ -17,6 +17,16 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
 			Bold(true)
+
+	permHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("214"))
+
+	permScopeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("79"))
+
+	permAccessStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("248"))
 )
 
 // PATSubmittedMsg is sent when a PAT has been successfully submitted
@@ -104,6 +114,7 @@ func (m Model) View() string {
 	var s string
 
 	s += titleStyle.Render("Azure DevOps Personal Access Token Setup") + "\n\n"
+	s += PermissionInfoText() + "\n"
 	s += m.prompt + "\n\n"
 	s += m.textInput.View() + "\n\n"
 
@@ -119,4 +130,36 @@ func (m Model) View() string {
 // GetPAT returns the entered PAT value
 func (m Model) GetPAT() string {
 	return m.textInput.Value()
+}
+
+// PermissionInfoText returns the required PAT permission scopes as styled text.
+// This can also be used outside the TUI (e.g. in `azdo auth` console output).
+func PermissionInfoText() string {
+	header := permHeaderStyle.Render("Required PAT permissions:")
+	scopes := []struct {
+		name   string
+		access string
+		reason string
+	}{
+		{"Build", "Read", "pipelines, build logs"},
+		{"Code", "Read & Write", "pull requests, voting, comments"},
+		{"Work Items", "Read & Write", "queries, state changes"},
+	}
+
+	lines := header + "\n"
+	for _, s := range scopes {
+		lines += "  " + permScopeStyle.Render(s.name) + " " +
+			permAccessStyle.Render("("+s.access+")") + " " +
+			helpStyle.Render("- "+s.reason) + "\n"
+	}
+
+	return lines
+}
+
+// PermissionInfoPlain returns the required PAT permissions as plain text (no ANSI styling).
+func PermissionInfoPlain() string {
+	return `Required PAT permissions:
+  Build        (Read)         - pipelines, build logs
+  Code         (Read & Write) - pull requests, voting, comments
+  Work Items   (Read & Write) - queries, state changes`
 }

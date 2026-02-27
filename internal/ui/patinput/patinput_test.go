@@ -1,6 +1,7 @@
 package patinput
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -166,4 +167,81 @@ func TestView_ShowsPromptAndInput(t *testing.T) {
 
 	// View should contain some indication that this is PAT input
 	// (We'll verify the exact content when implementing)
+}
+
+func TestNewModelForUpdate(t *testing.T) {
+	model := NewModelForUpdate()
+
+	if model.textInput.EchoMode != textinput.EchoPassword {
+		t.Error("Expected PAT input to be in password mode")
+	}
+
+	if model.err != "" {
+		t.Errorf("Expected no error, got: %s", model.err)
+	}
+
+	if model.submitted {
+		t.Error("Expected submitted to be false initially")
+	}
+}
+
+func TestView_ShowsPermissionRequirements(t *testing.T) {
+	model := NewModel()
+	view := model.View()
+
+	requiredTexts := []string{
+		"Build",
+		"Read",
+		"Code",
+		"Write",
+		"Work Items",
+	}
+
+	for _, text := range requiredTexts {
+		if !containsString(view, text) {
+			t.Errorf("Expected view to contain PAT permission info %q", text)
+		}
+	}
+}
+
+func TestView_UpdateModeShowsPermissionRequirements(t *testing.T) {
+	model := NewModelForUpdate()
+	view := model.View()
+
+	requiredTexts := []string{
+		"Build",
+		"Read",
+		"Code",
+		"Write",
+		"Work Items",
+	}
+
+	for _, text := range requiredTexts {
+		if !containsString(view, text) {
+			t.Errorf("Expected update view to contain PAT permission info %q", text)
+		}
+	}
+}
+
+func TestPermissionInfoText(t *testing.T) {
+	info := PermissionInfoText()
+
+	if info == "" {
+		t.Error("Expected non-empty permission info text")
+	}
+
+	// Should mention all three required scopes
+	requiredScopes := []string{"Build", "Code", "Work Items"}
+	for _, scope := range requiredScopes {
+		if !containsString(info, scope) {
+			t.Errorf("Expected permission info to mention scope %q", scope)
+		}
+	}
+}
+
+// containsString checks if s contains substr (ANSI-aware check)
+func containsString(s, substr string) bool {
+	// Simple contains check; lipgloss styling adds ANSI codes
+	// but the actual text content should still be present
+	return strings.Contains(s, substr)
 }
