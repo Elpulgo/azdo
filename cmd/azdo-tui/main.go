@@ -7,19 +7,108 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Build-time variables injected via ldflags by goreleaser.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(args []string) error {
+	action := cli.ParseArgs(args)
+
+	switch action {
+	case cli.ActionHelp:
+		return runHelp()
+	case cli.ActionVersion:
+		return runVersion()
+	case cli.ActionAuth:
+		return runAuth()
+	default:
+		return runTUI()
+	}
+}
+
+func runHelp() error {
+	configPath, _ := config.GetPath()
+	if configPath == "" {
+		configPath = "~/.config/azdo-tui/config.yaml"
+	}
+
+	fmt.Printf(`azdo - A TUI for Azure DevOps (%s)
+
+Usage:
+  azdo              Start the TUI application
+  azdo auth         Set or update your Personal Access Token (PAT)
+  azdo --help       Show this help message
+  azdo --version    Show version information
+
+Configuration:
+  Config file: %s
+  PAT storage: System keyring (service: azdo-tui)
+  PAT fallback: AZDO_PAT environment variable
+
+Keyboard shortcuts (in TUI):
+  1/2/3        Switch tabs (Pipelines, Pull Requests, Work Items)
+  r            Refresh data
+  f            Search / filter
+  t            Select theme
+  ?            Toggle help overlay
+  q            Quit
+
+For more information, visit: https://github.com/Elpulgo/azdo
+`, version, configPath)
+
+	return nil
+}
+
+func runVersion() error {
+	fmt.Printf("azdo version %s (commit: %s, built: %s)\n", version, commit, date)
+	return nil
+}
+
+func runAuth() error {
+	store := config.NewKeyringStore()
+
+	// Check if PAT already exists to show appropriate message
+	_, err := store.GetPAT()
+	isUpdate := err == nil
+
+	if isUpdate {
+		fmt.Println("Azure DevOps PAT Update")
+		fmt.Println("This will replace your existing Personal Access Token in the system keyring.")
+	} else {
+		fmt.Println("Azure DevOps PAT Setup")
+		fmt.Println("This will store your Personal Access Token in the system keyring.")
+	}
+	fmt.Println()
+
+	pat, err := promptForPATWithMode(store, isUpdate)
+	if err != nil {
+		return fmt.Errorf("failed to set PAT: %w", err)
+	}
+
+	if pat != "" {
+		fmt.Println("\nPAT saved successfully to system keyring.")
+	}
+
+	return nil
+}
+
+func runTUI() error {
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -56,7 +145,7 @@ func run() error {
 	}
 
 	// Create and run the TUI application
-	model := app.NewModel(client, cfg)
+	model := app.NewModel(client, cfg, version)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -66,9 +155,20 @@ func run() error {
 	return nil
 }
 
-// promptForPAT displays a TUI to prompt the user for their PAT and saves it to the keyring
+// promptForPAT displays a TUI to prompt the user for their PAT (first-time setup)
 func promptForPAT(store *config.KeyringStore) (string, error) {
-	model := patinput.NewModel()
+	return promptForPATWithMode(store, false)
+}
+
+// promptForPATWithMode displays a TUI to prompt the user for their PAT.
+// If isUpdate is true, shows an "update" message instead of "first-time setup".
+func promptForPATWithMode(store *config.KeyringStore, isUpdate bool) (string, error) {
+	var model patinput.Model
+	if isUpdate {
+		model = patinput.NewModelForUpdate()
+	} else {
+		model = patinput.NewModel()
+	}
 	p := tea.NewProgram(model)
 
 	m, err := p.Run()

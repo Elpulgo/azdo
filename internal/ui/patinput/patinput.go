@@ -27,12 +27,22 @@ type PATSubmittedMsg struct {
 // Model represents the PAT input view model
 type Model struct {
 	textInput textinput.Model
+	prompt    string
 	err       string
 	submitted bool
 }
 
-// NewModel creates a new PAT input model
+// NewModel creates a new PAT input model for first-time setup.
 func NewModel() Model {
+	return newModelWithPrompt("No PAT found in keyring. Please enter your Personal Access Token:")
+}
+
+// NewModelForUpdate creates a new PAT input model for updating an existing PAT.
+func NewModelForUpdate() Model {
+	return newModelWithPrompt("Enter your new Personal Access Token to replace the existing one:")
+}
+
+func newModelWithPrompt(prompt string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Enter your Azure DevOps Personal Access Token"
 	ti.Focus()
@@ -43,6 +53,7 @@ func NewModel() Model {
 
 	return Model{
 		textInput: ti,
+		prompt:    prompt,
 		err:       "",
 		submitted: false,
 	}
@@ -93,7 +104,7 @@ func (m Model) View() string {
 	var s string
 
 	s += titleStyle.Render("Azure DevOps Personal Access Token Setup") + "\n\n"
-	s += "No PAT found in keyring. Please enter your Personal Access Token:\n\n"
+	s += m.prompt + "\n\n"
 	s += m.textInput.View() + "\n\n"
 
 	if m.err != "" {

@@ -12,6 +12,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
+	"github.com/Elpulgo/azdo/internal/version"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -54,6 +55,11 @@ const (
 	contextBarJoinNewline = 1
 )
 
+// updateCheckMsg is sent when the background version check completes.
+type updateCheckMsg struct {
+	info *version.UpdateInfo
+}
+
 // Model is the root application model for the TUI
 type Model struct {
 	client           *azdevops.MultiClient
@@ -69,14 +75,15 @@ type Model struct {
 	themePicker      components.ThemePicker
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
+	currentVersion   string
 	width      int
 	height     int
 	footerRows int
 	err        error
 }
 
-// NewModel creates a new application model with the given Azure DevOps client and config
-func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
+// NewModel creates a new application model with the given Azure DevOps client, config, and current version.
+func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion string) Model {
 	// Create error handler early to capture initialization errors
 	errorHandler := polling.NewErrorHandler()
 
@@ -158,6 +165,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 		themePicker:      themePicker,
 		poller:           poller,
 		errorHandler:     errorHandler,
+		currentVersion:   currentVersion,
 	}
 }
 
@@ -172,7 +180,22 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
 		m.poller.StartPolling(),      // Start polling timer
+		checkForUpdate(m.currentVersion),
 	)
+}
+
+// checkForUpdate returns a tea.Cmd that checks GitHub for a newer version.
+// Failures are silently ignored.
+func checkForUpdate(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		checker := version.NewChecker(currentVersion)
+		info, err := checker.CheckForUpdate()
+		if err != nil {
+			// Silently ignore errors — don't disrupt the user
+			return nil
+		}
+		return updateCheckMsg{info: info}
+	}
 }
 
 // Update handles incoming messages and updates the model
@@ -372,6 +395,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
+		return m, nil
+
+	case updateCheckMsg:
+		if msg.info != nil && msg.info.UpdateAvailable {
+			m.statusBar.SetUpdateMessage(
+				fmt.Sprintf("Update available: %s → %s", msg.info.CurrentVersion, msg.info.LatestVersion),
+			)
+		}
 		return m, nil
 
 	case polling.TickMsg:

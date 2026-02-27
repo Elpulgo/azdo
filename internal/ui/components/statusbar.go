@@ -24,7 +24,8 @@ type StatusBar struct {
 	showScroll    bool
 	width         int
 	errorMessage  string
-	filterLabel string
+	filterLabel   string
+	updateMessage string
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -96,6 +97,11 @@ func (s *StatusBar) ClearFilterLabel() {
 	s.filterLabel = ""
 }
 
+// SetUpdateMessage sets the update notification message.
+func (s *StatusBar) SetUpdateMessage(message string) {
+	s.updateMessage = message
+}
+
 
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
@@ -142,6 +148,14 @@ func (s *StatusBar) View() string {
 			Bold(true).
 			Padding(0, 1)
 		parts = append(parts, filterStyle.Render(s.filterLabel))
+	}
+
+	if s.updateMessage != "" {
+		updateStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
+			Background(lipgloss.Color(s.styles.Theme.Background)).
+			Bold(true)
+		parts = append(parts, updateStyle.Render(s.updateMessage))
 	}
 
 	if orgProj := s.renderOrgProject(); orgProj != "" {

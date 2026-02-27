@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
+	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -21,7 +22,7 @@ func TestNewModel_WithConfig(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	if m.config != cfg {
 		t.Error("expected config to be set")
@@ -40,7 +41,7 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -67,7 +68,7 @@ func TestModel_HandlesPollingTick(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	// Send a tick message
 	_, cmd := m.Update(polling.TickMsg{})
@@ -87,7 +88,7 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -116,7 +117,7 @@ func TestModel_HandlesPipelineRunsUpdated_Error(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -146,7 +147,7 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	cmd := m.Init()
 
 	// Should return commands for initialization
@@ -164,7 +165,7 @@ func TestModel_DefaultTab_IsPipelines(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	if m.activeTab != TabPipelines {
 		t.Errorf("Default tab should be TabPipelines (0), got %d", m.activeTab)
@@ -180,7 +181,7 @@ func TestModel_TabSwitching_To_PullRequests(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -202,7 +203,7 @@ func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -228,7 +229,7 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -253,7 +254,7 @@ func TestModel_StatusBarShowsConfigPath(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 200
 	m.height = 30
 
@@ -278,7 +279,7 @@ func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -300,7 +301,7 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -325,7 +326,7 @@ func TestModel_View_HasBorderedTabBar(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -349,7 +350,7 @@ func TestModel_View_HasBorderedContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -375,7 +376,7 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -405,7 +406,7 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	// Simulate window size first
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -471,7 +472,7 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	var client *azdevops.MultiClient
 
 	terminalHeight := 40
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: terminalHeight})
 	m = updated.(Model)
@@ -553,7 +554,7 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	terminalHeights := []int{24, 30, 40, 50}
 	for _, termHeight := range terminalHeights {
 		t.Run(fmt.Sprintf("height_%d", termHeight), func(t *testing.T) {
-			m := NewModel(client, cfg)
+			m := NewModel(client, cfg, "dev")
 
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: termHeight})
 			m = updated.(Model)
@@ -599,7 +600,7 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
@@ -663,7 +664,7 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	// Set up window size
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -720,7 +721,7 @@ func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -735,5 +736,67 @@ func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	}
 	if !strings.Contains(view, "Work Items") {
 		t.Error("Tab bar should show Work Items")
+	}
+}
+
+func TestModel_UpdateCheckMsg_ShowsNotification(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "1.0.0")
+	m.width = 120
+	m.height = 30
+
+	// Simulate receiving an update check result
+	msg := updateCheckMsg{
+		info: &version.UpdateInfo{
+			CurrentVersion:  "1.0.0",
+			LatestVersion:   "v2.0.0",
+			UpdateAvailable: true,
+			ReleaseURL:      "https://github.com/Elpulgo/azdo/releases/tag/v2.0.0",
+		},
+	}
+
+	updated, _ := m.Update(msg)
+	updatedModel := updated.(Model)
+
+	view := updatedModel.View()
+	if !strings.Contains(view, "Update available") {
+		t.Error("expected update notification in view")
+	}
+}
+
+func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "2.0.0")
+	m.width = 120
+	m.height = 30
+
+	msg := updateCheckMsg{
+		info: &version.UpdateInfo{
+			CurrentVersion:  "2.0.0",
+			LatestVersion:   "v2.0.0",
+			UpdateAvailable: false,
+		},
+	}
+
+	updated, _ := m.Update(msg)
+	updatedModel := updated.(Model)
+
+	view := updatedModel.View()
+	if strings.Contains(view, "Update available") {
+		t.Error("should not show update notification when already on latest")
 	}
 }
