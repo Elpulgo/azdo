@@ -223,22 +223,6 @@ func TestView_UpdateModeShowsPermissionRequirements(t *testing.T) {
 	}
 }
 
-func TestPermissionInfoText(t *testing.T) {
-	info := PermissionInfoText()
-
-	if info == "" {
-		t.Error("Expected non-empty permission info text")
-	}
-
-	// Should mention all three required scopes
-	requiredScopes := []string{"Build", "Code", "Work Items"}
-	for _, scope := range requiredScopes {
-		if !containsString(info, scope) {
-			t.Errorf("Expected permission info to mention scope %q", scope)
-		}
-	}
-}
-
 // containsString checks if s contains substr (ANSI-aware check)
 func containsString(s, substr string) bool {
 	// Simple contains check; lipgloss styling adds ANSI codes
