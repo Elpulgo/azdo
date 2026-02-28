@@ -62,6 +62,38 @@ func TestLoad_ConfigFileNotFound(t *testing.T) {
 	}
 }
 
+func TestLoadFrom_MissingFile_ShowsSetupGuidance(t *testing.T) {
+	tmpDir := t.TempDir()
+	missingPath := filepath.Join(tmpDir, "config.yaml")
+
+	_, err := LoadFrom(missingPath)
+	if err == nil {
+		t.Fatal("LoadFrom() should fail when config file is missing")
+	}
+
+	errMsg := err.Error()
+
+	// Should mention the expected file path
+	if !strings.Contains(errMsg, missingPath) {
+		t.Errorf("error should contain config path %q, got: %s", missingPath, errMsg)
+	}
+
+	// Should guide the user on how to set up
+	if !strings.Contains(errMsg, "azdo auth") {
+		t.Errorf("error should mention 'azdo auth' for PAT setup, got: %s", errMsg)
+	}
+
+	// Should mention the GitHub repo for config reference
+	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
+		t.Errorf("error should mention GitHub repo for setup docs, got: %s", errMsg)
+	}
+
+	// Should NOT contain the raw "no such file or directory" OS error
+	if strings.Contains(strings.ToLower(errMsg), "no such file or directory") {
+		t.Errorf("error should not expose raw OS error, got: %s", errMsg)
+	}
+}
+
 func TestLoad_WithConfigFile(t *testing.T) {
 	// Create a temporary config directory
 	tempDir := t.TempDir()

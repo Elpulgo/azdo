@@ -131,8 +131,21 @@ func LoadFrom(configPath string) (*Config, error) {
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			return nil, fmt.Errorf("config file not found at: %s\nPlease create a config.yaml file with 'organization' and 'projects' settings", configPath)
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok || os.IsNotExist(err) {
+			return nil, fmt.Errorf(
+				"config file not found at: %s\n\n"+
+					"To get started, create a config file with your Azure DevOps settings:\n\n"+
+					"  mkdir -p %s\n"+
+					"  cat > %s << EOF\n"+
+					"  organization: <your-org>\n"+
+					"  projects:\n"+
+					"    - <your-project>\n"+
+					"  EOF\n\n"+
+					"Then set up your Personal Access Token:\n\n"+
+					"  azdo auth\n\n"+
+					"For more details, visit: https://github.com/Elpulgo/azdo",
+				configPath, configDir, configPath,
+			)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
