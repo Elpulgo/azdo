@@ -72,6 +72,7 @@ type Model struct {
 	statusBar        *components.StatusBar
 	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
+	errorModal       *components.ErrorModal
 	themePicker      components.ThemePicker
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
@@ -130,6 +131,9 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
+	// Create error modal
+	errorModal := components.NewErrorModal(appStyles)
+
 	// Create theme picker
 	availableThemes := styles.ListAvailableThemes()
 	themePicker := components.NewThemePicker(appStyles, availableThemes, cfg.GetTheme())
@@ -162,6 +166,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		statusBar:        statusBar,
 		contextBar:       contextBar,
 		helpModal:        helpModal,
+		errorModal:       errorModal,
 		themePicker:      themePicker,
 		poller:           poller,
 		errorHandler:     errorHandler,
@@ -201,6 +206,22 @@ func checkForUpdate(currentVersion string) tea.Cmd {
 // Update handles incoming messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// If error modal is visible, handle its input first (highest priority)
+	if m.errorModal.IsVisible() {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			m.errorModal, _ = m.errorModal.Update(msg)
+			return m, nil
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.errorModal.SetSize(msg.Width, msg.Height)
+			m.statusBar.SetWidth(msg.Width)
+			return m, nil
+		}
+		return m, nil
+	}
 
 	// If help modal is visible, handle its input first
 	if m.helpModal.IsVisible() {
@@ -352,6 +373,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.helpModal = components.NewHelpModal(m.styles)
 		m.helpModal.SetSize(m.width, m.height)
 
+		m.errorModal = components.NewErrorModal(m.styles)
+		m.errorModal.SetSize(m.width, m.height)
+
 		// Update theme picker with new styles and current theme
 		availableThemes := styles.ListAvailableThemes()
 		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
@@ -387,6 +411,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
 		m.contextBar.SetWidth(msg.Width)
+		m.errorModal.SetSize(msg.Width, msg.Height)
 		m.helpModal.SetSize(msg.Width, msg.Height)
 		m.themePicker.SetSize(msg.Width, msg.Height)
 		// Measure actual footer height at current width
@@ -415,7 +440,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if hasError {
 			m.statusBar.SetState(polling.StateError)
-			// Display user-friendly error message
+			// Check if this is a critical error that should show the modal
+			if errInfo := components.ClassifyError(msg.Err); errInfo != nil {
+				m.errorModal.SetSize(m.width, m.height)
+				m.errorModal.Show(errInfo.Title, errInfo.Message, errInfo.Hint)
+			}
+			// Display user-friendly error message in status bar too
 			if m.errorHandler.ShouldShowError() {
 				m.statusBar.SetErrorMessage(m.errorHandler.RecoveryMessage())
 			}
@@ -567,6 +597,11 @@ func (m Model) renderTabBar(innerWidth int) string {
 func (m Model) View() string {
 	if m.err != nil {
 		return "Error: " + m.err.Error() + "\n\nPress q to quit."
+	}
+
+	// If error modal is visible, show it as overlay
+	if m.errorModal.IsVisible() {
+		return m.errorModal.View()
 	}
 
 	// If help modal is visible, show it as overlay
