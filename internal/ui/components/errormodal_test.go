@@ -231,3 +231,40 @@ func TestClassifyError_RateLimited(t *testing.T) {
 		t.Error("rate limit error should return nil (transient)")
 	}
 }
+
+// --- CriticalErrorMsg / NewCriticalErrorCmd tests ---
+
+func TestNewCriticalErrorCmd_ReturnsCmd_For404(t *testing.T) {
+	err := fmt.Errorf("resource not found (HTTP 404)")
+	cmd := NewCriticalErrorCmd(err)
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for 404 error")
+	}
+
+	msg := cmd()
+	critMsg, ok := msg.(CriticalErrorMsg)
+	if !ok {
+		t.Fatalf("expected CriticalErrorMsg, got %T", msg)
+	}
+	if critMsg.Title != "Configuration Error" {
+		t.Errorf("expected title 'Configuration Error', got %q", critMsg.Title)
+	}
+}
+
+func TestNewCriticalErrorCmd_ReturnsNil_ForTransientError(t *testing.T) {
+	err := fmt.Errorf("connection timeout")
+	cmd := NewCriticalErrorCmd(err)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for transient error")
+	}
+}
+
+func TestNewCriticalErrorCmd_ReturnsNil_ForNilError(t *testing.T) {
+	cmd := NewCriticalErrorCmd(nil)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for nil error")
+	}
+}

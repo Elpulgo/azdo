@@ -434,6 +434,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Time to poll for updates
 		cmds = append(cmds, m.poller.OnTick())
 
+	case components.CriticalErrorMsg:
+		m.errorModal.SetSize(m.width, m.height)
+		m.errorModal.Show(msg.Title, msg.Message, msg.Hint)
+		return m, nil
+
 	case polling.PipelineRunsUpdated:
 		// Process the update through error handler
 		runs, hasError := m.errorHandler.ProcessUpdate(msg)

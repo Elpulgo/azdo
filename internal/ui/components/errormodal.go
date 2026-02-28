@@ -174,6 +174,31 @@ func (m *ErrorModal) View() string {
 	return modal
 }
 
+// CriticalErrorMsg is a tea.Msg that any view can return as a command
+// to signal a critical API error to the root app model, which will show
+// the error modal overlay.
+type CriticalErrorMsg struct {
+	Title   string
+	Message string
+	Hint    string
+}
+
+// NewCriticalErrorCmd checks if err is a critical error and, if so, returns
+// a tea.Cmd that emits a CriticalErrorMsg. Returns nil if the error is not critical.
+func NewCriticalErrorCmd(err error) tea.Cmd {
+	info := ClassifyError(err)
+	if info == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return CriticalErrorMsg{
+			Title:   info.Title,
+			Message: info.Message,
+			Hint:    info.Hint,
+		}
+	}
+}
+
 // ClassifyError examines an error and returns an ErrorInfo if it represents
 // a critical/known error that should be shown in the error modal.
 // Returns nil for transient or unknown errors.

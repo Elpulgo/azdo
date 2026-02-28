@@ -8,6 +8,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
@@ -768,6 +769,40 @@ func TestModel_UpdateCheckMsg_ShowsNotification(t *testing.T) {
 	view := updatedModel.View()
 	if !strings.Contains(view, "Update available") {
 		t.Error("expected update notification in view")
+	}
+}
+
+func TestModel_CriticalErrorMsg_ShowsErrorModal(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	// Send a CriticalErrorMsg
+	msg := components.CriticalErrorMsg{
+		Title:   "Configuration Error",
+		Message: "The API returned 'not found'.",
+		Hint:    "Check your config file.",
+	}
+
+	updated, _ := m.Update(msg)
+	m = updated.(Model)
+
+	if !m.errorModal.IsVisible() {
+		t.Error("error modal should be visible after CriticalErrorMsg")
+	}
+
+	// View should render the error modal overlay
+	view := m.View()
+	if !strings.Contains(view, "Configuration Error") {
+		t.Error("view should show error modal with title")
 	}
 }
 

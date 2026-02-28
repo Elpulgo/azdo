@@ -110,7 +110,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case workItemsMsg:
 		if msg.err != nil {
 			m.list = m.list.HandleFetchResult(msg.workItems, msg.err)
-			return m, nil
+			return m, components.NewCriticalErrorCmd(msg.err)
 		}
 		m.allItems = msg.workItems
 		if m.myItemsOnly {

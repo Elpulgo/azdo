@@ -118,7 +118,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pullRequestsMsg:
 		m.list = m.list.HandleFetchResult(msg.prs, msg.err)
-		return m, nil
+		return m, components.NewCriticalErrorCmd(msg.err)
 	case SetPRsMsg:
 		m.list = m.list.SetItems(msg.PRs)
 		return m, nil
