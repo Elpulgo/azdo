@@ -11,7 +11,7 @@ import (
 // Config holds the application configuration
 type Config struct {
 	Organization    string            `mapstructure:"organization"`
-	Project         string            `mapstructure:"project"`  // deprecated: use Projects
+	Project         string            `mapstructure:"project"` // deprecated: use Projects
 	Projects        []string          `mapstructure:"projects"`
 	DisplayNames    map[string]string `mapstructure:"-"` // API name → display name
 	PollingInterval int               `mapstructure:"polling_interval"`
@@ -135,16 +135,10 @@ func LoadFrom(configPath string) (*Config, error) {
 			return nil, fmt.Errorf(
 				"config file not found at: %s\n\n"+
 					"To get started, create a config file with your Azure DevOps settings:\n\n"+
-					"  mkdir -p %s\n"+
-					"  cat > %s << EOF\n"+
-					"  organization: <your-org>\n"+
-					"  projects:\n"+
-					"    - <your-project>\n"+
-					"  EOF\n\n"+
 					"Then set up your Personal Access Token:\n\n"+
 					"  azdo auth\n\n"+
-					"For more details, visit: https://github.com/Elpulgo/azdo",
-				configPath, configDir, configPath,
+					"For more details, visit: https://github.com/Elpulgo/azdo#configuration",
+				configPath,
 			)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
