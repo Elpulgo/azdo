@@ -12,7 +12,7 @@ var (
 			Foreground(lipgloss.Color("99"))
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
+			Foreground(lipgloss.Color("99"))
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
