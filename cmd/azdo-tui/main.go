@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
+	"github.com/Elpulgo/azdo/internal/ui/setupwizard"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -119,7 +120,14 @@ func runTUI() error {
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		if errors.Is(err, config.ErrConfigNotFound) {
+			cfg, err = runSetupWizard()
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
 	}
 
 	// Get PAT from keyring
@@ -152,6 +160,38 @@ func runTUI() error {
 	}
 
 	return nil
+}
+
+// runSetupWizard launches the interactive setup wizard and saves the config.
+func runSetupWizard() (*config.Config, error) {
+	model := setupwizard.NewModel()
+	p := tea.NewProgram(model)
+
+	m, err := p.Run()
+	if err != nil {
+		return nil, fmt.Errorf("setup wizard error: %w", err)
+	}
+
+	finalModel, ok := m.(setupwizard.Model)
+	if !ok {
+		return nil, fmt.Errorf("unexpected model type from setup wizard")
+	}
+
+	if finalModel.Cancelled() {
+		return nil, fmt.Errorf("setup cancelled")
+	}
+
+	cfg := finalModel.GetConfig()
+	if cfg == nil {
+		return nil, fmt.Errorf("setup wizard did not produce a configuration")
+	}
+
+	if err := cfg.Save(); err != nil {
+		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Println("\nConfiguration saved successfully!")
+	return cfg, nil
 }
 
 // promptForPAT displays a TUI to prompt the user for their PAT (first-time setup)

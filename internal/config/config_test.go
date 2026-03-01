@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,7 +63,7 @@ func TestLoad_ConfigFileNotFound(t *testing.T) {
 	}
 }
 
-func TestLoadFrom_MissingFile_ShowsSetupGuidance(t *testing.T) {
+func TestLoadFrom_MissingFile_ReturnsConfigNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	missingPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -71,21 +72,16 @@ func TestLoadFrom_MissingFile_ShowsSetupGuidance(t *testing.T) {
 		t.Fatal("LoadFrom() should fail when config file is missing")
 	}
 
+	// Should be a sentinel ErrConfigNotFound
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("expected ErrConfigNotFound, got: %v", err)
+	}
+
 	errMsg := err.Error()
 
 	// Should mention the expected file path
 	if !strings.Contains(errMsg, missingPath) {
 		t.Errorf("error should contain config path %q, got: %s", missingPath, errMsg)
-	}
-
-	// Should guide the user on how to set up
-	if !strings.Contains(errMsg, "azdo auth") {
-		t.Errorf("error should mention 'azdo auth' for PAT setup, got: %s", errMsg)
-	}
-
-	// Should mention the GitHub repo for config reference
-	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
-		t.Errorf("error should mention GitHub repo for setup docs, got: %s", errMsg)
 	}
 
 	// Should NOT contain the raw "no such file or directory" OS error
@@ -625,5 +621,39 @@ func TestConfig_LoadFrom_MissingOrgShowsGuidance(t *testing.T) {
 
 	if !strings.Contains(errMsg, "organization") {
 		t.Error("error should mention 'organization'")
+	}
+}
+
+func TestNewWithPath_CreatesValidConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	cfg := NewWithPath("my-org", []string{"proj-a", "proj-b"}, 90, "nord", configPath)
+
+	if cfg.Organization != "my-org" {
+		t.Errorf("Organization = %q, want %q", cfg.Organization, "my-org")
+	}
+	if len(cfg.Projects) != 2 || cfg.Projects[0] != "proj-a" || cfg.Projects[1] != "proj-b" {
+		t.Errorf("Projects = %v, want [proj-a proj-b]", cfg.Projects)
+	}
+	if cfg.PollingInterval != 90 {
+		t.Errorf("PollingInterval = %d, want 90", cfg.PollingInterval)
+	}
+	if cfg.Theme != "nord" {
+		t.Errorf("Theme = %q, want %q", cfg.Theme, "nord")
+	}
+
+	// Should be saveable
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	// Verify saved file can be loaded back
+	loaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed after save: %v", err)
+	}
+	if loaded.Organization != "my-org" {
+		t.Errorf("loaded Organization = %q, want %q", loaded.Organization, "my-org")
 	}
 }

@@ -1,12 +1,16 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/viper"
 )
+
+// ErrConfigNotFound is returned when the config file does not exist.
+var ErrConfigNotFound = errors.New("config file not found")
 
 // Config holds the application configuration
 type Config struct {
@@ -132,17 +136,7 @@ func LoadFrom(configPath string) (*Config, error) {
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok || os.IsNotExist(err) {
-			return nil, fmt.Errorf(
-				"config file not found at: %s\n\n"+
-					"To get started, create the file with your Azure DevOps settings:\n\n"+
-					"  organization: your-org-name\n"+
-					"  projects:\n"+
-					"    - your-project-name\n\n"+
-					"Then set up your Personal Access Token:\n\n"+
-					"  azdo auth\n\n"+
-					"For more details, visit: %s",
-				configPath, configurationGuideURL,
-			)
+			return nil, fmt.Errorf("%w: %s", ErrConfigNotFound, configPath)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -199,6 +193,18 @@ func LoadFrom(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// NewWithPath creates a Config with all fields set and the internal configPath
+// populated so that Save() writes to the correct location.
+func NewWithPath(org string, projects []string, pollingInterval int, theme string, configPath string) *Config {
+	return &Config{
+		Organization:    org,
+		Projects:        projects,
+		PollingInterval: pollingInterval,
+		Theme:           theme,
+		configPath:      configPath,
+	}
 }
 
 // configurationGuideURL is the link to the GitHub configuration documentation.
