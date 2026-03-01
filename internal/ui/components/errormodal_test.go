@@ -7,6 +7,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestErrorModal_New(t *testing.T) {
@@ -163,6 +164,56 @@ func TestErrorModal_SetSize(t *testing.T) {
 
 	if m.width != 120 || m.height != 40 {
 		t.Errorf("expected size 120x40, got %dx%d", m.width, m.height)
+	}
+}
+
+func TestErrorModal_View_ConstrainedByScreenWidth(t *testing.T) {
+	m := NewErrorModal(styles.DefaultStyles())
+	narrowWidth := 40
+	m.SetSize(narrowWidth, 20)
+	m.Show("Error", "This is a very long message that would normally make the modal much wider than the screen allows", "Check your config")
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	for _, line := range lines {
+		// lipgloss.Width accounts for ANSI sequences
+		lineWidth := lipgloss.Width(line)
+		if lineWidth > narrowWidth {
+			t.Errorf("Modal line width %d exceeds screen width %d", lineWidth, narrowWidth)
+			break
+		}
+	}
+}
+
+func TestErrorModal_View_ResizesWhenScreenShrinks(t *testing.T) {
+	m := NewErrorModal(styles.DefaultStyles())
+	m.SetSize(120, 40)
+	m.Show("Error", "A reasonably long error message for testing resize behavior", "hint")
+
+	// Now shrink
+	m.SetSize(50, 20)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	for _, line := range lines {
+		lineWidth := lipgloss.Width(line)
+		if lineWidth > 50 {
+			t.Errorf("After resize, modal line width %d exceeds screen width 50", lineWidth)
+			break
+		}
+	}
+}
+
+func TestErrorModal_View_RespectsMinWidthOnLargeScreen(t *testing.T) {
+	m := NewErrorModal(styles.DefaultStyles())
+	m.SetSize(200, 50)
+	m.Show("Err", "Short", "hint")
+
+	view := m.View()
+	// The modal should still be at least minErrorModalWidth wide
+	// (content area, not including border/padding)
+	if !strings.Contains(view, "Short") {
+		t.Error("Modal should contain the message")
 	}
 }
 

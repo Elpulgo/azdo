@@ -11,6 +11,10 @@ import (
 // minErrorModalWidth is the minimum width for the error modal content.
 const minErrorModalWidth = 50
 
+// modalHorizontalOverhead accounts for the border (1 char each side)
+// and padding (2 chars each side) in the error modal.
+const modalHorizontalOverhead = 6
+
 // ErrorInfo holds classified error information for display in the error modal.
 type ErrorInfo struct {
 	Title   string
@@ -91,6 +95,17 @@ func (m *ErrorModal) View() string {
 	}
 	if len(m.message) > contentWidth {
 		contentWidth = len(m.message)
+	}
+
+	// Cap content width to fit within the available screen width
+	if m.width > 0 {
+		maxContentWidth := m.width - modalHorizontalOverhead
+		if maxContentWidth < 0 {
+			maxContentWidth = 0
+		}
+		if contentWidth > maxContentWidth {
+			contentWidth = maxContentWidth
+		}
 	}
 
 	// Build styles from theme using error color for border
