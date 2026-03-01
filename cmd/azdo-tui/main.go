@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"os"
 
+	"strings"
+
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
 	"github.com/Elpulgo/azdo/internal/ui/setupwizard"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Build-time variables injected via ldflags by goreleaser.
@@ -93,6 +97,11 @@ func runAuth() error {
 	_, err := store.GetPAT()
 	isUpdate := err == nil
 
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("99"))
+	fmt.Println(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
+	fmt.Println()
 	if isUpdate {
 		fmt.Println("Azure DevOps PAT Update")
 		fmt.Println("This will replace your existing Personal Access Token in the system keyring.")
