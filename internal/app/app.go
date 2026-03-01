@@ -360,8 +360,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Create new styles with the selected theme
 		m.styles = styles.NewStyles(theme)
 
+		// Preserve transient status bar state before rebuilding
+		previousState := m.statusBar.GetState()
+		previousWarning := m.statusBar.GetWarningMessage()
+
 		// Update all components with new styles
 		m.statusBar = components.NewStatusBar(m.styles)
+		m.statusBar.SetState(previousState)
+		if previousWarning != "" {
+			m.statusBar.SetWarningMessage(previousWarning)
+		}
 		m.statusBar.SetOrganization(m.config.Organization)
 		if m.config.IsMultiProject() {
 			m.statusBar.SetProject(fmt.Sprintf("%d projects", len(m.config.Projects)))

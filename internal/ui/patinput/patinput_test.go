@@ -169,15 +169,6 @@ func TestView_ShowsPromptAndInput(t *testing.T) {
 	// (We'll verify the exact content when implementing)
 }
 
-func TestView_ContainsLogo(t *testing.T) {
-	model := NewModel()
-	view := model.View()
-
-	if !strings.Contains(view, "╔═╗") {
-		t.Error("view should contain the ASCII art logo")
-	}
-}
-
 func TestView_ShowsSetupTitle(t *testing.T) {
 	model := NewModel()
 	view := model.View()

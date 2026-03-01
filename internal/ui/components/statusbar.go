@@ -48,9 +48,19 @@ func (s *StatusBar) SetProject(project string) {
 	s.project = project
 }
 
+// GetState returns the current connection state.
+func (s *StatusBar) GetState() polling.ConnectionState {
+	return s.state
+}
+
 // SetState sets the connection state.
 func (s *StatusBar) SetState(state polling.ConnectionState) {
 	s.state = state
+}
+
+// GetWarningMessage returns the current warning message.
+func (s *StatusBar) GetWarningMessage() string {
+	return s.warningMessage
 }
 
 // SetKeybindings sets the keybindings to display.

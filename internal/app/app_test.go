@@ -830,6 +830,82 @@ func TestModel_CriticalErrorMsg_ShowsErrorModal(t *testing.T) {
 	}
 }
 
+func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	// Simulate successful data fetch to set status to "connected"
+	runs := []azdevops.PipelineRun{
+		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	}
+	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
+	m = updated.(Model)
+
+	// Verify we're connected
+	if m.statusBar.GetState() != polling.StateConnected {
+		t.Fatal("Expected connected state before theme switch")
+	}
+
+	// Switch theme
+	updated, _ = m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	// Status bar should still show connected, not connecting
+	if m.statusBar.GetState() != polling.StateConnected {
+		t.Errorf("Expected state to remain 'connected' after theme switch, got %q", m.statusBar.GetState())
+	}
+
+	view := m.View()
+	if strings.Contains(view, "connecting") {
+		t.Error("Status bar should not show 'connecting' after theme switch when already connected")
+	}
+	if !strings.Contains(view, "connected") {
+		t.Error("Status bar should still show 'connected' after theme switch")
+	}
+}
+
+func TestModel_ThemeSwitch_PreservesWarningMessage(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	// Set a warning message
+	m.statusBar.SetWarningMessage("Some projects failed")
+
+	// Switch theme
+	updated, _ = m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	// Warning message should be preserved
+	view := m.View()
+	if !strings.Contains(view, "Some projects failed") {
+		t.Error("Warning message should be preserved after theme switch")
+	}
+}
+
 func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
