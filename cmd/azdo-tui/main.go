@@ -53,6 +53,11 @@ func runHelp() error {
 		configPath = "~/.config/azdo-tui/config.yaml"
 	}
 
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("99"))
+	fmt.Println(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
+
 	fmt.Printf(`azdo - A TUI for Azure DevOps (%s)
 
 Usage:
