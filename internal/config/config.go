@@ -134,7 +134,7 @@ func LoadFrom(configPath string) (*Config, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok || os.IsNotExist(err) {
 			return nil, fmt.Errorf(
 				"config file not found at: %s\n\n"+
-					"To get started, create a config file with your Azure DevOps settings:\n\n"+
+					"To get started, create a config file with your Azure DevOps settings\n\n"+
 					"Then set up your Personal Access Token:\n\n"+
 					"  azdo auth\n\n"+
 					"For more details, visit: https://github.com/Elpulgo/azdo#configuration",
