@@ -533,3 +533,97 @@ func TestConfig_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_Validate_NoProjects_ErrorContainsSetupGuidance(t *testing.T) {
+	cfg := Config{
+		Organization:    "test-org",
+		Projects:        []string{},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty projects")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "projects") {
+		t.Error("error should mention 'projects' field")
+	}
+	if !strings.Contains(errMsg, "config.yaml") {
+		t.Error("error should reference config.yaml")
+	}
+	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
+		t.Error("error should contain a link to the GitHub configuration docs")
+	}
+}
+
+func TestConfig_Validate_NoOrganization_ErrorContainsSetupGuidance(t *testing.T) {
+	cfg := Config{
+		Organization:    "",
+		Projects:        []string{"my-project"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty organization")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "organization") {
+		t.Error("error should mention 'organization' field")
+	}
+	if !strings.Contains(errMsg, "config.yaml") {
+		t.Error("error should reference config.yaml")
+	}
+}
+
+func TestConfig_LoadFrom_MissingProjectsShowsExample(t *testing.T) {
+	// Create a config file with organization but no projects
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := "organization: my-org\n"
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("expected error for missing projects")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "projects") {
+		t.Error("error should mention 'projects'")
+	}
+	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
+		t.Error("error should contain GitHub configuration link")
+	}
+}
+
+func TestConfig_LoadFrom_MissingOrgShowsGuidance(t *testing.T) {
+	// Create a config file with projects but no organization
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := "projects:\n  - my-project\n"
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("expected error for missing organization")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "organization") {
+		t.Error("error should mention 'organization'")
+	}
+}

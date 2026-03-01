@@ -119,15 +119,7 @@ func runTUI() error {
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Verify organization and projects are configured
-	if cfg.Organization == "" {
-		return fmt.Errorf("organization not configured\nHint: Set 'organization' in ~/.config/azdo-tui/config.yaml")
-	}
-	if len(cfg.Projects) == 0 {
-		return fmt.Errorf("no projects configured\nHint: Set 'projects' list in ~/.config/azdo-tui/config.yaml")
+		return err
 	}
 
 	// Get PAT from keyring

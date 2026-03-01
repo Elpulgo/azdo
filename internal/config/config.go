@@ -134,11 +134,14 @@ func LoadFrom(configPath string) (*Config, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok || os.IsNotExist(err) {
 			return nil, fmt.Errorf(
 				"config file not found at: %s\n\n"+
-					"To get started, create a config file with your Azure DevOps settings\n\n"+
+					"To get started, create the file with your Azure DevOps settings:\n\n"+
+					"  organization: your-org-name\n"+
+					"  projects:\n"+
+					"    - your-project-name\n\n"+
 					"Then set up your Personal Access Token:\n\n"+
 					"  azdo auth\n\n"+
-					"For more details, visit: https://github.com/Elpulgo/azdo#configuration",
-				configPath,
+					"For more details, visit: %s",
+				configPath, configurationGuideURL,
 			)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -192,16 +195,32 @@ func LoadFrom(configPath string) (*Config, error) {
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, err
 	}
 
 	return &cfg, nil
 }
 
+// configurationGuideURL is the link to the GitHub configuration documentation.
+const configurationGuideURL = "https://github.com/Elpulgo/azdo#configuration"
+
 // Validate checks if the configuration values are valid
 func (c *Config) Validate() error {
+	if c.Organization == "" {
+		return fmt.Errorf(
+			"'organization' is not set in config.yaml\n\n"+
+				"Add your Azure DevOps organization name to the config file:\n\n"+
+				"  organization: your-org-name\n\n"+
+				"For more details, visit: %s", configurationGuideURL)
+	}
+
 	if len(c.Projects) == 0 {
-		return fmt.Errorf("at least one project must be configured")
+		return fmt.Errorf(
+			"no projects configured in config.yaml\n\n"+
+				"Add at least one project to the config file:\n\n"+
+				"  projects:\n"+
+				"    - your-project-name\n\n"+
+				"For more details, visit: %s", configurationGuideURL)
 	}
 
 	for i, p := range c.Projects {
