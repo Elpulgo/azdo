@@ -17,16 +17,6 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
 			Bold(true)
-
-	permHeaderStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("214"))
-
-	permScopeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("79"))
-
-	permAccessStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("248"))
 )
 
 // PATSubmittedMsg is sent when a PAT has been successfully submitted

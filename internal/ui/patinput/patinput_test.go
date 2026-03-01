@@ -1,7 +1,6 @@
 package patinput
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -185,47 +184,4 @@ func TestNewModelForUpdate(t *testing.T) {
 	}
 }
 
-func TestView_ShowsPermissionRequirements(t *testing.T) {
-	model := NewModel()
-	view := model.View()
 
-	requiredTexts := []string{
-		"Build",
-		"Read",
-		"Code",
-		"Write",
-		"Work Items",
-	}
-
-	for _, text := range requiredTexts {
-		if !containsString(view, text) {
-			t.Errorf("Expected view to contain PAT permission info %q", text)
-		}
-	}
-}
-
-func TestView_UpdateModeShowsPermissionRequirements(t *testing.T) {
-	model := NewModelForUpdate()
-	view := model.View()
-
-	requiredTexts := []string{
-		"Build",
-		"Read",
-		"Code",
-		"Write",
-		"Work Items",
-	}
-
-	for _, text := range requiredTexts {
-		if !containsString(view, text) {
-			t.Errorf("Expected update view to contain PAT permission info %q", text)
-		}
-	}
-}
-
-// containsString checks if s contains substr (ANSI-aware check)
-func containsString(s, substr string) bool {
-	// Simple contains check; lipgloss styling adds ANSI codes
-	// but the actual text content should still be present
-	return strings.Contains(s, substr)
-}
