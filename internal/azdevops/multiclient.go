@@ -112,6 +112,10 @@ func (mc *MultiClient) ListPipelineRuns(top int) ([]PipelineRun, error) {
 		return allRuns[i].QueueTime.After(allRuns[j].QueueTime)
 	})
 
+	if len(errs) > 0 {
+		return allRuns, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
+
 	return allRuns, nil
 }
 
@@ -162,6 +166,10 @@ func (mc *MultiClient) ListPullRequests(top int) ([]PullRequest, error) {
 	sort.Slice(allPRs, func(i, j int) bool {
 		return allPRs[i].CreationDate.After(allPRs[j].CreationDate)
 	})
+
+	if len(errs) > 0 {
+		return allPRs, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
 
 	return allPRs, nil
 }
@@ -214,6 +222,10 @@ func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {
 		return allItems[i].Fields.ChangedDate.After(allItems[j].Fields.ChangedDate)
 	})
 
+	if len(errs) > 0 {
+		return allItems, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
+
 	return allItems, nil
 }
 
@@ -265,6 +277,10 @@ func (mc *MultiClient) ListMyWorkItems(top int) ([]WorkItem, error) {
 	sort.Slice(allItems, func(i, j int) bool {
 		return allItems[i].Fields.ChangedDate.After(allItems[j].Fields.ChangedDate)
 	})
+
+	if len(errs) > 0 {
+		return allItems, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
 
 	return allItems, nil
 }

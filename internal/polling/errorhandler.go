@@ -1,6 +1,7 @@
 package polling
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ type ErrorHandler struct {
 	consecutiveErrors int
 	lastErrorTime     time.Time
 	lastKnownGoodData []azdevops.PipelineRun
+	partialWarning    string
 	mu                sync.RWMutex
 }
 
@@ -96,18 +98,49 @@ func (h *ErrorHandler) GetLastKnownGoodData() []azdevops.PipelineRun {
 
 // ProcessUpdate processes a PipelineRunsUpdated message.
 // On success, it stores the data and clears errors.
-// On error, it sets the error and returns last known good data.
-// Returns the data to display and whether there was an error.
+// On partial error (PartialError), it treats data as valid but stores a warning.
+// On full error, it sets the error and returns last known good data.
+// Returns the data to display and whether there was a full error.
 func (h *ErrorHandler) ProcessUpdate(msg PipelineRunsUpdated) ([]azdevops.PipelineRun, bool) {
 	if msg.Err != nil {
+		// Check if this is a partial error (some projects succeeded)
+		var partialErr *azdevops.PartialError
+		if errors.As(msg.Err, &partialErr) {
+			// Partial success: treat data as valid, set warning
+			h.SetLastKnownGoodData(msg.Runs)
+			h.ClearError()
+			h.setPartialWarning(partialErr.Error())
+			return msg.Runs, false
+		}
+
 		h.SetError(msg.Err)
 		return h.GetLastKnownGoodData(), true
 	}
 
-	// Success - store the data and clear errors
+	// Full success - store the data and clear errors and warnings
 	h.SetLastKnownGoodData(msg.Runs)
 	h.ClearError()
+	h.clearPartialWarning()
 	return msg.Runs, false
+}
+
+// PartialWarning returns the partial load warning message, if any.
+func (h *ErrorHandler) PartialWarning() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.partialWarning
+}
+
+func (h *ErrorHandler) setPartialWarning(msg string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.partialWarning = msg
+}
+
+func (h *ErrorHandler) clearPartialWarning() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.partialWarning = ""
 }
 
 // ErrorMessage returns the error message if there is an error.

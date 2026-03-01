@@ -1,6 +1,7 @@
 package patinput
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -167,3 +168,39 @@ func TestView_ShowsPromptAndInput(t *testing.T) {
 	// View should contain some indication that this is PAT input
 	// (We'll verify the exact content when implementing)
 }
+
+func TestView_ShowsSetupTitle(t *testing.T) {
+	model := NewModel()
+	view := model.View()
+
+	if !strings.Contains(view, "PAT Setup") {
+		t.Error("first-time view should show 'PAT Setup'")
+	}
+}
+
+func TestView_ShowsUpdateTitle(t *testing.T) {
+	model := NewModelForUpdate()
+	view := model.View()
+
+	if !strings.Contains(view, "PAT Update") {
+		t.Error("update view should show 'PAT Update'")
+	}
+}
+
+func TestNewModelForUpdate(t *testing.T) {
+	model := NewModelForUpdate()
+
+	if model.textInput.EchoMode != textinput.EchoPassword {
+		t.Error("Expected PAT input to be in password mode")
+	}
+
+	if model.err != "" {
+		t.Errorf("Expected no error, got: %s", model.err)
+	}
+
+	if model.submitted {
+		t.Error("Expected submitted to be false initially")
+	}
+}
+
+

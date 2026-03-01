@@ -51,6 +51,11 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
 
+    # Use zip for Windows instead of tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+
     # Files to include in archive
     files:
       - README.md

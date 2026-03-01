@@ -18,7 +18,7 @@ param(
 
 $RepoOwner = "Elpulgo"
 $RepoName = "azdo"
-$BinaryName = "azdo-tui"
+$BinaryName = "azdo"
 $ConfigDirName = "azdo-tui"
 $GitHubApi = "https://api.github.com"
 $GitHubDownload = "https://github.com"

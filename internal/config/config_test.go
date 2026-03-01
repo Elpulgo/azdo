@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -59,6 +60,33 @@ func TestLoad_ConfigFileNotFound(t *testing.T) {
 	// The error should mention "config.yaml"
 	if !strings.Contains(errMsg, "config.yaml") {
 		t.Errorf("Expected error message to mention 'config.yaml', got: %s", errMsg)
+	}
+}
+
+func TestLoadFrom_MissingFile_ReturnsConfigNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	missingPath := filepath.Join(tmpDir, "config.yaml")
+
+	_, err := LoadFrom(missingPath)
+	if err == nil {
+		t.Fatal("LoadFrom() should fail when config file is missing")
+	}
+
+	// Should be a sentinel ErrConfigNotFound
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("expected ErrConfigNotFound, got: %v", err)
+	}
+
+	errMsg := err.Error()
+
+	// Should mention the expected file path
+	if !strings.Contains(errMsg, missingPath) {
+		t.Errorf("error should contain config path %q, got: %s", missingPath, errMsg)
+	}
+
+	// Should NOT contain the raw "no such file or directory" OS error
+	if strings.Contains(strings.ToLower(errMsg), "no such file or directory") {
+		t.Errorf("error should not expose raw OS error, got: %s", errMsg)
 	}
 }
 
@@ -499,5 +527,133 @@ func TestConfig_Validate(t *testing.T) {
 				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestConfig_Validate_NoProjects_ErrorContainsSetupGuidance(t *testing.T) {
+	cfg := Config{
+		Organization:    "test-org",
+		Projects:        []string{},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty projects")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "projects") {
+		t.Error("error should mention 'projects' field")
+	}
+	if !strings.Contains(errMsg, "config.yaml") {
+		t.Error("error should reference config.yaml")
+	}
+	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
+		t.Error("error should contain a link to the GitHub configuration docs")
+	}
+}
+
+func TestConfig_Validate_NoOrganization_ErrorContainsSetupGuidance(t *testing.T) {
+	cfg := Config{
+		Organization:    "",
+		Projects:        []string{"my-project"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty organization")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "organization") {
+		t.Error("error should mention 'organization' field")
+	}
+	if !strings.Contains(errMsg, "config.yaml") {
+		t.Error("error should reference config.yaml")
+	}
+}
+
+func TestConfig_LoadFrom_MissingProjectsShowsExample(t *testing.T) {
+	// Create a config file with organization but no projects
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := "organization: my-org\n"
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("expected error for missing projects")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "projects") {
+		t.Error("error should mention 'projects'")
+	}
+	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
+		t.Error("error should contain GitHub configuration link")
+	}
+}
+
+func TestConfig_LoadFrom_MissingOrgShowsGuidance(t *testing.T) {
+	// Create a config file with projects but no organization
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := "projects:\n  - my-project\n"
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("expected error for missing organization")
+	}
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "organization") {
+		t.Error("error should mention 'organization'")
+	}
+}
+
+func TestNewWithPath_CreatesValidConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	cfg := NewWithPath("my-org", []string{"proj-a", "proj-b"}, 90, "nord", configPath)
+
+	if cfg.Organization != "my-org" {
+		t.Errorf("Organization = %q, want %q", cfg.Organization, "my-org")
+	}
+	if len(cfg.Projects) != 2 || cfg.Projects[0] != "proj-a" || cfg.Projects[1] != "proj-b" {
+		t.Errorf("Projects = %v, want [proj-a proj-b]", cfg.Projects)
+	}
+	if cfg.PollingInterval != 90 {
+		t.Errorf("PollingInterval = %d, want 90", cfg.PollingInterval)
+	}
+	if cfg.Theme != "nord" {
+		t.Errorf("Theme = %q, want %q", cfg.Theme, "nord")
+	}
+
+	// Should be saveable
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	// Verify saved file can be loaded back
+	loaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed after save: %v", err)
+	}
+	if loaded.Organization != "my-org" {
+		t.Errorf("loaded Organization = %q, want %q", loaded.Organization, "my-org")
 	}
 }

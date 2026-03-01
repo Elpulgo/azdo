@@ -12,8 +12,10 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
+	"github.com/Elpulgo/azdo/internal/version"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ThemeNotFoundError represents an error when a requested theme is not found.
@@ -23,18 +25,18 @@ type ThemeNotFoundError struct {
 }
 
 func (e *ThemeNotFoundError) Error() string {
-	availableThemes := styles.ListAvailableThemes()
-	return fmt.Sprintf("Theme '%s' not found. Using default theme. Available themes: %v. Custom themes can be placed in: %s",
-		e.ThemeName, availableThemes, e.ThemesPath)
+	defaultTheme := styles.GetDefaultTheme()
+	return fmt.Sprintf("Theme '%s' not found, using '%s'. Press 't' to select a theme.",
+		e.ThemeName, defaultTheme.Name)
 }
 
 // Tab represents the active tab in the application
 type Tab int
 
 const (
-	TabPipelines    Tab = iota // Pipelines tab (key '1')
-	TabPullRequests            // Pull Requests tab (key '2')
-	TabWorkItems               // Work Items tab (key '3')
+	TabPullRequests Tab = iota // Pull Requests tab (key '1')
+	TabWorkItems               // Work Items tab (key '2')
+	TabPipelines               // Pipelines tab (key '3')
 )
 
 // Layout constants for the bordered content area.
@@ -46,13 +48,18 @@ const (
 	// top border (1) + bottom border (1) = 2.
 	boxBorderRows = 2
 
-	// tabBarRows is the vertical space consumed by the bordered tab bar:
-	// top border (1) + tab row (1) + bottom border (1) = 3.
-	tabBarRows = 3
+	// tabBarRows is the vertical space consumed by the bordered tab bar
+	// (which includes the logo): top border (1) + 3 content rows + bottom border (1) = 5.
+	tabBarRows = 5
 
 	// contextBarJoinNewline accounts for the newline joining context bar and status bar.
 	contextBarJoinNewline = 1
 )
+
+// updateCheckMsg is sent when the background version check completes.
+type updateCheckMsg struct {
+	info *version.UpdateInfo
+}
 
 // Model is the root application model for the TUI
 type Model struct {
@@ -63,20 +70,23 @@ type Model struct {
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
 	workItemsView    workitems.Model
+	logo             *components.Logo
 	statusBar        *components.StatusBar
 	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
+	errorModal       *components.ErrorModal
 	themePicker      components.ThemePicker
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
+	currentVersion   string
 	width      int
 	height     int
 	footerRows int
 	err        error
 }
 
-// NewModel creates a new application model with the given Azure DevOps client and config
-func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
+// NewModel creates a new application model with the given Azure DevOps client, config, and current version.
+func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion string) Model {
 	// Create error handler early to capture initialization errors
 	errorHandler := polling.NewErrorHandler()
 
@@ -103,6 +113,9 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 
 	appStyles := styles.NewStyles(theme)
 
+	// Create logo
+	logo := components.NewLogo(appStyles)
+
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
@@ -122,6 +135,9 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
+
+	// Create error modal
+	errorModal := components.NewErrorModal(appStyles)
 
 	// Create theme picker
 	availableThemes := styles.ListAvailableThemes()
@@ -148,36 +164,71 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 		client:           client,
 		config:           cfg,
 		styles:           appStyles,
-		activeTab:        TabPipelines,
+		activeTab:        TabPullRequests,
+		logo:             logo,
 		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(client, appStyles),
 		statusBar:        statusBar,
 		contextBar:       contextBar,
 		helpModal:        helpModal,
+		errorModal:       errorModal,
 		themePicker:      themePicker,
 		poller:           poller,
 		errorHandler:     errorHandler,
+		currentVersion:   currentVersion,
 	}
 }
 
 // Init initializes the application
 func (m Model) Init() tea.Cmd {
 	// Check for any startup errors (e.g., theme not found)
+	// Use warning message so it persists even after successful polling
 	if m.errorHandler.ShouldShowError() {
-		m.statusBar.SetState(polling.StateError)
-		m.statusBar.SetErrorMessage(m.errorHandler.ErrorMessage())
+		m.statusBar.SetWarningMessage(m.errorHandler.ErrorMessage())
 	}
 
 	return tea.Batch(
-		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
-		m.poller.StartPolling(),      // Start polling timer
+		m.poller.FetchPipelineRuns(),  // Initial fetch - updates connection state
+		m.poller.StartPolling(),       // Start polling timer
+		m.pullRequestsView.Init(),    // Load PR tab (default tab)
+		checkForUpdate(m.currentVersion),
 	)
+}
+
+// checkForUpdate returns a tea.Cmd that checks GitHub for a newer version.
+// Failures are silently ignored.
+func checkForUpdate(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		checker := version.NewChecker(currentVersion)
+		info, err := checker.CheckForUpdate()
+		if err != nil {
+			// Silently ignore errors — don't disrupt the user
+			return nil
+		}
+		return updateCheckMsg{info: info}
+	}
 }
 
 // Update handles incoming messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// If error modal is visible, handle its input first (highest priority)
+	if m.errorModal.IsVisible() {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			m.errorModal, _ = m.errorModal.Update(msg)
+			return m, nil
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.errorModal.SetSize(msg.Width, msg.Height)
+			m.statusBar.SetWidth(msg.Width)
+			return m, nil
+		}
+		return m, nil
+	}
 
 	// If help modal is visible, handle its input first
 	if m.helpModal.IsVisible() {
@@ -232,10 +283,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themePicker.Show()
 			return m, nil
 		case "1":
-			m.activeTab = TabPipelines
-			m.resizeActiveViewIfNeeded()
-			return m, nil
-		case "2":
 			if m.activeTab != TabPullRequests {
 				m.activeTab = TabPullRequests
 				m.resizeActiveViewIfNeeded()
@@ -243,7 +290,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
-		case "3":
+		case "2":
 			if m.activeTab != TabWorkItems {
 				m.activeTab = TabWorkItems
 				m.resizeActiveViewIfNeeded()
@@ -251,13 +298,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.workItemsView.Init()
 			}
 			return m, nil
+		case "3":
+			m.activeTab = TabPipelines
+			m.resizeActiveViewIfNeeded()
+			return m, nil
 		case "left":
 			// Navigate to previous tab (with wraparound)
 			switch m.activeTab {
-			case TabPipelines:
-				m.activeTab = TabWorkItems
-				m.resizeActiveViewIfNeeded()
-				return m, m.workItemsView.Init()
 			case TabPullRequests:
 				m.activeTab = TabPipelines
 				m.resizeActiveViewIfNeeded()
@@ -266,15 +313,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = TabPullRequests
 				m.resizeActiveViewIfNeeded()
 				return m, m.pullRequestsView.Init()
+			case TabPipelines:
+				m.activeTab = TabWorkItems
+				m.resizeActiveViewIfNeeded()
+				return m, m.workItemsView.Init()
 			}
 			return m, nil
 		case "right":
 			// Navigate to next tab (with wraparound)
 			switch m.activeTab {
-			case TabPipelines:
-				m.activeTab = TabPullRequests
-				m.resizeActiveViewIfNeeded()
-				return m, m.pullRequestsView.Init()
 			case TabPullRequests:
 				m.activeTab = TabWorkItems
 				m.resizeActiveViewIfNeeded()
@@ -283,6 +330,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = TabPipelines
 				m.resizeActiveViewIfNeeded()
 				return m, nil
+			case TabPipelines:
+				m.activeTab = TabPullRequests
+				m.resizeActiveViewIfNeeded()
+				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
 		}
@@ -310,8 +361,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Create new styles with the selected theme
 		m.styles = styles.NewStyles(theme)
 
+		// Preserve transient status bar state before rebuilding
+		previousState := m.statusBar.GetState()
+		previousWarning := m.statusBar.GetWarningMessage()
+
 		// Update all components with new styles
 		m.statusBar = components.NewStatusBar(m.styles)
+		m.statusBar.SetState(previousState)
+		if previousWarning != "" {
+			m.statusBar.SetWarningMessage(previousWarning)
+		}
 		m.statusBar.SetOrganization(m.config.Organization)
 		if m.config.IsMultiProject() {
 			m.statusBar.SetProject(fmt.Sprintf("%d projects", len(m.config.Projects)))
@@ -323,11 +382,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetConfigPath(configPath)
 		}
 
+		m.logo = components.NewLogo(m.styles)
+
 		m.contextBar = components.NewContextBar(m.styles)
 		m.contextBar.SetWidth(m.width)
 
 		m.helpModal = components.NewHelpModal(m.styles)
 		m.helpModal.SetSize(m.width, m.height)
+
+		m.errorModal = components.NewErrorModal(m.styles)
+		m.errorModal.SetSize(m.width, m.height)
 
 		// Update theme picker with new styles and current theme
 		availableThemes := styles.ListAvailableThemes()
@@ -364,6 +428,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
 		m.contextBar.SetWidth(msg.Width)
+		m.errorModal.SetSize(msg.Width, msg.Height)
 		m.helpModal.SetSize(msg.Width, msg.Height)
 		m.themePicker.SetSize(msg.Width, msg.Height)
 		// Measure actual footer height at current width
@@ -374,9 +439,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
 		return m, nil
 
+	case updateCheckMsg:
+		if msg.info != nil && msg.info.UpdateAvailable {
+			m.statusBar.SetUpdateMessage(
+				fmt.Sprintf("Update available: %s → %s", msg.info.CurrentVersion, msg.info.LatestVersion),
+			)
+		}
+		return m, nil
+
 	case polling.TickMsg:
 		// Time to poll for updates
 		cmds = append(cmds, m.poller.OnTick())
+
+	case components.CriticalErrorMsg:
+		m.errorModal.SetSize(m.width, m.height)
+		m.errorModal.Show(msg.Title, msg.Message, msg.Hint)
+		return m, nil
 
 	case polling.PipelineRunsUpdated:
 		// Process the update through error handler
@@ -384,13 +462,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if hasError {
 			m.statusBar.SetState(polling.StateError)
-			// Display user-friendly error message
+			// Check if this is a critical error that should show the modal
+			if errInfo := components.ClassifyError(msg.Err); errInfo != nil {
+				m.errorModal.SetSize(m.width, m.height)
+				m.errorModal.Show(errInfo.Title, errInfo.Message, errInfo.Hint)
+			}
+			// Display user-friendly error message in status bar too
 			if m.errorHandler.ShouldShowError() {
 				m.statusBar.SetErrorMessage(m.errorHandler.RecoveryMessage())
 			}
 		} else {
 			m.statusBar.SetState(polling.StateConnected)
 			m.statusBar.ClearErrorMessage()
+
+			// Check for partial project load warning
+			if warning := m.errorHandler.PartialWarning(); warning != "" {
+				m.statusBar.SetWarningMessage(warning)
+			} else {
+				m.statusBar.ClearWarningMessage()
+			}
 		}
 
 		// Update pipelines view with the runs
@@ -510,32 +600,56 @@ func (m Model) measureFooterHeight() int {
 	return statusRows
 }
 
-// renderTabBar renders the tab header content wrapped in its own bordered box.
+// renderTabBar renders the tab header content wrapped in its own bordered box,
+// with tabs on the left and the ASCII art logo on the right.
 func (m Model) renderTabBar(innerWidth int) string {
 	var tab1, tab2, tab3 string
 
 	switch m.activeTab {
-	case TabPipelines:
-		tab1 = m.styles.TabActive.Render("1: Pipelines")
-		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
-		tab3 = m.styles.TabInactive.Render("3: Work Items")
 	case TabPullRequests:
-		tab1 = m.styles.TabInactive.Render("1: Pipelines")
-		tab2 = m.styles.TabActive.Render("2: Pull Requests")
-		tab3 = m.styles.TabInactive.Render("3: Work Items")
+		tab1 = m.styles.TabActive.Render("1: Pull Requests")
+		tab2 = m.styles.TabInactive.Render("2: Work Items")
+		tab3 = m.styles.TabInactive.Render("3: Pipelines")
 	case TabWorkItems:
-		tab1 = m.styles.TabInactive.Render("1: Pipelines")
-		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
-		tab3 = m.styles.TabActive.Render("3: Work Items")
+		tab1 = m.styles.TabInactive.Render("1: Pull Requests")
+		tab2 = m.styles.TabActive.Render("2: Work Items")
+		tab3 = m.styles.TabInactive.Render("3: Pipelines")
+	case TabPipelines:
+		tab1 = m.styles.TabInactive.Render("1: Pull Requests")
+		tab2 = m.styles.TabInactive.Render("2: Work Items")
+		tab3 = m.styles.TabActive.Render("3: Pipelines")
 	}
 
-	return m.styles.TabBar.Width(innerWidth).Render(tab1 + " " + tab2 + " " + tab3)
+	tabs := tab1 + " " + tab2 + " " + tab3
+	logo := m.logo.View()
+
+	// Place tabs on the left (top-aligned) and logo on the right.
+	logoWidth := lipgloss.Width(logo)
+	tabsWidth := innerWidth - logoWidth
+	if tabsWidth < 0 {
+		tabsWidth = 0
+	}
+
+	left := lipgloss.NewStyle().
+		Width(tabsWidth).
+		Height(m.logo.Height()).
+		AlignVertical(lipgloss.Center).
+		Render(tabs)
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, left, logo)
+
+	return m.styles.TabBar.Width(innerWidth).Render(content)
 }
 
 // View renders the application UI
 func (m Model) View() string {
 	if m.err != nil {
 		return "Error: " + m.err.Error() + "\n\nPress q to quit."
+	}
+
+	// If error modal is visible, show it as overlay
+	if m.errorModal.IsVisible() {
+		return m.errorModal.View()
 	}
 
 	// If help modal is visible, show it as overlay

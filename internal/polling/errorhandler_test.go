@@ -235,3 +235,61 @@ func TestErrorHandler_RecoveryMessage(t *testing.T) {
 		t.Error("should have a recovery message when error exists")
 	}
 }
+
+func TestErrorHandler_ProcessUpdate_PartialError_ReturnsDataAndWarning(t *testing.T) {
+	eh := NewErrorHandler()
+
+	runs := []azdevops.PipelineRun{
+		{ID: 1},
+	}
+	partialErr := &azdevops.PartialError{Failed: 1, Total: 2}
+	msg := PipelineRunsUpdated{Runs: runs, Err: partialErr}
+
+	result, hasError := eh.ProcessUpdate(msg)
+
+	// Should NOT be treated as a full error
+	if hasError {
+		t.Error("partial error should not be treated as a full error")
+	}
+
+	// Should return the partial data as valid
+	if len(result) != 1 {
+		t.Fatalf("expected 1 run from partial result, got %d", len(result))
+	}
+
+	// Should store the partial data as last known good
+	stored := eh.GetLastKnownGoodData()
+	if len(stored) != 1 {
+		t.Fatalf("expected 1 run in last known good, got %d", len(stored))
+	}
+
+	// Should have a partial warning set
+	if eh.PartialWarning() == "" {
+		t.Error("expected partial warning to be set")
+	}
+}
+
+func TestErrorHandler_ProcessUpdate_Success_ClearsPartialWarning(t *testing.T) {
+	eh := NewErrorHandler()
+
+	// First, trigger a partial error
+	partialErr := &azdevops.PartialError{Failed: 1, Total: 2}
+	eh.ProcessUpdate(PipelineRunsUpdated{
+		Runs: []azdevops.PipelineRun{{ID: 1}},
+		Err:  partialErr,
+	})
+
+	if eh.PartialWarning() == "" {
+		t.Fatal("expected partial warning after partial error")
+	}
+
+	// Now a full success should clear the warning
+	eh.ProcessUpdate(PipelineRunsUpdated{
+		Runs: []azdevops.PipelineRun{{ID: 1}, {ID: 2}},
+		Err:  nil,
+	})
+
+	if eh.PartialWarning() != "" {
+		t.Error("expected partial warning to be cleared after full success")
+	}
+}

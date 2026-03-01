@@ -14,17 +14,19 @@ import (
 // StatusBar is a component that displays keybindings, org/project info,
 // and connection state at the bottom of the screen like lazygit.
 type StatusBar struct {
-	styles        *styles.Styles
-	organization  string
-	project       string
-	state         polling.ConnectionState
-	keybindings   string
-	configPath    string
-	scrollPercent float64
-	showScroll    bool
-	width         int
-	errorMessage  string
-	filterLabel string
+	styles         *styles.Styles
+	organization   string
+	project        string
+	state          polling.ConnectionState
+	keybindings    string
+	configPath     string
+	scrollPercent  float64
+	showScroll     bool
+	width          int
+	errorMessage   string
+	filterLabel    string
+	updateMessage  string
+	warningMessage string
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -46,9 +48,19 @@ func (s *StatusBar) SetProject(project string) {
 	s.project = project
 }
 
+// GetState returns the current connection state.
+func (s *StatusBar) GetState() polling.ConnectionState {
+	return s.state
+}
+
 // SetState sets the connection state.
 func (s *StatusBar) SetState(state polling.ConnectionState) {
 	s.state = state
+}
+
+// GetWarningMessage returns the current warning message.
+func (s *StatusBar) GetWarningMessage() string {
+	return s.warningMessage
 }
 
 // SetKeybindings sets the keybindings to display.
@@ -96,6 +108,20 @@ func (s *StatusBar) ClearFilterLabel() {
 	s.filterLabel = ""
 }
 
+// SetUpdateMessage sets the update notification message.
+func (s *StatusBar) SetUpdateMessage(message string) {
+	s.updateMessage = message
+}
+
+// SetWarningMessage sets a persistent warning message that displays regardless of connection state.
+func (s *StatusBar) SetWarningMessage(message string) {
+	s.warningMessage = message
+}
+
+// ClearWarningMessage clears the persistent warning message.
+func (s *StatusBar) ClearWarningMessage() {
+	s.warningMessage = ""
+}
 
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
@@ -135,6 +161,14 @@ func (s *StatusBar) View() string {
 		parts = append(parts, s.renderKeybindings())
 	}
 
+	if s.warningMessage != "" {
+		warningStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
+			Background(lipgloss.Color(s.styles.Theme.Background)).
+			Bold(true)
+		parts = append(parts, warningStyle.Render("⚠ "+s.warningMessage))
+	}
+
 	if s.filterLabel != "" {
 		filterStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(s.styles.Theme.Background)).
@@ -142,6 +176,14 @@ func (s *StatusBar) View() string {
 			Bold(true).
 			Padding(0, 1)
 		parts = append(parts, filterStyle.Render(s.filterLabel))
+	}
+
+	if s.updateMessage != "" {
+		updateStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
+			Background(lipgloss.Color(s.styles.Theme.Background)).
+			Bold(true)
+		parts = append(parts, updateStyle.Render(s.updateMessage))
 	}
 
 	if orgProj := s.renderOrgProject(); orgProj != "" {
@@ -224,7 +266,12 @@ func (s *StatusBar) renderConfigPath() string {
 	if s.configPath == "" {
 		return ""
 	}
-	return s.styles.Muted.Render(s.configPath)
+	configStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
+		Background(lipgloss.Color(s.styles.Theme.Background)).
+		Bold(true)
+
+	return configStyle.Render(s.configPath)
 }
 
 // renderScrollPercent renders the scroll percentage indicator.

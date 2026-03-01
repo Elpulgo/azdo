@@ -2,6 +2,7 @@ package azdevops
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -208,12 +209,47 @@ func TestMultiClient_ListPipelineRuns_PartialFailure(t *testing.T) {
 	})
 
 	runs, err := mc.ListPipelineRuns(10)
-	// Partial failure: should return results from successful project
-	if err != nil {
-		t.Fatalf("expected no error for partial failure, got: %v", err)
-	}
+	// Partial failure: should return results AND a PartialError
 	if len(runs) != 1 {
 		t.Fatalf("expected 1 run from partial result, got %d", len(runs))
+	}
+
+	var partialErr *PartialError
+	if !errors.As(err, &partialErr) {
+		t.Fatalf("expected PartialError, got: %v", err)
+	}
+	if partialErr.Total != 2 {
+		t.Errorf("expected Total=2, got %d", partialErr.Total)
+	}
+	if partialErr.Failed != 1 {
+		t.Errorf("expected Failed=1, got %d", partialErr.Failed)
+	}
+}
+
+func TestPartialError_Error(t *testing.T) {
+	pe := &PartialError{
+		Failed: 1,
+		Total:  3,
+		Errors: []error{fmt.Errorf("project beta failed")},
+	}
+
+	msg := pe.Error()
+	if !strings.Contains(msg, "1") || !strings.Contains(msg, "3") {
+		t.Errorf("expected error message to contain failed/total counts, got: %s", msg)
+	}
+}
+
+func TestPartialError_IsPartialError(t *testing.T) {
+	pe := &PartialError{Failed: 1, Total: 2}
+	var target *PartialError
+	if !errors.As(pe, &target) {
+		t.Error("errors.As should match PartialError")
+	}
+
+	// A regular error should not match
+	regularErr := fmt.Errorf("some error")
+	if errors.As(regularErr, &target) {
+		t.Error("errors.As should not match regular error as PartialError")
 	}
 }
 

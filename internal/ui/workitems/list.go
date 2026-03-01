@@ -1,6 +1,7 @@
 package workitems
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -109,6 +110,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case workItemsMsg:
 		if msg.err != nil {
+			// For partial errors, treat data as valid (some projects succeeded)
+			var partialErr *azdevops.PartialError
+			if errors.As(msg.err, &partialErr) {
+				m.allItems = msg.workItems
+				if m.myItemsOnly {
+					return m, fetchMyWorkItemsMulti(m.client)
+				}
+				m.list = m.list.HandleFetchResult(msg.workItems, nil)
+				return m, nil
+			}
+
+			criticalCmd := components.NewCriticalErrorCmd(msg.err)
+			if criticalCmd != nil {
+				// Critical errors are shown via the error modal; don't display inline
+				m.list = m.list.HandleFetchResult(nil, nil)
+				return m, criticalCmd
+			}
 			m.list = m.list.HandleFetchResult(msg.workItems, msg.err)
 			return m, nil
 		}
@@ -121,6 +139,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	case myWorkItemsMsg:
 		if msg.err != nil {
+			// For partial errors, use partial data as valid
+			var partialErr *azdevops.PartialError
+			if errors.As(msg.err, &partialErr) {
+				m.list = m.list.SetItems(msg.workItems)
+				return m, nil
+			}
 			// On error, fall back to showing all items and clear loading state
 			m.myItemsOnly = false
 			m.list = m.list.SetItems(m.allItems)

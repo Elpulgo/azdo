@@ -2,13 +2,16 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
+	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -21,7 +24,7 @@ func TestNewModel_WithConfig(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	if m.config != cfg {
 		t.Error("expected config to be set")
@@ -40,7 +43,7 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -67,7 +70,7 @@ func TestModel_HandlesPollingTick(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	// Send a tick message
 	_, cmd := m.Update(polling.TickMsg{})
@@ -87,7 +90,7 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -116,7 +119,7 @@ func TestModel_HandlesPipelineRunsUpdated_Error(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -146,7 +149,7 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	cmd := m.Init()
 
 	// Should return commands for initialization
@@ -155,7 +158,7 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 	}
 }
 
-func TestModel_DefaultTab_IsPipelines(t *testing.T) {
+func TestModel_DefaultTab_IsPullRequests(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -164,36 +167,14 @@ func TestModel_DefaultTab_IsPipelines(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
-
-	if m.activeTab != TabPipelines {
-		t.Errorf("Default tab should be TabPipelines (0), got %d", m.activeTab)
-	}
-}
-
-func TestModel_TabSwitching_To_PullRequests(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(client, cfg)
-	m.width = 100
-	m.height = 30
-
-	// Press '2' to switch to pull requests tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	m = updated.(Model)
+	m := NewModel(client, cfg, "dev")
 
 	if m.activeTab != TabPullRequests {
-		t.Errorf("After pressing '2', activeTab should be TabPullRequests (1), got %d", m.activeTab)
+		t.Errorf("Default tab should be TabPullRequests, got %d", m.activeTab)
 	}
 }
 
-func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
+func TestModel_TabSwitching_Key1_IsPullRequests(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -202,20 +183,62 @@ func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
-	// Switch to pull requests tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	// Switch away first, then press '1' to go to PR tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	m = updated.(Model)
-
-	// Press '1' to switch back to pipelines tab
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	m = updated.(Model)
 
+	if m.activeTab != TabPullRequests {
+		t.Errorf("After pressing '1', activeTab should be TabPullRequests, got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabSwitching_Key2_IsWorkItems(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	// Press '2' to switch to work items tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabWorkItems {
+		t.Errorf("After pressing '2', activeTab should be TabWorkItems, got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabSwitching_Key3_IsPipelines(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	// Press '3' to switch to pipelines tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
 	if m.activeTab != TabPipelines {
-		t.Errorf("After pressing '1', activeTab should be TabPipelines (0), got %d", m.activeTab)
+		t.Errorf("After pressing '3', activeTab should be TabPipelines, got %d", m.activeTab)
 	}
 }
 
@@ -228,14 +251,11 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
-	// Switch to pull requests tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	m = updated.(Model)
-
+	// PR is now the default tab (key '1'), so it should already be active
 	view := m.View()
 
 	// Should show pull requests content (empty list message or similar)
@@ -253,7 +273,7 @@ func TestModel_StatusBarShowsConfigPath(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 200
 	m.height = 30
 
@@ -278,16 +298,16 @@ func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
-	// Press '3' to switch to work items tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Press '2' to switch to work items tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
 	if m.activeTab != TabWorkItems {
-		t.Errorf("After pressing '3', activeTab should be TabWorkItems (2), got %d", m.activeTab)
+		t.Errorf("After pressing '2', activeTab should be TabWorkItems, got %d", m.activeTab)
 	}
 }
 
@@ -300,12 +320,12 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
-	// Switch to work items tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Switch to work items tab (key '2')
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
 	view := m.View()
@@ -325,7 +345,7 @@ func TestModel_View_HasBorderedTabBar(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -349,7 +369,7 @@ func TestModel_View_HasBorderedContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -375,7 +395,7 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
@@ -385,7 +405,7 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	view := m.View()
 	lines := strings.Split(view, "\n")
 
-	// The first line should contain the top-left rounded corner of the tab border
+	// The first line should contain the tab bar border corner (logo is inside the tab bar)
 	if len(lines) == 0 || !strings.Contains(lines[0], "╭") {
 		t.Errorf("First line should contain tab bar border corner ╭, got: %q", lines[0])
 	}
@@ -405,10 +425,14 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	// Simulate window size first
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Switch to pipelines tab (key '3')
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	m = updated.(Model)
 
 	// Simulate pipeline data arriving (like from polling)
@@ -455,7 +479,7 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 		t.Errorf("View has %d lines, exceeds terminal height 40", len(lines))
 	}
 
-	// Tab bar border should be on line 0
+	// Tab bar border should be on line 0 (logo is inside the tab bar)
 	if !strings.Contains(lines[0], "╭") {
 		t.Errorf("Line 0 should have tab bar top border, got: %.80q", lines[0])
 	}
@@ -471,9 +495,13 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	var client *azdevops.MultiClient
 
 	terminalHeight := 40
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: terminalHeight})
+	m = updated.(Model)
+
+	// Switch to pipelines tab (key '3') since pipeline data is used in this test
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	m = updated.(Model)
 
 	// Load enough data to fill the table
@@ -553,9 +581,13 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	terminalHeights := []int{24, 30, 40, 50}
 	for _, termHeight := range terminalHeights {
 		t.Run(fmt.Sprintf("height_%d", termHeight), func(t *testing.T) {
-			m := NewModel(client, cfg)
+			m := NewModel(client, cfg, "dev")
 
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: termHeight})
+			m = updated.(Model)
+
+			// Switch to pipelines tab (key '3')
+			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 			m = updated.(Model)
 
 			// Load data so content fills
@@ -599,9 +631,13 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Switch to pipelines tab (key '3') so we can test search there
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	m = updated.(Model)
 
 	// Load some pipeline data
@@ -633,10 +669,9 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	m = updated.(Model)
 
 	if m.activeTab != TabPipelines {
-		t.Error("Pressing '2' during search should NOT switch to PR tab")
+		t.Error("Pressing '2' during search should NOT switch to Work Items tab")
 	}
 
-	// Press 'q' — should NOT quit (we can't easily test quit, but we can ensure model is returned)
 	// Press esc to exit search
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
@@ -645,12 +680,12 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 		t.Error("Expected search to be exited after esc")
 	}
 
-	// Now '2' should work again
+	// Now '2' should work again — switches to Work Items
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
-	if m.activeTab != TabPullRequests {
-		t.Error("After exiting search, '2' should switch to PR tab")
+	if m.activeTab != TabWorkItems {
+		t.Error("After exiting search, '2' should switch to Work Items tab")
 	}
 }
 
@@ -663,14 +698,14 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 
 	// Set up window size
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
-	// Switch to work items tab
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Switch to work items tab (key '2')
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
 	// Simulate work items arriving
@@ -711,6 +746,30 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestModel_View_ShowsLogo(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// The logo should appear in the view (contains box-drawing chars from ASCII art)
+	if !strings.Contains(view, "╔═╗") {
+		t.Error("View should contain the ASCII art logo")
+	}
+}
+
 func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -720,20 +779,184 @@ func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg)
+	m := NewModel(client, cfg, "dev")
 	m.width = 100
 	m.height = 30
 
 	view := m.View()
 
-	// Should show all three tabs in the tab bar
-	if !strings.Contains(view, "Pipelines") {
-		t.Error("Tab bar should show Pipelines")
+	// Should show all three tabs with new ordering: 1=PR, 2=Work Items, 3=Pipelines
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Error("Tab bar should show '1: Pull Requests'")
 	}
-	if !strings.Contains(view, "Pull Requests") {
-		t.Error("Tab bar should show Pull Requests")
+	if !strings.Contains(view, "2: Work Items") {
+		t.Error("Tab bar should show '2: Work Items'")
 	}
-	if !strings.Contains(view, "Work Items") {
-		t.Error("Tab bar should show Work Items")
+	if !strings.Contains(view, "3: Pipelines") {
+		t.Error("Tab bar should show '3: Pipelines'")
+	}
+}
+
+func TestModel_UpdateCheckMsg_ShowsNotification(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "1.0.0")
+	m.width = 120
+	m.height = 30
+
+	// Simulate receiving an update check result
+	msg := updateCheckMsg{
+		info: &version.UpdateInfo{
+			CurrentVersion:  "1.0.0",
+			LatestVersion:   "v2.0.0",
+			UpdateAvailable: true,
+			ReleaseURL:      "https://github.com/Elpulgo/azdo/releases/tag/v2.0.0",
+		},
+	}
+
+	updated, _ := m.Update(msg)
+	updatedModel := updated.(Model)
+
+	view := updatedModel.View()
+	if !strings.Contains(view, "Update available") {
+		t.Error("expected update notification in view")
+	}
+}
+
+func TestModel_CriticalErrorMsg_ShowsErrorModal(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	// Send a CriticalErrorMsg
+	msg := components.CriticalErrorMsg{
+		Title:   "Configuration Error",
+		Message: "The API returned 'not found'.",
+		Hint:    "Check your config file.",
+	}
+
+	updated, _ := m.Update(msg)
+	m = updated.(Model)
+
+	if !m.errorModal.IsVisible() {
+		t.Error("error modal should be visible after CriticalErrorMsg")
+	}
+
+	// View should render the error modal overlay
+	view := m.View()
+	if !strings.Contains(view, "Configuration Error") {
+		t.Error("view should show error modal with title")
+	}
+}
+
+func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	// Simulate successful data fetch to set status to "connected"
+	runs := []azdevops.PipelineRun{
+		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	}
+	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
+	m = updated.(Model)
+
+	// Verify we're connected
+	if m.statusBar.GetState() != polling.StateConnected {
+		t.Fatal("Expected connected state before theme switch")
+	}
+
+	// Switch theme
+	updated, _ = m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	// Status bar should still show connected, not connecting
+	if m.statusBar.GetState() != polling.StateConnected {
+		t.Errorf("Expected state to remain 'connected' after theme switch, got %q", m.statusBar.GetState())
+	}
+
+	view := m.View()
+	if strings.Contains(view, "connecting") {
+		t.Error("Status bar should not show 'connecting' after theme switch when already connected")
+	}
+	if !strings.Contains(view, "connected") {
+		t.Error("Status bar should still show 'connected' after theme switch")
+	}
+}
+
+func TestModel_ThemeSwitch_PreservesWarningMessage(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	// Set a warning message
+	m.statusBar.SetWarningMessage("Some projects failed")
+
+	// Switch theme
+	updated, _ = m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	// Warning message should be preserved
+	view := m.View()
+	if !strings.Contains(view, "Some projects failed") {
+		t.Error("Warning message should be preserved after theme switch")
+	}
+}
+
+func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "2.0.0")
+	m.width = 120
+	m.height = 30
+
+	msg := updateCheckMsg{
+		info: &version.UpdateInfo{
+			CurrentVersion:  "2.0.0",
+			LatestVersion:   "v2.0.0",
+			UpdateAvailable: false,
+		},
+	}
+
+	updated, _ := m.Update(msg)
+	updatedModel := updated.(Model)
+
+	view := updatedModel.View()
+	if strings.Contains(view, "Update available") {
+		t.Error("should not show update notification when already on latest")
 	}
 }

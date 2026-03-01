@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -624,6 +625,28 @@ func TestModel_VoteFlowThroughDetailView(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if model.GetViewMode() != ViewList {
 		t.Error("Second Esc should exit detail view back to list")
+	}
+}
+
+func TestUpdate_PullRequestsMsg_CriticalErrorNotShownInline(t *testing.T) {
+	model := NewModel(nil)
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	criticalErr := fmt.Errorf("all projects failed: [HTTP request failed with status 400]")
+	model, cmd := model.Update(pullRequestsMsg{prs: nil, err: criticalErr})
+
+	if cmd == nil {
+		t.Fatal("Expected a command to be returned for critical error, got nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(components.CriticalErrorMsg); !ok {
+		t.Errorf("Expected CriticalErrorMsg, got %T", msg)
+	}
+
+	// Critical error should NOT show inline
+	view := model.View()
+	if strings.Contains(view, "Error loading") {
+		t.Error("Critical error should not be displayed inline in the list view")
 	}
 }
 

@@ -29,6 +29,26 @@ jobs:
           go test -json -count=1 ./... > test-output.json 2>&1
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
+      - name: Show failing tests
+        if: always() && steps.test.outputs.exit_code != '0'
+        run: |
+          grep '^{' test-output.json > test-clean.json || true
+          FAILED_TESTS=$(jq -r 'select(.Action == "fail" and .Test != null) | "\(.Package)/\(.Test)"' test-clean.json)
+          if [ -z "$FAILED_TESTS" ]; then
+            echo "No individual test failures found (possible build error)"
+            cat test-output.json
+            exit 0
+          fi
+          for ft in $FAILED_TESTS; do
+            PKG="${ft%/*}"
+            TEST="${ft#*/}"
+            echo "=== FAIL: ${PKG} / ${TEST} ==="
+            jq -r --arg pkg "$PKG" --arg test "$TEST" \
+              'select(.Package == $pkg and .Test == $test and .Action == "output") | .Output' \
+              test-clean.json | tr -d '\n' | sed 's/$/\n/'
+            echo ""
+          done
+
       - name: Generate test report
         if: always() && steps.test.outcome != 'skipped'
         run: |

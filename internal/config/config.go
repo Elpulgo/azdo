@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,10 +9,13 @@ import (
 	"github.com/spf13/viper"
 )
 
+// ErrConfigNotFound is returned when the config file does not exist.
+var ErrConfigNotFound = errors.New("config file not found")
+
 // Config holds the application configuration
 type Config struct {
 	Organization    string            `mapstructure:"organization"`
-	Project         string            `mapstructure:"project"`  // deprecated: use Projects
+	Project         string            `mapstructure:"project"` // deprecated: use Projects
 	Projects        []string          `mapstructure:"projects"`
 	DisplayNames    map[string]string `mapstructure:"-"` // API name → display name
 	PollingInterval int               `mapstructure:"polling_interval"`
@@ -131,8 +135,8 @@ func LoadFrom(configPath string) (*Config, error) {
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			return nil, fmt.Errorf("config file not found at: %s\nPlease create a config.yaml file with 'organization' and 'projects' settings", configPath)
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok || os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrConfigNotFound, configPath)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -185,16 +189,44 @@ func LoadFrom(configPath string) (*Config, error) {
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, err
 	}
 
 	return &cfg, nil
 }
 
+// NewWithPath creates a Config with all fields set and the internal configPath
+// populated so that Save() writes to the correct location.
+func NewWithPath(org string, projects []string, pollingInterval int, theme string, configPath string) *Config {
+	return &Config{
+		Organization:    org,
+		Projects:        projects,
+		PollingInterval: pollingInterval,
+		Theme:           theme,
+		configPath:      configPath,
+	}
+}
+
+// configurationGuideURL is the link to the GitHub configuration documentation.
+const configurationGuideURL = "https://github.com/Elpulgo/azdo#configuration"
+
 // Validate checks if the configuration values are valid
 func (c *Config) Validate() error {
+	if c.Organization == "" {
+		return fmt.Errorf(
+			"'organization' is not set in config.yaml\n\n"+
+				"Add your Azure DevOps organization name to the config file:\n\n"+
+				"  organization: your-org-name\n\n"+
+				"For more details, visit: %s", configurationGuideURL)
+	}
+
 	if len(c.Projects) == 0 {
-		return fmt.Errorf("at least one project must be configured")
+		return fmt.Errorf(
+			"no projects configured in config.yaml\n\n"+
+				"Add at least one project to the config file:\n\n"+
+				"  projects:\n"+
+				"    - your-project-name\n\n"+
+				"For more details, visit: %s", configurationGuideURL)
 	}
 
 	for i, p := range c.Projects {
