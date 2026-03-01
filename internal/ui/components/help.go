@@ -51,7 +51,7 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 			{
 				Title: "Tabs",
 				Bindings: []HelpBinding{
-					{Key: "1/2/3", Description: "Switch to tab 1/2/3"},
+					{Key: "1/2/3", Description: "PR / Work Items / Pipelines"},
 					{Key: "←/→", Description: "Previous / next tab"},
 				},
 			},

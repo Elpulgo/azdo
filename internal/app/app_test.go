@@ -157,7 +157,7 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 	}
 }
 
-func TestModel_DefaultTab_IsPipelines(t *testing.T) {
+func TestModel_DefaultTab_IsPullRequests(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -167,35 +167,13 @@ func TestModel_DefaultTab_IsPipelines(t *testing.T) {
 	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg, "dev")
-
-	if m.activeTab != TabPipelines {
-		t.Errorf("Default tab should be TabPipelines (0), got %d", m.activeTab)
-	}
-}
-
-func TestModel_TabSwitching_To_PullRequests(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(client, cfg, "dev")
-	m.width = 100
-	m.height = 30
-
-	// Press '2' to switch to pull requests tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	m = updated.(Model)
 
 	if m.activeTab != TabPullRequests {
-		t.Errorf("After pressing '2', activeTab should be TabPullRequests (1), got %d", m.activeTab)
+		t.Errorf("Default tab should be TabPullRequests, got %d", m.activeTab)
 	}
 }
 
-func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
+func TestModel_TabSwitching_Key1_IsPullRequests(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -208,16 +186,58 @@ func TestModel_TabSwitching_Back_To_Pipelines(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	// Switch to pull requests tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	// Switch away first, then press '1' to go to PR tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	m = updated.(Model)
-
-	// Press '1' to switch back to pipelines tab
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	m = updated.(Model)
 
+	if m.activeTab != TabPullRequests {
+		t.Errorf("After pressing '1', activeTab should be TabPullRequests, got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabSwitching_Key2_IsWorkItems(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	// Press '2' to switch to work items tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabWorkItems {
+		t.Errorf("After pressing '2', activeTab should be TabWorkItems, got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabSwitching_Key3_IsPipelines(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	// Press '3' to switch to pipelines tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
 	if m.activeTab != TabPipelines {
-		t.Errorf("After pressing '1', activeTab should be TabPipelines (0), got %d", m.activeTab)
+		t.Errorf("After pressing '3', activeTab should be TabPipelines, got %d", m.activeTab)
 	}
 }
 
@@ -234,10 +254,7 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	// Switch to pull requests tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	m = updated.(Model)
-
+	// PR is now the default tab (key '1'), so it should already be active
 	view := m.View()
 
 	// Should show pull requests content (empty list message or similar)
@@ -284,12 +301,12 @@ func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	// Press '3' to switch to work items tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Press '2' to switch to work items tab
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
 	if m.activeTab != TabWorkItems {
-		t.Errorf("After pressing '3', activeTab should be TabWorkItems (2), got %d", m.activeTab)
+		t.Errorf("After pressing '2', activeTab should be TabWorkItems, got %d", m.activeTab)
 	}
 }
 
@@ -306,8 +323,8 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	// Switch to work items tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Switch to work items tab (key '2')
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
 	view := m.View()
@@ -413,6 +430,10 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
+	// Switch to pipelines tab (key '3')
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
 	// Simulate pipeline data arriving (like from polling)
 	runs := make([]azdevops.PipelineRun, 30)
 	for i := range runs {
@@ -476,6 +497,10 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	m := NewModel(client, cfg, "dev")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: terminalHeight})
+	m = updated.(Model)
+
+	// Switch to pipelines tab (key '3') since pipeline data is used in this test
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	m = updated.(Model)
 
 	// Load enough data to fill the table
@@ -560,6 +585,10 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: termHeight})
 			m = updated.(Model)
 
+			// Switch to pipelines tab (key '3')
+			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+			m = updated.(Model)
+
 			// Load data so content fills
 			runs := make([]azdevops.PipelineRun, 50)
 			for i := range runs {
@@ -606,6 +635,10 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
+	// Switch to pipelines tab (key '3') so we can test search there
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
 	// Load some pipeline data
 	runs := []azdevops.PipelineRun{
 		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
@@ -635,10 +668,9 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	m = updated.(Model)
 
 	if m.activeTab != TabPipelines {
-		t.Error("Pressing '2' during search should NOT switch to PR tab")
+		t.Error("Pressing '2' during search should NOT switch to Work Items tab")
 	}
 
-	// Press 'q' — should NOT quit (we can't easily test quit, but we can ensure model is returned)
 	// Press esc to exit search
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
@@ -647,12 +679,12 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 		t.Error("Expected search to be exited after esc")
 	}
 
-	// Now '2' should work again
+	// Now '2' should work again — switches to Work Items
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
-	if m.activeTab != TabPullRequests {
-		t.Error("After exiting search, '2' should switch to PR tab")
+	if m.activeTab != TabWorkItems {
+		t.Error("After exiting search, '2' should switch to Work Items tab")
 	}
 }
 
@@ -671,8 +703,8 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
-	// Switch to work items tab
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Switch to work items tab (key '2')
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
 	// Simulate work items arriving
@@ -752,15 +784,15 @@ func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 
 	view := m.View()
 
-	// Should show all three tabs in the tab bar
-	if !strings.Contains(view, "Pipelines") {
-		t.Error("Tab bar should show Pipelines")
+	// Should show all three tabs with new ordering: 1=PR, 2=Work Items, 3=Pipelines
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Error("Tab bar should show '1: Pull Requests'")
 	}
-	if !strings.Contains(view, "Pull Requests") {
-		t.Error("Tab bar should show Pull Requests")
+	if !strings.Contains(view, "2: Work Items") {
+		t.Error("Tab bar should show '2: Work Items'")
 	}
-	if !strings.Contains(view, "Work Items") {
-		t.Error("Tab bar should show Work Items")
+	if !strings.Contains(view, "3: Pipelines") {
+		t.Error("Tab bar should show '3: Pipelines'")
 	}
 }
 

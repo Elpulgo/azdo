@@ -34,9 +34,9 @@ func (e *ThemeNotFoundError) Error() string {
 type Tab int
 
 const (
-	TabPipelines    Tab = iota // Pipelines tab (key '1')
-	TabPullRequests            // Pull Requests tab (key '2')
-	TabWorkItems               // Work Items tab (key '3')
+	TabPullRequests Tab = iota // Pull Requests tab (key '1')
+	TabWorkItems               // Work Items tab (key '2')
+	TabPipelines               // Pipelines tab (key '3')
 )
 
 // Layout constants for the bordered content area.
@@ -164,7 +164,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		client:           client,
 		config:           cfg,
 		styles:           appStyles,
-		activeTab:        TabPipelines,
+		activeTab:        TabPullRequests,
 		logo:             logo,
 		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
@@ -189,8 +189,9 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	return tea.Batch(
-		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
-		m.poller.StartPolling(),      // Start polling timer
+		m.poller.FetchPipelineRuns(),  // Initial fetch - updates connection state
+		m.poller.StartPolling(),       // Start polling timer
+		m.pullRequestsView.Init(),    // Load PR tab (default tab)
 		checkForUpdate(m.currentVersion),
 	)
 }
@@ -282,10 +283,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themePicker.Show()
 			return m, nil
 		case "1":
-			m.activeTab = TabPipelines
-			m.resizeActiveViewIfNeeded()
-			return m, nil
-		case "2":
 			if m.activeTab != TabPullRequests {
 				m.activeTab = TabPullRequests
 				m.resizeActiveViewIfNeeded()
@@ -293,7 +290,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
-		case "3":
+		case "2":
 			if m.activeTab != TabWorkItems {
 				m.activeTab = TabWorkItems
 				m.resizeActiveViewIfNeeded()
@@ -301,13 +298,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.workItemsView.Init()
 			}
 			return m, nil
+		case "3":
+			m.activeTab = TabPipelines
+			m.resizeActiveViewIfNeeded()
+			return m, nil
 		case "left":
 			// Navigate to previous tab (with wraparound)
 			switch m.activeTab {
-			case TabPipelines:
-				m.activeTab = TabWorkItems
-				m.resizeActiveViewIfNeeded()
-				return m, m.workItemsView.Init()
 			case TabPullRequests:
 				m.activeTab = TabPipelines
 				m.resizeActiveViewIfNeeded()
@@ -316,15 +313,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = TabPullRequests
 				m.resizeActiveViewIfNeeded()
 				return m, m.pullRequestsView.Init()
+			case TabPipelines:
+				m.activeTab = TabWorkItems
+				m.resizeActiveViewIfNeeded()
+				return m, m.workItemsView.Init()
 			}
 			return m, nil
 		case "right":
 			// Navigate to next tab (with wraparound)
 			switch m.activeTab {
-			case TabPipelines:
-				m.activeTab = TabPullRequests
-				m.resizeActiveViewIfNeeded()
-				return m, m.pullRequestsView.Init()
 			case TabPullRequests:
 				m.activeTab = TabWorkItems
 				m.resizeActiveViewIfNeeded()
@@ -333,6 +330,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = TabPipelines
 				m.resizeActiveViewIfNeeded()
 				return m, nil
+			case TabPipelines:
+				m.activeTab = TabPullRequests
+				m.resizeActiveViewIfNeeded()
+				return m, m.pullRequestsView.Init()
 			}
 			return m, nil
 		}
@@ -605,18 +606,18 @@ func (m Model) renderTabBar(innerWidth int) string {
 	var tab1, tab2, tab3 string
 
 	switch m.activeTab {
-	case TabPipelines:
-		tab1 = m.styles.TabActive.Render("1: Pipelines")
-		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
-		tab3 = m.styles.TabInactive.Render("3: Work Items")
 	case TabPullRequests:
-		tab1 = m.styles.TabInactive.Render("1: Pipelines")
-		tab2 = m.styles.TabActive.Render("2: Pull Requests")
-		tab3 = m.styles.TabInactive.Render("3: Work Items")
+		tab1 = m.styles.TabActive.Render("1: Pull Requests")
+		tab2 = m.styles.TabInactive.Render("2: Work Items")
+		tab3 = m.styles.TabInactive.Render("3: Pipelines")
 	case TabWorkItems:
-		tab1 = m.styles.TabInactive.Render("1: Pipelines")
-		tab2 = m.styles.TabInactive.Render("2: Pull Requests")
-		tab3 = m.styles.TabActive.Render("3: Work Items")
+		tab1 = m.styles.TabInactive.Render("1: Pull Requests")
+		tab2 = m.styles.TabActive.Render("2: Work Items")
+		tab3 = m.styles.TabInactive.Render("3: Pipelines")
+	case TabPipelines:
+		tab1 = m.styles.TabInactive.Render("1: Pull Requests")
+		tab2 = m.styles.TabInactive.Render("2: Work Items")
+		tab3 = m.styles.TabActive.Render("3: Pipelines")
 	}
 
 	tabs := tab1 + " " + tab2 + " " + tab3

@@ -72,7 +72,7 @@ Required PAT permissions:
   Work Items   (Read & Write) - queries, state changes
 
 Keyboard shortcuts (in TUI):
-  1/2/3        Switch tabs (Pipelines, Pull Requests, Work Items)
+  1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
   r            Refresh data
   f            Search / filter
   t            Select theme
