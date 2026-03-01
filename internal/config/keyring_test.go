@@ -132,6 +132,8 @@ func TestSetPAT_Error(t *testing.T) {
 }
 
 func TestGetPAT_Error(t *testing.T) {
+	t.Setenv("AZDO_PAT", "")
+
 	mock := newMockKeyring()
 	mock.err = errors.New("keyring access denied")
 	ks := &KeyringStore{provider: mock}
