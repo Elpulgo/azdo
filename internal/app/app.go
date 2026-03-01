@@ -15,6 +15,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/version"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ThemeNotFoundError represents an error when a requested theme is not found.
@@ -47,9 +48,9 @@ const (
 	// top border (1) + bottom border (1) = 2.
 	boxBorderRows = 2
 
-	// tabBarRows is the vertical space consumed by the bordered tab bar:
-	// top border (1) + tab row (1) + bottom border (1) = 3.
-	tabBarRows = 3
+	// tabBarRows is the vertical space consumed by the bordered tab bar
+	// (which includes the logo): top border (1) + 3 content rows + bottom border (1) = 5.
+	tabBarRows = 5
 
 	// contextBarJoinNewline accounts for the newline joining context bar and status bar.
 	contextBarJoinNewline = 1
@@ -69,6 +70,7 @@ type Model struct {
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
 	workItemsView    workitems.Model
+	logo             *components.Logo
 	statusBar        *components.StatusBar
 	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
@@ -110,6 +112,9 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	}
 
 	appStyles := styles.NewStyles(theme)
+
+	// Create logo
+	logo := components.NewLogo(appStyles)
 
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
@@ -160,6 +165,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		config:           cfg,
 		styles:           appStyles,
 		activeTab:        TabPipelines,
+		logo:             logo,
 		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(client, appStyles),
@@ -366,6 +372,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if configPath, err := config.GetPath(); err == nil {
 			m.statusBar.SetConfigPath(configPath)
 		}
+
+		m.logo = components.NewLogo(m.styles)
 
 		m.contextBar = components.NewContextBar(m.styles)
 		m.contextBar.SetWidth(m.width)
@@ -583,7 +591,8 @@ func (m Model) measureFooterHeight() int {
 	return statusRows
 }
 
-// renderTabBar renders the tab header content wrapped in its own bordered box.
+// renderTabBar renders the tab header content wrapped in its own bordered box,
+// with tabs on the left and the ASCII art logo on the right.
 func (m Model) renderTabBar(innerWidth int) string {
 	var tab1, tab2, tab3 string
 
@@ -602,7 +611,25 @@ func (m Model) renderTabBar(innerWidth int) string {
 		tab3 = m.styles.TabActive.Render("3: Work Items")
 	}
 
-	return m.styles.TabBar.Width(innerWidth).Render(tab1 + " " + tab2 + " " + tab3)
+	tabs := tab1 + " " + tab2 + " " + tab3
+	logo := m.logo.View()
+
+	// Place tabs on the left (top-aligned) and logo on the right.
+	logoWidth := lipgloss.Width(logo)
+	tabsWidth := innerWidth - logoWidth
+	if tabsWidth < 0 {
+		tabsWidth = 0
+	}
+
+	left := lipgloss.NewStyle().
+		Width(tabsWidth).
+		Height(m.logo.Height()).
+		AlignVertical(lipgloss.Center).
+		Render(tabs)
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, left, logo)
+
+	return m.styles.TabBar.Width(innerWidth).Render(content)
 }
 
 // View renders the application UI

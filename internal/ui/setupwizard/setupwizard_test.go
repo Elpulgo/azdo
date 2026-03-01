@@ -307,6 +307,15 @@ func TestCtrlC_CancelsAtAnyStep(t *testing.T) {
 	}
 }
 
+func TestView_ContainsLogo(t *testing.T) {
+	m := NewModel()
+	view := m.View()
+
+	if !strings.Contains(view, "╔═╗") {
+		t.Error("view should contain the ASCII art logo")
+	}
+}
+
 func TestView_ContainsExpectedLabels(t *testing.T) {
 	tests := []struct {
 		name     string

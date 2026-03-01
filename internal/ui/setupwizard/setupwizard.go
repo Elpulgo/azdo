@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/config"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -241,7 +242,9 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("azdo — Setup Wizard"))
+	b.WriteString(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
+	b.WriteString("\n\n")
+	b.WriteString(titleStyle.Render("Setup Wizard"))
 	b.WriteString("\n")
 	b.WriteString(stepStyle.Render(fmt.Sprintf("Step %d of %d", int(m.step)+1, totalSteps)))
 	b.WriteString("\n\n")

@@ -14,16 +14,16 @@ import (
 // StatusBar is a component that displays keybindings, org/project info,
 // and connection state at the bottom of the screen like lazygit.
 type StatusBar struct {
-	styles        *styles.Styles
-	organization  string
-	project       string
-	state         polling.ConnectionState
-	keybindings   string
-	configPath    string
-	scrollPercent float64
-	showScroll    bool
-	width         int
-	errorMessage  string
+	styles         *styles.Styles
+	organization   string
+	project        string
+	state          polling.ConnectionState
+	keybindings    string
+	configPath     string
+	scrollPercent  float64
+	showScroll     bool
+	width          int
+	errorMessage   string
 	filterLabel    string
 	updateMessage  string
 	warningMessage string
@@ -112,7 +112,6 @@ func (s *StatusBar) SetWarningMessage(message string) {
 func (s *StatusBar) ClearWarningMessage() {
 	s.warningMessage = ""
 }
-
 
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
@@ -257,7 +256,12 @@ func (s *StatusBar) renderConfigPath() string {
 	if s.configPath == "" {
 		return ""
 	}
-	return s.styles.Muted.Render(s.configPath)
+	configStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
+		Background(lipgloss.Color(s.styles.Theme.Background)).
+		Bold(true)
+
+	return configStyle.Render(s.configPath)
 }
 
 // renderScrollPercent renders the scroll percentage indicator.

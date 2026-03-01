@@ -387,7 +387,7 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	view := m.View()
 	lines := strings.Split(view, "\n")
 
-	// The first line should contain the top-left rounded corner of the tab border
+	// The first line should contain the tab bar border corner (logo is inside the tab bar)
 	if len(lines) == 0 || !strings.Contains(lines[0], "╭") {
 		t.Errorf("First line should contain tab bar border corner ╭, got: %q", lines[0])
 	}
@@ -457,7 +457,7 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 		t.Errorf("View has %d lines, exceeds terminal height 40", len(lines))
 	}
 
-	// Tab bar border should be on line 0
+	// Tab bar border should be on line 0 (logo is inside the tab bar)
 	if !strings.Contains(lines[0], "╭") {
 		t.Errorf("Line 0 should have tab bar top border, got: %.80q", lines[0])
 	}
@@ -710,6 +710,30 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	view = m.View()
 	if strings.Contains(view, "My Items") {
 		t.Error("status bar should NOT show 'My Items' badge when filter is inactive")
+	}
+}
+
+func TestModel_View_ShowsLogo(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// The logo should appear in the view (contains box-drawing chars from ASCII art)
+	if !strings.Contains(view, "╔═╗") {
+		t.Error("View should contain the ASCII art logo")
 	}
 }
 
