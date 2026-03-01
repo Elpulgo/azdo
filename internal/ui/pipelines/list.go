@@ -117,6 +117,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// Handle domain-specific messages
 	switch msg := msg.(type) {
 	case pipelineRunsMsg:
+		criticalCmd := components.NewCriticalErrorCmd(msg.err)
+		if criticalCmd != nil {
+			// Critical errors are shown via the error modal; don't display inline
+			m.list = m.list.HandleFetchResult(nil, nil)
+			return m, criticalCmd
+		}
 		m.list = m.list.HandleFetchResult(msg.runs, msg.err)
 		return m, nil
 	case SetRunsMsg:

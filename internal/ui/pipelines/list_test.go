@@ -1,11 +1,13 @@
 package pipelines
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -481,6 +483,61 @@ func TestRunsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	}
 	if row[0] != "alpha" {
 		t.Errorf("Project column = %q, want 'alpha'", row[0])
+	}
+}
+
+func TestUpdate_PipelineRunsMsg_BubblesCriticalError(t *testing.T) {
+	model := NewModel(nil)
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Send a pipelineRunsMsg with a critical error (HTTP 400)
+	criticalErr := fmt.Errorf("all projects failed: [HTTP request failed with status 400]")
+	model, cmd := model.Update(pipelineRunsMsg{runs: nil, err: criticalErr})
+
+	if cmd == nil {
+		t.Fatal("Expected a command to be returned for critical error, got nil")
+	}
+
+	// Execute the command and verify it produces a CriticalErrorMsg
+	msg := cmd()
+	if _, ok := msg.(components.CriticalErrorMsg); !ok {
+		t.Errorf("Expected CriticalErrorMsg, got %T", msg)
+	}
+
+	// Critical error should NOT show inline in the list view
+	view := model.View()
+	if strings.Contains(view, "Error loading") {
+		t.Error("Critical error should not be displayed inline in the list view")
+	}
+}
+
+func TestUpdate_PipelineRunsMsg_NonCriticalErrorShowsInline(t *testing.T) {
+	model := NewModel(nil)
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Send a pipelineRunsMsg with a non-critical error
+	transientErr := fmt.Errorf("connection timeout")
+	model, cmd := model.Update(pipelineRunsMsg{runs: nil, err: transientErr})
+
+	if cmd != nil {
+		t.Error("Expected nil command for non-critical error, got non-nil")
+	}
+
+	// Non-critical error should still show inline
+	view := model.View()
+	if !strings.Contains(view, "Error loading") {
+		t.Error("Non-critical error should be displayed inline in the list view")
+	}
+}
+
+func TestUpdate_PipelineRunsMsg_NoCmdForSuccess(t *testing.T) {
+	model := NewModel(nil)
+
+	// Send a successful pipelineRunsMsg
+	_, cmd := model.Update(pipelineRunsMsg{runs: []azdevops.PipelineRun{}, err: nil})
+
+	if cmd != nil {
+		t.Error("Expected nil command for successful fetch, got non-nil")
 	}
 }
 

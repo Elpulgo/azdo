@@ -233,5 +233,13 @@ func ClassifyError(err error) *ErrorInfo {
 		}
 	}
 
+	if strings.Contains(msg, "HTTP 400") || strings.Contains(msg, "HTTP request failed with status") {
+		return &ErrorInfo{
+			Title:   "Configuration Error",
+			Message: "The API returned an error. Your organization or project name in the configuration may be incorrect.",
+			Hint:    "Check your config file and verify the organization and project names match your Azure DevOps setup.",
+		}
+	}
+
 	return nil
 }

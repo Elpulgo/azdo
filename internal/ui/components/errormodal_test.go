@@ -223,6 +223,27 @@ func TestClassifyError_TransientError(t *testing.T) {
 	}
 }
 
+func TestClassifyError_400(t *testing.T) {
+	err := fmt.Errorf("all projects failed: [HTTP request failed with status 400]")
+	result := ClassifyError(err)
+
+	if result == nil {
+		t.Fatal("HTTP 400 should return non-nil ErrorInfo")
+	}
+	if result.Title != "Configuration Error" {
+		t.Errorf("Expected title 'Configuration Error', got %q", result.Title)
+	}
+}
+
+func TestClassifyError_GenericHTTPFailedStatus(t *testing.T) {
+	err := fmt.Errorf("HTTP request failed with status 400")
+	result := ClassifyError(err)
+
+	if result == nil {
+		t.Fatal("Generic HTTP failed status should return non-nil ErrorInfo")
+	}
+}
+
 func TestClassifyError_RateLimited(t *testing.T) {
 	err := fmt.Errorf("rate limited (HTTP 429)")
 	result := ClassifyError(err)
