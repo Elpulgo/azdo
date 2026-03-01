@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -863,12 +864,8 @@ func TestModel_CriticalErrorMsg_ShowsErrorModal(t *testing.T) {
 }
 
 func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg, "dev")
@@ -909,12 +906,8 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 }
 
 func TestModel_ThemeSwitch_PreservesWarningMessage(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
 	m := NewModel(client, cfg, "dev")
