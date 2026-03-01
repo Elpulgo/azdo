@@ -392,3 +392,66 @@ func TestStatusBar_ClearFilterLabel(t *testing.T) {
 	}
 }
 
+func TestStatusBar_SetWarningMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWarningMessage("Invalid theme 'foo', using default theme 'dracula'")
+
+	if sb.warningMessage != "Invalid theme 'foo', using default theme 'dracula'" {
+		t.Errorf("expected warningMessage to be set, got '%s'", sb.warningMessage)
+	}
+}
+
+func TestStatusBar_ClearWarningMessage(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWarningMessage("some warning")
+	sb.ClearWarningMessage()
+
+	if sb.warningMessage != "" {
+		t.Errorf("expected warningMessage to be empty, got '%s'", sb.warningMessage)
+	}
+}
+
+func TestStatusBar_View_WarningMessageShowsWhenConnected(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateConnected)
+	sb.SetWarningMessage("Invalid theme 'foo', using default theme 'dracula'")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "Invalid theme") {
+		t.Error("view should show warning message even when connected")
+	}
+}
+
+func TestStatusBar_View_WarningMessageShowsAlongsideKeybindings(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateConnected)
+	sb.SetWarningMessage("Invalid theme 'foo', using default theme 'dracula'")
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	// Warning should be visible
+	if !strings.Contains(view, "Invalid theme") {
+		t.Error("view should contain warning message")
+	}
+	// Keybindings should still show (not replaced by warning)
+	if !strings.Contains(view, "quit") {
+		t.Error("view should still contain keybindings alongside warning")
+	}
+}
+
+func TestStatusBar_View_WarningMessageNotShownWhenEmpty(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetState(polling.StateConnected)
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	// No warning section should appear
+	if strings.Contains(view, "⚠") {
+		t.Error("view should not contain warning indicator when no warning set")
+	}
+}
+

@@ -24,8 +24,9 @@ type StatusBar struct {
 	showScroll    bool
 	width         int
 	errorMessage  string
-	filterLabel   string
-	updateMessage string
+	filterLabel    string
+	updateMessage  string
+	warningMessage string
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -102,6 +103,16 @@ func (s *StatusBar) SetUpdateMessage(message string) {
 	s.updateMessage = message
 }
 
+// SetWarningMessage sets a persistent warning message that displays regardless of connection state.
+func (s *StatusBar) SetWarningMessage(message string) {
+	s.warningMessage = message
+}
+
+// ClearWarningMessage clears the persistent warning message.
+func (s *StatusBar) ClearWarningMessage() {
+	s.warningMessage = ""
+}
+
 
 // Init implements tea.Model (no initialization needed).
 func (s *StatusBar) Init() tea.Cmd {
@@ -139,6 +150,14 @@ func (s *StatusBar) View() string {
 		parts = append(parts, errorStyle.Render(s.errorMessage))
 	} else {
 		parts = append(parts, s.renderKeybindings())
+	}
+
+	if s.warningMessage != "" {
+		warningStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
+			Background(lipgloss.Color(s.styles.Theme.Background)).
+			Bold(true)
+		parts = append(parts, warningStyle.Render("⚠ "+s.warningMessage))
 	}
 
 	if s.filterLabel != "" {

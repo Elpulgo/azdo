@@ -24,9 +24,9 @@ type ThemeNotFoundError struct {
 }
 
 func (e *ThemeNotFoundError) Error() string {
-	availableThemes := styles.ListAvailableThemes()
-	return fmt.Sprintf("Theme '%s' not found. Using default theme. Available themes: %v. Custom themes can be placed in: %s",
-		e.ThemeName, availableThemes, e.ThemesPath)
+	defaultTheme := styles.GetDefaultTheme()
+	return fmt.Sprintf("Theme '%s' not found, using '%s'. Press 't' to select a theme.",
+		e.ThemeName, defaultTheme.Name)
 }
 
 // Tab represents the active tab in the application
@@ -177,9 +177,9 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 // Init initializes the application
 func (m Model) Init() tea.Cmd {
 	// Check for any startup errors (e.g., theme not found)
+	// Use warning message so it persists even after successful polling
 	if m.errorHandler.ShouldShowError() {
-		m.statusBar.SetState(polling.StateError)
-		m.statusBar.SetErrorMessage(m.errorHandler.ErrorMessage())
+		m.statusBar.SetWarningMessage(m.errorHandler.ErrorMessage())
 	}
 
 	return tea.Batch(
