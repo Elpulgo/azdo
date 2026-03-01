@@ -457,6 +457,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusBar.SetState(polling.StateConnected)
 			m.statusBar.ClearErrorMessage()
+
+			// Check for partial project load warning
+			if warning := m.errorHandler.PartialWarning(); warning != "" {
+				m.statusBar.SetWarningMessage(warning)
+			} else {
+				m.statusBar.ClearWarningMessage()
+			}
 		}
 
 		// Update pipelines view with the runs
