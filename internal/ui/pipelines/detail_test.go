@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
@@ -39,25 +40,6 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	if len(lines) != height {
 		t.Errorf("Detail view output has %d lines, want %d (height passed to SetSize). "+
 			"Viewport is not using full available height.", len(lines), height)
-	}
-}
-
-func TestDetailModel_HasStyles(t *testing.T) {
-	run := azdevops.PipelineRun{ID: 123, Definition: azdevops.PipelineDefinition{Name: "Test"}}
-	m := NewDetailModel(nil, run)
-
-	if m.styles == nil {
-		t.Error("Expected detail model to have styles initialized")
-	}
-}
-
-func TestDetailModel_WithStyles(t *testing.T) {
-	run := azdevops.PipelineRun{ID: 123, Definition: azdevops.PipelineDefinition{Name: "Test"}}
-	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
-	m := NewDetailModelWithStyles(nil, run, customStyles)
-
-	if m.styles != customStyles {
-		t.Error("Expected detail model to use provided custom styles")
 	}
 }
 
@@ -135,6 +117,29 @@ func TestDetailRecordIcon(t *testing.T) {
 			recordType:   "Task",
 			state:        "completed",
 			result:       "skipped",
+			wantContains: "○",
+		},
+
+		// Additional result values
+		{
+			name:         "succeeded with issues",
+			recordType:   "Task",
+			state:        "completed",
+			result:       "succeededWithIssues",
+			wantContains: "◐",
+		},
+		{
+			name:         "canceled",
+			recordType:   "Task",
+			state:        "completed",
+			result:       "canceled",
+			wantContains: "○",
+		},
+		{
+			name:         "abandoned",
+			recordType:   "Task",
+			state:        "completed",
+			result:       "abandoned",
 			wantContains: "○",
 		},
 	}
@@ -361,6 +366,12 @@ func TestFormatDuration(t *testing.T) {
 			startTime:  timePtr(now.Add(-150 * time.Second)),
 			finishTime: timePtr(now),
 			want:       "2m30s",
+		},
+		{
+			name:       "completed 1 hour 5 minutes 30 seconds",
+			startTime:  timePtr(now.Add(-1*time.Hour - 5*time.Minute - 30*time.Second)),
+			finishTime: timePtr(now),
+			want:       "1h5m30s",
 		},
 	}
 
@@ -1261,6 +1272,106 @@ func TestDetailModel_SearchExitRestoresAllTreeItems(t *testing.T) {
 	// Should restore to 2 items (tree-based flat, not the "all nodes" list)
 	if len(model.flatItems) != 2 {
 		t.Errorf("Expected 2 items after exiting search (stages collapsed), got %d", len(model.flatItems))
+	}
+}
+
+// --- Key handling via Update() ---
+
+func TestDetailModel_RefreshKey_SetsLoadingAndReturnsCmd(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	if model.loading {
+		t.Fatal("Model should not be loading before refresh")
+	}
+
+	// Press 'r' to refresh
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	if !model.loading {
+		t.Error("After 'r', model should be in loading state")
+	}
+	if cmd == nil {
+		t.Error("After 'r', expected a command to fetch timeline")
+	}
+}
+
+func TestDetailModel_RefreshKey_IgnoredDuringSearch(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	// Enter search mode first
+	model.EnterSearch()
+
+	// Press 'r' during search — should be treated as search input, not refresh
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	if model.loading {
+		t.Error("'r' during search should not trigger refresh")
+	}
+	// The 'r' should have been typed into the search input
+	if model.searchInput.Value() != "r" {
+		t.Errorf("Expected search input to contain 'r', got %q", model.searchInput.Value())
+	}
+}
+
+func TestDetailModel_SearchKey_EntersSearchMode(t *testing.T) {
+	timeline := &azdevops.Timeline{
+		ID: "test",
+		Records: []azdevops.TimelineRecord{
+			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+		},
+	}
+
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	model.SetTimeline(timeline)
+
+	if model.IsSearching() {
+		t.Fatal("Model should not be searching initially")
+	}
+
+	// Press 'f' to enter search
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+
+	if !model.IsSearching() {
+		t.Error("After 'f', model should be in search mode")
+	}
+	if cmd == nil {
+		t.Error("After 'f', expected a command to focus the search input")
+	}
+}
+
+func TestDetailModel_SearchKey_IgnoredWhenEmpty(t *testing.T) {
+	// 'f' should not enter search if there are no items
+	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	model := NewDetailModel(nil, run)
+	model.SetSize(80, 30)
+	// No timeline set — flatItems is empty
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+
+	if model.IsSearching() {
+		t.Error("'f' should not enter search when there are no items")
 	}
 }
 
