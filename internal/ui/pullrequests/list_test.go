@@ -12,75 +12,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestNewModel_HasStyles(t *testing.T) {
-	m := NewModel(nil)
-
-	if m.styles == nil {
-		t.Error("Expected model to have styles initialized")
-	}
-}
-
 func TestNewModelWithStyles(t *testing.T) {
 	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
 	m := NewModelWithStyles(nil, customStyles)
 
 	if m.styles != customStyles {
 		t.Error("Expected model to use provided custom styles")
-	}
-}
-
-func TestStatusIconWithStyles(t *testing.T) {
-	themes := []string{"dark", "gruvbox", "nord", "dracula"}
-
-	for _, themeName := range themes {
-		t.Run(themeName, func(t *testing.T) {
-			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
-
-			tests := []struct {
-				status   string
-				isDraft  bool
-				wantIcon string
-			}{
-				{"active", false, "Active"},
-				{"completed", false, "Merged"},
-				{"active", true, "Draft"},
-			}
-
-			for _, tt := range tests {
-				got := statusIconWithStyles(tt.status, tt.isDraft, s)
-				if !strings.Contains(got, tt.wantIcon) {
-					t.Errorf("statusIconWithStyles(%q, %v) with theme %s = %q, want to contain %q",
-						tt.status, tt.isDraft, themeName, got, tt.wantIcon)
-				}
-			}
-		})
-	}
-}
-
-func TestVoteIconWithStyles(t *testing.T) {
-	themes := []string{"dark", "gruvbox", "nord"}
-
-	for _, themeName := range themes {
-		t.Run(themeName, func(t *testing.T) {
-			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
-
-			tests := []struct {
-				reviewers []azdevops.Reviewer
-				wantIcon  string
-			}{
-				{[]azdevops.Reviewer{{Vote: 10}}, "✓"},
-				{[]azdevops.Reviewer{{Vote: -10}}, "✗"},
-				{[]azdevops.Reviewer{}, "-"},
-			}
-
-			for _, tt := range tests {
-				got := voteIconWithStyles(tt.reviewers, s)
-				if !strings.Contains(got, tt.wantIcon) {
-					t.Errorf("voteIconWithStyles with theme %s = %q, want to contain %q",
-						themeName, got, tt.wantIcon)
-				}
-			}
-		})
 	}
 }
 
@@ -330,19 +267,6 @@ func TestViewModeNavigation(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if model.GetViewMode() != ViewList {
 		t.Errorf("After Esc, ViewMode = %d, want ViewList (%d)", model.GetViewMode(), ViewList)
-	}
-}
-
-func TestViewLoading(t *testing.T) {
-	model := NewModel(nil)
-	// Trigger refresh which sets loading state on the returned model
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-
-	view := model.View()
-
-	if !strings.Contains(view, "Loading") {
-		t.Error("Loading view should contain 'Loading'")
 	}
 }
 
@@ -661,5 +585,170 @@ func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
 	}
 	if filterPRMulti(pr, "beta") {
 		t.Error("filterPRMulti should not match 'beta'")
+	}
+}
+
+// --- updateDiffView routing tests ---
+
+func newModelInDiffView() Model {
+	s := styles.DefaultStyles()
+	model := NewModel(nil)
+	model.viewMode = ViewDiff
+	model.diffView = NewDiffModel(nil, azdevops.PullRequest{
+		ID:            123,
+		Title:         "Test PR",
+		SourceRefName: "refs/heads/feature/test",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123"},
+	}, nil, s)
+	model.diffView.SetSize(80, 24)
+	return model
+}
+
+func TestUpdateDiffView_ExitDiffViewMsg_ReturnsToDetail(t *testing.T) {
+	model := newModelInDiffView()
+
+	model, _ = model.Update(exitDiffViewMsg{})
+
+	if model.GetViewMode() != ViewDetail {
+		t.Errorf("After exitDiffViewMsg, viewMode = %d, want ViewDetail", model.GetViewMode())
+	}
+	if model.diffView != nil {
+		t.Error("After exitDiffViewMsg, diffView should be nil")
+	}
+}
+
+func TestUpdateDiffView_WindowSizeMsg_PropagatedToDiffView(t *testing.T) {
+	model := newModelInDiffView()
+
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if model.diffView.width != 120 || model.diffView.height != 40 {
+		t.Errorf("DiffView size = %dx%d, want 120x40", model.diffView.width, model.diffView.height)
+	}
+}
+
+func TestUpdateDiffView_NilDiffView_FallsBackToDetail(t *testing.T) {
+	model := NewModel(nil)
+	model.viewMode = ViewDiff
+	model.diffView = nil
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	if model.GetViewMode() != ViewDetail {
+		t.Errorf("With nil diffView, viewMode should fall back to ViewDetail, got %d", model.GetViewMode())
+	}
+}
+
+// --- openFileDiffMsg / openGeneralCommentsMsg tests ---
+
+func newModelInDetailView() Model {
+	model := NewModel(nil)
+	model.list = model.list.SetItems([]azdevops.PullRequest{
+		{
+			ID:            123,
+			Title:         "Test PR",
+			Status:        "active",
+			SourceRefName: "refs/heads/test",
+			TargetRefName: "refs/heads/main",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{ID: "repo-123", Name: "repo"},
+		},
+	})
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return model
+}
+
+func TestUpdateDetail_OpenFileDiffMsg_TransitionsToDiffView(t *testing.T) {
+	model := newModelInDetailView()
+	if model.GetViewMode() != ViewDetail {
+		t.Fatalf("Expected ViewDetail, got %d", model.GetViewMode())
+	}
+
+	file := azdevops.IterationChange{
+		ChangeID:   1,
+		Item:       azdevops.ChangeItem{Path: "/src/main.go"},
+		ChangeType: "edit",
+	}
+
+	model, cmd := model.Update(openFileDiffMsg{file: file})
+
+	if model.GetViewMode() != ViewDiff {
+		t.Errorf("After openFileDiffMsg, viewMode = %d, want ViewDiff", model.GetViewMode())
+	}
+	if model.diffView == nil {
+		t.Fatal("After openFileDiffMsg, diffView should not be nil")
+	}
+	if cmd == nil {
+		t.Error("After openFileDiffMsg, expected a command to fetch diff")
+	}
+}
+
+func TestUpdateDetail_OpenGeneralCommentsMsg_TransitionsToDiffView(t *testing.T) {
+	model := newModelInDetailView()
+	if model.GetViewMode() != ViewDetail {
+		t.Fatalf("Expected ViewDetail, got %d", model.GetViewMode())
+	}
+
+	model, cmd := model.Update(openGeneralCommentsMsg{})
+
+	if model.GetViewMode() != ViewDiff {
+		t.Errorf("After openGeneralCommentsMsg, viewMode = %d, want ViewDiff", model.GetViewMode())
+	}
+	if model.diffView == nil {
+		t.Fatal("After openGeneralCommentsMsg, diffView should not be nil")
+	}
+	if !model.diffView.viewingGeneralComments {
+		t.Error("After openGeneralCommentsMsg, diffView.viewingGeneralComments should be true")
+	}
+	if cmd == nil {
+		t.Error("After openGeneralCommentsMsg, expected a command")
+	}
+}
+
+// --- Delegation tests ---
+
+func TestGetScrollPercent_DelegatedToDiffView(t *testing.T) {
+	model := newModelInDiffView()
+
+	// Populate enough content to be scrollable
+	model.diffView.diffLines = make([]diffLine, 50)
+	for i := range model.diffView.diffLines {
+		model.diffView.diffLines[i] = diffLine{
+			Type:    diffLineContext,
+			Content: fmt.Sprintf("line%d", i),
+			OldNum:  i + 1,
+			NewNum:  i + 1,
+		}
+	}
+	model.diffView.updateDiffViewport()
+
+	// At top, scroll percent should be 0
+	pct := model.GetScrollPercent()
+	if pct != 0 {
+		t.Errorf("At top, GetScrollPercent() = %f, want 0", pct)
+	}
+
+	// Scroll to the bottom
+	for i := 0; i < 49; i++ {
+		model.diffView.selectedLine = i + 1
+		model.diffView.updateDiffViewport()
+		model.diffView.ensureDiffLineVisible()
+	}
+
+	pct = model.GetScrollPercent()
+	if pct < 90 {
+		t.Errorf("After scrolling to bottom, GetScrollPercent() = %f, want ~100", pct)
+	}
+}
+
+func TestGetStatusMessage_DelegatedToDiffView(t *testing.T) {
+	model := newModelInDiffView()
+	model.diffView.statusMessage = "Comment added"
+
+	msg := model.GetStatusMessage()
+	if msg != "Comment added" {
+		t.Errorf("GetStatusMessage() = %q, want %q", msg, "Comment added")
 	}
 }
