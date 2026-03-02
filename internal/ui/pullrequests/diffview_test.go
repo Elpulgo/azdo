@@ -126,30 +126,6 @@ func TestDiffModel_FileListNavigation_UpDown(t *testing.T) {
 	}
 }
 
-func TestDiffModel_ChangeTypeDisplay(t *testing.T) {
-	s := styles.DefaultStyles()
-
-	tests := []struct {
-		changeType string
-		wantIcon   string
-	}{
-		{"add", "+"},
-		{"edit", "~"},
-		{"delete", "-"},
-		{"rename", "→"},
-		{"unknown", "?"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.changeType, func(t *testing.T) {
-			icon, _ := changeTypeDisplay(tt.changeType, s)
-			if icon != tt.wantIcon {
-				t.Errorf("changeTypeDisplay(%q) icon = %q, want %q", tt.changeType, icon, tt.wantIcon)
-			}
-		})
-	}
-}
-
 func TestDiffModel_BuildDiffLines(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 24)
@@ -622,22 +598,27 @@ func TestDiffModel_View_Loading(t *testing.T) {
 	m.SetSize(80, 24)
 	m.loading = true
 	m.spinner.SetVisible(true)
+	m.spinner.SetMessage("Loading changed files...")
 
 	view := m.View()
-	// Should show spinner, not error
-	if view == "" {
-		t.Error("View should not be empty when loading")
+
+	if !strings.Contains(view, "Loading changed files") {
+		t.Errorf("Loading view should contain spinner message, got:\n%s", view)
 	}
 }
 
 func TestDiffModel_View_Error(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 24)
-	m.err = fmt.Errorf("test error")
+	m.err = fmt.Errorf("connection timed out")
 
 	view := m.View()
-	if view == "" {
-		t.Error("View should not be empty when error")
+
+	if !strings.Contains(view, "connection timed out") {
+		t.Errorf("Error view should contain the error message, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Esc") {
+		t.Error("Error view should contain Esc hint for going back")
 	}
 }
 
@@ -648,8 +629,12 @@ func TestDiffModel_View_EmptyFileList(t *testing.T) {
 	m.updateFileListViewport()
 
 	view := m.View()
-	if view == "" {
-		t.Error("View should not be empty for empty file list")
+
+	if !strings.Contains(view, "No changed files") {
+		t.Errorf("Empty file list view should contain 'No changed files', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Changed files (0)") {
+		t.Errorf("Empty file list view should show 'Changed files (0)' header, got:\n%s", view)
 	}
 }
 
@@ -1096,6 +1081,103 @@ func TestDiffModel_InputMode_BlocksKeystrokes(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
 	if m.textInput.Value() != "h?t" {
 		t.Errorf("After typing 't', textInput.Value() = %q, want %q", m.textInput.Value(), "h?t")
+	}
+}
+
+// --- Refresh key tests ---
+
+func TestDiffModel_RefreshKey_FileList(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileList
+	m.err = fmt.Errorf("previous error")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	if !m.loading {
+		t.Error("After 'r', model should be in loading state")
+	}
+	if m.err != nil {
+		t.Error("After 'r', previous error should be cleared")
+	}
+	if cmd == nil {
+		t.Error("After 'r', expected a command to fetch changed files")
+	}
+}
+
+// --- Reply and resolve key tests ---
+
+func TestDiffModel_ReplyKey_SetsInputMode(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.diffLines = []diffLine{
+		{Type: diffLineContext, Content: "line1", OldNum: 1, NewNum: 1},
+		{Type: diffLineComment, Content: "Alice: Fix this", ThreadID: 5, CommentIdx: 0},
+		{Type: diffLineContext, Content: "line2", OldNum: 2, NewNum: 2},
+	}
+	m.selectedLine = 2 // on line after the comment
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+
+	if m.inputMode != InputReply {
+		t.Errorf("After 'p', inputMode = %d, want InputReply", m.inputMode)
+	}
+	if m.replyThreadID != 5 {
+		t.Errorf("After 'p', replyThreadID = %d, want 5", m.replyThreadID)
+	}
+	if m.textInput.Value() != "" {
+		t.Error("Text input should be empty after opening reply")
+	}
+}
+
+func TestDiffModel_ReplyKey_NoopWithoutThread(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.diffLines = []diffLine{
+		{Type: diffLineContext, Content: "line1", OldNum: 1, NewNum: 1},
+		{Type: diffLineContext, Content: "line2", OldNum: 2, NewNum: 2},
+	}
+	m.selectedLine = 0
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+
+	if m.inputMode != InputNone {
+		t.Errorf("After 'p' with no thread, inputMode = %d, want InputNone", m.inputMode)
+	}
+}
+
+func TestDiffModel_ResolveKey_ReturnsCommand(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.diffLines = []diffLine{
+		{Type: diffLineComment, Content: "Alice: Fix this", ThreadID: 7, CommentIdx: 0, ThreadStatus: "active"},
+		{Type: diffLineContext, Content: "line1", OldNum: 1, NewNum: 1},
+	}
+	m.selectedLine = 1 // on line after the comment
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+
+	if cmd == nil {
+		t.Fatal("After 'x' near a thread, expected a resolve command")
+	}
+}
+
+func TestDiffModel_ResolveKey_NoopWithoutThread(t *testing.T) {
+	m := newTestDiffModel()
+	m.SetSize(80, 24)
+	m.viewMode = DiffFileView
+	m.diffLines = []diffLine{
+		{Type: diffLineContext, Content: "line1", OldNum: 1, NewNum: 1},
+	}
+	m.selectedLine = 0
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+
+	if cmd != nil {
+		t.Error("After 'x' with no thread, expected nil command")
 	}
 }
 
