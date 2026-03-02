@@ -82,15 +82,44 @@ func TestStatusBar_View_ContainsProject(t *testing.T) {
 	}
 }
 
-func TestStatusBar_View_Connected_ShowsConnected(t *testing.T) {
+func TestStatusBar_View_Connected_ShowsIconOnly(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetState(polling.StateConnected)
 	sb.SetWidth(120)
 
 	view := sb.View()
 
-	if !strings.Contains(strings.ToLower(view), "connected") {
-		t.Error("view should indicate connected state")
+	// Connected state should show the icon
+	if !strings.Contains(view, "●") {
+		t.Error("view should contain connected icon ●")
+	}
+	// Connected state should NOT show the word "connected"
+	if strings.Contains(strings.ToLower(view), "connected") {
+		t.Error("connected state should show icon only, not the word 'connected'")
+	}
+}
+
+func TestStatusBar_View_NonConnectedStates_ShowText(t *testing.T) {
+	tests := []struct {
+		state      polling.ConnectionState
+		expectText string
+	}{
+		{polling.StateConnecting, "connecting"},
+		{polling.StateDisconnected, "disconnected"},
+		{polling.StateError, "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			sb := NewStatusBar(styles.DefaultStyles())
+			sb.SetState(tt.state)
+			sb.SetWidth(120)
+
+			view := sb.View()
+			if !strings.Contains(strings.ToLower(view), tt.expectText) {
+				t.Errorf("state %s should show text '%s'", tt.state, tt.expectText)
+			}
+		})
 	}
 }
 
@@ -233,24 +262,15 @@ func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
 	}
 }
 
-func TestStatusBar_SetConfigPath(t *testing.T) {
+func TestStatusBar_View_DoesNotContainConfigPath(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
-	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
-
-	if sb.configPath != "/home/user/.config/azdo-tui/config.yaml" {
-		t.Errorf("expected configPath to be set, got '%s'", sb.configPath)
-	}
-}
-
-func TestStatusBar_View_ContainsConfigPath(t *testing.T) {
-	sb := NewStatusBar(styles.DefaultStyles())
-	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
 	sb.SetWidth(200)
 
 	view := sb.View()
 
-	if !strings.Contains(view, "config.yaml") {
-		t.Error("view should contain config path")
+	// Config path should never appear in the status bar
+	if strings.Contains(view, "config.yaml") {
+		t.Error("status bar should NOT contain config path")
 	}
 }
 

@@ -25,11 +25,12 @@ type HelpSection struct {
 
 // HelpModal is an overlay that displays available keybindings.
 type HelpModal struct {
-	styles   *styles.Styles
-	visible  bool
-	width    int
-	height   int
-	sections []HelpSection
+	styles     *styles.Styles
+	visible    bool
+	width      int
+	height     int
+	sections   []HelpSection
+	configPath string
 }
 
 // NewHelpModal creates a new HelpModal with default keybindings.
@@ -96,6 +97,11 @@ func (h *HelpModal) IsVisible() bool {
 func (h *HelpModal) SetSize(width, height int) {
 	h.width = width
 	h.height = height
+}
+
+// SetConfigPath sets the config file path to display in the help modal.
+func (h *HelpModal) SetConfigPath(path string) {
+	h.configPath = path
 }
 
 // AddSection adds a custom section to the help modal.
@@ -208,6 +214,26 @@ func (h *HelpModal) View() string {
 			content.WriteString(line)
 			content.WriteString("\n")
 		}
+	}
+
+	// Config path info section
+	if h.configPath != "" {
+		infoSectionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
+			Bold(true).
+			MarginTop(1).
+			Width(contentWidth).
+			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+		infoValueStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+			Width(contentWidth)
+
+		content.WriteString(infoSectionStyle.Render("Info"))
+		content.WriteString("\n")
+		content.WriteString(infoValueStyle.Render("Config: " + h.configPath))
+		content.WriteString("\n")
 	}
 
 	// Footer hint

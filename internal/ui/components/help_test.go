@@ -162,3 +162,28 @@ func TestHelpModal_AddSection(t *testing.T) {
 		t.Error("view should contain custom binding description")
 	}
 }
+
+func TestHelpModal_SetConfigPath_ShowsInView(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("help modal should display config path when set")
+	}
+}
+
+func TestHelpModal_NoConfigPath_NotShown(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if strings.Contains(view, "Config") {
+		t.Error("help modal should not show config section when no path set")
+	}
+}

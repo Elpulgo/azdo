@@ -19,7 +19,6 @@ type StatusBar struct {
 	project        string
 	state          polling.ConnectionState
 	keybindings    string
-	configPath     string
 	scrollPercent  float64
 	showScroll     bool
 	width          int
@@ -71,11 +70,6 @@ func (s *StatusBar) SetKeybindings(bindings string) {
 // SetWidth sets the width of the status bar.
 func (s *StatusBar) SetWidth(width int) {
 	s.width = width
-}
-
-// SetConfigPath sets the config file path to display.
-func (s *StatusBar) SetConfigPath(path string) {
-	s.configPath = path
 }
 
 // SetScrollPercent sets the scroll percentage (0-100).
@@ -190,10 +184,6 @@ func (s *StatusBar) View() string {
 		parts = append(parts, orgProj)
 	}
 
-	if configPath := s.renderConfigPath(); configPath != "" {
-		parts = append(parts, configPath)
-	}
-
 	if scrollPercent := s.renderScrollPercent(); scrollPercent != "" {
 		parts = append(parts, scrollPercent)
 	}
@@ -261,19 +251,6 @@ func (s *StatusBar) renderOrgProject() string {
 	return orgProjectStyle.Render(s.project)
 }
 
-// renderConfigPath renders the config file path.
-func (s *StatusBar) renderConfigPath() string {
-	if s.configPath == "" {
-		return ""
-	}
-	configStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
-		Background(lipgloss.Color(s.styles.Theme.Background)).
-		Bold(true)
-
-	return configStyle.Render(s.configPath)
-}
-
 // renderScrollPercent renders the scroll percentage indicator.
 func (s *StatusBar) renderScrollPercent() string {
 	if !s.showScroll {
@@ -286,7 +263,7 @@ func (s *StatusBar) renderScrollPercent() string {
 func (s *StatusBar) renderConnectionState() string {
 	switch s.state {
 	case polling.StateConnected:
-		return s.styles.Connected.Render("● connected")
+		return s.styles.Connected.Render("●")
 	case polling.StateConnecting:
 		return s.styles.Connecting.Render("◐ connecting")
 	case polling.StateDisconnected:

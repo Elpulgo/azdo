@@ -125,16 +125,16 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		statusBar.SetProject(cfg.DisplayNameFor(cfg.Projects[0]))
 	}
 
-	// Set config path if available
-	if configPath, err := config.GetPath(); err == nil {
-		statusBar.SetConfigPath(configPath)
-	}
-
 	// Create context bar for view-specific info
 	contextBar := components.NewContextBar(appStyles)
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
+
+	// Set config path in help modal
+	if configPath, err := config.GetPath(); err == nil {
+		helpModal.SetConfigPath(configPath)
+	}
 
 	// Create error modal
 	errorModal := components.NewErrorModal(appStyles)
@@ -378,9 +378,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetProject(m.config.DisplayNameFor(m.config.Projects[0]))
 		}
 		m.statusBar.SetWidth(m.width)
-		if configPath, err := config.GetPath(); err == nil {
-			m.statusBar.SetConfigPath(configPath)
-		}
 
 		m.logo = components.NewLogo(m.styles)
 
@@ -388,6 +385,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contextBar.SetWidth(m.width)
 
 		m.helpModal = components.NewHelpModal(m.styles)
+		if configPath, err := config.GetPath(); err == nil {
+			m.helpModal.SetConfigPath(configPath)
+		}
 		m.helpModal.SetSize(m.width, m.height)
 
 		m.errorModal = components.NewErrorModal(m.styles)

@@ -103,10 +103,10 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	updated, _ := m.Update(msg)
 	m = updated.(Model)
 
-	// Status bar should show connected
+	// Status bar should show connected icon (● only, no text)
 	view := m.View()
-	if !strings.Contains(strings.ToLower(view), "connected") {
-		t.Error("should show connected state after successful update")
+	if !strings.Contains(view, "●") {
+		t.Error("should show connected icon ● after successful update")
 	}
 }
 
@@ -264,7 +264,7 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 }
 
-func TestModel_StatusBarShowsConfigPath(t *testing.T) {
+func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -277,15 +277,19 @@ func TestModel_StatusBarShowsConfigPath(t *testing.T) {
 	m.width = 200
 	m.height = 30
 
-	// Update with window size to initialize status bar width
+	// Update with window size
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	m = updated.(Model)
+
+	// Open help modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	m = updated.(Model)
 
 	view := m.View()
 
-	// Should contain config.yaml somewhere in the view
+	// Config path should appear in the help modal
 	if !strings.Contains(view, "config.yaml") {
-		t.Error("view should contain config file path")
+		t.Error("help modal should contain config file path")
 	}
 }
 
@@ -900,8 +904,9 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	if strings.Contains(view, "connecting") {
 		t.Error("Status bar should not show 'connecting' after theme switch when already connected")
 	}
-	if !strings.Contains(view, "connected") {
-		t.Error("Status bar should still show 'connected' after theme switch")
+	// Connected state shows icon only (●), not the word "connected"
+	if !strings.Contains(view, "●") {
+		t.Error("Status bar should show connected icon ● after theme switch")
 	}
 }
 
