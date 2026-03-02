@@ -549,6 +549,9 @@ func (m Model) contentViewSize() tea.WindowSizeMsg {
 // the active content view if it changed (e.g., after tab switch or
 // view mode change).
 func (m *Model) resizeActiveViewIfNeeded() {
+	// Sync context items on the status bar BEFORE measuring, so the
+	// footer height reflects the current view mode (list vs detail).
+	m.syncStatusBarContext()
 	newFooterRows := m.measureFooterHeight()
 	if newFooterRows == m.footerRows {
 		return
@@ -562,6 +565,32 @@ func (m *Model) resizeActiveViewIfNeeded() {
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
 	default:
 		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
+	}
+}
+
+// syncStatusBarContext reads context items from the active view and updates
+// the status bar. This ensures measureFooterHeight uses the correct state
+// during Update, not stale state from the previous View call.
+func (m *Model) syncStatusBarContext() {
+	var hasContextBar bool
+	var contextItems []components.ContextItem
+
+	switch m.activeTab {
+	case TabPullRequests:
+		hasContextBar = m.pullRequestsView.HasContextBar()
+		contextItems = m.pullRequestsView.GetContextItems()
+	case TabWorkItems:
+		hasContextBar = m.workItemsView.HasContextBar()
+		contextItems = m.workItemsView.GetContextItems()
+	default:
+		hasContextBar = m.pipelinesView.HasContextBar()
+		contextItems = m.pipelinesView.GetContextItems()
+	}
+
+	if hasContextBar {
+		m.statusBar.SetContextItems(contextItems)
+	} else {
+		m.statusBar.ClearContextItems()
 	}
 }
 

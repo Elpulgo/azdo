@@ -1298,6 +1298,64 @@ func TestDetailModel_ViewShowsVotePicker(t *testing.T) {
 	}
 }
 
+func TestDetailModel_GetContextItems(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 123, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+
+	items := model.GetContextItems()
+	if len(items) == 0 {
+		t.Fatal("GetContextItems() should return items")
+	}
+
+	// Should include enter/open for opening files
+	found := false
+	for _, item := range items {
+		if item.Key == "enter" && item.Description == "open" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include 'enter open'")
+	}
+
+	// Should include vote
+	found = false
+	for _, item := range items {
+		if item.Key == "v" && item.Description == "vote" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include 'v vote'")
+	}
+
+	// Should include navigate
+	found = false
+	for _, item := range items {
+		if item.Key == "↑↓" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include '↑↓ navigate'")
+	}
+
+	// Should include refresh
+	found = false
+	for _, item := range items {
+		if item.Key == "r" && item.Description == "refresh" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include 'r refresh'")
+	}
+}
+
 func TestChangeTypeDisplay(t *testing.T) {
 	s := styles.DefaultStyles()
 	tests := []struct {

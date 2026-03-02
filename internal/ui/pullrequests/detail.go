@@ -529,7 +529,10 @@ func (m *DetailModel) SelectedFile() *azdevops.IterationChange {
 // GetContextItems returns context items for the detail view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
-		{Key: "v", Description: "Vote"},
+		{Key: "enter", Description: "open"},
+		{Key: "↑↓", Description: "navigate"},
+		{Key: "v", Description: "vote"},
+		{Key: "r", Description: "refresh"},
 	}
 }
 
