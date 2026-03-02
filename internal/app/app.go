@@ -51,9 +51,6 @@ const (
 	// tabBarRows is the vertical space consumed by the bordered tab bar
 	// (which includes the logo): top border (1) + 3 content rows + bottom border (1) = 5.
 	tabBarRows = 5
-
-	// contextBarJoinNewline accounts for the newline joining context bar and status bar.
-	contextBarJoinNewline = 1
 )
 
 // updateCheckMsg is sent when the background version check completes.
@@ -72,7 +69,6 @@ type Model struct {
 	workItemsView    workitems.Model
 	logo             *components.Logo
 	statusBar        *components.StatusBar
-	contextBar       *components.ContextBar
 	helpModal        *components.HelpModal
 	errorModal       *components.ErrorModal
 	themePicker      components.ThemePicker
@@ -125,9 +121,6 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		statusBar.SetProject(cfg.DisplayNameFor(cfg.Projects[0]))
 	}
 
-	// Create context bar for view-specific info
-	contextBar := components.NewContextBar(appStyles)
-
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
@@ -170,7 +163,6 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(client, appStyles),
 		statusBar:        statusBar,
-		contextBar:       contextBar,
 		helpModal:        helpModal,
 		errorModal:       errorModal,
 		themePicker:      themePicker,
@@ -381,9 +373,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.logo = components.NewLogo(m.styles)
 
-		m.contextBar = components.NewContextBar(m.styles)
-		m.contextBar.SetWidth(m.width)
-
 		m.helpModal = components.NewHelpModal(m.styles)
 		if configPath, err := config.GetPath(); err == nil {
 			m.helpModal.SetConfigPath(configPath)
@@ -427,7 +416,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.statusBar.SetWidth(msg.Width)
-		m.contextBar.SetWidth(msg.Width)
 		m.errorModal.SetSize(msg.Width, msg.Height)
 		m.helpModal.SetSize(msg.Width, msg.Height)
 		m.themePicker.SetSize(msg.Width, msg.Height)
@@ -577,27 +565,10 @@ func (m *Model) resizeActiveViewIfNeeded() {
 	}
 }
 
-// measureFooterHeight measures the actual footer height based on the
-// active view's context bar state. Returns the number of lines the footer
-// will occupy when rendered.
+// measureFooterHeight measures the actual footer height. The footer is always
+// just the status bar (context items are now rendered inline in the status bar).
 func (m Model) measureFooterHeight() int {
-	statusRows := strings.Count(m.statusBar.View(), "\n") + 1
-
-	hasContextBar := false
-	switch m.activeTab {
-	case TabPullRequests:
-		hasContextBar = m.pullRequestsView.HasContextBar()
-	case TabWorkItems:
-		hasContextBar = m.workItemsView.HasContextBar()
-	default:
-		hasContextBar = m.pipelinesView.HasContextBar()
-	}
-
-	if hasContextBar {
-		contextRows := strings.Count(m.contextBar.View(), "\n") + 1
-		return contextRows + contextBarJoinNewline + statusRows
-	}
-	return statusRows
+	return strings.Count(m.statusBar.View(), "\n") + 1
 }
 
 // renderTabBar renders the tab header content wrapped in its own bordered box,
@@ -701,33 +672,25 @@ func (m Model) View() string {
 		m.statusBar.ClearFilterLabel()
 	}
 
-	// Build footer section
-	var footer string
-
-	// Show context bar above footer when in detail/log views
+	// Pass context items to status bar (replaces default keybindings in detail views)
 	if hasContextBar {
-		m.contextBar.Clear()
-		m.contextBar.SetItems(contextItems)
-		m.contextBar.ShowScrollPercent(true)
-		m.contextBar.SetScrollPercent(scrollPercent)
-
+		m.statusBar.SetContextItems(contextItems)
 		if statusMessage != "" {
-			m.contextBar.SetStatus(statusMessage)
+			m.statusBar.SetContextStatus(statusMessage)
 		}
-
-		m.statusBar.ShowScrollPercent(false)
-		footer = m.contextBar.View() + "\n" + m.statusBar.View()
 	} else {
-		// Show scroll percent in status bar for views without context bar
-		// (e.g., PR detail view which has scrollable content)
-		if scrollPercent > 0 {
-			m.statusBar.ShowScrollPercent(true)
-			m.statusBar.SetScrollPercent(scrollPercent)
-		} else {
-			m.statusBar.ShowScrollPercent(false)
-		}
-		footer = m.statusBar.View()
+		m.statusBar.ClearContextItems()
 	}
+
+	// Pass scroll percent to status bar
+	if scrollPercent > 0 {
+		m.statusBar.ShowScrollPercent(true)
+		m.statusBar.SetScrollPercent(scrollPercent)
+	} else {
+		m.statusBar.ShowScrollPercent(false)
+	}
+
+	footer := m.statusBar.View()
 
 	// Render content in its own bordered box, using the same dimensions
 	// that were used to size the content views.
