@@ -19,36 +19,12 @@ func newTestTable() Model {
 	)
 }
 
-func TestFKeyDoesNotTriggerPageDown(t *testing.T) {
-	m := newTestTable()
-
-	if m.Cursor() != 0 {
-		t.Fatalf("Expected cursor at 0, got %d", m.Cursor())
-	}
-
-	// Press 'f' — should NOT move cursor
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-
-	if m.Cursor() != 0 {
-		t.Errorf("Pressing 'f' should not move cursor, but cursor is at %d", m.Cursor())
-	}
-}
-
-func TestPageDownStillWorksWithPgDnKey(t *testing.T) {
-	m := newTestTable()
-
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-
-	if m.Cursor() == 0 {
-		t.Error("Pressing pgdown should move cursor, but it stayed at 0")
-	}
-}
-
 func TestUndocumentedKeysDoNotNavigate(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  tea.KeyMsg
 	}{
+		{"f does not page down", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}},
 		{"space does not page down", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}},
 		{"b does not page up", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}}},
 		{"u does not half page up", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}}},
@@ -115,13 +91,29 @@ func TestDocumentedKeysStillWork(t *testing.T) {
 func TestDefaultKeyMapHasNoHiddenBindings(t *testing.T) {
 	km := DefaultKeyMap()
 
-	// PageUp should only have pgup
-	if len(km.PageUp.Keys()) != 1 || km.PageUp.Keys()[0] != "pgup" {
-		t.Errorf("PageUp should only bind 'pgup', got %v", km.PageUp.Keys())
+	tests := []struct {
+		name     string
+		keys     []string
+		expected []string
+	}{
+		{"LineUp", km.LineUp.Keys(), []string{"up", "k"}},
+		{"LineDown", km.LineDown.Keys(), []string{"down", "j"}},
+		{"PageUp", km.PageUp.Keys(), []string{"pgup"}},
+		{"PageDown", km.PageDown.Keys(), []string{"pgdown"}},
 	}
 
-	// PageDown should only have pgdown
-	if len(km.PageDown.Keys()) != 1 || km.PageDown.Keys()[0] != "pgdown" {
-		t.Errorf("PageDown should only bind 'pgdown', got %v", km.PageDown.Keys())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.keys) != len(tt.expected) {
+				t.Errorf("%s should bind %v, got %v", tt.name, tt.expected, tt.keys)
+				return
+			}
+			for i, k := range tt.keys {
+				if k != tt.expected[i] {
+					t.Errorf("%s should bind %v, got %v", tt.name, tt.expected, tt.keys)
+					return
+				}
+			}
+		})
 	}
 }
