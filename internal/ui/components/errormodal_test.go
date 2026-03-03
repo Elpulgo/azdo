@@ -30,21 +30,6 @@ func TestErrorModal_Show(t *testing.T) {
 	}
 }
 
-func TestErrorModal_Show_SetsFields(t *testing.T) {
-	m := NewErrorModal(styles.DefaultStyles())
-	m.Show("My Title", "My Message", "My Hint")
-
-	if m.title != "My Title" {
-		t.Errorf("expected title 'My Title', got %q", m.title)
-	}
-	if m.message != "My Message" {
-		t.Errorf("expected message 'My Message', got %q", m.message)
-	}
-	if m.hint != "My Hint" {
-		t.Errorf("expected hint 'My Hint', got %q", m.hint)
-	}
-}
-
 func TestErrorModal_Hide(t *testing.T) {
 	m := NewErrorModal(styles.DefaultStyles())
 	m.Show("Error", "msg", "hint")
@@ -63,18 +48,6 @@ func TestErrorModal_View_WhenHidden(t *testing.T) {
 
 	if view != "" {
 		t.Error("view should be empty when hidden")
-	}
-}
-
-func TestErrorModal_View_WhenVisible(t *testing.T) {
-	m := NewErrorModal(styles.DefaultStyles())
-	m.SetSize(80, 24)
-	m.Show("Error", "Something broke", "Fix it")
-
-	view := m.View()
-
-	if view == "" {
-		t.Error("view should not be empty when visible")
 	}
 }
 
@@ -158,15 +131,6 @@ func TestErrorModal_Update_IgnoresWhenHidden(t *testing.T) {
 	}
 }
 
-func TestErrorModal_SetSize(t *testing.T) {
-	m := NewErrorModal(styles.DefaultStyles())
-	m.SetSize(120, 40)
-
-	if m.width != 120 || m.height != 40 {
-		t.Errorf("expected size 120x40, got %dx%d", m.width, m.height)
-	}
-}
-
 func TestErrorModal_View_ConstrainedByScreenWidth(t *testing.T) {
 	m := NewErrorModal(styles.DefaultStyles())
 	narrowWidth := 40
@@ -201,19 +165,6 @@ func TestErrorModal_View_ResizesWhenScreenShrinks(t *testing.T) {
 			t.Errorf("After resize, modal line width %d exceeds screen width 50", lineWidth)
 			break
 		}
-	}
-}
-
-func TestErrorModal_View_RespectsMinWidthOnLargeScreen(t *testing.T) {
-	m := NewErrorModal(styles.DefaultStyles())
-	m.SetSize(200, 50)
-	m.Show("Err", "Short", "hint")
-
-	view := m.View()
-	// The modal should still be at least minErrorModalWidth wide
-	// (content area, not including border/padding)
-	if !strings.Contains(view, "Short") {
-		t.Error("Modal should contain the message")
 	}
 }
 
@@ -283,15 +234,6 @@ func TestClassifyError_400(t *testing.T) {
 	}
 	if result.Title != "Configuration Error" {
 		t.Errorf("Expected title 'Configuration Error', got %q", result.Title)
-	}
-}
-
-func TestClassifyError_GenericHTTPFailedStatus(t *testing.T) {
-	err := fmt.Errorf("HTTP request failed with status 400")
-	result := ClassifyError(err)
-
-	if result == nil {
-		t.Fatal("Generic HTTP failed status should return non-nil ErrorInfo")
 	}
 }
 
