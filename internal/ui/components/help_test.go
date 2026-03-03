@@ -91,6 +91,43 @@ func TestHelpModal_View_ContainsKeybindings(t *testing.T) {
 	}
 }
 
+func TestHelpModal_View_ContainsCodeReviewSection(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.Show()
+
+	view := h.View()
+	lower := strings.ToLower(view)
+
+	if !strings.Contains(lower, "code review") {
+		t.Error("help modal should contain 'Code Review' section")
+	}
+	for _, desc := range []string{"create new comment", "reply to nearest thread", "resolve nearest thread"} {
+		if !strings.Contains(lower, desc) {
+			t.Errorf("help modal should contain code review binding: %s", desc)
+		}
+	}
+}
+
+func TestHelpModal_View_ContainsLogViewerSection(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.Show()
+
+	view := h.View()
+	lower := strings.ToLower(view)
+
+	if !strings.Contains(lower, "log viewer") {
+		t.Error("help modal should contain 'Log Viewer' section")
+	}
+	if !strings.Contains(lower, "go to top") {
+		t.Error("help modal should contain 'Go to top' binding")
+	}
+	if !strings.Contains(lower, "go to bottom") {
+		t.Error("help modal should contain 'Go to bottom' binding")
+	}
+}
+
 func TestHelpModal_Update_EscHides(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.Show()

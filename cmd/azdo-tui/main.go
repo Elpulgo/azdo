@@ -98,6 +98,16 @@ Keyboard shortcuts (in TUI):
     ?            Toggle help overlay
     q            Quit
 
+  Code Review (PR diff):
+    c            Create new comment
+    p            Reply to nearest thread
+    x            Resolve nearest thread
+    n / N        Jump to next / previous comment
+
+  Log Viewer (pipelines):
+    g            Go to top
+    G            Go to bottom
+
 For more information, visit: https://github.com/Elpulgo/azdo
 `, version, configPath)
 

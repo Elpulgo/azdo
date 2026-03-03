@@ -64,10 +64,27 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 					{Key: "m", Description: "Toggle my items (work items)"},
 					{Key: "r", Description: "Refresh data"},
 					{Key: "v", Description: "Vote on PR (detail view)"},
-				{Key: "s", Description: "Change work item state (detail view)"},
+					{Key: "s", Description: "Change work item state (detail view)"},
 					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},
 					{Key: "q", Description: "Quit application"},
+				},
+			},
+			{
+				Title: "Code Review (PR diff)",
+				Bindings: []HelpBinding{
+					{Key: "c", Description: "Create new comment"},
+					{Key: "p", Description: "Reply to nearest thread"},
+					{Key: "x", Description: "Resolve nearest thread"},
+					{Key: "n", Description: "Jump to next comment"},
+					{Key: "N", Description: "Jump to previous comment"},
+				},
+			},
+			{
+				Title: "Log Viewer (pipelines)",
+				Bindings: []HelpBinding{
+					{Key: "g", Description: "Go to top"},
+					{Key: "G", Description: "Go to bottom"},
 				},
 			},
 		},
