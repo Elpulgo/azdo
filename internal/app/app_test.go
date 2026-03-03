@@ -15,6 +15,25 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestFormatVersionInfo(t *testing.T) {
+	tests := []struct {
+		version string
+		commit  string
+		want    string
+	}{
+		{"1.2.3", "abc1234", "1.2.3 (abc1234)"},
+		{"dev", "none", "dev"},
+		{"0.1.0", "", "0.1.0"},
+		{"2.0.0", "deadbeef", "2.0.0 (deadbeef)"},
+	}
+	for _, tt := range tests {
+		got := formatVersionInfo(tt.version, tt.commit)
+		if got != tt.want {
+			t.Errorf("formatVersionInfo(%q, %q) = %q, want %q", tt.version, tt.commit, got, tt.want)
+		}
+	}
+}
+
 func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "myorg",
@@ -24,7 +43,7 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -51,7 +70,7 @@ func TestModel_HandlesPollingTick(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 
 	// Send a tick message
 	_, cmd := m.Update(polling.TickMsg{})
@@ -71,7 +90,7 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -100,7 +119,7 @@ func TestModel_HandlesPipelineRunsUpdated_Error(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -130,7 +149,7 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	cmd := m.Init()
 
 	// Should return commands for initialization
@@ -148,7 +167,7 @@ func TestModel_DefaultTab_IsPullRequests(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 
 	if m.activeTab != TabPullRequests {
 		t.Errorf("Default tab should be TabPullRequests, got %d", m.activeTab)
@@ -164,7 +183,7 @@ func TestModel_TabSwitching_Key1_IsPullRequests(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -188,7 +207,7 @@ func TestModel_TabSwitching_Key2_IsWorkItems(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -210,7 +229,7 @@ func TestModel_TabSwitching_Key3_IsPipelines(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -232,7 +251,7 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -254,7 +273,7 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 200
 	m.height = 30
 
@@ -283,7 +302,7 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -308,7 +327,7 @@ func TestModel_View_HasBorderedTabBar(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -332,7 +351,7 @@ func TestModel_View_HasBorderedContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -358,7 +377,7 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -388,7 +407,7 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 
 	// Simulate window size first
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -458,7 +477,7 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	var client *azdevops.MultiClient
 
 	terminalHeight := 40
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: terminalHeight})
 	m = updated.(Model)
@@ -544,7 +563,7 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	terminalHeights := []int{24, 30, 40, 50}
 	for _, termHeight := range terminalHeights {
 		t.Run(fmt.Sprintf("height_%d", termHeight), func(t *testing.T) {
-			m := NewModel(client, cfg, "dev")
+			m := NewModel(client, cfg, "dev", "")
 
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: termHeight})
 			m = updated.(Model)
@@ -594,7 +613,7 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
@@ -661,7 +680,7 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 
 	// Set up window size
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -718,7 +737,7 @@ func TestModel_View_ShowsLogo(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -742,7 +761,7 @@ func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -769,7 +788,7 @@ func TestModel_UpdateCheckMsg_ShowsNotification(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "1.0.0")
+	m := NewModel(client, cfg, "1.0.0", "")
 	m.width = 120
 	m.height = 30
 
@@ -801,7 +820,7 @@ func TestModel_CriticalErrorMsg_ShowsErrorModal(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -831,7 +850,7 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -874,7 +893,7 @@ func TestModel_ThemeSwitch_PreservesWarningMessage(t *testing.T) {
 	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -895,6 +914,64 @@ func TestModel_ThemeSwitch_PreservesWarningMessage(t *testing.T) {
 	}
 }
 
+func TestModel_HelpModalShowsVersionInfo(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "1.5.0", "abc1234")
+	m.width = 200
+	m.height = 30
+
+	// Update with window size
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	m = updated.(Model)
+
+	// Open help modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	if !strings.Contains(view, "1.5.0") {
+		t.Error("help modal should contain version number")
+	}
+	if !strings.Contains(view, "abc1234") {
+		t.Error("help modal should contain commit hash")
+	}
+}
+
+func TestModel_HelpModalShowsDevVersion(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "none")
+	m.width = 200
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	m = updated.(Model)
+
+	// Open help modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	if !strings.Contains(view, "dev") {
+		t.Error("help modal should show 'dev' version")
+	}
+}
+
 func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -904,7 +981,7 @@ func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "2.0.0")
+	m := NewModel(client, cfg, "2.0.0", "")
 	m.width = 120
 	m.height = 30
 

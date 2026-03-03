@@ -188,3 +188,57 @@ func TestHelpModal_NoConfigPath_NotShown(t *testing.T) {
 		t.Error("help modal should not show config section when no path set")
 	}
 }
+
+func TestHelpModal_SetVersionInfo_ShowsInView(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetVersionInfo("1.2.3 (abc1234)")
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "1.2.3") {
+		t.Error("help modal should display version when set")
+	}
+	if !strings.Contains(view, "abc1234") {
+		t.Error("help modal should display commit hash when set")
+	}
+}
+
+func TestHelpModal_EmptyVersionInfo_NotShown(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if strings.Contains(view, "Version") {
+		t.Error("help modal should not show version when not set")
+	}
+}
+
+func TestHelpModal_VersionAndConfig_BothInInfoSection(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetVersionInfo("2.0.0 (def5678)")
+	h.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "2.0.0") {
+		t.Error("help modal should show version in info section")
+	}
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("help modal should show config path in info section")
+	}
+	// Both should be under the same "Info" heading
+	infoIdx := strings.Index(view, "Info")
+	if infoIdx == -1 {
+		t.Fatal("help modal should have an Info section")
+	}
+	afterInfo := view[infoIdx:]
+	if !strings.Contains(afterInfo, "2.0.0") || !strings.Contains(afterInfo, "config.yaml") {
+		t.Error("both version and config should appear after the Info heading")
+	}
+}

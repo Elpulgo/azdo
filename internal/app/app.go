@@ -75,14 +75,24 @@ type Model struct {
 	poller           *polling.Poller
 	errorHandler     *polling.ErrorHandler
 	currentVersion   string
+	commitHash       string
 	width      int
 	height     int
 	footerRows int
 	err        error
 }
 
-// NewModel creates a new application model with the given Azure DevOps client, config, and current version.
-func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion string) Model {
+// formatVersionInfo formats the version and commit hash for display.
+// For example: "1.2.3 (abc1234)" or "dev (none)".
+func formatVersionInfo(version, commit string) string {
+	if commit != "" && commit != "none" {
+		return fmt.Sprintf("%s (%s)", version, commit)
+	}
+	return version
+}
+
+// NewModel creates a new application model with the given Azure DevOps client, config, version, and commit hash.
+func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion string, commitHash string) Model {
 	// Create error handler early to capture initialization errors
 	errorHandler := polling.NewErrorHandler()
 
@@ -123,6 +133,9 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
+
+	// Set version info in help modal
+	helpModal.SetVersionInfo(formatVersionInfo(currentVersion, commitHash))
 
 	// Set config path in help modal
 	if configPath, err := config.GetPath(); err == nil {
@@ -169,6 +182,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		poller:           poller,
 		errorHandler:     errorHandler,
 		currentVersion:   currentVersion,
+		commitHash:       commitHash,
 	}
 }
 
@@ -374,6 +388,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logo = components.NewLogo(m.styles)
 
 		m.helpModal = components.NewHelpModal(m.styles)
+		m.helpModal.SetVersionInfo(formatVersionInfo(m.currentVersion, m.commitHash))
 		if configPath, err := config.GetPath(); err == nil {
 			m.helpModal.SetConfigPath(configPath)
 		}
