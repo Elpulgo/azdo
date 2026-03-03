@@ -77,12 +77,26 @@ Required PAT permissions:
   Work Items   (Read & Write) - queries, state changes
 
 Keyboard shortcuts (in TUI):
-  1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
-  r            Refresh data
-  f            Search / filter
-  t            Select theme
-  ?            Toggle help overlay
-  q            Quit
+  Navigation:
+    ↑/k          Move up
+    ↓/j          Move down
+    pgup/pgdn    Page up / down
+    enter        View details / expand
+    esc          Go back
+
+  Tabs:
+    1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
+    ←/→          Previous / next tab
+
+  Actions:
+    f            Search / filter
+    m            Toggle my items (work items)
+    r            Refresh data
+    v            Vote on PR (detail view)
+    s            Change work item state (detail view)
+    t            Select theme
+    ?            Toggle help overlay
+    q            Quit
 
 For more information, visit: https://github.com/Elpulgo/azdo
 `, version, configPath)
