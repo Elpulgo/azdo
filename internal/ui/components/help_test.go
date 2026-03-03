@@ -63,27 +63,15 @@ func TestHelpModal_View_WhenHidden(t *testing.T) {
 	}
 }
 
-func TestHelpModal_View_WhenVisible(t *testing.T) {
-	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(80, 24)
-	h.Show()
-
-	view := h.View()
-
-	if view == "" {
-		t.Error("view should not be empty when visible")
-	}
-}
-
 func TestHelpModal_View_ContainsTitle(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 24)
 	h.Show()
 
-	view := h.View()
+	view := strings.ToLower(h.View())
 
-	if !strings.Contains(strings.ToLower(view), "help") {
-		t.Error("view should contain help title")
+	if !strings.Contains(view, "keyboard shortcuts") {
+		t.Error("view should contain the 'Keyboard Shortcuts' title")
 	}
 }
 
@@ -136,12 +124,25 @@ func TestHelpModal_Update_QHides(t *testing.T) {
 	}
 }
 
-func TestHelpModal_SetSize(t *testing.T) {
+func TestHelpModal_SetSize_AffectsViewCentering(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(100, 50)
+	h.Show()
 
-	if h.width != 100 || h.height != 50 {
-		t.Errorf("expected size 100x50, got %dx%d", h.width, h.height)
+	// Render without size — no centering applied
+	h.SetSize(0, 0)
+	viewNoSize := h.View()
+
+	// Render with a large terminal size — centering should add leading whitespace
+	h.SetSize(200, 60)
+	viewWithSize := h.View()
+
+	if viewWithSize == viewNoSize {
+		t.Error("setting a large terminal size should change the rendered output (centering)")
+	}
+
+	// The centered view should have leading blank lines (vertical centering)
+	if !strings.HasPrefix(viewWithSize, "\n") {
+		t.Error("centered view should start with blank lines for vertical padding")
 	}
 }
 
