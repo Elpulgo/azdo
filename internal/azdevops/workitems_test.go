@@ -609,6 +609,116 @@ func TestClient_UpdateWorkItemState(t *testing.T) {
 	}
 }
 
+func TestWorkItemFields_TagsDeserialization(t *testing.T) {
+	// Azure DevOps returns tags as a semicolon-separated string in System.Tags
+	jsonData := `{
+		"System.Title": "Tagged item",
+		"System.Tags": "Sprint 5; Frontend; Critical"
+	}`
+
+	var fields WorkItemFields
+	if err := json.Unmarshal([]byte(jsonData), &fields); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if fields.Tags != "Sprint 5; Frontend; Critical" {
+		t.Errorf("Tags = %q, want %q", fields.Tags, "Sprint 5; Frontend; Critical")
+	}
+}
+
+func TestWorkItemFields_TagsDeserialization_Empty(t *testing.T) {
+	// When no tags are set, the field should be empty
+	jsonData := `{
+		"System.Title": "No tags"
+	}`
+
+	var fields WorkItemFields
+	if err := json.Unmarshal([]byte(jsonData), &fields); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if fields.Tags != "" {
+		t.Errorf("Tags = %q, want empty string", fields.Tags)
+	}
+}
+
+func TestWorkItem_TagList(t *testing.T) {
+	tests := []struct {
+		name string
+		tags string
+		want []string
+	}{
+		{
+			name: "multiple tags",
+			tags: "Sprint 5; Frontend; Critical",
+			want: []string{"Sprint 5", "Frontend", "Critical"},
+		},
+		{
+			name: "single tag",
+			tags: "Backend",
+			want: []string{"Backend"},
+		},
+		{
+			name: "empty tags",
+			tags: "",
+			want: nil,
+		},
+		{
+			name: "tags with extra whitespace",
+			tags: "  Sprint 5 ;  Frontend ;  Critical  ",
+			want: []string{"Sprint 5", "Frontend", "Critical"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wi := WorkItem{Fields: WorkItemFields{Tags: tt.tags}}
+			got := wi.TagList()
+			if len(got) != len(tt.want) {
+				t.Fatalf("TagList() returned %d tags, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("TagList()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestClient_GetWorkItems_RequestsTagsField(t *testing.T) {
+	var capturedPath string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.String()
+		response := WorkItemsResponse{
+			Count: 1,
+			Value: []WorkItem{
+				{ID: 1, Fields: WorkItemFields{Title: "Item", Tags: "tag1; tag2"}},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.GetWorkItems([]int{1})
+	if err != nil {
+		t.Fatalf("GetWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedPath, "System.Tags") {
+		t.Errorf("GetWorkItems request must include System.Tags field.\nGot path: %s", capturedPath)
+	}
+}
+
 func TestClient_UpdateWorkItemState_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

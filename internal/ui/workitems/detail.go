@@ -222,6 +222,13 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n\n")
 	}
 
+	// Tags
+	if tags := wi.TagList(); len(tags) > 0 {
+		sb.WriteString(m.styles.Label.Render("Tags: "))
+		sb.WriteString(strings.Join(tags, ", "))
+		sb.WriteString("\n\n")
+	}
+
 	// Link to work item (shown before description for quick access)
 	if m.client != nil {
 		url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), wi.ID)

@@ -42,6 +42,7 @@ type WorkItemFields struct {
 	IterationPath string    `json:"System.IterationPath"`
 	Description   string    `json:"System.Description"`
 	ReproSteps    string    `json:"Microsoft.VSTS.TCM.ReproSteps"`
+	Tags          string    `json:"System.Tags"`
 }
 
 // WorkItemReference represents a reference to a work item from WIQL queries
@@ -89,6 +90,23 @@ func (wi *WorkItem) EffectiveDescription() string {
 		return wi.Fields.ReproSteps
 	}
 	return wi.Fields.Description
+}
+
+// TagList returns the tags as a trimmed slice, split on semicolons.
+// Returns nil if there are no tags.
+func (wi *WorkItem) TagList() []string {
+	if wi.Fields.Tags == "" {
+		return nil
+	}
+	raw := strings.Split(wi.Fields.Tags, ";")
+	tags := make([]string, 0, len(raw))
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
 }
 
 // AssignedToName returns the display name of the assigned user, or "-" if unassigned
@@ -150,6 +168,7 @@ func (c *Client) GetWorkItems(ids []int) ([]WorkItem, error) {
 		"System.IterationPath",
 		"System.Description",
 		"Microsoft.VSTS.TCM.ReproSteps",
+		"System.Tags",
 	}, ",")
 
 	path := fmt.Sprintf("/wit/workitems?ids=%s&fields=%s&api-version=7.1", idsParam, fields)

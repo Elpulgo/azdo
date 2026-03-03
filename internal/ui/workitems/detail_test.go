@@ -429,6 +429,93 @@ func TestDetailView_LinkBeforeDescription(t *testing.T) {
 	}
 }
 
+func TestDetailView_ShowsTags(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 300,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Tagged work item",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Tags:         "Sprint 5; Frontend; Critical",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if !strings.Contains(view, "Tags") {
+		t.Error("Expected view to contain 'Tags' label when work item has tags")
+	}
+	if !strings.Contains(view, "Sprint 5") {
+		t.Error("Expected view to contain tag 'Sprint 5'")
+	}
+	if !strings.Contains(view, "Frontend") {
+		t.Error("Expected view to contain tag 'Frontend'")
+	}
+	if !strings.Contains(view, "Critical") {
+		t.Error("Expected view to contain tag 'Critical'")
+	}
+}
+
+func TestDetailView_NoTagsSectionWhenEmpty(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 301,
+		Fields: azdevops.WorkItemFields{
+			Title:        "No tags item",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	// "Tags" label should NOT appear when there are no tags
+	// We need to be careful: "Tags" could appear in other content.
+	// Check that the specific "Tags:" label pattern is absent.
+	if strings.Contains(view, "Tags:") {
+		t.Error("Expected 'Tags:' label to NOT appear when work item has no tags")
+	}
+}
+
+func TestDetailView_TagsAppearBeforeDescription(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 302,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Ordering test",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Tags:         "Backend",
+			Description:  "Some description text",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	tagsIdx := strings.Index(view, "Backend")
+	descIdx := strings.Index(view, "Description")
+
+	if tagsIdx == -1 {
+		t.Fatal("Expected tag 'Backend' in view")
+	}
+	if descIdx == -1 {
+		t.Fatal("Expected 'Description' in view")
+	}
+	if tagsIdx >= descIdx {
+		t.Errorf("Expected tags (pos %d) to appear before description (pos %d)", tagsIdx, descIdx)
+	}
+}
+
 func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 	wi := azdevops.WorkItem{ID: 123}
 	m := NewDetailModel(nil, wi)
