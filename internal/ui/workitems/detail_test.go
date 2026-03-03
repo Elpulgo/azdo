@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	tea "github.com/charmbracelet/bubbletea"
@@ -530,5 +531,90 @@ func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 	}
 	if !found {
 		t.Error("Expected context items to include 's' keybinding for state change")
+	}
+}
+
+func TestDetailView_ShowsLastChangedTimestamp(t *testing.T) {
+	changedAt := time.Date(2026, 3, 1, 14, 30, 0, 0, time.UTC)
+
+	wi := azdevops.WorkItem{
+		ID: 500,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Timestamped item",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			ChangedDate:  changedAt,
+			Description:  "Some description",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	// The user should see when the item was last changed
+	if !strings.Contains(view, "2026-03-01 14:30") {
+		t.Error("Expected detail view to show formatted ChangedDate timestamp '2026-03-01 14:30'")
+	}
+	if !strings.Contains(view, "Last changed") {
+		t.Error("Expected detail view to show 'Last changed' label")
+	}
+}
+
+func TestDetailView_TimestampAppearsBeforeDescription(t *testing.T) {
+	changedAt := time.Date(2026, 2, 15, 9, 0, 0, 0, time.UTC)
+
+	wi := azdevops.WorkItem{
+		ID: 501,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Ordering check",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			ChangedDate:  changedAt,
+			Description:  "Description content here",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	tsIdx := strings.Index(view, "2026-02-15")
+	descIdx := strings.Index(view, "Description")
+
+	if tsIdx == -1 {
+		t.Fatal("Expected timestamp to be present in view")
+	}
+	if descIdx == -1 {
+		t.Fatal("Expected 'Description' to be present in view")
+	}
+	if tsIdx >= descIdx {
+		t.Errorf("Expected timestamp (pos %d) to appear before description (pos %d)", tsIdx, descIdx)
+	}
+}
+
+func TestDetailView_ZeroChangedDateIsHidden(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 502,
+		Fields: azdevops.WorkItemFields{
+			Title:        "No timestamp item",
+			State:        "New",
+			WorkItemType: "Task",
+			Priority:     3,
+			// ChangedDate is zero value
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if strings.Contains(view, "Last changed") {
+		t.Error("Expected 'Last changed' label to NOT appear when ChangedDate is zero")
 	}
 }
