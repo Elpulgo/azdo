@@ -25,18 +25,6 @@ func (m *MockClient) ListPipelineRuns(top int) ([]azdevops.PipelineRun, error) {
 // Compile-time check: MultiClient must satisfy PipelineClient interface.
 var _ PipelineClient = (*azdevops.MultiClient)(nil)
 
-func TestPoller_New(t *testing.T) {
-	client := &MockClient{}
-	p := NewPoller(client, 30*time.Second)
-
-	if p == nil {
-		t.Fatal("expected non-nil Poller")
-	}
-	if p.interval != 30*time.Second {
-		t.Errorf("expected interval 30s, got %v", p.interval)
-	}
-}
-
 func TestPoller_DefaultInterval(t *testing.T) {
 	client := &MockClient{}
 	p := NewPoller(client, 0) // 0 should use default
@@ -113,41 +101,37 @@ func TestPoller_FetchPipelineRuns_Error(t *testing.T) {
 	}
 }
 
-func TestPoller_StartPolling_ReturnsTickCmd(t *testing.T) {
+func TestPoller_StartPolling_RespectsStopState(t *testing.T) {
 	client := &MockClient{}
 	p := NewPoller(client, 30*time.Second)
 
 	cmd := p.StartPolling()
 	if cmd == nil {
-		t.Fatal("expected non-nil command from StartPolling")
+		t.Error("StartPolling should return a command when running")
 	}
-	// The command will return a TickMsg after the interval
-	// We can't easily test the timing here, but we verify it returns a command
-}
 
-func TestPoller_OnTick_ReturnsFetchAndNextTick(t *testing.T) {
-	expectedRuns := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1"},
-	}
-	client := &MockClient{Runs: expectedRuns}
-	p := NewPoller(client, 30*time.Second)
+	p.Stop()
 
-	// OnTick should return a batch command that:
-	// 1. Fetches pipeline runs
-	// 2. Schedules the next tick
-	cmd := p.OnTick()
-	if cmd == nil {
-		t.Fatal("expected non-nil command from OnTick")
+	cmd = p.StartPolling()
+	if cmd != nil {
+		t.Error("StartPolling should return nil when stopped")
 	}
 }
 
-func TestPoller_SetInterval(t *testing.T) {
+func TestPoller_OnTick_RespectsStopState(t *testing.T) {
 	client := &MockClient{}
 	p := NewPoller(client, 30*time.Second)
 
-	p.SetInterval(60 * time.Second)
-	if p.interval != 60*time.Second {
-		t.Errorf("expected interval 60s, got %v", p.interval)
+	cmd := p.OnTick()
+	if cmd == nil {
+		t.Error("OnTick should return a command when running")
+	}
+
+	p.Stop()
+
+	cmd = p.OnTick()
+	if cmd != nil {
+		t.Error("OnTick should return nil when stopped")
 	}
 }
 
@@ -158,16 +142,6 @@ func TestPoller_SetInterval_EnforcesMinimum(t *testing.T) {
 	p.SetInterval(1 * time.Second) // Too short
 	if p.interval < MinInterval {
 		t.Errorf("interval %v should not be less than MinInterval %v", p.interval, MinInterval)
-	}
-}
-
-func TestPoller_Stop(t *testing.T) {
-	client := &MockClient{}
-	p := NewPoller(client, 30*time.Second)
-
-	p.Stop()
-	if !p.stopped {
-		t.Error("expected poller to be stopped")
 	}
 }
 
@@ -190,25 +164,12 @@ func TestPoller_FetchPipelineRuns_WhenStopped(t *testing.T) {
 	p := NewPoller(client, 30*time.Second)
 	p.Stop()
 
-	// When stopped, fetch should return nil or a no-op
 	cmd := p.FetchPipelineRuns()
-	if cmd == nil {
-		// This is acceptable - returning nil when stopped
-		return
+	if cmd != nil {
+		t.Error("FetchPipelineRuns should return nil when stopped")
 	}
-
-	// If it returns a command, it should not make API calls
-	msg := cmd()
-	if msg != nil {
-		// If it does return something, check that no API was called
-		// Or it could return an empty update
-		runsMsg, ok := msg.(PipelineRunsUpdated)
-		if ok && runsMsg.Runs != nil {
-			// Only error if API was actually called when stopped
-			if client.CallCount > 0 {
-				t.Error("API should not be called when poller is stopped")
-			}
-		}
+	if client.CallCount != 0 {
+		t.Error("API should not be called when poller is stopped")
 	}
 }
 
