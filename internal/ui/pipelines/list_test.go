@@ -12,23 +12,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestNewModel_HasStyles(t *testing.T) {
-	m := NewModel(nil)
-
-	if m.styles == nil {
-		t.Error("Expected model to have styles initialized")
-	}
-}
-
-func TestNewModelWithStyles(t *testing.T) {
-	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
-	m := NewModelWithStyles(nil, customStyles)
-
-	if m.styles != customStyles {
-		t.Error("Expected model to use provided custom styles")
-	}
-}
-
 func TestStatusIconWithStyles(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
 

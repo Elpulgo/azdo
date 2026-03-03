@@ -3,6 +3,7 @@ package workitems
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,10 @@ const (
 	ViewDetail = listview.ViewDetail
 )
 
+// TagSelectedMsg is sent when a tag is selected from the tag picker.
+// An empty Tag means "clear filter".
+type TagSelectedMsg = components.TagSelectedMsg
+
 // Model represents the work items list view with sub-views
 type Model struct {
 	list        listview.Model[azdevops.WorkItem]
@@ -30,6 +35,9 @@ type Model struct {
 	styles      *styles.Styles
 	myItemsOnly bool
 	allItems    []azdevops.WorkItem
+	myItems     []azdevops.WorkItem // base my-items set (before tag filter)
+	activeTag   string
+	tagPicker   components.TagPicker
 }
 
 // NewModel creates a new work items list model with default styles
@@ -94,9 +102,10 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 	}
 
 	return Model{
-		list:   listview.New(cfg, s),
-		client: client,
-		styles: s,
+		list:      listview.New(cfg, s),
+		client:    client,
+		styles:    s,
+		tagPicker: components.NewTagPicker(s),
 	}
 }
 
@@ -142,15 +151,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			// For partial errors, use partial data as valid
 			var partialErr *azdevops.PartialError
 			if errors.As(msg.err, &partialErr) {
-				m.list = m.list.SetItems(msg.workItems)
+				m.myItems = msg.workItems
+				m.list = m.list.SetItems(applyTagFilter(msg.workItems, m.activeTag))
 				return m, nil
 			}
 			// On error, fall back to showing all items and clear loading state
 			m.myItemsOnly = false
-			m.list = m.list.SetItems(m.allItems)
+			m.myItems = nil
+			m.list = m.list.SetItems(applyTagFilter(m.allItems, m.activeTag))
 			return m, nil
 		}
-		m.list = m.list.SetItems(msg.workItems)
+		m.myItems = msg.workItems
+		m.list = m.list.SetItems(applyTagFilter(msg.workItems, m.activeTag))
 		return m, nil
 	case WorkItemStateChangedMsg:
 		// Re-fetch work items so the list reflects the updated state
@@ -158,19 +170,46 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case SetWorkItemsMsg:
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
-			m.list = m.list.SetItems(msg.WorkItems)
+			m.list = m.list.SetItems(applyTagFilter(msg.WorkItems, m.activeTag))
+		}
+		return m, nil
+	case components.TagSelectedMsg:
+		m.activeTag = msg.Tag
+		m.tagPicker.Hide()
+		// Re-apply tag filter on the appropriate base set
+		if m.myItemsOnly {
+			m.list = m.list.SetItems(applyTagFilter(m.myItems, m.activeTag))
+		} else {
+			m.list = m.list.SetItems(applyTagFilter(m.allItems, m.activeTag))
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if msg.String() == "T" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
+			tags := collectUniqueTags(m.allItems)
+			m.tagPicker.SetTags(tags, m.activeTag)
+			m.tagPicker.Show()
+			return m, nil
+		}
 		if msg.String() == "m" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
 			m.myItemsOnly = !m.myItemsOnly
 			if m.myItemsOnly {
 				return m, fetchMyWorkItemsMulti(m.client)
 			}
-			// Toggle OFF: restore all items
-			m.list = m.list.SetItems(m.allItems)
+			// Toggle OFF: restore all items (with tag filter if active)
+			m.myItems = nil
+			m.list = m.list.SetItems(applyTagFilter(m.allItems, m.activeTag))
 			return m, nil
 		}
+	}
+
+	// When tag picker is visible, route all input to it
+	if m.tagPicker.IsVisible() {
+		if kmsg, ok := msg.(tea.KeyMsg); ok {
+			var cmd tea.Cmd
+			m.tagPicker, cmd = m.tagPicker.Update(kmsg)
+			return m, cmd
+		}
+		return m, nil
 	}
 
 	// When in detail view, intercept esc to check for modals first
@@ -231,6 +270,31 @@ func (m Model) IsSearching() bool {
 // IsMyItemsActive returns true if the "my items" filter is active.
 func (m Model) IsMyItemsActive() bool {
 	return m.myItemsOnly
+}
+
+// IsTagFilterActive returns true if a tag filter is active.
+func (m Model) IsTagFilterActive() bool {
+	return m.activeTag != ""
+}
+
+// ActiveTag returns the currently active tag filter, or "" if none.
+func (m Model) ActiveTag() string {
+	return m.activeTag
+}
+
+// IsTagPickerVisible returns true if the tag picker modal is open.
+func (m Model) IsTagPickerVisible() bool {
+	return m.tagPicker.IsVisible()
+}
+
+// TagPickerView returns the rendered tag picker overlay.
+func (m Model) TagPickerView() string {
+	return m.tagPicker.View()
+}
+
+// SetTagPickerSize sets the dimensions for the tag picker overlay.
+func (m *Model) SetTagPickerSize(width, height int) {
+	m.tagPicker.SetSize(width, height)
 }
 
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
@@ -314,6 +378,9 @@ func filterWorkItem(wi azdevops.WorkItem, query string) bool {
 			return true
 		}
 	}
+	if strings.Contains(strings.ToLower(wi.Fields.Tags), q) {
+		return true
+	}
 	return false
 }
 
@@ -372,6 +439,40 @@ func fetchMyWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 		workItems, err := client.ListMyWorkItems(50)
 		return myWorkItemsMsg{workItems: workItems, err: err}
 	}
+}
+
+// collectUniqueTags extracts all unique tags from the work items, sorted alphabetically.
+func collectUniqueTags(items []azdevops.WorkItem) []string {
+	seen := make(map[string]struct{})
+	for i := range items {
+		for _, tag := range items[i].TagList() {
+			seen[tag] = struct{}{}
+		}
+	}
+	tags := make([]string, 0, len(seen))
+	for tag := range seen {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+// applyTagFilter returns only work items that have the given tag.
+// If tag is empty, all items are returned unfiltered.
+func applyTagFilter(items []azdevops.WorkItem, tag string) []azdevops.WorkItem {
+	if tag == "" {
+		return items
+	}
+	var filtered []azdevops.WorkItem
+	for _, wi := range items {
+		for _, t := range wi.TagList() {
+			if t == tag {
+				filtered = append(filtered, wi)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 // Icon/text formatting functions (unchanged)

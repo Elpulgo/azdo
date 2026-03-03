@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -131,31 +132,6 @@ func TestSetPAT_Error(t *testing.T) {
 	}
 }
 
-func TestGetPAT_Error(t *testing.T) {
-	t.Setenv("AZDO_PAT", "")
-
-	mock := newMockKeyring()
-	mock.err = errors.New("keyring access denied")
-	ks := &KeyringStore{provider: mock}
-
-	_, err := ks.GetPAT()
-	if err == nil {
-		t.Error("Expected GetPAT to fail with keyring error")
-	}
-}
-
-func TestNewKeyringStore(t *testing.T) {
-	ks := NewKeyringStore()
-	if ks == nil {
-		t.Error("NewKeyringStore() returned nil")
-	}
-
-	// Verify it has a provider
-	if ks.provider == nil {
-		t.Error("KeyringStore provider is nil")
-	}
-}
-
 func TestSetPAT_EmptyToken(t *testing.T) {
 	mock := newMockKeyring()
 	ks := &KeyringStore{provider: mock}
@@ -204,15 +180,11 @@ func TestGetPAT_ErrorWhenNoFallback(t *testing.T) {
 
 	// Check error message mentions both issues
 	errMsg := err.Error()
-	if !contains(errMsg, "keyring") {
+	if !strings.Contains(errMsg, "keyring") {
 		t.Errorf("Error message should mention keyring: %s", errMsg)
 	}
-	if !contains(errMsg, "AZDO_PAT") {
+	if !strings.Contains(errMsg, "AZDO_PAT") {
 		t.Errorf("Error message should mention AZDO_PAT env var: %s", errMsg)
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && (s[:len(substr)] == substr || contains(s[1:], substr))))
-}

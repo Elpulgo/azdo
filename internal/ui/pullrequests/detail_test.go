@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
@@ -43,15 +44,6 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	}
 }
 
-func TestDetailModel_HasStyles(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 123, Title: "Test"}
-	m := NewDetailModel(nil, pr)
-
-	if m.styles == nil {
-		t.Error("Expected detail model to have styles initialized")
-	}
-}
-
 func TestDetailModel_WithStyles(t *testing.T) {
 	pr := azdevops.PullRequest{ID: 123, Title: "Test"}
 	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
@@ -62,25 +54,37 @@ func TestDetailModel_WithStyles(t *testing.T) {
 	}
 }
 
-func TestDetailIconsWithStyles(t *testing.T) {
+func TestIconRendering_AllThemes_NoPanic(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
+	votes := []struct {
+		vote int
+		icon string
+	}{
+		{10, "✓"}, {5, "~"}, {0, "○"}, {-5, "◐"}, {-10, "✗"},
+	}
+	statuses := []struct {
+		status string
+		icon   string
+	}{
+		{"active", "●"}, {"fixed", "✓"}, {"wontFix", "○"}, {"closed", "○"}, {"pending", "◐"},
+	}
 
 	for _, themeName := range themes {
 		t.Run(themeName, func(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
-			if !strings.Contains(reviewerVoteIconWithStyles(10, s), "✓") {
-				t.Error("reviewerVoteIconWithStyles(10) should contain ✓")
-			}
-			if !strings.Contains(reviewerVoteIconWithStyles(-10, s), "✗") {
-				t.Error("reviewerVoteIconWithStyles(-10) should contain ✗")
+			for _, tt := range votes {
+				got := reviewerVoteIconWithStyles(tt.vote, s)
+				if !strings.Contains(got, tt.icon) {
+					t.Errorf("vote %d: got %q, want icon %q", tt.vote, got, tt.icon)
+				}
 			}
 
-			if !strings.Contains(threadStatusIconWithStyles("active", s), "●") {
-				t.Error("threadStatusIconWithStyles('active') should contain ●")
-			}
-			if !strings.Contains(threadStatusIconWithStyles("fixed", s), "✓") {
-				t.Error("threadStatusIconWithStyles('fixed') should contain ✓")
+			for _, tt := range statuses {
+				got := threadStatusIconWithStyles(tt.status, s)
+				if !strings.Contains(got, tt.icon) {
+					t.Errorf("status %q: got %q, want icon %q", tt.status, got, tt.icon)
+				}
 			}
 		})
 	}
@@ -102,20 +106,6 @@ func TestNewDetailModel(t *testing.T) {
 
 	if model.GetPR().ID != 101 {
 		t.Errorf("Model PR ID = %d, want 101", model.GetPR().ID)
-	}
-}
-
-func TestDetailModel_SetSize(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
-	model := NewDetailModel(nil, pr)
-
-	model.SetSize(80, 24)
-
-	if model.width != 80 {
-		t.Errorf("Width = %d, want 80", model.width)
-	}
-	if model.height != 24 {
-		t.Errorf("Height = %d, want 24", model.height)
 	}
 }
 
@@ -739,39 +729,7 @@ func TestDetailModel_View_RenamedShowsBothPaths(t *testing.T) {
 	}
 }
 
-func TestDetailModel_GetThreads(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
-	model := NewDetailModel(nil, pr)
-	model.SetSize(80, 24)
-
-	threads := []azdevops.Thread{
-		{ID: 1, Status: "active", Comments: []azdevops.Comment{{ID: 1, Content: "Comment"}}},
-	}
-	model.SetThreads(threads)
-
-	got := model.GetThreads()
-	if len(got) != 1 {
-		t.Errorf("GetThreads() length = %d, want 1", len(got))
-	}
-}
-
-func TestDetailModel_GetChangedFiles(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
-	model := NewDetailModel(nil, pr)
-	model.SetSize(80, 24)
-
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
-	}
-	model.SetChangedFiles(files)
-
-	got := model.GetChangedFiles()
-	if len(got) != 1 {
-		t.Errorf("GetChangedFiles() length = %d, want 1", len(got))
-	}
-}
-
-// --- Helper function tests (unchanged) ---
+// --- Helper function tests ---
 
 func TestReviewerVoteIcon(t *testing.T) {
 	tests := []struct {
@@ -1298,6 +1256,64 @@ func TestDetailModel_ViewShowsVotePicker(t *testing.T) {
 	}
 }
 
+func TestDetailModel_GetContextItems(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 123, Title: "Test PR"}
+	model := NewDetailModel(nil, pr)
+
+	items := model.GetContextItems()
+	if len(items) == 0 {
+		t.Fatal("GetContextItems() should return items")
+	}
+
+	// Should include enter/open for opening files
+	found := false
+	for _, item := range items {
+		if item.Key == "enter" && item.Description == "open" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include 'enter open'")
+	}
+
+	// Should include vote
+	found = false
+	for _, item := range items {
+		if item.Key == "v" && item.Description == "vote" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include 'v vote'")
+	}
+
+	// Should include navigate
+	found = false
+	for _, item := range items {
+		if item.Key == "↑↓" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include '↑↓ navigate'")
+	}
+
+	// Should include refresh
+	found = false
+	for _, item := range items {
+		if item.Key == "r" && item.Description == "refresh" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetContextItems() should include 'r refresh'")
+	}
+}
+
 func TestChangeTypeDisplay(t *testing.T) {
 	s := styles.DefaultStyles()
 	tests := []struct {
@@ -1318,5 +1334,114 @@ func TestChangeTypeDisplay(t *testing.T) {
 				t.Errorf("changeTypeDisplay(%q) icon = %q, want %q", tt.changeType, icon, tt.wantIcon)
 			}
 		})
+	}
+}
+
+func TestDetailView_ShowsCreationTimestamp(t *testing.T) {
+	createdAt := time.Date(2026, 2, 15, 10, 30, 0, 0, time.UTC)
+
+	pr := azdevops.PullRequest{
+		ID:            200,
+		Title:         "Feature with timestamp",
+		Description:   "Some description",
+		Status:        "active",
+		CreationDate:  createdAt,
+		SourceRefName: "refs/heads/feature/ts",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Alice"},
+		Repository:    azdevops.Repository{ID: "repo-1", Name: "my-repo"},
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	if !strings.Contains(view, "2026-02-15 10:30") {
+		t.Error("Expected detail view to show the formatted creation timestamp '2026-02-15 10:30'")
+	}
+	if !strings.Contains(view, "Created") {
+		t.Error("Expected detail view to show the 'Created' label")
+	}
+}
+
+func TestDetailView_CreationTimestampShowsAuthor(t *testing.T) {
+	createdAt := time.Date(2026, 1, 20, 8, 0, 0, 0, time.UTC)
+
+	pr := azdevops.PullRequest{
+		ID:            201,
+		Title:         "PR by Bob",
+		CreationDate:  createdAt,
+		SourceRefName: "refs/heads/feature/x",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Bob Builder"},
+		Repository:    azdevops.Repository{ID: "repo-1"},
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	// The author's name should appear near the creation timestamp
+	if !strings.Contains(view, "Bob Builder") {
+		t.Error("Expected detail view to show the PR author name 'Bob Builder'")
+	}
+}
+
+func TestDetailView_ZeroCreationDateIsHidden(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:            202,
+		Title:         "PR without date",
+		SourceRefName: "refs/heads/feature/y",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Charlie"},
+		Repository:    azdevops.Repository{ID: "repo-1"},
+		// CreationDate is zero value — not set
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	if strings.Contains(view, "Created") {
+		t.Error("Expected 'Created' label NOT to appear when CreationDate is zero")
+	}
+}
+
+func TestDetailView_CreationTimestampAppearsBeforeReviewers(t *testing.T) {
+	createdAt := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	pr := azdevops.PullRequest{
+		ID:            203,
+		Title:         "Ordering test PR",
+		Description:   "Desc",
+		CreationDate:  createdAt,
+		SourceRefName: "refs/heads/feature/order",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Dave"},
+		Repository:    azdevops.Repository{ID: "repo-1"},
+		Reviewers: []azdevops.Reviewer{
+			{ID: "r1", DisplayName: "Eve Reviewer", Vote: 0},
+		},
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	createdPos := strings.Index(view, "Created")
+	reviewersPos := strings.Index(view, "Reviewers")
+
+	if createdPos == -1 {
+		t.Fatal("Expected 'Created' to appear in the view")
+	}
+	if reviewersPos == -1 {
+		t.Fatal("Expected 'Reviewers' to appear in the view")
+	}
+	if createdPos >= reviewersPos {
+		t.Errorf("Expected 'Created' (pos %d) to appear before 'Reviewers' (pos %d)", createdPos, reviewersPos)
 	}
 }

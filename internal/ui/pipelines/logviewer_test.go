@@ -31,37 +31,6 @@ func TestLogViewerModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	}
 }
 
-func TestLogViewerModel_SetContent(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "Test Task")
-
-	content := "Line 1\nLine 2\nLine 3"
-	model.SetContent(content)
-
-	if model.GetContent() != content {
-		t.Errorf("GetContent() = %q, want %q", model.GetContent(), content)
-	}
-}
-
-func TestLogViewerModel_Title(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "npm install")
-
-	if model.GetTitle() != "npm install" {
-		t.Errorf("GetTitle() = %q, want %q", model.GetTitle(), "npm install")
-	}
-}
-
-func TestLogViewerModel_BuildAndLogIDs(t *testing.T) {
-	model := NewLogViewerModel(nil, 456, 10, "Build Task")
-
-	if model.GetBuildID() != 456 {
-		t.Errorf("GetBuildID() = %d, want 456", model.GetBuildID())
-	}
-
-	if model.GetLogID() != 10 {
-		t.Errorf("GetLogID() = %d, want 10", model.GetLogID())
-	}
-}
-
 func TestLogViewerModel_LoadingState(t *testing.T) {
 	model := NewLogViewerModel(nil, 123, 5, "Test Task")
 

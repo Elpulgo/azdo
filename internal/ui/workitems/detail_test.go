@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
-	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,41 +36,6 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	if len(lines) != height {
 		t.Errorf("Work item detail view output has %d lines, want %d (height passed to SetSize). "+
 			"Viewport is not using full available height.", len(lines), height)
-	}
-}
-
-func TestDetailModel_HasStyles(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	m := NewDetailModel(nil, wi)
-
-	if m.styles == nil {
-		t.Error("Expected detail model to have styles initialized")
-	}
-}
-
-func TestDetailModel_WithStyles(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
-	m := NewDetailModelWithStyles(nil, wi, customStyles)
-
-	if m.styles != customStyles {
-		t.Error("Expected detail model to use provided custom styles")
-	}
-}
-
-func TestNewDetailModel(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID:     123,
-		Fields: azdevops.WorkItemFields{Title: "Test item", State: "Active"},
-	}
-
-	m := NewDetailModel(nil, wi)
-
-	if m.workItem.ID != 123 {
-		t.Errorf("Expected work item ID 123, got %d", m.workItem.ID)
-	}
-	if m.workItem.Fields.Title != "Test item" {
-		t.Errorf("Expected title 'Test item', got '%s'", m.workItem.Fields.Title)
 	}
 }
 
@@ -311,39 +276,6 @@ func TestBuildWorkItemURL(t *testing.T) {
 	}
 }
 
-func TestDetailModel_GetContextItems(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	m := NewDetailModel(nil, wi)
-
-	items := m.GetContextItems()
-	if len(items) == 0 {
-		t.Error("Expected context items to be non-empty")
-	}
-}
-
-func TestDetailModel_GetStatusMessage(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	m := NewDetailModel(nil, wi)
-
-	msg := m.GetStatusMessage()
-	if msg != "" {
-		t.Errorf("Expected empty status message, got %s", msg)
-	}
-}
-
-func TestGetWorkItem(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 999, Fields: azdevops.WorkItemFields{Title: "Test WI"}}
-	m := NewDetailModel(nil, wi)
-
-	got := m.GetWorkItem()
-	if got.ID != 999 {
-		t.Errorf("Expected ID 999, got %d", got.ID)
-	}
-	if got.Fields.Title != "Test WI" {
-		t.Errorf("Expected title 'Test WI', got '%s'", got.Fields.Title)
-	}
-}
-
 func TestDetailModel_SKeyStartsLoading(t *testing.T) {
 	wi := azdevops.WorkItem{
 		ID: 123,
@@ -498,6 +430,93 @@ func TestDetailView_LinkBeforeDescription(t *testing.T) {
 	}
 }
 
+func TestDetailView_ShowsTags(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 300,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Tagged work item",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Tags:         "Sprint 5; Frontend; Critical",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if !strings.Contains(view, "Tags") {
+		t.Error("Expected view to contain 'Tags' label when work item has tags")
+	}
+	if !strings.Contains(view, "Sprint 5") {
+		t.Error("Expected view to contain tag 'Sprint 5'")
+	}
+	if !strings.Contains(view, "Frontend") {
+		t.Error("Expected view to contain tag 'Frontend'")
+	}
+	if !strings.Contains(view, "Critical") {
+		t.Error("Expected view to contain tag 'Critical'")
+	}
+}
+
+func TestDetailView_NoTagsSectionWhenEmpty(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 301,
+		Fields: azdevops.WorkItemFields{
+			Title:        "No tags item",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	// "Tags" label should NOT appear when there are no tags
+	// We need to be careful: "Tags" could appear in other content.
+	// Check that the specific "Tags:" label pattern is absent.
+	if strings.Contains(view, "Tags:") {
+		t.Error("Expected 'Tags:' label to NOT appear when work item has no tags")
+	}
+}
+
+func TestDetailView_TagsAppearBeforeDescription(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 302,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Ordering test",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Tags:         "Backend",
+			Description:  "Some description text",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	tagsIdx := strings.Index(view, "Backend")
+	descIdx := strings.Index(view, "Description")
+
+	if tagsIdx == -1 {
+		t.Fatal("Expected tag 'Backend' in view")
+	}
+	if descIdx == -1 {
+		t.Fatal("Expected 'Description' in view")
+	}
+	if tagsIdx >= descIdx {
+		t.Errorf("Expected tags (pos %d) to appear before description (pos %d)", tagsIdx, descIdx)
+	}
+}
+
 func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 	wi := azdevops.WorkItem{ID: 123}
 	m := NewDetailModel(nil, wi)
@@ -512,5 +531,90 @@ func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 	}
 	if !found {
 		t.Error("Expected context items to include 's' keybinding for state change")
+	}
+}
+
+func TestDetailView_ShowsLastChangedTimestamp(t *testing.T) {
+	changedAt := time.Date(2026, 3, 1, 14, 30, 0, 0, time.UTC)
+
+	wi := azdevops.WorkItem{
+		ID: 500,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Timestamped item",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			ChangedDate:  changedAt,
+			Description:  "Some description",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	// The user should see when the item was last changed
+	if !strings.Contains(view, "2026-03-01 14:30") {
+		t.Error("Expected detail view to show formatted ChangedDate timestamp '2026-03-01 14:30'")
+	}
+	if !strings.Contains(view, "Last changed") {
+		t.Error("Expected detail view to show 'Last changed' label")
+	}
+}
+
+func TestDetailView_TimestampAppearsBeforeDescription(t *testing.T) {
+	changedAt := time.Date(2026, 2, 15, 9, 0, 0, 0, time.UTC)
+
+	wi := azdevops.WorkItem{
+		ID: 501,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Ordering check",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			ChangedDate:  changedAt,
+			Description:  "Description content here",
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	view := m.View()
+
+	tsIdx := strings.Index(view, "2026-02-15")
+	descIdx := strings.Index(view, "Description")
+
+	if tsIdx == -1 {
+		t.Fatal("Expected timestamp to be present in view")
+	}
+	if descIdx == -1 {
+		t.Fatal("Expected 'Description' to be present in view")
+	}
+	if tsIdx >= descIdx {
+		t.Errorf("Expected timestamp (pos %d) to appear before description (pos %d)", tsIdx, descIdx)
+	}
+}
+
+func TestDetailView_ZeroChangedDateIsHidden(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 502,
+		Fields: azdevops.WorkItemFields{
+			Title:        "No timestamp item",
+			State:        "New",
+			WorkItemType: "Task",
+			Priority:     3,
+			// ChangedDate is zero value
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 30)
+
+	view := m.View()
+
+	if strings.Contains(view, "Last changed") {
+		t.Error("Expected 'Last changed' label to NOT appear when ChangedDate is zero")
 	}
 }

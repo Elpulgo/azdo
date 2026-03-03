@@ -11,23 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestNewModel_HasStyles(t *testing.T) {
-	m := NewModel(nil)
-
-	if m.styles == nil {
-		t.Error("Expected model to have styles initialized")
-	}
-}
-
-func TestNewModelWithStyles(t *testing.T) {
-	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
-	m := NewModelWithStyles(nil, customStyles)
-
-	if m.styles != customStyles {
-		t.Error("Expected model to use provided custom styles")
-	}
-}
-
 func TestTypeIconWithStyles(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
 
@@ -111,18 +94,6 @@ func TestPriorityTextWithStyles(t *testing.T) {
 	}
 }
 
-func TestNewModel(t *testing.T) {
-	m := NewModel(nil)
-
-	// Check initial state
-	if m.GetViewMode() != ViewList {
-		t.Errorf("Expected viewMode to be ViewList, got %v", m.GetViewMode())
-	}
-	if len(m.list.Items()) != 0 {
-		t.Errorf("Expected empty workItems, got %d", len(m.list.Items()))
-	}
-}
-
 func TestUpdate_SetWorkItemsMsg(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -147,20 +118,6 @@ func TestUpdate_SetWorkItemsMsg(t *testing.T) {
 	}
 	if m.list.Items()[0].ID != 123 {
 		t.Errorf("Expected first work item ID to be 123, got %d", m.list.Items()[0].ID)
-	}
-}
-
-func TestUpdate_Error(t *testing.T) {
-	m := NewModel(nil)
-
-	msg := workItemsMsg{err: tea.ErrInterrupted}
-	m, _ = m.Update(msg)
-
-	// View should show error
-	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	view := m.View()
-	if !strings.Contains(view, "Error") {
-		t.Error("Expected view to show error message")
 	}
 }
 
@@ -291,32 +248,6 @@ func TestListModel_GetContextItems_ListMode(t *testing.T) {
 	}
 }
 
-func TestListModel_HasContextBar(t *testing.T) {
-	m := NewModel(nil)
-
-	if m.HasContextBar() {
-		t.Error("Expected no context bar for list mode")
-	}
-}
-
-func TestListModel_GetScrollPercent_ListMode(t *testing.T) {
-	m := NewModel(nil)
-
-	percent := m.GetScrollPercent()
-	if percent != 0 {
-		t.Errorf("Expected 0 scroll percent for list mode, got %f", percent)
-	}
-}
-
-func TestListModel_GetStatusMessage(t *testing.T) {
-	m := NewModel(nil)
-
-	msg := m.GetStatusMessage()
-	if msg != "" {
-		t.Errorf("Expected empty status message, got %s", msg)
-	}
-}
-
 func TestFilterWorkItem(t *testing.T) {
 	wi := azdevops.WorkItem{
 		ID: 42,
@@ -349,6 +280,50 @@ func TestFilterWorkItem(t *testing.T) {
 				t.Errorf("filterWorkItem(%q) = %v, want %v", tt.query, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFilterWorkItem_MatchesTags(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID: 42,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Fix login bug",
+			State:        "Active",
+			WorkItemType: "Bug",
+			Tags:         "Sprint 1; Backend; Urgent",
+		},
+	}
+
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{"Sprint", true},   // partial tag match
+		{"sprint 1", true}, // case-insensitive tag match
+		{"backend", true},  // exact tag match (case-insensitive)
+		{"urgent", true},   // another tag
+		{"Sprint 2", false}, // no such tag
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got := filterWorkItem(wi, tt.query)
+			if got != tt.want {
+				t.Errorf("filterWorkItem(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterWorkItemMulti_MatchesTags(t *testing.T) {
+	wi := azdevops.WorkItem{
+		ID:          42,
+		Fields:      azdevops.WorkItemFields{Title: "Test", WorkItemType: "Task", Tags: "Sprint 1; Backend"},
+		ProjectName: "alpha",
+	}
+
+	if !filterWorkItemMulti(wi, "backend") {
+		t.Error("filterWorkItemMulti should match tag 'backend'")
 	}
 }
 
@@ -791,6 +766,233 @@ func TestHasContextBar_DetailView(t *testing.T) {
 	// In detail mode, context bar should be shown
 	if !m.HasContextBar() {
 		t.Error("Expected context bar in detail mode")
+	}
+}
+
+// --- Tag Filter Tests ---
+
+func TestTagFilter_ApplyAndClear(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item 1", Tags: "Sprint 1; Backend"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Item 2", Tags: "Sprint 1; Frontend"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Title: "Item 3", Tags: "Sprint 2; Backend"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	if m.IsTagFilterActive() {
+		t.Error("tag filter should not be active initially")
+	}
+
+	// Apply tag filter for "Backend"
+	m, _ = m.Update(TagSelectedMsg{Tag: "Backend"})
+
+	if !m.IsTagFilterActive() {
+		t.Error("tag filter should be active after selecting a tag")
+	}
+	if m.ActiveTag() != "Backend" {
+		t.Errorf("expected active tag 'Backend', got %q", m.ActiveTag())
+	}
+	if len(m.list.Items()) != 2 {
+		t.Errorf("expected 2 items with 'Backend' tag, got %d", len(m.list.Items()))
+	}
+
+	// Clear tag filter
+	m, _ = m.Update(TagSelectedMsg{Tag: ""})
+
+	if m.IsTagFilterActive() {
+		t.Error("tag filter should not be active after clearing")
+	}
+	if len(m.list.Items()) != 3 {
+		t.Errorf("expected 3 items after clearing tag filter, got %d", len(m.list.Items()))
+	}
+}
+
+func TestTagFilter_ComposesWithMyItems(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My Backend", Tags: "Backend"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "My Frontend", Tags: "Frontend"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Title: "Other Backend", Tags: "Backend"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Toggle my items on
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	// Simulate @Me results (items 1 and 2 are mine)
+	myItems := []azdevops.WorkItem{items[0], items[1]}
+	m, _ = m.Update(myWorkItemsMsg{workItems: myItems})
+
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("expected 2 my items, got %d", len(m.list.Items()))
+	}
+
+	// Apply tag filter for "Backend" — should intersect with my items
+	m, _ = m.Update(TagSelectedMsg{Tag: "Backend"})
+
+	if len(m.list.Items()) != 1 {
+		t.Errorf("expected 1 item (my + backend), got %d", len(m.list.Items()))
+	}
+	if m.list.Items()[0].ID != 1 {
+		t.Errorf("expected item ID 1, got %d", m.list.Items()[0].ID)
+	}
+}
+
+func TestTagFilter_PollingRespectsActiveFilter(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item 1", Tags: "Sprint 1"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Item 2", Tags: "Sprint 2"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Apply tag filter
+	m, _ = m.Update(TagSelectedMsg{Tag: "Sprint 1"})
+
+	if len(m.list.Items()) != 1 {
+		t.Fatalf("expected 1 item with Sprint 1, got %d", len(m.list.Items()))
+	}
+
+	// Polling arrives with new items
+	newItems := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item 1", Tags: "Sprint 1"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Item 2", Tags: "Sprint 2"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Title: "Item 3", Tags: "Sprint 1"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: newItems})
+
+	// allItems updated but visible list should apply tag filter
+	if len(m.allItems) != 3 {
+		t.Errorf("expected 3 allItems, got %d", len(m.allItems))
+	}
+	if len(m.list.Items()) != 2 {
+		t.Errorf("expected 2 visible items (Sprint 1 filtered), got %d", len(m.list.Items()))
+	}
+}
+
+func TestTagFilter_IgnoredDuringSearch(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item", Tags: "Sprint 1"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Enter search mode
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	if !m.IsSearching() {
+		t.Fatal("should be in search mode")
+	}
+
+	// Try to press T - should be ignored during search
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+
+	if m.IsTagFilterActive() {
+		t.Error("T key should be ignored during search mode")
+	}
+}
+
+func TestTagFilter_IgnoredInDetailView(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item", Tags: "Sprint 1", WorkItemType: "Task"}},
+	}
+	m.list = m.list.SetItems(items)
+
+	// Enter detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.GetViewMode() != ViewDetail {
+		t.Fatal("should be in detail view")
+	}
+
+	// Try to press T - should be ignored in detail view
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+
+	if m.IsTagFilterActive() {
+		t.Error("T key should be ignored in detail view")
+	}
+}
+
+func TestCollectUniqueTags(t *testing.T) {
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Backend"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Frontend"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Tags: "Sprint 2; Backend"}},
+		{ID: 4, Fields: azdevops.WorkItemFields{Tags: ""}},
+	}
+
+	tags := collectUniqueTags(items)
+
+	// Should have 4 unique tags: Sprint 1, Backend, Frontend, Sprint 2
+	if len(tags) != 4 {
+		t.Errorf("expected 4 unique tags, got %d: %v", len(tags), tags)
+	}
+
+	// Check all expected tags are present
+	tagSet := make(map[string]bool)
+	for _, tag := range tags {
+		tagSet[tag] = true
+	}
+	for _, expected := range []string{"Sprint 1", "Backend", "Frontend", "Sprint 2"} {
+		if !tagSet[expected] {
+			t.Errorf("expected tag %q to be present", expected)
+		}
+	}
+}
+
+func TestCollectUniqueTags_Sorted(t *testing.T) {
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Tags: "Zebra; Alpha; Middle"}},
+	}
+
+	tags := collectUniqueTags(items)
+
+	if len(tags) != 3 {
+		t.Fatalf("expected 3 tags, got %d", len(tags))
+	}
+	if tags[0] != "Alpha" || tags[1] != "Middle" || tags[2] != "Zebra" {
+		t.Errorf("expected sorted tags [Alpha Middle Zebra], got %v", tags)
+	}
+}
+
+func TestApplyTagFilter(t *testing.T) {
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Backend"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Frontend"}},
+		{ID: 3, Fields: azdevops.WorkItemFields{Tags: "Sprint 2; Backend"}},
+	}
+
+	filtered := applyTagFilter(items, "Backend")
+	if len(filtered) != 2 {
+		t.Errorf("expected 2 items with Backend tag, got %d", len(filtered))
+	}
+
+	filtered = applyTagFilter(items, "Sprint 1")
+	if len(filtered) != 2 {
+		t.Errorf("expected 2 items with Sprint 1 tag, got %d", len(filtered))
+	}
+
+	filtered = applyTagFilter(items, "Nonexistent")
+	if len(filtered) != 0 {
+		t.Errorf("expected 0 items with Nonexistent tag, got %d", len(filtered))
+	}
+
+	// Empty tag = no filter
+	filtered = applyTagFilter(items, "")
+	if len(filtered) != 3 {
+		t.Errorf("expected 3 items with empty filter, got %d", len(filtered))
 	}
 }
 

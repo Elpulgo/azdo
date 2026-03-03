@@ -246,6 +246,16 @@ func (m *DetailModel) updateViewportContent() {
 		}
 	}
 
+	// Creation timestamp
+	if !m.pr.CreationDate.IsZero() {
+		sb.WriteString(m.styles.Label.Render("Created: "))
+		sb.WriteString(m.pr.CreationDate.Format("2006-01-02 15:04"))
+		if m.pr.CreatedBy.DisplayName != "" {
+			sb.WriteString(" by " + m.pr.CreatedBy.DisplayName)
+		}
+		sb.WriteString("\n\n")
+	}
+
 	// Reviewers section
 	if len(m.pr.Reviewers) > 0 {
 		sb.WriteString(m.styles.Label.Render("Reviewers"))
@@ -469,6 +479,9 @@ func (m *DetailModel) getSelectedItemLineOffset() int {
 	if m.client != nil && m.pr.Repository.ID != "" {
 		lineOffset += 2
 	}
+	if !m.pr.CreationDate.IsZero() {
+		lineOffset += 2
+	}
 	if len(m.pr.Reviewers) > 0 {
 		lineOffset += 1 + len(m.pr.Reviewers) + 1
 	}
@@ -529,7 +542,10 @@ func (m *DetailModel) SelectedFile() *azdevops.IterationChange {
 // GetContextItems returns context items for the detail view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
-		{Key: "v", Description: "Vote"},
+		{Key: "enter", Description: "open"},
+		{Key: "↑↓", Description: "navigate"},
+		{Key: "v", Description: "vote"},
+		{Key: "r", Description: "refresh"},
 	}
 }
 

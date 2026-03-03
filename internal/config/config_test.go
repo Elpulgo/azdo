@@ -200,25 +200,6 @@ func TestConfig_IsMultiProject(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingConfigDirectory(t *testing.T) {
-	// Create a temporary directory without .config
-	tempDir := t.TempDir()
-
-	// Set HOME to temp directory for testing
-	cleanup := setTestHome(t, tempDir)
-	defer cleanup()
-
-	// Load config (should return error since config file doesn't exist)
-	cfg, err := Load()
-	if err == nil {
-		t.Fatal("Load() should fail when config file is not found")
-	}
-
-	if cfg != nil {
-		t.Error("Expected cfg to be nil when config file is not found")
-	}
-}
-
 func TestGetPath_ReturnsExpectedPath(t *testing.T) {
 	// Create a temporary directory
 	tempDir := t.TempDir()

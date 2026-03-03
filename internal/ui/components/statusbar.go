@@ -12,14 +12,13 @@ import (
 )
 
 // StatusBar is a component that displays keybindings, org/project info,
-// and connection state at the bottom of the screen like lazygit.
+// and connection state at the bottom of the screen.
 type StatusBar struct {
 	styles         *styles.Styles
 	organization   string
 	project        string
 	state          polling.ConnectionState
 	keybindings    string
-	configPath     string
 	scrollPercent  float64
 	showScroll     bool
 	width          int
@@ -27,6 +26,8 @@ type StatusBar struct {
 	filterLabel    string
 	updateMessage  string
 	warningMessage string
+	contextItems   []ContextItem
+	contextStatus  string
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -68,14 +69,27 @@ func (s *StatusBar) SetKeybindings(bindings string) {
 	s.keybindings = bindings
 }
 
+// SetContextItems sets context-specific keybindings that replace the default
+// keybindings in the footer. Base shortcuts (esc back, ? help, q quit) are
+// automatically appended with deduplication.
+func (s *StatusBar) SetContextItems(items []ContextItem) {
+	s.contextItems = items
+}
+
+// ClearContextItems removes context-specific keybindings, restoring defaults.
+func (s *StatusBar) ClearContextItems() {
+	s.contextItems = nil
+	s.contextStatus = ""
+}
+
+// SetContextStatus sets an italic status message displayed alongside context items.
+func (s *StatusBar) SetContextStatus(status string) {
+	s.contextStatus = status
+}
+
 // SetWidth sets the width of the status bar.
 func (s *StatusBar) SetWidth(width int) {
 	s.width = width
-}
-
-// SetConfigPath sets the config file path to display.
-func (s *StatusBar) SetConfigPath(path string) {
-	s.configPath = path
 }
 
 // SetScrollPercent sets the scroll percentage (0-100).
@@ -161,6 +175,14 @@ func (s *StatusBar) View() string {
 		parts = append(parts, s.renderKeybindings())
 	}
 
+	if s.contextStatus != "" {
+		statusStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(s.styles.Theme.ForegroundMuted)).
+			Background(lipgloss.Color(s.styles.Theme.Background)).
+			Italic(true)
+		parts = append(parts, statusStyle.Render(s.contextStatus))
+	}
+
 	if s.warningMessage != "" {
 		warningStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
@@ -190,10 +212,6 @@ func (s *StatusBar) View() string {
 		parts = append(parts, orgProj)
 	}
 
-	if configPath := s.renderConfigPath(); configPath != "" {
-		parts = append(parts, configPath)
-	}
-
 	if scrollPercent := s.renderScrollPercent(); scrollPercent != "" {
 		parts = append(parts, scrollPercent)
 	}
@@ -214,6 +232,10 @@ func (s *StatusBar) View() string {
 
 // renderKeybindings renders the keybindings section.
 func (s *StatusBar) renderKeybindings() string {
+	if len(s.contextItems) > 0 {
+		return s.renderContextKeybindings()
+	}
+
 	if s.keybindings != "" {
 		return s.keybindings
 	}
@@ -231,6 +253,42 @@ func (s *StatusBar) renderKeybindings() string {
 		s.styles.Key.Render("esc") + s.styles.Description.Render(" back") + sep +
 		s.styles.Key.Render("?") + s.styles.Description.Render(" help") + sep +
 		s.styles.Key.Render("q") + s.styles.Description.Render(" quit")
+}
+
+// renderContextKeybindings renders context-specific keybindings with base
+// shortcuts (esc back, ? help, q quit) appended, deduplicating any that
+// already exist in the context items.
+func (s *StatusBar) renderContextKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Border)).
+		Background(lipgloss.Color(s.styles.Theme.Background))
+	sep := sepStyle.Render(" • ")
+
+	// Track which base shortcut keys are already in context items
+	hasKey := make(map[string]bool)
+	for _, item := range s.contextItems {
+		hasKey[item.Key] = true
+	}
+
+	// Render context items
+	var parts []string
+	for _, item := range s.contextItems {
+		parts = append(parts, s.styles.Key.Render(item.Key)+" "+s.styles.Description.Render(item.Description))
+	}
+
+	// Append base shortcuts with deduplication
+	baseShortcuts := []ContextItem{
+		{Key: "esc", Description: "back"},
+		{Key: "?", Description: "help"},
+		{Key: "q", Description: "quit"},
+	}
+	for _, base := range baseShortcuts {
+		if !hasKey[base.Key] {
+			parts = append(parts, s.styles.Key.Render(base.Key)+" "+s.styles.Description.Render(base.Description))
+		}
+	}
+
+	return strings.Join(parts, sep)
 }
 
 // renderOrgProject renders the organization and project section.
@@ -261,19 +319,6 @@ func (s *StatusBar) renderOrgProject() string {
 	return orgProjectStyle.Render(s.project)
 }
 
-// renderConfigPath renders the config file path.
-func (s *StatusBar) renderConfigPath() string {
-	if s.configPath == "" {
-		return ""
-	}
-	configStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
-		Background(lipgloss.Color(s.styles.Theme.Background)).
-		Bold(true)
-
-	return configStyle.Render(s.configPath)
-}
-
 // renderScrollPercent renders the scroll percentage indicator.
 func (s *StatusBar) renderScrollPercent() string {
 	if !s.showScroll {
@@ -286,7 +331,7 @@ func (s *StatusBar) renderScrollPercent() string {
 func (s *StatusBar) renderConnectionState() string {
 	switch s.state {
 	case polling.StateConnected:
-		return s.styles.Connected.Render("● connected")
+		return s.styles.Connected.Render("●")
 	case polling.StateConnecting:
 		return s.styles.Connecting.Render("◐ connecting")
 	case polling.StateDisconnected:

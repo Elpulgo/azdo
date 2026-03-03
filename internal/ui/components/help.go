@@ -9,7 +9,7 @@ import (
 )
 
 // minModalWidth is the minimum width for the help modal content
-const minModalWidth = 50
+const minModalWidth = 80
 
 // HelpBinding represents a single keybinding entry.
 type HelpBinding struct {
@@ -25,11 +25,13 @@ type HelpSection struct {
 
 // HelpModal is an overlay that displays available keybindings.
 type HelpModal struct {
-	styles   *styles.Styles
-	visible  bool
-	width    int
-	height   int
-	sections []HelpSection
+	styles      *styles.Styles
+	visible     bool
+	width       int
+	height      int
+	sections    []HelpSection
+	configPath  string
+	versionInfo string
 }
 
 // NewHelpModal creates a new HelpModal with default keybindings.
@@ -60,12 +62,30 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 				Bindings: []HelpBinding{
 					{Key: "f", Description: "Search / filter"},
 					{Key: "m", Description: "Toggle my items (work items)"},
+					{Key: "T", Description: "Filter by tag (work items)"},
 					{Key: "r", Description: "Refresh data"},
 					{Key: "v", Description: "Vote on PR (detail view)"},
-				{Key: "s", Description: "Change work item state (detail view)"},
+					{Key: "s", Description: "Change work item state (detail view)"},
 					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},
 					{Key: "q", Description: "Quit application"},
+				},
+			},
+			{
+				Title: "Code Review (PR diff)",
+				Bindings: []HelpBinding{
+					{Key: "c", Description: "Create new comment"},
+					{Key: "p", Description: "Reply to nearest thread"},
+					{Key: "x", Description: "Resolve nearest thread"},
+					{Key: "n", Description: "Jump to next comment"},
+					{Key: "N", Description: "Jump to previous comment"},
+				},
+			},
+			{
+				Title: "Log Viewer (pipelines)",
+				Bindings: []HelpBinding{
+					{Key: "g", Description: "Go to top"},
+					{Key: "G", Description: "Go to bottom"},
 				},
 			},
 		},
@@ -96,6 +116,16 @@ func (h *HelpModal) IsVisible() bool {
 func (h *HelpModal) SetSize(width, height int) {
 	h.width = width
 	h.height = height
+}
+
+// SetConfigPath sets the config file path to display in the help modal.
+func (h *HelpModal) SetConfigPath(path string) {
+	h.configPath = path
+}
+
+// SetVersionInfo sets the version info string to display in the help modal.
+func (h *HelpModal) SetVersionInfo(info string) {
+	h.versionInfo = info
 }
 
 // AddSection adds a custom section to the help modal.
@@ -206,6 +236,32 @@ func (h *HelpModal) View() string {
 		for _, binding := range section.Bindings {
 			line := helpKeyStyle.Render(binding.Key) + helpDescStyle.Render(binding.Description)
 			content.WriteString(line)
+			content.WriteString("\n")
+		}
+	}
+
+	// Info section (version, config path)
+	if h.versionInfo != "" || h.configPath != "" {
+		infoSectionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
+			Bold(true).
+			MarginTop(1).
+			Width(contentWidth).
+			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+		infoValueStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+			Width(contentWidth)
+
+		content.WriteString(infoSectionStyle.Render("Info"))
+		content.WriteString("\n")
+		if h.versionInfo != "" {
+			content.WriteString(infoValueStyle.Render("Version: " + h.versionInfo))
+			content.WriteString("\n")
+		}
+		if h.configPath != "" {
+			content.WriteString(infoValueStyle.Render("Config: " + h.configPath))
 			content.WriteString("\n")
 		}
 	}

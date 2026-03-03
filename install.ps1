@@ -9,8 +9,7 @@
 [CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$InstallDir = "",
-    [switch]$SkipConfig,
+    [string]$InstallDir = "",    
     [switch]$Help
 )
 
@@ -296,68 +295,6 @@ function Install-Binary {
     }
 }
 
-# ─── Configuration file setup ─────────────────────────────────────────────────
-
-function Setup-Config {
-    if ($SkipConfig) {
-        Write-Info "Skipping configuration file setup (-SkipConfig)"
-        return
-    }
-
-    $configDir = Join-Path $env:USERPROFILE ".config\$ConfigDirName"
-    $script:ConfigFile = Join-Path $configDir "config.yaml"
-
-    if (Test-Path $ConfigFile) {
-        Write-Ok "Configuration file already exists at $ConfigFile"
-        Write-Info "Skipping config creation to preserve your settings."
-        return
-    }
-
-    Write-Info "Creating configuration directory: $configDir"
-    try {
-        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-    }
-    catch {
-        Write-Err "Failed to create config directory: $configDir"
-        Write-Err "You can create it manually later."
-        return
-    }
-
-    Write-Info "Creating configuration file with placeholder values..."
-
-    $configContent = @"
-# Azure DevOps TUI Configuration
-# Documentation: https://github.com/$RepoOwner/$RepoName#configuration
-
-# Azure DevOps organization name (required)
-# Replace with your organization name from https://dev.azure.com/{organization}
-organization: your-org-name
-
-# Azure DevOps project name(s) (required)
-# Simple format:
-projects:
-  - your-project-name
-
-# With display names (friendly name shown in UI):
-#   projects:
-#     - name: ugly-api-project-name
-#       display_name: My Project
-#     - simple-project
-
-# Polling interval in seconds (optional, default: 60)
-polling_interval: 60
-
-# Theme (optional, default: dark)
-# Available: dark, gruvbox, nord, dracula, catppuccin, github, retro
-# Custom themes: Place JSON files in ~/.config/azdo-tui/themes/
-theme: dark
-"@
-
-    Set-Content -Path $ConfigFile -Value $configContent -Encoding UTF8
-    Write-Ok "Created configuration file at $ConfigFile"
-    Write-Warn "Edit this file with your Azure DevOps organization and project details before running azdo-tui."
-}
-
 # ─── Summary ───────────────────────────────────────────────────────────────────
 
 function Show-Summary {
@@ -367,21 +304,14 @@ function Show-Summary {
     Write-Host "────────────────────────────────────────────────" -ForegroundColor Green
     Write-Host ""
 
-    if (-not $SkipConfig -and $ConfigFile -and (Test-Path $ConfigFile)) {
+    if (-and $ConfigFile -and (Test-Path $ConfigFile)) {
         Write-Host "  Next steps:"
-        Write-Host "    1. Edit your config file:"
+        Write-Host "    1. Edit your config file or run azdo and follow the wizard:"
         Write-Host "       $ConfigFile" -ForegroundColor Cyan
         Write-Host "    2. Set your organization and project name(s)"
         Write-Host "    3. Run " -NoNewline
         Write-Host "azdo-tui" -ForegroundColor Cyan
         Write-Host "       (You'll be prompted for your Azure DevOps PAT on first run)"
-    }
-    else {
-        Write-Host "  Next steps:"
-        Write-Host "    1. Create a config file at " -NoNewline
-        Write-Host "$env:USERPROFILE\.config\$ConfigDirName\config.yaml" -ForegroundColor Cyan
-        Write-Host "    2. Run " -NoNewline
-        Write-Host "azdo-tui" -ForegroundColor Cyan
     }
 
     Write-Host ""
@@ -408,9 +338,6 @@ function Main {
 
     Write-Step "Downloading and installing"
     Install-Binary -ArchName $archName -TargetDir $installDir
-
-    Write-Step "Setting up configuration"
-    Setup-Config
 
     Show-Summary
 }

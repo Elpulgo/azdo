@@ -77,12 +77,37 @@ Required PAT permissions:
   Work Items   (Read & Write) - queries, state changes
 
 Keyboard shortcuts (in TUI):
-  1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
-  r            Refresh data
-  f            Search / filter
-  t            Select theme
-  ?            Toggle help overlay
-  q            Quit
+  Navigation:
+    ↑/k          Move up
+    ↓/j          Move down
+    pgup/pgdn    Page up / down
+    enter        View details / expand
+    esc          Go back
+
+  Tabs:
+    1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
+    ←/→          Previous / next tab
+
+  Actions:
+    f            Search / filter
+    m            Toggle my items (work items)
+    T            Filter by tag (work items)
+    r            Refresh data
+    v            Vote on PR (detail view)
+    s            Change work item state (detail view)
+    t            Select theme
+    ?            Toggle help overlay
+    q            Quit
+
+  Code Review (PR diff):
+    c            Create new comment
+    p            Reply to nearest thread
+    x            Resolve nearest thread
+    n / N        Jump to next / previous comment
+
+  Log Viewer (pipelines):
+    g            Go to top
+    G            Go to bottom
 
 For more information, visit: https://github.com/Elpulgo/azdo
 `, version, configPath)
@@ -166,7 +191,7 @@ func runTUI() error {
 	}
 
 	// Create and run the TUI application
-	model := app.NewModel(client, cfg, version)
+	model := app.NewModel(client, cfg, version, commit)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

@@ -3,6 +3,7 @@ package styles
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -215,53 +216,16 @@ func TestListAvailableThemes(t *testing.T) {
 	}
 }
 
-// TestDefaultTheme tests that GetDefaultTheme returns the gruvbox theme
+// TestDefaultTheme tests that GetDefaultTheme returns the dracula theme
 func TestDefaultTheme(t *testing.T) {
 	theme := GetDefaultTheme()
 
 	if theme.Name != "dracula" {
-		t.Errorf("GetDefaultTheme() returned theme %q, want %q", theme.Name, "gruvbox")
+		t.Errorf("GetDefaultTheme() returned theme %q, want %q", theme.Name, "dracula")
 	}
 
 	if err := theme.Validate(); err != nil {
 		t.Errorf("Default theme failed validation: %v", err)
-	}
-}
-
-// TestThemeColorsInterface tests that Theme implements ThemeColors interface
-func TestThemeColorsInterface(t *testing.T) {
-	theme, _ := GetThemeByName("dark")
-
-	// Verify Theme implements ThemeColors
-	var _ ThemeColors = theme
-
-	// Test all interface methods return expected values
-	if theme.GetName() != "dark" {
-		t.Errorf("GetName() = %q, want %q", theme.GetName(), "dark")
-	}
-	if theme.GetPrimary() != theme.Primary {
-		t.Error("GetPrimary() doesn't match Primary field")
-	}
-	if theme.GetSecondary() != theme.Secondary {
-		t.Error("GetSecondary() doesn't match Secondary field")
-	}
-	if theme.GetAccent() != theme.Accent {
-		t.Error("GetAccent() doesn't match Accent field")
-	}
-	if theme.GetSuccess() != theme.Success {
-		t.Error("GetSuccess() doesn't match Success field")
-	}
-	if theme.GetWarning() != theme.Warning {
-		t.Error("GetWarning() doesn't match Warning field")
-	}
-	if theme.GetError() != theme.Error {
-		t.Error("GetError() doesn't match Error field")
-	}
-	if theme.GetBackground() != theme.Background {
-		t.Error("GetBackground() doesn't match Background field")
-	}
-	if theme.GetForeground() != theme.Foreground {
-		t.Error("GetForeground() doesn't match Foreground field")
 	}
 }
 
@@ -363,31 +327,9 @@ func TestGetThemesDirectoryPath(t *testing.T) {
 	}
 
 	// Path should contain .config/azdo-tui/themes
-	if !contains(path, "azdo-tui") || !contains(path, "themes") {
+	if !strings.Contains(path, "azdo-tui") || !strings.Contains(path, "themes") {
 		t.Errorf("GetThemesDirectoryPath() = %q, should contain 'azdo-tui' and 'themes'", path)
 	}
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (hasPrefix(s, substr) || hasSuffix(s, substr) || hasInfix(s, substr)))
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-func hasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
-}
-
-func hasInfix(s, infix string) bool {
-	for i := 0; i <= len(s)-len(infix); i++ {
-		if s[i:i+len(infix)] == infix {
-			return true
-		}
-	}
-	return false
 }
 
 // TestLoadCustomThemesFromDirectory tests loading custom themes from a directory

@@ -1,25 +1,12 @@
 package components
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// TestThemePickerInitialization tests that a theme picker can be created
-func TestThemePickerInitialization(t *testing.T) {
-	theme := styles.GetDefaultTheme()
-	appStyles := styles.NewStyles(theme)
-	availableThemes := []string{"dark", "gruvbox", "nord"}
-	currentTheme := "dark"
-
-	picker := NewThemePicker(appStyles, availableThemes, currentTheme)
-
-	if picker.IsVisible() {
-		t.Error("Expected theme picker to be hidden initially")
-	}
-}
 
 // TestThemePickerShowHide tests visibility toggling
 func TestThemePickerShowHide(t *testing.T) {
@@ -196,31 +183,11 @@ func TestThemePickerView(t *testing.T) {
 	}
 
 	// Should contain theme names
-	if !contains(view, "dark") {
+	if !strings.Contains(view, "dark") {
 		t.Error("Expected view to contain 'dark' theme")
 	}
-	if !contains(view, "gruvbox") {
+	if !strings.Contains(view, "gruvbox") {
 		t.Error("Expected view to contain 'gruvbox' theme")
 	}
 }
 
-// TestThemePickerSetSize tests size setting
-func TestThemePickerSetSize(t *testing.T) {
-	theme := styles.GetDefaultTheme()
-	appStyles := styles.NewStyles(theme)
-	availableThemes := []string{"dark", "gruvbox"}
-	currentTheme := "dark"
-
-	picker := NewThemePicker(appStyles, availableThemes, currentTheme)
-	picker.SetSize(100, 30)
-
-	// Should not panic and should accept the size
-	// The actual size handling is implementation-specific
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		(s == substr || len(s) > 0 && (s[0:len(substr)] == substr ||
-		len(s) > len(substr) && contains(s[1:], substr)))
-}

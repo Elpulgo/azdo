@@ -222,6 +222,20 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n\n")
 	}
 
+	// Last changed timestamp
+	if !wi.Fields.ChangedDate.IsZero() {
+		sb.WriteString(m.styles.Label.Render("Last changed: "))
+		sb.WriteString(wi.Fields.ChangedDate.Format("2006-01-02 15:04"))
+		sb.WriteString("\n\n")
+	}
+
+	// Tags
+	if tags := wi.TagList(); len(tags) > 0 {
+		sb.WriteString(m.styles.Label.Render("Tags: "))
+		sb.WriteString(strings.Join(tags, ", "))
+		sb.WriteString("\n\n")
+	}
+
 	// Link to work item (shown before description for quick access)
 	if m.client != nil {
 		url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), wi.ID)

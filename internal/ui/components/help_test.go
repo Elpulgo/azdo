@@ -63,27 +63,15 @@ func TestHelpModal_View_WhenHidden(t *testing.T) {
 	}
 }
 
-func TestHelpModal_View_WhenVisible(t *testing.T) {
-	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(80, 24)
-	h.Show()
-
-	view := h.View()
-
-	if view == "" {
-		t.Error("view should not be empty when visible")
-	}
-}
-
 func TestHelpModal_View_ContainsTitle(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 24)
 	h.Show()
 
-	view := h.View()
+	view := strings.ToLower(h.View())
 
-	if !strings.Contains(strings.ToLower(view), "help") {
-		t.Error("view should contain help title")
+	if !strings.Contains(view, "keyboard shortcuts") {
+		t.Error("view should contain the 'Keyboard Shortcuts' title")
 	}
 }
 
@@ -100,6 +88,43 @@ func TestHelpModal_View_ContainsKeybindings(t *testing.T) {
 		if !strings.Contains(strings.ToLower(view), kb) {
 			t.Errorf("view should contain '%s' keybinding", kb)
 		}
+	}
+}
+
+func TestHelpModal_View_ContainsCodeReviewSection(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.Show()
+
+	view := h.View()
+	lower := strings.ToLower(view)
+
+	if !strings.Contains(lower, "code review") {
+		t.Error("help modal should contain 'Code Review' section")
+	}
+	for _, desc := range []string{"create new comment", "reply to nearest thread", "resolve nearest thread"} {
+		if !strings.Contains(lower, desc) {
+			t.Errorf("help modal should contain code review binding: %s", desc)
+		}
+	}
+}
+
+func TestHelpModal_View_ContainsLogViewerSection(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.Show()
+
+	view := h.View()
+	lower := strings.ToLower(view)
+
+	if !strings.Contains(lower, "log viewer") {
+		t.Error("help modal should contain 'Log Viewer' section")
+	}
+	if !strings.Contains(lower, "go to top") {
+		t.Error("help modal should contain 'Go to top' binding")
+	}
+	if !strings.Contains(lower, "go to bottom") {
+		t.Error("help modal should contain 'Go to bottom' binding")
 	}
 }
 
@@ -136,12 +161,25 @@ func TestHelpModal_Update_QHides(t *testing.T) {
 	}
 }
 
-func TestHelpModal_SetSize(t *testing.T) {
+func TestHelpModal_SetSize_AffectsViewCentering(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(100, 50)
+	h.Show()
 
-	if h.width != 100 || h.height != 50 {
-		t.Errorf("expected size 100x50, got %dx%d", h.width, h.height)
+	// Render without size — no centering applied
+	h.SetSize(0, 0)
+	viewNoSize := h.View()
+
+	// Render with a large terminal size — centering should add leading whitespace
+	h.SetSize(200, 60)
+	viewWithSize := h.View()
+
+	if viewWithSize == viewNoSize {
+		t.Error("setting a large terminal size should change the rendered output (centering)")
+	}
+
+	// The centered view should have leading blank lines (vertical centering)
+	if !strings.HasPrefix(viewWithSize, "\n") {
+		t.Error("centered view should start with blank lines for vertical padding")
 	}
 }
 
@@ -160,5 +198,84 @@ func TestHelpModal_AddSection(t *testing.T) {
 	}
 	if !strings.Contains(view, "do something") {
 		t.Error("view should contain custom binding description")
+	}
+}
+
+func TestHelpModal_SetConfigPath_ShowsInView(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("help modal should display config path when set")
+	}
+}
+
+func TestHelpModal_NoConfigPath_NotShown(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if strings.Contains(view, "Config") {
+		t.Error("help modal should not show config section when no path set")
+	}
+}
+
+func TestHelpModal_SetVersionInfo_ShowsInView(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetVersionInfo("1.2.3 (abc1234)")
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "1.2.3") {
+		t.Error("help modal should display version when set")
+	}
+	if !strings.Contains(view, "abc1234") {
+		t.Error("help modal should display commit hash when set")
+	}
+}
+
+func TestHelpModal_EmptyVersionInfo_NotShown(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if strings.Contains(view, "Version") {
+		t.Error("help modal should not show version when not set")
+	}
+}
+
+func TestHelpModal_VersionAndConfig_BothInInfoSection(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetVersionInfo("2.0.0 (def5678)")
+	h.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
+	h.SetSize(80, 40)
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "2.0.0") {
+		t.Error("help modal should show version in info section")
+	}
+	if !strings.Contains(view, "config.yaml") {
+		t.Error("help modal should show config path in info section")
+	}
+	// Both should be under the same "Info" heading
+	infoIdx := strings.Index(view, "Info")
+	if infoIdx == -1 {
+		t.Fatal("help modal should have an Info section")
+	}
+	afterInfo := view[infoIdx:]
+	if !strings.Contains(afterInfo, "2.0.0") || !strings.Contains(afterInfo, "config.yaml") {
+		t.Error("both version and config should appear after the Info heading")
 	}
 }

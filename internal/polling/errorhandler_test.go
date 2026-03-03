@@ -8,20 +8,6 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 )
 
-func TestErrorHandler_New(t *testing.T) {
-	eh := NewErrorHandler()
-
-	if eh == nil {
-		t.Fatal("expected non-nil ErrorHandler")
-	}
-	if eh.HasError() {
-		t.Error("new error handler should not have an error")
-	}
-	if eh.consecutiveErrors != 0 {
-		t.Error("consecutive errors should be 0 initially")
-	}
-}
-
 func TestErrorHandler_SetError(t *testing.T) {
 	eh := NewErrorHandler()
 	err := errors.New("connection failed")

@@ -82,15 +82,44 @@ func TestStatusBar_View_ContainsProject(t *testing.T) {
 	}
 }
 
-func TestStatusBar_View_Connected_ShowsConnected(t *testing.T) {
+func TestStatusBar_View_Connected_ShowsIconOnly(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetState(polling.StateConnected)
 	sb.SetWidth(120)
 
 	view := sb.View()
 
-	if !strings.Contains(strings.ToLower(view), "connected") {
-		t.Error("view should indicate connected state")
+	// Connected state should show the icon
+	if !strings.Contains(view, "●") {
+		t.Error("view should contain connected icon ●")
+	}
+	// Connected state should NOT show the word "connected"
+	if strings.Contains(strings.ToLower(view), "connected") {
+		t.Error("connected state should show icon only, not the word 'connected'")
+	}
+}
+
+func TestStatusBar_View_NonConnectedStates_ShowText(t *testing.T) {
+	tests := []struct {
+		state      polling.ConnectionState
+		expectText string
+	}{
+		{polling.StateConnecting, "connecting"},
+		{polling.StateDisconnected, "disconnected"},
+		{polling.StateError, "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			sb := NewStatusBar(styles.DefaultStyles())
+			sb.SetState(tt.state)
+			sb.SetWidth(120)
+
+			view := sb.View()
+			if !strings.Contains(strings.ToLower(view), tt.expectText) {
+				t.Errorf("state %s should show text '%s'", tt.state, tt.expectText)
+			}
+		})
 	}
 }
 
@@ -233,24 +262,15 @@ func TestStatusBar_Update_WithKeyMsg(t *testing.T) {
 	}
 }
 
-func TestStatusBar_SetConfigPath(t *testing.T) {
+func TestStatusBar_View_DoesNotContainConfigPath(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
-	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
-
-	if sb.configPath != "/home/user/.config/azdo-tui/config.yaml" {
-		t.Errorf("expected configPath to be set, got '%s'", sb.configPath)
-	}
-}
-
-func TestStatusBar_View_ContainsConfigPath(t *testing.T) {
-	sb := NewStatusBar(styles.DefaultStyles())
-	sb.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
 	sb.SetWidth(200)
 
 	view := sb.View()
 
-	if !strings.Contains(view, "config.yaml") {
-		t.Error("view should contain config path")
+	// Config path should never appear in the status bar
+	if strings.Contains(view, "config.yaml") {
+		t.Error("status bar should NOT contain config path")
 	}
 }
 
@@ -452,6 +472,124 @@ func TestStatusBar_View_WarningMessageNotShownWhenEmpty(t *testing.T) {
 	// No warning section should appear
 	if strings.Contains(view, "⚠") {
 		t.Error("view should not contain warning indicator when no warning set")
+	}
+}
+
+func TestStatusBar_SetContextItems(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	items := []ContextItem{
+		{Key: "v", Description: "Vote"},
+		{Key: "a", Description: "Approve"},
+	}
+	sb.SetContextItems(items)
+
+	if len(sb.contextItems) != 2 {
+		t.Errorf("expected 2 context items, got %d", len(sb.contextItems))
+	}
+	if sb.contextItems[0].Key != "v" || sb.contextItems[0].Description != "Vote" {
+		t.Error("first context item not stored correctly")
+	}
+}
+
+func TestStatusBar_ClearContextItems(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetContextItems([]ContextItem{
+		{Key: "v", Description: "Vote"},
+	})
+	sb.ClearContextItems()
+
+	if len(sb.contextItems) != 0 {
+		t.Errorf("expected 0 context items after clear, got %d", len(sb.contextItems))
+	}
+}
+
+func TestStatusBar_View_ContextItemsReplaceDefaultKeybindings(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWidth(200)
+	sb.SetContextItems([]ContextItem{
+		{Key: "v", Description: "Vote"},
+	})
+
+	view := sb.View()
+
+	// Context item should be shown
+	if !strings.Contains(view, "Vote") {
+		t.Error("view should contain context item 'Vote'")
+	}
+	// Default keybindings should NOT be shown
+	if strings.Contains(view, "refresh") {
+		t.Error("view should NOT contain default 'refresh' when context items are set")
+	}
+	if strings.Contains(view, "navigate") {
+		t.Error("view should NOT contain default 'navigate' when context items are set")
+	}
+}
+
+func TestStatusBar_View_ContextItemsIncludeBaseShortcuts(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWidth(200)
+	sb.SetContextItems([]ContextItem{
+		{Key: "v", Description: "Vote"},
+	})
+
+	view := sb.View()
+
+	// Base shortcuts should always appear
+	if !strings.Contains(view, "back") {
+		t.Error("view should contain 'back' base shortcut")
+	}
+	if !strings.Contains(view, "help") {
+		t.Error("view should contain 'help' base shortcut")
+	}
+	if !strings.Contains(view, "quit") {
+		t.Error("view should contain 'quit' base shortcut")
+	}
+}
+
+func TestStatusBar_View_ContextItemsDeduplicateEsc(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWidth(200)
+	sb.SetContextItems([]ContextItem{
+		{Key: "v", Description: "Vote"},
+		{Key: "esc", Description: "back"},
+	})
+
+	view := sb.View()
+
+	// "back" should appear exactly once — count occurrences
+	count := strings.Count(view, "back")
+	if count != 1 {
+		t.Errorf("expected 'back' to appear once (deduplicated), got %d occurrences", count)
+	}
+}
+
+func TestStatusBar_SetContextStatus(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWidth(200)
+	sb.SetContextStatus("Loading PR details...")
+
+	view := sb.View()
+
+	if !strings.Contains(view, "Loading PR details...") {
+		t.Error("view should contain context status message")
+	}
+}
+
+func TestStatusBar_View_NoContextItems_ShowsDefault(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	// Should still show default keybindings when no context items
+	if !strings.Contains(view, "refresh") {
+		t.Error("view should contain 'refresh' when no context items set")
+	}
+	if !strings.Contains(view, "navigate") {
+		t.Error("view should contain 'navigate' when no context items set")
+	}
+	if !strings.Contains(view, "quit") {
+		t.Error("view should contain 'quit' when no context items set")
 	}
 }
 
