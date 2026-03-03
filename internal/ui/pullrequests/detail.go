@@ -246,6 +246,16 @@ func (m *DetailModel) updateViewportContent() {
 		}
 	}
 
+	// Creation timestamp
+	if !m.pr.CreationDate.IsZero() {
+		sb.WriteString(m.styles.Label.Render("Created: "))
+		sb.WriteString(m.pr.CreationDate.Format("2006-01-02 15:04"))
+		if m.pr.CreatedBy.DisplayName != "" {
+			sb.WriteString(" by " + m.pr.CreatedBy.DisplayName)
+		}
+		sb.WriteString("\n\n")
+	}
+
 	// Reviewers section
 	if len(m.pr.Reviewers) > 0 {
 		sb.WriteString(m.styles.Label.Render("Reviewers"))
@@ -467,6 +477,9 @@ func (m *DetailModel) getSelectedItemLineOffset() int {
 		lineOffset += strings.Count(m.pr.Description, "\n") + 2
 	}
 	if m.client != nil && m.pr.Repository.ID != "" {
+		lineOffset += 2
+	}
+	if !m.pr.CreationDate.IsZero() {
 		lineOffset += 2
 	}
 	if len(m.pr.Reviewers) > 0 {

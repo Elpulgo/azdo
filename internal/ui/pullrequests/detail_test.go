@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
@@ -1333,5 +1334,114 @@ func TestChangeTypeDisplay(t *testing.T) {
 				t.Errorf("changeTypeDisplay(%q) icon = %q, want %q", tt.changeType, icon, tt.wantIcon)
 			}
 		})
+	}
+}
+
+func TestDetailView_ShowsCreationTimestamp(t *testing.T) {
+	createdAt := time.Date(2026, 2, 15, 10, 30, 0, 0, time.UTC)
+
+	pr := azdevops.PullRequest{
+		ID:            200,
+		Title:         "Feature with timestamp",
+		Description:   "Some description",
+		Status:        "active",
+		CreationDate:  createdAt,
+		SourceRefName: "refs/heads/feature/ts",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Alice"},
+		Repository:    azdevops.Repository{ID: "repo-1", Name: "my-repo"},
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	if !strings.Contains(view, "2026-02-15 10:30") {
+		t.Error("Expected detail view to show the formatted creation timestamp '2026-02-15 10:30'")
+	}
+	if !strings.Contains(view, "Created") {
+		t.Error("Expected detail view to show the 'Created' label")
+	}
+}
+
+func TestDetailView_CreationTimestampShowsAuthor(t *testing.T) {
+	createdAt := time.Date(2026, 1, 20, 8, 0, 0, 0, time.UTC)
+
+	pr := azdevops.PullRequest{
+		ID:            201,
+		Title:         "PR by Bob",
+		CreationDate:  createdAt,
+		SourceRefName: "refs/heads/feature/x",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Bob Builder"},
+		Repository:    azdevops.Repository{ID: "repo-1"},
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	// The author's name should appear near the creation timestamp
+	if !strings.Contains(view, "Bob Builder") {
+		t.Error("Expected detail view to show the PR author name 'Bob Builder'")
+	}
+}
+
+func TestDetailView_ZeroCreationDateIsHidden(t *testing.T) {
+	pr := azdevops.PullRequest{
+		ID:            202,
+		Title:         "PR without date",
+		SourceRefName: "refs/heads/feature/y",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Charlie"},
+		Repository:    azdevops.Repository{ID: "repo-1"},
+		// CreationDate is zero value — not set
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	if strings.Contains(view, "Created") {
+		t.Error("Expected 'Created' label NOT to appear when CreationDate is zero")
+	}
+}
+
+func TestDetailView_CreationTimestampAppearsBeforeReviewers(t *testing.T) {
+	createdAt := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	pr := azdevops.PullRequest{
+		ID:            203,
+		Title:         "Ordering test PR",
+		Description:   "Desc",
+		CreationDate:  createdAt,
+		SourceRefName: "refs/heads/feature/order",
+		TargetRefName: "refs/heads/main",
+		CreatedBy:     azdevops.Identity{DisplayName: "Dave"},
+		Repository:    azdevops.Repository{ID: "repo-1"},
+		Reviewers: []azdevops.Reviewer{
+			{ID: "r1", DisplayName: "Eve Reviewer", Vote: 0},
+		},
+	}
+
+	model := NewDetailModel(nil, pr)
+	model.SetSize(100, 40)
+
+	view := model.View()
+
+	createdPos := strings.Index(view, "Created")
+	reviewersPos := strings.Index(view, "Reviewers")
+
+	if createdPos == -1 {
+		t.Fatal("Expected 'Created' to appear in the view")
+	}
+	if reviewersPos == -1 {
+		t.Fatal("Expected 'Reviewers' to appear in the view")
+	}
+	if createdPos >= reviewersPos {
+		t.Errorf("Expected 'Created' (pos %d) to appear before 'Reviewers' (pos %d)", createdPos, reviewersPos)
 	}
 }
