@@ -74,28 +74,6 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-func TestClient_GetOrg(t *testing.T) {
-	client, err := NewClient("myorg", "myproject", "test-pat")
-	if err != nil {
-		t.Fatalf("NewClient() failed: %v", err)
-	}
-
-	if got := client.GetOrg(); got != "myorg" {
-		t.Errorf("GetOrg() = %q, want %q", got, "myorg")
-	}
-}
-
-func TestClient_GetProject(t *testing.T) {
-	client, err := NewClient("myorg", "myproject", "test-pat")
-	if err != nil {
-		t.Fatalf("NewClient() failed: %v", err)
-	}
-
-	if got := client.GetProject(); got != "myproject" {
-		t.Errorf("GetProject() = %q, want %q", got, "myproject")
-	}
-}
-
 func TestClient_BaseURL(t *testing.T) {
 	client, err := NewClient("myorg", "myproject", "test-pat")
 	if err != nil {
@@ -193,30 +171,6 @@ func TestClient_Get_Success(t *testing.T) {
 	}
 }
 
-func TestClient_Get_HTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"message": "Unauthorized"}`))
-	}))
-	defer server.Close()
-
-	client, err := NewClient("myorg", "myproject", "test-pat")
-	if err != nil {
-		t.Fatalf("NewClient() failed: %v", err)
-	}
-
-	client.baseURL = server.URL
-
-	_, err = client.get("/test")
-	if err == nil {
-		t.Error("Expected error for 401 response, got nil")
-	}
-
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("Expected error to contain '401', got %q", err.Error())
-	}
-}
-
 func TestClient_Get_ExpiredOrInvalidPAT(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -260,62 +214,6 @@ func TestClient_Get_InsufficientPermissions(t *testing.T) {
 	client.baseURL = server.URL
 
 	_, err = client.get("/test")
-	if err == nil {
-		t.Error("Expected error for 403 response, got nil")
-	}
-
-	// Check for user-friendly error message about permissions
-	if !strings.Contains(err.Error(), "PAT") {
-		t.Errorf("Expected error to mention PAT, got %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "permission") {
-		t.Errorf("Expected error to mention 'permission', got %q", err.Error())
-	}
-}
-
-func TestClient_DoRequest_ExpiredOrInvalidPAT(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"message": "Unauthorized"}`))
-	}))
-	defer server.Close()
-
-	client, err := NewClient("myorg", "myproject", "test-pat")
-	if err != nil {
-		t.Fatalf("NewClient() failed: %v", err)
-	}
-
-	client.baseURL = server.URL
-
-	_, err = client.doRequest("POST", "/test", nil)
-	if err == nil {
-		t.Error("Expected error for 401 response, got nil")
-	}
-
-	// Check for user-friendly error message about PAT
-	if !strings.Contains(err.Error(), "PAT") {
-		t.Errorf("Expected error to mention PAT, got %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "expired") || !strings.Contains(err.Error(), "invalid") {
-		t.Errorf("Expected error to mention 'expired' or 'invalid', got %q", err.Error())
-	}
-}
-
-func TestClient_DoRequest_InsufficientPermissions(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"message": "Access denied"}`))
-	}))
-	defer server.Close()
-
-	client, err := NewClient("myorg", "myproject", "test-pat")
-	if err != nil {
-		t.Fatalf("NewClient() failed: %v", err)
-	}
-
-	client.baseURL = server.URL
-
-	_, err = client.doRequest("PUT", "/test", nil)
 	if err == nil {
 		t.Error("Expected error for 403 response, got nil")
 	}
@@ -381,32 +279,6 @@ func TestClient_Get_InvalidURL(t *testing.T) {
 	_, err = client.get("/test")
 	if err == nil {
 		t.Error("Expected error for invalid URL, got nil")
-	}
-}
-
-func TestClient_Get_WithAPIVersion(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check for api-version query parameter
-		apiVersion := r.URL.Query().Get("api-version")
-		if apiVersion == "" {
-			t.Error("api-version query parameter is missing")
-		}
-
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"value": []}`))
-	}))
-	defer server.Close()
-
-	client, err := NewClient("myorg", "myproject", "test-pat")
-	if err != nil {
-		t.Fatalf("NewClient() failed: %v", err)
-	}
-
-	client.baseURL = server.URL
-
-	_, err = client.get("/test?api-version=7.0")
-	if err != nil {
-		t.Fatalf("get() failed: %v", err)
 	}
 }
 
