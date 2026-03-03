@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -276,13 +277,13 @@ func TestVotePickerView(t *testing.T) {
 	}
 
 	// Should contain vote option labels
-	if !contains(view, "Approve") {
+	if !strings.Contains(view, "Approve") {
 		t.Error("Expected view to contain 'Approve'")
 	}
-	if !contains(view, "Reject") {
+	if !strings.Contains(view, "Reject") {
 		t.Error("Expected view to contain 'Reject'")
 	}
-	if !contains(view, "Reset feedback") {
+	if !strings.Contains(view, "Reset feedback") {
 		t.Error("Expected view to contain 'Reset feedback'")
 	}
 }
