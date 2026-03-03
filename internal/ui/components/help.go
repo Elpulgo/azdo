@@ -62,6 +62,7 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 				Bindings: []HelpBinding{
 					{Key: "f", Description: "Search / filter"},
 					{Key: "m", Description: "Toggle my items (work items)"},
+					{Key: "T", Description: "Filter by tag (work items)"},
 					{Key: "r", Description: "Refresh data"},
 					{Key: "v", Description: "Vote on PR (detail view)"},
 					{Key: "s", Description: "Change work item state (detail view)"},

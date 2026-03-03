@@ -677,6 +677,12 @@ func (m Model) View() string {
 		return m.themePicker.View()
 	}
 
+	// If tag picker is visible, show it as overlay
+	if m.activeTab == TabWorkItems && m.workItemsView.IsTagPickerVisible() {
+		m.workItemsView.SetTagPickerSize(m.width, m.height)
+		return m.workItemsView.TagPickerView()
+	}
+
 	// Render tab bar in its own bordered box
 	contentSize := m.contentViewSize()
 	tabBar := m.renderTabBar(contentSize.Width)
@@ -710,8 +716,19 @@ func (m Model) View() string {
 	}
 
 	// Update filter label badge on status bar
-	if m.activeTab == TabWorkItems && m.workItemsView.IsMyItemsActive() {
-		m.statusBar.SetFilterLabel("My Items")
+	if m.activeTab == TabWorkItems {
+		var labels []string
+		if m.workItemsView.IsMyItemsActive() {
+			labels = append(labels, "My Items")
+		}
+		if m.workItemsView.IsTagFilterActive() {
+			labels = append(labels, "Tag: "+m.workItemsView.ActiveTag())
+		}
+		if len(labels) > 0 {
+			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
+		} else {
+			m.statusBar.ClearFilterLabel()
+		}
 	} else {
 		m.statusBar.ClearFilterLabel()
 	}
