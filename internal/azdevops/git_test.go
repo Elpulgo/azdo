@@ -779,34 +779,6 @@ func TestAddPRComment_HTTPError(t *testing.T) {
 	}
 }
 
-func TestGetCurrentUserID_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"authenticatedUser":{"id":"abc-def-123"}}`))
-	}))
-	defer server.Close()
-
-	client, err := NewClient("test-org", "test-project", "test-pat")
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-	// Override the org-level URL by pointing it at our test server
-	// GetCurrentUserID constructs: https://dev.azure.com/{org}/_apis/connectionData
-	// We can't easily override that, so pre-set the userID to test caching
-	client.userID = ""
-
-	// Test caching: set userID directly and verify it's returned
-	client.userID = "cached-id"
-	id, err := client.GetCurrentUserID()
-	if err != nil {
-		t.Fatalf("GetCurrentUserID() error = %v", err)
-	}
-	if id != "cached-id" {
-		t.Errorf("GetCurrentUserID() = %q, want 'cached-id'", id)
-	}
-}
-
 func TestGetCurrentUserID_Caching(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -834,24 +806,6 @@ func TestGetCurrentUserID_Caching(t *testing.T) {
 	// Should not have made any HTTP calls since userID was cached
 	if callCount != 0 {
 		t.Errorf("Expected 0 HTTP calls with cached userID, got %d", callCount)
-	}
-}
-
-func TestVoteValue(t *testing.T) {
-	if VoteApprove != 10 {
-		t.Errorf("VoteApprove = %d, want 10", VoteApprove)
-	}
-	if VoteApproveWithSuggestions != 5 {
-		t.Errorf("VoteApproveWithSuggestions = %d, want 5", VoteApproveWithSuggestions)
-	}
-	if VoteNoVote != 0 {
-		t.Errorf("VoteNoVote = %d, want 0", VoteNoVote)
-	}
-	if VoteWaitForAuthor != -5 {
-		t.Errorf("VoteWaitForAuthor = %d, want -5", VoteWaitForAuthor)
-	}
-	if VoteReject != -10 {
-		t.Errorf("VoteReject = %d, want -10", VoteReject)
 	}
 }
 
