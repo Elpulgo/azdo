@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
@@ -1443,5 +1444,61 @@ func TestDetailView_CreationTimestampAppearsBeforeReviewers(t *testing.T) {
 	}
 	if createdPos >= reviewersPos {
 		t.Errorf("Expected 'Created' (pos %d) to appear before 'Reviewers' (pos %d)", createdPos, reviewersPos)
+	}
+}
+
+func TestDetailView_LongPRDescriptionWrapsWithinViewWidth(t *testing.T) {
+	// PR descriptions can be long markdown/plain text that overflows the terminal.
+	longDesc := strings.Repeat("This PR refactors the authentication module to support OAuth2 tokens. ", 10)
+	pr := azdevops.PullRequest{
+		ID:            300,
+		Title:         "Refactor auth",
+		Description:   longDesc,
+		SourceRefName: "refs/heads/feature/auth",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123"},
+	}
+
+	viewWidth := 70
+	model := NewDetailModel(nil, pr)
+	model.SetSize(viewWidth, 30)
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w > viewWidth {
+			preview := line
+			if len(preview) > 60 {
+				preview = preview[:60] + "..."
+			}
+			t.Errorf("line %d exceeds view width %d (visual width %d): %q",
+				i+1, viewWidth, w, preview)
+		}
+	}
+}
+
+func TestDetailView_WrappedPRDescriptionPreservesContent(t *testing.T) {
+	description := "Implements the new caching layer with Redis integration for session management and rate limiting"
+	pr := azdevops.PullRequest{
+		ID:            301,
+		Title:         "Add caching",
+		Description:   description,
+		SourceRefName: "refs/heads/feature/cache",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123"},
+	}
+
+	// Narrow width forces wrapping
+	model := NewDetailModel(nil, pr)
+	model.SetSize(40, 30)
+
+	view := model.View()
+
+	for _, word := range strings.Fields(description) {
+		if !strings.Contains(view, word) {
+			t.Errorf("word %q from PR description is missing in the rendered view — wrapping may be truncating content", word)
+		}
 	}
 }

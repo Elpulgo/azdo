@@ -228,7 +228,8 @@ func (m *DetailModel) updateViewportContent() {
 
 	// Description
 	if m.pr.Description != "" {
-		sb.WriteString(m.styles.Value.Render(m.pr.Description))
+		descStyle := m.styles.Value.Width(m.width)
+		sb.WriteString(descStyle.Render(m.pr.Description))
 		sb.WriteString("\n\n")
 	}
 
