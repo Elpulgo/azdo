@@ -22,7 +22,6 @@ GITHUB_DOWNLOAD="https://github.com"
 # Defaults (can be overridden by flags)
 INSTALL_DIR=""
 VERSION=""
-SKIP_CONFIG="false"
 
 # ─── Output helpers ────────────────────────────────────────────────────────────
 
@@ -66,11 +65,7 @@ parse_args() {
             --install-dir|-d)
                 INSTALL_DIR="$2"
                 shift 2
-                ;;
-            --skip-config)
-                SKIP_CONFIG="true"
-                shift
-                ;;
+                ;;           
             --help|-h)
                 usage
                 exit 0
@@ -95,7 +90,6 @@ Options:
                             Default: latest release
   --install-dir, -d DIR     Custom installation directory
                             Default: /usr/local/bin (or ~/.local/bin as fallback)
-  --skip-config             Skip creating the configuration file
   --help, -h                Show this help message
 
 Examples:
@@ -401,76 +395,6 @@ download_and_install() {
     success "Installed $BINARY_FILE to $INSTALL_DIR/$BINARY_FILE"
 }
 
-# ─── Configuration file setup ─────────────────────────────────────────────────
-
-setup_config() {
-    if [ "$SKIP_CONFIG" = "true" ]; then
-        info "Skipping configuration file setup (--skip-config)"
-        return
-    fi
-
-    # Determine config directory
-    if [ "$OS_NAME" = "Windows" ]; then
-        CONFIG_DIR="$USERPROFILE/.config/$CONFIG_DIR_NAME"
-        # Fallback to HOME if USERPROFILE is not set (e.g., in MSYS)
-        if [ -z "$CONFIG_DIR" ] || [ "$CONFIG_DIR" = "/.config/$CONFIG_DIR_NAME" ]; then
-            CONFIG_DIR="$HOME/.config/$CONFIG_DIR_NAME"
-        fi
-    else
-        # Use XDG_CONFIG_HOME if set, otherwise ~/.config
-        CONFIG_BASE="${XDG_CONFIG_HOME:-$HOME/.config}"
-        CONFIG_DIR="$CONFIG_BASE/$CONFIG_DIR_NAME"
-    fi
-
-    CONFIG_FILE="$CONFIG_DIR/config.yaml"
-
-    if [ -f "$CONFIG_FILE" ]; then
-        success "Configuration file already exists at $CONFIG_FILE"
-        info "Skipping config creation to preserve your settings."
-        return
-    fi
-
-    info "Creating configuration directory: $CONFIG_DIR"
-    mkdir -p "$CONFIG_DIR" 2>/dev/null || {
-        error "Failed to create config directory: $CONFIG_DIR"
-        error "You can create it manually later:"
-        error "  mkdir -p $CONFIG_DIR"
-        return
-    }
-
-    info "Creating configuration file with placeholder values..."
-    cat > "$CONFIG_FILE" <<'CONFIGEOF'
-# Azure DevOps TUI Configuration
-# Documentation: https://github.com/Elpulgo/azdo#configuration
-
-# Azure DevOps organization name (required)
-# Replace with your organization name from https://dev.azure.com/{organization}
-organization: your-org-name
-
-# Azure DevOps project name(s) (required)
-# Simple format:
-projects:
-  - your-project-name
-
-# With display names (friendly name shown in UI):
-#   projects:
-#     - name: ugly-api-project-name
-#       display_name: My Project
-#     - simple-project
-
-# Polling interval in seconds (optional, default: 60)
-polling_interval: 60
-
-# Theme (optional, default: dark)
-# Available: dark, gruvbox, nord, dracula, catppuccin, github, retro
-# Custom themes: Place JSON files in ~/.config/<CONFIG_DIR>/themes/
-theme: dracula
-CONFIGEOF
-
-    success "Created configuration file at ~/.config/$CONFIG_DIR"
-    warn "Edit this file with your Azure DevOps organization and project details before running azdo-tui."
-}
-
 # ─── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {
@@ -480,17 +404,13 @@ print_summary() {
     printf "${GREEN}${BOLD}────────────────────────────────────────────────${NC}\n"
     printf "\n"
 
-    if [ "$SKIP_CONFIG" != "true" ] && [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ]; then
+    if  [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ]; then
         printf "  ${BOLD}Next steps:${NC}\n"
-        printf "    1. Edit your config file:\n"
+        printf "    1. Edit your config file or run azdo and follow the wizard:\n"
         printf "       ${CYAN}%s${NC}\n" "$CONFIG_FILE"
         printf "    2. Set your organization and project name(s)\n"
         printf "    3. Run ${CYAN}%s${NC}\n" "$BINARY_NAME"
-        printf "       (You'll be prompted for your Azure DevOps PAT on first run)\n"
-    else
-        printf "  ${BOLD}Next steps:${NC}\n"
-        printf "    1. Create a config file at ${CYAN}~/.config/$CONFIG_DIR_NAME/config.yaml${NC}\n"
-        printf "    2. Run ${CYAN}%s${NC}\n" "$BINARY_NAME"
+        printf "       (You'll be prompted for your Azure DevOps PAT on first run)\n"   
     fi
 
     printf "\n"
@@ -517,9 +437,6 @@ main() {
 
     step "Downloading and installing"
     download_and_install
-
-    step "Setting up configuration"
-    setup_config
 
     print_summary
 }
