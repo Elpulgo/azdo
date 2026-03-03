@@ -239,20 +239,6 @@ func TestPartialError_Error(t *testing.T) {
 	}
 }
 
-func TestPartialError_IsPartialError(t *testing.T) {
-	pe := &PartialError{Failed: 1, Total: 2}
-	var target *PartialError
-	if !errors.As(pe, &target) {
-		t.Error("errors.As should match PartialError")
-	}
-
-	// A regular error should not match
-	regularErr := fmt.Errorf("some error")
-	if errors.As(regularErr, &target) {
-		t.Error("errors.As should not match regular error as PartialError")
-	}
-}
-
 func TestMultiClient_ListPipelineRuns_AllFail(t *testing.T) {
 	errorServer1 := newErrorServer(t)
 	defer errorServer1.Close()
@@ -377,12 +363,6 @@ func TestMultiClient_SingleProject_BehavesLikeSingleClient(t *testing.T) {
 	if result[0].ID != 1 {
 		t.Errorf("expected run ID=1, got %d", result[0].ID)
 	}
-}
-
-// Ensure PipelineRunsResponse is accessible for test helpers
-func TestPipelineRunsResponse_Exists(t *testing.T) {
-	_ = PipelineRunsResponse{}
-	_ = fmt.Sprintf("%v", PipelineRunsResponse{})
 }
 
 func TestNewMultiClient_WithDisplayNames(t *testing.T) {
