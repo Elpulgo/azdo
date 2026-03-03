@@ -12,7 +12,7 @@ import (
 )
 
 // StatusBar is a component that displays keybindings, org/project info,
-// and connection state at the bottom of the screen like lazygit.
+// and connection state at the bottom of the screen.
 type StatusBar struct {
 	styles         *styles.Styles
 	organization   string
