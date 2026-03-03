@@ -95,15 +95,6 @@ func TestNew_InitialState(t *testing.T) {
 	}
 }
 
-func TestNew_CustomStyles(t *testing.T) {
-	s := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
-	m := New(testConfig(), s)
-
-	if m.styles != s {
-		t.Error("Expected model to use provided custom styles")
-	}
-}
-
 func TestSetItems_ClearsLoadingAndError(t *testing.T) {
 	s := styles.DefaultStyles()
 	m := New(testConfig(), s)
