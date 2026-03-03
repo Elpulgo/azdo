@@ -252,7 +252,8 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString(m.styles.Label.Render("Description"))
 		sb.WriteString("\n")
 		cleanDesc := stripHTMLTags(effectiveDesc)
-		sb.WriteString(m.styles.Value.Render(cleanDesc))
+		descStyle := m.styles.Value.Width(m.width)
+		sb.WriteString(descStyle.Render(cleanDesc))
 		sb.WriteString("\n")
 	} else {
 		sb.WriteString(m.styles.Muted.Render("No description"))

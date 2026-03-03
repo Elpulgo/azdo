@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
@@ -617,4 +618,139 @@ func TestDetailView_ZeroChangedDateIsHidden(t *testing.T) {
 	if strings.Contains(view, "Last changed") {
 		t.Error("Expected 'Last changed' label to NOT appear when ChangedDate is zero")
 	}
+}
+
+func TestDetailView_LongDescriptionWrapsWithinViewWidth(t *testing.T) {
+	// A single long line that far exceeds any reasonable terminal width.
+	// This is a realistic scenario: Azure DevOps descriptions often come as
+	// a single run of HTML text that, once stripped, becomes one huge line.
+	longLine := strings.Repeat("word ", 80) // ~400 chars, well over 80-col terminal
+	wi := azdevops.WorkItem{
+		ID: 700,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Overflow test",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Description:  longLine,
+		},
+	}
+
+	viewWidth := 80
+	m := NewDetailModel(nil, wi)
+	m.SetSize(viewWidth, 40)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w > viewWidth {
+			t.Errorf("line %d exceeds view width %d (visual width %d): %q",
+				i+1, viewWidth, w, truncateForTest(line, 60))
+		}
+	}
+}
+
+func TestDetailView_LongHTMLDescriptionWrapsWithinViewWidth(t *testing.T) {
+	// Realistic Azure DevOps content: HTML paragraphs that become long lines
+	// after stripping tags.
+	htmlDesc := "<p>" + strings.Repeat("This is a detailed description of the work item that explains the requirements in full. ", 10) + "</p>"
+	wi := azdevops.WorkItem{
+		ID: 701,
+		Fields: azdevops.WorkItemFields{
+			Title:        "HTML overflow test",
+			State:        "New",
+			WorkItemType: "Bug",
+			Priority:     1,
+			ReproSteps:   htmlDesc,
+		},
+	}
+
+	viewWidth := 60
+	m := NewDetailModel(nil, wi)
+	m.SetSize(viewWidth, 30)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w > viewWidth {
+			t.Errorf("line %d exceeds view width %d (visual width %d): %q",
+				i+1, viewWidth, w, truncateForTest(line, 60))
+		}
+	}
+}
+
+func TestDetailView_WrappedDescriptionPreservesContent(t *testing.T) {
+	// When we wrap a long description, the text should still be fully present
+	// in the output — just broken across multiple lines, not truncated.
+	description := "The quick brown fox jumps over the lazy dog and then continues running across the field until reaching the distant forest"
+	wi := azdevops.WorkItem{
+		ID: 702,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Content preservation test",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Description:  description,
+		},
+	}
+
+	// Narrow width forces wrapping
+	m := NewDetailModel(nil, wi)
+	m.SetSize(40, 30)
+
+	view := m.View()
+
+	// Every word from the description should still appear in the rendered output
+	for _, word := range strings.Fields(description) {
+		if !strings.Contains(view, word) {
+			t.Errorf("word %q from description is missing in the rendered view — wrapping may be truncating content", word)
+		}
+	}
+}
+
+func TestDetailView_DescriptionRespectsResizedWidth(t *testing.T) {
+	// When the terminal is resized, the description wrapping should adapt
+	// to the new width.
+	longLine := strings.Repeat("alpha beta gamma delta ", 20)
+	wi := azdevops.WorkItem{
+		ID: 703,
+		Fields: azdevops.WorkItemFields{
+			Title:        "Resize test",
+			State:        "Active",
+			WorkItemType: "Task",
+			Priority:     2,
+			Description:  longLine,
+		},
+	}
+
+	m := NewDetailModel(nil, wi)
+
+	// First render at 100 columns
+	m.SetSize(100, 30)
+
+	// Now shrink to 50 columns
+	m.SetSize(50, 30)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w > 50 {
+			t.Errorf("after resize to 50 cols, line %d still exceeds width (visual width %d): %q",
+				i+1, w, truncateForTest(line, 50))
+		}
+	}
+}
+
+// truncateForTest shortens a string for readable test output
+func truncateForTest(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
