@@ -258,6 +258,8 @@ azdo
 | `pgup/pgdn` | Page up/down |
 | `enter` | View details / expand |
 | `f` | Search / filter |
+| `m` | Toggle my items (work items) |
+| `T` | Filter by tag (work items) |
 | `esc` | Go back / dismiss search |
 | `?` | Toggle help modal |
 | `t` | Select theme |

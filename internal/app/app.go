@@ -609,6 +609,24 @@ func (m *Model) syncStatusBarContext() {
 	}
 }
 
+// workItemsKeybindings returns the keybindings string for the work items list view.
+func (m Model) workItemsKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border)).
+		Background(lipgloss.Color(m.styles.Theme.Background))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("enter") + m.styles.Description.Render(" details") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" search") + sep +
+		m.styles.Key.Render("m") + m.styles.Description.Render(" my items") + sep +
+		m.styles.Key.Render("T") + m.styles.Description.Render(" tags") + sep +
+		m.styles.Key.Render("esc") + m.styles.Description.Render(" back") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
 // measureFooterHeight measures the actual footer height. The footer is always
 // just the status bar (context items are now rendered inline in the status bar).
 func (m Model) measureFooterHeight() int {
@@ -713,6 +731,13 @@ func (m Model) View() string {
 		contextItems = m.pipelinesView.GetContextItems()
 		scrollPercent = m.pipelinesView.GetScrollPercent()
 		statusMessage = m.pipelinesView.GetStatusMessage()
+	}
+
+	// Set tab-specific keybindings on status bar
+	if m.activeTab == TabWorkItems && !hasContextBar {
+		m.statusBar.SetKeybindings(m.workItemsKeybindings())
+	} else {
+		m.statusBar.SetKeybindings("")
 	}
 
 	// Update filter label badge on status bar
