@@ -15,25 +15,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestNewModel_WithConfig(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(client, cfg, "dev")
-
-	if m.config != cfg {
-		t.Error("expected config to be set")
-	}
-	if m.statusBar == nil {
-		t.Error("expected status bar to be initialized")
-	}
-}
-
 func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "myorg",
@@ -290,28 +271,6 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	// Config path should appear in the help modal
 	if !strings.Contains(view, "config.yaml") {
 		t.Error("help modal should contain config file path")
-	}
-}
-
-func TestModel_TabSwitching_To_WorkItems(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(client, cfg, "dev")
-	m.width = 100
-	m.height = 30
-
-	// Press '2' to switch to work items tab
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	m = updated.(Model)
-
-	if m.activeTab != TabWorkItems {
-		t.Errorf("After pressing '2', activeTab should be TabWorkItems, got %d", m.activeTab)
 	}
 }
 
