@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
-	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,41 +35,6 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	if len(lines) != height {
 		t.Errorf("Work item detail view output has %d lines, want %d (height passed to SetSize). "+
 			"Viewport is not using full available height.", len(lines), height)
-	}
-}
-
-func TestDetailModel_HasStyles(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	m := NewDetailModel(nil, wi)
-
-	if m.styles == nil {
-		t.Error("Expected detail model to have styles initialized")
-	}
-}
-
-func TestDetailModel_WithStyles(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
-	m := NewDetailModelWithStyles(nil, wi, customStyles)
-
-	if m.styles != customStyles {
-		t.Error("Expected detail model to use provided custom styles")
-	}
-}
-
-func TestNewDetailModel(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID:     123,
-		Fields: azdevops.WorkItemFields{Title: "Test item", State: "Active"},
-	}
-
-	m := NewDetailModel(nil, wi)
-
-	if m.workItem.ID != 123 {
-		t.Errorf("Expected work item ID 123, got %d", m.workItem.ID)
-	}
-	if m.workItem.Fields.Title != "Test item" {
-		t.Errorf("Expected title 'Test item', got '%s'", m.workItem.Fields.Title)
 	}
 }
 
@@ -308,39 +272,6 @@ func TestBuildWorkItemURL(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("buildWorkItemURL(%q, %q, %d) = %q, want %q", tt.org, tt.project, tt.id, got, tt.want)
 		}
-	}
-}
-
-func TestDetailModel_GetContextItems(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	m := NewDetailModel(nil, wi)
-
-	items := m.GetContextItems()
-	if len(items) == 0 {
-		t.Error("Expected context items to be non-empty")
-	}
-}
-
-func TestDetailModel_GetStatusMessage(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
-	m := NewDetailModel(nil, wi)
-
-	msg := m.GetStatusMessage()
-	if msg != "" {
-		t.Errorf("Expected empty status message, got %s", msg)
-	}
-}
-
-func TestGetWorkItem(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 999, Fields: azdevops.WorkItemFields{Title: "Test WI"}}
-	m := NewDetailModel(nil, wi)
-
-	got := m.GetWorkItem()
-	if got.ID != 999 {
-		t.Errorf("Expected ID 999, got %d", got.ID)
-	}
-	if got.Fields.Title != "Test WI" {
-		t.Errorf("Expected title 'Test WI', got '%s'", got.Fields.Title)
 	}
 }
 

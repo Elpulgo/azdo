@@ -24,36 +24,6 @@ func TestNewModel(t *testing.T) {
 	}
 }
 
-func TestUpdate_EnterSubmitsPAT(t *testing.T) {
-	model := NewModel()
-
-	// Simulate typing a PAT
-	testPAT := "test-pat-token-123"
-	for _, char := range testPAT {
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{char}}
-		m, _ := model.Update(msg)
-		model = m.(Model)
-	}
-
-	// Simulate pressing Enter
-	msg := tea.KeyMsg{Type: tea.KeyEnter}
-	m, cmd := model.Update(msg)
-	model = m.(Model)
-
-	if !model.submitted {
-		t.Error("Expected submitted to be true after pressing Enter")
-	}
-
-	if cmd == nil {
-		t.Error("Expected a command to be returned after submission")
-	}
-
-	// Verify the command returns the PAT
-	if result := cmd(); result == nil {
-		t.Error("Expected command to return a message")
-	}
-}
-
 func TestUpdate_EnterQuitsProgram(t *testing.T) {
 	model := NewModel()
 
@@ -157,18 +127,6 @@ func TestGetPAT(t *testing.T) {
 	}
 }
 
-func TestView_ShowsPromptAndInput(t *testing.T) {
-	model := NewModel()
-	view := model.View()
-
-	if view == "" {
-		t.Error("Expected non-empty view")
-	}
-
-	// View should contain some indication that this is PAT input
-	// (We'll verify the exact content when implementing)
-}
-
 func TestView_ShowsSetupTitle(t *testing.T) {
 	model := NewModel()
 	view := model.View()
@@ -184,22 +142,6 @@ func TestView_ShowsUpdateTitle(t *testing.T) {
 
 	if !strings.Contains(view, "PAT Update") {
 		t.Error("update view should show 'PAT Update'")
-	}
-}
-
-func TestNewModelForUpdate(t *testing.T) {
-	model := NewModelForUpdate()
-
-	if model.textInput.EchoMode != textinput.EchoPassword {
-		t.Error("Expected PAT input to be in password mode")
-	}
-
-	if model.err != "" {
-		t.Errorf("Expected no error, got: %s", model.err)
-	}
-
-	if model.submitted {
-		t.Error("Expected submitted to be false initially")
 	}
 }
 

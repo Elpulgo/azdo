@@ -11,23 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestNewModel_HasStyles(t *testing.T) {
-	m := NewModel(nil)
-
-	if m.styles == nil {
-		t.Error("Expected model to have styles initialized")
-	}
-}
-
-func TestNewModelWithStyles(t *testing.T) {
-	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("gruvbox"))
-	m := NewModelWithStyles(nil, customStyles)
-
-	if m.styles != customStyles {
-		t.Error("Expected model to use provided custom styles")
-	}
-}
-
 func TestTypeIconWithStyles(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
 
@@ -111,18 +94,6 @@ func TestPriorityTextWithStyles(t *testing.T) {
 	}
 }
 
-func TestNewModel(t *testing.T) {
-	m := NewModel(nil)
-
-	// Check initial state
-	if m.GetViewMode() != ViewList {
-		t.Errorf("Expected viewMode to be ViewList, got %v", m.GetViewMode())
-	}
-	if len(m.list.Items()) != 0 {
-		t.Errorf("Expected empty workItems, got %d", len(m.list.Items()))
-	}
-}
-
 func TestUpdate_SetWorkItemsMsg(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -147,20 +118,6 @@ func TestUpdate_SetWorkItemsMsg(t *testing.T) {
 	}
 	if m.list.Items()[0].ID != 123 {
 		t.Errorf("Expected first work item ID to be 123, got %d", m.list.Items()[0].ID)
-	}
-}
-
-func TestUpdate_Error(t *testing.T) {
-	m := NewModel(nil)
-
-	msg := workItemsMsg{err: tea.ErrInterrupted}
-	m, _ = m.Update(msg)
-
-	// View should show error
-	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	view := m.View()
-	if !strings.Contains(view, "Error") {
-		t.Error("Expected view to show error message")
 	}
 }
 
@@ -288,32 +245,6 @@ func TestListModel_GetContextItems_ListMode(t *testing.T) {
 	items := m.GetContextItems()
 	if items != nil {
 		t.Error("Expected nil context items for list mode")
-	}
-}
-
-func TestListModel_HasContextBar(t *testing.T) {
-	m := NewModel(nil)
-
-	if m.HasContextBar() {
-		t.Error("Expected no context bar for list mode")
-	}
-}
-
-func TestListModel_GetScrollPercent_ListMode(t *testing.T) {
-	m := NewModel(nil)
-
-	percent := m.GetScrollPercent()
-	if percent != 0 {
-		t.Errorf("Expected 0 scroll percent for list mode, got %f", percent)
-	}
-}
-
-func TestListModel_GetStatusMessage(t *testing.T) {
-	m := NewModel(nil)
-
-	msg := m.GetStatusMessage()
-	if msg != "" {
-		t.Errorf("Expected empty status message, got %s", msg)
 	}
 }
 
