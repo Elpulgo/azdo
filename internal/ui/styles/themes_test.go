@@ -60,6 +60,12 @@ func TestGetThemeByName(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name:      "load monokai theme",
+			themeName: "monokai",
+			wantName:  "monokai",
+			wantErr:   false,
+		},
+		{
 			name:      "invalid theme returns error",
 			themeName: "nonexistent",
 			wantName:  "",
@@ -129,7 +135,7 @@ func TestGetThemeByNameWithFallback(t *testing.T) {
 
 // TestThemeValidation tests that all built-in themes pass validation
 func TestThemeValidation(t *testing.T) {
-	themeNames := []string{"dark", "gruvbox", "nord", "dracula", "catppuccin", "github", "retro"}
+	themeNames := []string{"dark", "gruvbox", "nord", "dracula", "catppuccin", "github", "retro", "monokai"}
 
 	for _, themeName := range themeNames {
 		t.Run(themeName, func(t *testing.T) {
@@ -147,7 +153,7 @@ func TestThemeValidation(t *testing.T) {
 
 // TestThemeHasAllRequiredColors tests that all themes have non-empty colors
 func TestThemeHasAllRequiredColors(t *testing.T) {
-	themeNames := []string{"dark", "gruvbox", "nord", "dracula", "catppuccin", "github", "retro"}
+	themeNames := []string{"dark", "gruvbox", "nord", "dracula", "catppuccin", "github", "retro", "monokai"}
 
 	for _, themeName := range themeNames {
 		t.Run(themeName, func(t *testing.T) {
@@ -197,7 +203,7 @@ func TestThemeHasAllRequiredColors(t *testing.T) {
 func TestListAvailableThemes(t *testing.T) {
 	themes := ListAvailableThemes()
 
-	expectedThemes := []string{"dark", "gruvbox", "nord", "dracula", "catppuccin", "github", "retro"}
+	expectedThemes := []string{"dark", "gruvbox", "nord", "dracula", "catppuccin", "github", "retro", "monokai"}
 
 	if len(themes) < len(expectedThemes) {
 		t.Errorf("ListAvailableThemes() returned %d themes, want at least %d", len(themes), len(expectedThemes))

@@ -44,7 +44,7 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 - Secure PAT storage using system keyring
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
-- Seven built-in themes with true color support
+- Eight built-in themes with true color support
 - **Theme switcher** modal (press `t`) to change themes on the fly
 - **Multi-project support** with display name customization
 
@@ -154,7 +154,7 @@ projects:
 polling_interval: 60
 
 # Theme (optional, default: dark)
-# Available themes: dark, gruvbox, nord, dracula, catppuccin, github, retro
+# Available themes: dark, gruvbox, nord, dracula, catppuccin, github, retro, monokai
 theme: dark
 ```
 
@@ -172,6 +172,7 @@ theme: dark
 - `catppuccin` - Soothing pastel theme (Mocha variant)
 - `github` - GitHub Dark theme
 - `retro` - Matrix-inspired green phosphor on black
+- `monokai` - Classic Monokai color scheme
 
 ### Custom Themes
 
