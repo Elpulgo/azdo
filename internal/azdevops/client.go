@@ -29,6 +29,18 @@ func (c *Client) GetProject() string {
 	return c.project
 }
 
+// SetBaseURL overrides the base URL for the client.
+// This is used by the demo mode to point to a local mock server.
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = url
+}
+
+// SetUserID sets the cached user ID, bypassing the connectionData API call.
+// This is used by the demo mode.
+func (c *Client) SetUserID(id string) {
+	c.userID = id
+}
+
 // NewClient creates a new Azure DevOps API client
 func NewClient(org, project, pat string) (*Client, error) {
 	if org == "" {

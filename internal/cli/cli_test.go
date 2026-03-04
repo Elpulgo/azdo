@@ -16,6 +16,7 @@ func TestParseArgs(t *testing.T) {
 		{"--version flag", []string{"azdo", "--version"}, ActionVersion},
 		{"-v flag", []string{"azdo", "-v"}, ActionVersion},
 		{"version subcommand", []string{"azdo", "version"}, ActionVersion},
+		{"demo subcommand", []string{"azdo", "demo"}, ActionDemo},
 		{"unknown arg defaults to run", []string{"azdo", "foo"}, ActionRun},
 		{"extra args after auth ignored", []string{"azdo", "auth", "extra"}, ActionAuth},
 		{"empty args defaults to run", []string{}, ActionRun},
@@ -40,6 +41,7 @@ func TestActionString(t *testing.T) {
 		{ActionAuth, "auth"},
 		{ActionHelp, "help"},
 		{ActionVersion, "version"},
+		{ActionDemo, "demo"},
 		{Action(99), "unknown"},
 	}
 
