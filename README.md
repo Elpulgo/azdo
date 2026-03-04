@@ -1,9 +1,9 @@
-# azdo-tui
+# azdo
 
-A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly from your terminal.
+A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work items, and pipelines directly from your terminal.
 
 ![Tests](https://img.shields.io/github/actions/workflow/status/Elpulgo/azdo/ci.yml?label=tests)
-![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 ![GitHub Release](https://img.shields.io/github/v/release/Elpulgo/azdo)
 
@@ -28,18 +28,41 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 - List view of pull requests with status indicators
 - Detailed view showing PR information and metadata
 - Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
+- **Code review**: Diff viewer with file-by-file navigation
+- Inline commenting, thread replies, and thread resolution
+- General (non-file-specific) comments
 
 ### Work Items
 - List view of work items with status and type information
 - Detailed view showing work item details
 - Change work item state directly from the detail view (dynamically fetches available states)
+- Filter to show only your assigned items
 
 ### User Experience
+- **Setup wizard** on first run guides you through configuration
 - Help modal with all keyboard shortcuts (press `?`)
 - Secure PAT storage using system keyring
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
 - Seven built-in themes with true color support
+- **Theme switcher** modal (press `t`) to change themes on the fly
+- **Multi-project support** with display name customization
+
+## CLI Usage
+
+```bash
+# Start the TUI
+azdo
+
+# Set or update your Personal Access Token
+azdo auth
+
+# Show version
+azdo --version
+
+# Show help
+azdo --help
+```
 
 ## Installation
 
@@ -80,12 +103,12 @@ Download the latest release for your platform from the [Releases page](https://g
 
 | Platform | Architecture | File |
 |----------|-------------|------|
-| Linux    | x86_64      | `azdo-tui_*_Linux_x86_64.tar.gz` |
-| Linux    | ARM64       | `azdo-tui_*_Linux_arm64.tar.gz` |
-| macOS    | x86_64      | `azdo-tui_*_Darwin_x86_64.tar.gz` |
-| macOS    | ARM64 (M1+) | `azdo-tui_*_Darwin_arm64.tar.gz` |
-| Windows  | x86_64      | `azdo-tui_*_Windows_x86_64.zip` |
-| Windows  | ARM64       | `azdo-tui_*_Windows_arm64.zip` |
+| Linux    | x86_64      | `azdo_*_Linux_x86_64.tar.gz` |
+| Linux    | ARM64       | `azdo_*_Linux_arm64.tar.gz` |
+| macOS    | x86_64      | `azdo_*_Darwin_x86_64.tar.gz` |
+| macOS    | ARM64 (M1+) | `azdo_*_Darwin_arm64.tar.gz` |
+| Windows  | x86_64      | `azdo_*_Windows_x86_64.zip` |
+| Windows  | ARM64       | `azdo_*_Windows_arm64.zip` |
 
 Extract the archive and move the binary to a directory in your `PATH`.
 
@@ -222,6 +245,8 @@ On first run, the application will prompt you to enter your Azure DevOps PAT. Th
 - **macOS**: Keychain
 - **Linux**: Secret Service (gnome-keyring, KWallet, etc.)
 
+You can also set the `AZDO_PAT` environment variable as a fallback if your system doesn't support a keyring. To update your PAT at any time, run `azdo auth`.
+
 **Required PAT Scopes:**
 | Scope | Access | Used For |
 |-------|--------|----------|
@@ -234,18 +259,6 @@ To create a PAT:
 2. Click "New Token"
 3. Select the required scopes
 4. Copy the generated token
-
-## Usage
-
-```bash
-./azdo
-```
-
-Or if installed via `go install`:
-
-```bash
-azdo
-```
 
 ## Keyboard Shortcuts
 
@@ -270,6 +283,17 @@ azdo
 | Key | Action |
 |-----|--------|
 | `v` | Vote on pull request |
+| `enter` | View diff for selected file |
+
+### PR Diff / Code Review View
+| Key | Action |
+|-----|--------|
+| `c` | Create comment (on selected line or general) |
+| `p` | Reply to nearest thread |
+| `x` | Resolve nearest thread |
+| `n` | Jump to next comment |
+| `N` | Jump to previous comment |
+| `r` | Refresh changed files |
 
 ### Work Item Detail View
 | Key | Action |
@@ -282,56 +306,9 @@ azdo
 | `g` | Jump to top |
 | `G` | Jump to bottom |
 
-## Project Structure
-
-```
-azdo/
-├── cmd/azdo-tui/           # Application entry point
-├── internal/
-│   ├── app/                # Root Bubble Tea application with tab management
-│   ├── azdevops/           # Azure DevOps API client
-│   │   ├── client.go       # HTTP client with authentication
-│   │   ├── pipelines.go    # Pipeline runs API
-│   │   ├── timeline.go     # Build timeline API
-│   │   ├── logs.go         # Build logs API
-│   │   ├── pullrequests.go # Pull requests API
-│   │   ├── workitems.go    # Work items API
-│   │   └── types.go        # API response types
-│   ├── config/             # Configuration management
-│   │   ├── config.go       # YAML config with Viper
-│   │   └── keyring.go      # Secure PAT storage
-│   ├── polling/            # Live update system
-│   │   ├── poller.go       # Background polling
-│   │   ├── events.go       # Message types
-│   │   └── errorhandler.go # Graceful degradation
-│   └── ui/
-│       ├── components/     # Reusable UI components
-│       │   ├── statusbar.go    # Footer with keybindings
-│       │   ├── contextbar.go   # View-specific info bar
-│       │   ├── help.go         # Help modal overlay
-│       │   ├── spinner.go      # Loading indicator
-│       │   └── table/          # Local table fork (TrueColor fix)
-│       ├── styles/         # Theming system
-│       │   ├── theme.go        # Theme type definition
-│       │   ├── themes.go       # Built-in themes
-│       │   └── styles.go       # Lipgloss styles
-│       ├── pipelines/      # Pipeline views
-│       │   ├── list.go         # Pipeline runs table
-│       │   ├── detail.go       # Timeline tree view
-│       │   └── logviewer.go    # Log content viewer
-│       ├── pullrequests/   # Pull request views
-│       │   ├── list.go         # PR list table
-│       │   └── detail.go       # PR detail view
-│       ├── workitems/      # Work item views
-│       │   ├── list.go         # Work items table
-│       │   └── detail.go       # Work item detail view
-│       └── patinput/       # PAT input prompt
-├── config.yaml.example     # Example configuration
-└── Architecture.md         # Detailed architecture docs
-```
-
 ## Technology Stack
 
+- **Go 1.23+**
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) - Terminal UI framework
 - [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components (table, viewport)
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) - Styling and layout
@@ -392,32 +369,32 @@ goreleaser release --snapshot --clean
 
 Binaries will be available in the `dist/` directory after running GoReleaser locally, or as GitHub release assets when publishing.
 
-
 ## Contributing
 
-Contributions are welcome! Please check the `Architecture.md` file for implementation details.
+Contributions are welcome! Here's how to get started:
 
-## Notes
+1. **Fork** the repository and clone your fork:
+   ```bash
+   git clone https://github.com/<your-username>/azdo.git
+   cd azdo
+   ```
 
-### Local Table Fork (TrueColor Fix)
+2. **Create a branch** for your changes:
+   ```bash
+   git checkout -b feature/my-change
+   ```
 
-The table component at `internal/ui/components/table/` is a local fork of
-[charmbracelet/bubbles/table](https://github.com/charmbracelet/bubbles/tree/main/table).
-The only change is replacing `runewidth.Truncate` with `ansi.Truncate` from
-`github.com/charmbracelet/x/ansi` in the `headersView()` and `renderRow()`
-functions.
+3. **Develop** using the standard Go workflow:
+   ```bash
+   go build -o azdo ./cmd/azdo-tui   # Build
+   go test ./...                      # Run tests
+   go fmt ./...                       # Format code
+   go vet ./...                       # Check for issues
+   ```
 
-**Why:** The upstream bubbles table uses `go-runewidth` for truncation, which is
-not ANSI-aware — it counts escape code characters (e.g. `\x1b[38;2;R;G;Bm`) as
-having visual width. This causes columns to misalign and text to get truncated
-when cell values contain styled ANSI content (like our colored status icons).
-The `x/ansi` package's `Truncate` function is a drop-in replacement that
-properly skips ANSI escape sequences.
+4. **Submit a pull request** against the `main` branch with a clear description of your changes.
 
-**When upgrading bubbletea/bubbles:** Check if the upstream table has switched
-from `runewidth.Truncate` to `ansi.Truncate`. If so, the local fork can be
-removed and we can go back to importing `github.com/charmbracelet/bubbles/table`
-directly.
+For architecture details and code organization, see [Architecture.md](Architecture.md).
 
 ## License
 
