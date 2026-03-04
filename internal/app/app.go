@@ -612,8 +612,7 @@ func (m *Model) syncStatusBarContext() {
 // workItemsKeybindings returns the keybindings string for the work items list view.
 func (m Model) workItemsKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.styles.Theme.Border)).
-		Background(lipgloss.Color(m.styles.Theme.Background))
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
 	sep := sepStyle.Render(" • ")
 
 	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +

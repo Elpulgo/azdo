@@ -98,7 +98,6 @@ func NewStyles(theme Theme) *Styles {
 	s.BoxRounded = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(theme.Accent)).
-		Background(lipgloss.Color(theme.Background)).
 		Padding(0, 1)
 
 	s.ContentBox = lipgloss.NewStyle().
@@ -152,12 +151,10 @@ func NewStyles(theme Theme) *Styles {
 	// Interactive element styles
 	s.Key = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Accent)).
-		Background(lipgloss.Color(theme.Background)).
 		Bold(true)
 
 	s.Description = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.Foreground)).
-		Background(lipgloss.Color(theme.Background))
+		Foreground(lipgloss.Color(theme.Foreground))
 
 	s.Link = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Link)).
