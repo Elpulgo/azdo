@@ -127,7 +127,7 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 
 ### 1. Create Configuration File
 
-When running azdo for the first time, a wizard will help you setup this.
+When running azdo for the first time, a **wizard setup** will help you setup this.
 Otherwise follow these instructions.
 
 Create a configuration file at the following location:
@@ -324,37 +324,7 @@ go build -o azdo ./cmd/azdo-tui
 
 ### Releases
 
-This project uses [GoReleaser](https://goreleaser.com/) for automated cross-platform builds and releases.
-
-**Supported Platforms:**
-- Linux (amd64, arm64)
-- macOS (amd64, arm64)
-- Windows (amd64, arm64)
-
-**Local Testing:**
-
-```bash
-# Install goreleaser
-go install github.com/goreleaser/goreleaser/v2@latest
-
-# Build snapshot (without publishing)
-goreleaser build --snapshot --clean
-
-# Full release dry-run
-goreleaser release --snapshot --clean
-```
-
-**Creating a Release:**
-
-1. Ensure all changes are committed
-2. Create and push a new tag:
-   ```bash
-   git tag -a v0.1.0 -m "Release v0.1.0"
-   git push origin v0.1.0
-   ```
-3. GoReleaser will automatically create a GitHub release with binaries for all platforms
-
-Binaries will be available in the `dist/` directory after running GoReleaser locally, or as GitHub release assets when publishing.
+See [RELEASES.md](RELEASES.md) for release process and GoReleaser usage.
 
 ## FAQ
 
@@ -362,30 +332,7 @@ See [FAQ.md](FAQ.md) for common questions and troubleshooting.
 
 ## Contributing
 
-Contributions are welcome! Here's how to get started:
-
-1. **Fork** the repository on GitHub (click the "Fork" button on the repo page) and then clone your fork:
-   ```bash
-   git clone https://github.com/<your-username>/azdo.git
-   cd azdo
-   ```
-
-2. **Create a branch** for your changes:
-   ```bash
-   git checkout -b feature/my-change
-   ```
-
-3. **Develop** using the standard Go workflow:
-   ```bash
-   go build -o azdo ./cmd/azdo-tui   # Build
-   go test ./...                      # Run tests
-   go fmt ./...                       # Format code
-   go vet ./...                       # Check for issues
-   ```
-
-4. **Push** your branch to your fork and **open a pull request** against the `main` branch on GitHub.
-
-For architecture details and code organization, see [Architecture.md](Architecture.md).
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 

@@ -53,19 +53,21 @@ go vet ./...
 
 ## Architecture
 
-This is a new project. Architecture details will be added as the codebase develops.
-
 Expected structure:
 - TUI application for Azure DevOps interaction
 - Standard Go project layout with `cmd/`, `pkg/`, and/or `internal/` directories
 - Integration with Azure DevOps REST API
 
-!!! CRITICAL !!! You should use beads (bd) as tracking system when creating tasks. ALWAYS run bd ready when a new session starts.
+See reference for architecture at [ARCHITECTURE.md](ARCHITECTURE.md) for guidelines.
+
+
+## Important
+You should use beads (bd) as tracking system when creating tasks. ALWAYS run bd ready when a new session starts.
 
 
 ## Skill/role
 
-When developing this project you are a pro in Golang, read the Skill.md file and use these approaches when devloping.
+When developing this project you are a pro in Golang, read the SKILL.md file and use these approaches when devloping.
 
 ## TDD
 
