@@ -19,6 +19,7 @@ var themeRegistry = map[string]Theme{
 	"catppuccin": catppuccinTheme,
 	"github":     githubTheme,
 	"retro":      retroTheme,
+	"monokai":    monokaiTheme,
 }
 
 // GetThemeByName returns a theme by name.
@@ -481,4 +482,44 @@ var retroTheme = Theme{
 	TabActiveForeground:   lipgloss.Color("#0a0a0a"), // Black
 	TabActiveBackground:   lipgloss.Color("#00ff41"), // Matrix green
 	TabInactiveForeground: lipgloss.Color("#336633"), // Dim green
+}
+
+// Monokai theme - classic Monokai color scheme
+var monokaiTheme = Theme{
+	Name: "monokai",
+
+	// Monokai palette
+	Primary:   lipgloss.Color("#66d9ef"), // Cyan - headers, active status
+	Secondary: lipgloss.Color("#a6e22e"), // Green - secondary info
+	Accent:    lipgloss.Color("#f92672"), // Pink/Red - keybindings, section titles
+
+	// Status colors
+	Success: lipgloss.Color("#a6e22e"), // Green
+	Warning: lipgloss.Color("#e6db74"), // Yellow
+	Error:   lipgloss.Color("#f92672"), // Red/Pink
+	Info:    lipgloss.Color("#66d9ef"), // Cyan
+
+	// Background colors
+	Background:       lipgloss.Color("#272822"), // Monokai bg
+	BackgroundAlt:    lipgloss.Color("#1e1f1c"), // Darker bg
+	BackgroundSelect: lipgloss.Color("#49483e"), // Selection/current line
+
+	// Foreground colors
+	Foreground:      lipgloss.Color("#f8f8f2"), // Main text
+	ForegroundMuted: lipgloss.Color("#75715e"), // Comments/muted
+	ForegroundBold:  lipgloss.Color("#f8f8f2"), // Emphasized text
+
+	// Selection colors
+	SelectForeground: lipgloss.Color("#f8f8f2"), // Foreground
+	SelectBackground: lipgloss.Color("#49483e"), // Current line
+
+	// UI elements
+	Border:  lipgloss.Color("#75715e"), // Comment color for borders
+	Link:    lipgloss.Color("#66d9ef"), // Cyan
+	Spinner: lipgloss.Color("#ae81ff"), // Purple
+
+	// Tab colors
+	TabActiveForeground:   lipgloss.Color("#f8f8f2"), // Foreground
+	TabActiveBackground:   lipgloss.Color("#f92672"), // Pink
+	TabInactiveForeground: lipgloss.Color("#75715e"), // Muted
 }

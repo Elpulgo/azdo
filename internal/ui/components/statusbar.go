@@ -157,8 +157,7 @@ func (s *StatusBar) View() string {
 
 	// Build separator style
 	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Border)).
-		Background(lipgloss.Color(s.styles.Theme.Background))
+		Foreground(lipgloss.Color(s.styles.Theme.Border))
 
 	sep := sepStyle.Render(" │ ")
 
@@ -168,7 +167,6 @@ func (s *StatusBar) View() string {
 	if s.errorMessage != "" && s.state == polling.StateError {
 		errorStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(s.styles.Theme.Error)).
-			Background(lipgloss.Color(s.styles.Theme.Background)).
 			Bold(true)
 		parts = append(parts, errorStyle.Render(s.errorMessage))
 	} else {
@@ -178,7 +176,6 @@ func (s *StatusBar) View() string {
 	if s.contextStatus != "" {
 		statusStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(s.styles.Theme.ForegroundMuted)).
-			Background(lipgloss.Color(s.styles.Theme.Background)).
 			Italic(true)
 		parts = append(parts, statusStyle.Render(s.contextStatus))
 	}
@@ -186,7 +183,6 @@ func (s *StatusBar) View() string {
 	if s.warningMessage != "" {
 		warningStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
-			Background(lipgloss.Color(s.styles.Theme.Background)).
 			Bold(true)
 		parts = append(parts, warningStyle.Render("⚠ "+s.warningMessage))
 	}
@@ -203,7 +199,6 @@ func (s *StatusBar) View() string {
 	if s.updateMessage != "" {
 		updateStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
-			Background(lipgloss.Color(s.styles.Theme.Background)).
 			Bold(true)
 		parts = append(parts, updateStyle.Render(s.updateMessage))
 	}
@@ -242,8 +237,7 @@ func (s *StatusBar) renderKeybindings() string {
 
 	// Build styles from theme
 	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Border)).
-		Background(lipgloss.Color(s.styles.Theme.Background))
+		Foreground(lipgloss.Color(s.styles.Theme.Border))
 
 	// Default keybindings with styled keys
 	sep := sepStyle.Render(" • ")
@@ -260,8 +254,7 @@ func (s *StatusBar) renderKeybindings() string {
 // already exist in the context items.
 func (s *StatusBar) renderContextKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Border)).
-		Background(lipgloss.Color(s.styles.Theme.Background))
+		Foreground(lipgloss.Color(s.styles.Theme.Border))
 	sep := sepStyle.Render(" • ")
 
 	// Track which base shortcut keys are already in context items
@@ -298,12 +291,10 @@ func (s *StatusBar) renderOrgProject() string {
 	}
 
 	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Border)).
-		Background(lipgloss.Color(s.styles.Theme.Background))
+		Foreground(lipgloss.Color(s.styles.Theme.Border))
 
 	orgProjectStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
-		Background(lipgloss.Color(s.styles.Theme.Background)).
 		Bold(true)
 
 	sep := sepStyle.Render("/")

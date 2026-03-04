@@ -177,7 +177,9 @@ func (m *DetailModel) View() string {
 	sb.WriteString("\n")
 
 	// Type, state and priority
-	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.Fields.WorkItemType, wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
+	metadataStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Secondary))
+	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.Fields.WorkItemType, wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
 	sb.WriteString("\n")
 
 	// Separator
