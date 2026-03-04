@@ -8,6 +8,7 @@ const (
 	ActionAuth                  // azdo auth: re-set PAT
 	ActionHelp                  // azdo --help: show help
 	ActionVersion               // azdo --version: show version
+	ActionDemo                  // azdo demo: run with mock data
 )
 
 // String returns the string representation of an Action.
@@ -21,6 +22,8 @@ func (a Action) String() string {
 		return "help"
 	case ActionVersion:
 		return "version"
+	case ActionDemo:
+		return "demo"
 	default:
 		return "unknown"
 	}
@@ -39,6 +42,8 @@ func ParseArgs(args []string) Action {
 		return ActionHelp
 	case "--version", "-v", "version":
 		return ActionVersion
+	case "demo":
+		return ActionDemo
 	default:
 		return ActionRun
 	}

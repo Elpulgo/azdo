@@ -11,6 +11,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
+	"github.com/Elpulgo/azdo/internal/demo"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
 	"github.com/Elpulgo/azdo/internal/ui/setupwizard"
@@ -42,6 +43,8 @@ func run(args []string) error {
 		return runVersion()
 	case cli.ActionAuth:
 		return runAuth()
+	case cli.ActionDemo:
+		return demo.Run(version, commit)
 	default:
 		return runTUI()
 	}
@@ -63,6 +66,7 @@ func runHelp() error {
 Usage:
   azdo              Start the TUI application
   azdo auth         Set or update your Personal Access Token (PAT)
+  azdo demo         Launch with mock data (for screenshots/demos)
   azdo --help       Show this help message
   azdo --version    Show version information
 

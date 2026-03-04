@@ -48,11 +48,24 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 - **Theme switcher** modal (press `t`) to change themes on the fly
 - **Multi-project support** with display name customization
 
+## Demo Mode
+
+Want to try azdo without an Azure DevOps account? Run the demo — no configuration, no PAT, no setup required:
+
+```bash
+azdo demo
+```
+
+This launches the full TUI with realistic mock data (two fictional projects, pull requests with diffs, work items, pipeline runs with logs). All features work — you can navigate, view details, switch themes, and explore the UI. Perfect for evaluating the tool or taking screenshots.
+
 ## CLI Usage
 
 ```bash
 # Start the TUI
 azdo
+
+# Try it out with mock data (no setup needed)
+azdo demo
 
 # Set or update your Personal Access Token
 azdo auth
