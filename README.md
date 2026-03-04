@@ -15,15 +15,6 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 - **Pipelines** (Tab 3): Monitor and drill into pipeline runs
 - Switch between tabs using `1`, `2`, `3` keys or `←`/`→` arrow keys
 
-### Pipeline Dashboard
-- View recent pipeline runs in a sortable table
-- Color-coded status indicators (✓ Success, ✗ Failed, ● Running, ○ Queued)
-- Live auto-refresh with configurable polling interval
-- Connection status indicator in footer
-- Hierarchical detail view with stages, jobs, and tasks
-- Duration tracking for each step
-- Full log viewer with scrollable viewport
-
 ### Pull Requests
 - List view of pull requests with status indicators
 - Detailed view showing PR information and metadata
@@ -37,6 +28,15 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 - Detailed view showing work item details
 - Change work item state directly from the detail view (dynamically fetches available states)
 - Filter to show only your assigned items
+
+### Pipeline Dashboard
+- View recent pipeline runs in a sortable table
+- Color-coded status indicators (✓ Success, ✗ Failed, ● Running, ○ Queued)
+- Live auto-refresh with configurable polling interval
+- Connection status indicator in footer
+- Hierarchical detail view with stages, jobs, and tasks
+- Duration tracking for each step
+- Full log viewer with scrollable viewport
 
 ### User Experience
 - **Setup wizard** on first run guides you through configuration
@@ -92,9 +92,6 @@ curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh -
 
 # Install to a custom directory
 ./install.sh --install-dir ~/bin
-
-# Skip config file creation
-./install.sh --skip-config
 ```
 
 ### Manual Download
@@ -130,6 +127,9 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 
 ### 1. Create Configuration File
 
+When running azdo for the first time, a wizard will help you setup this.
+Otherwise follow these instructions.
+
 Create a configuration file at the following location:
 - **Linux/macOS**: `~/.config/azdo-tui/config.yaml`
 - **Windows**: `C:\Users\<username>\.config\azdo-tui\config.yaml`
@@ -147,7 +147,8 @@ projects:
 #   projects:
 #     - name: ugly-api-project-name
 #       display_name: My Project
-#     - simple-project
+#     - name: ugly-api-project-name-2
+#       display_name: My Project 2
 
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
@@ -157,20 +158,6 @@ polling_interval: 60
 theme: dark
 ```
 
-Or copy the example configuration:
-
-**Linux/macOS:**
-```bash
-mkdir -p ~/.config/azdo-tui
-cp config.yaml.example ~/.config/azdo-tui/config.yaml
-```
-
-**Windows (PowerShell):**
-```powershell
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.config\azdo-tui"
-Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
-```
-
 **Configuration Options:**
 - `organization`: Your Azure DevOps organization name (required)
 - `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
@@ -178,10 +165,10 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 - `theme`: Color theme for the UI (optional, default: dark)
 
 **Available Themes:**
-- `dark` - Default dark theme with blue and cyan accents
+- `dark` - Dark theme with blue and cyan accents
 - `gruvbox` - Retro groove color scheme
 - `nord` - Arctic, north-bluish color palette
-- `dracula` - Dark theme with purple and pink accents
+- `dracula` - Default dark theme with purple and pink accents
 - `catppuccin` - Soothing pastel theme (Mocha variant)
 - `github` - GitHub Dark theme
 - `retro` - Matrix-inspired green phosphor on black
@@ -369,11 +356,15 @@ goreleaser release --snapshot --clean
 
 Binaries will be available in the `dist/` directory after running GoReleaser locally, or as GitHub release assets when publishing.
 
+## FAQ
+
+See [FAQ.md](FAQ.md) for common questions and troubleshooting.
+
 ## Contributing
 
 Contributions are welcome! Here's how to get started:
 
-1. **Fork** the repository and clone your fork:
+1. **Fork** the repository on GitHub (click the "Fork" button on the repo page) and then clone your fork:
    ```bash
    git clone https://github.com/<your-username>/azdo.git
    cd azdo
@@ -392,7 +383,7 @@ Contributions are welcome! Here's how to get started:
    go vet ./...                       # Check for issues
    ```
 
-4. **Submit a pull request** against the `main` branch with a clear description of your changes.
+4. **Push** your branch to your fork and **open a pull request** against the `main` branch on GitHub.
 
 For architecture details and code organization, see [Architecture.md](Architecture.md).
 
