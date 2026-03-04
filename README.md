@@ -1,9 +1,9 @@
-# azdo-tui
+# azdo
 
-A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly from your terminal.
+A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work items, and pipelines directly from your terminal.
 
 ![Tests](https://img.shields.io/github/actions/workflow/status/Elpulgo/azdo/ci.yml?label=tests)
-![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 ![GitHub Release](https://img.shields.io/github/v/release/Elpulgo/azdo)
 
@@ -15,6 +15,20 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 - **Pipelines** (Tab 3): Monitor and drill into pipeline runs
 - Switch between tabs using `1`, `2`, `3` keys or `←`/`→` arrow keys
 
+### Pull Requests
+- List view of pull requests with status indicators
+- Detailed view showing PR information and metadata
+- Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
+- **Code review**: Diff viewer with file-by-file navigation
+- Inline commenting, thread replies, and thread resolution
+- General (non-file-specific) comments
+
+### Work Items
+- List view of work items with status and type information
+- Detailed view showing work item details
+- Change work item state directly from the detail view (dynamically fetches available states)
+- Filter to show only your assigned items
+
 ### Pipeline Dashboard
 - View recent pipeline runs in a sortable table
 - Color-coded status indicators (✓ Success, ✗ Failed, ● Running, ○ Queued)
@@ -24,22 +38,31 @@ A Terminal User Interface (TUI) for Azure DevOps - monitor pipelines directly fr
 - Duration tracking for each step
 - Full log viewer with scrollable viewport
 
-### Pull Requests
-- List view of pull requests with status indicators
-- Detailed view showing PR information and metadata
-- Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
-
-### Work Items
-- List view of work items with status and type information
-- Detailed view showing work item details
-- Change work item state directly from the detail view (dynamically fetches available states)
-
 ### User Experience
+- **Setup wizard** on first run guides you through configuration
 - Help modal with all keyboard shortcuts (press `?`)
 - Secure PAT storage using system keyring
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
 - Seven built-in themes with true color support
+- **Theme switcher** modal (press `t`) to change themes on the fly
+- **Multi-project support** with display name customization
+
+## CLI Usage
+
+```bash
+# Start the TUI
+azdo
+
+# Set or update your Personal Access Token
+azdo auth
+
+# Show version
+azdo --version
+
+# Show help
+azdo --help
+```
 
 ## Installation
 
@@ -69,9 +92,6 @@ curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh -
 
 # Install to a custom directory
 ./install.sh --install-dir ~/bin
-
-# Skip config file creation
-./install.sh --skip-config
 ```
 
 ### Manual Download
@@ -80,12 +100,12 @@ Download the latest release for your platform from the [Releases page](https://g
 
 | Platform | Architecture | File |
 |----------|-------------|------|
-| Linux    | x86_64      | `azdo-tui_*_Linux_x86_64.tar.gz` |
-| Linux    | ARM64       | `azdo-tui_*_Linux_arm64.tar.gz` |
-| macOS    | x86_64      | `azdo-tui_*_Darwin_x86_64.tar.gz` |
-| macOS    | ARM64 (M1+) | `azdo-tui_*_Darwin_arm64.tar.gz` |
-| Windows  | x86_64      | `azdo-tui_*_Windows_x86_64.zip` |
-| Windows  | ARM64       | `azdo-tui_*_Windows_arm64.zip` |
+| Linux    | x86_64      | `azdo_*_Linux_x86_64.tar.gz` |
+| Linux    | ARM64       | `azdo_*_Linux_arm64.tar.gz` |
+| macOS    | x86_64      | `azdo_*_Darwin_x86_64.tar.gz` |
+| macOS    | ARM64 (M1+) | `azdo_*_Darwin_arm64.tar.gz` |
+| Windows  | x86_64      | `azdo_*_Windows_x86_64.zip` |
+| Windows  | ARM64       | `azdo_*_Windows_arm64.zip` |
 
 Extract the archive and move the binary to a directory in your `PATH`.
 
@@ -107,6 +127,9 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 
 ### 1. Create Configuration File
 
+When running azdo for the first time, a **wizard setup** will help you setup this.
+Otherwise follow these instructions.
+
 Create a configuration file at the following location:
 - **Linux/macOS**: `~/.config/azdo-tui/config.yaml`
 - **Windows**: `C:\Users\<username>\.config\azdo-tui\config.yaml`
@@ -124,7 +147,8 @@ projects:
 #   projects:
 #     - name: ugly-api-project-name
 #       display_name: My Project
-#     - simple-project
+#     - name: ugly-api-project-name-2
+#       display_name: My Project 2
 
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
@@ -134,20 +158,6 @@ polling_interval: 60
 theme: dark
 ```
 
-Or copy the example configuration:
-
-**Linux/macOS:**
-```bash
-mkdir -p ~/.config/azdo-tui
-cp config.yaml.example ~/.config/azdo-tui/config.yaml
-```
-
-**Windows (PowerShell):**
-```powershell
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.config\azdo-tui"
-Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
-```
-
 **Configuration Options:**
 - `organization`: Your Azure DevOps organization name (required)
 - `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
@@ -155,10 +165,10 @@ Copy-Item config.yaml.example "$env:USERPROFILE\.config\azdo-tui\config.yaml"
 - `theme`: Color theme for the UI (optional, default: dark)
 
 **Available Themes:**
-- `dark` - Default dark theme with blue and cyan accents
+- `dark` - Dark theme with blue and cyan accents
 - `gruvbox` - Retro groove color scheme
 - `nord` - Arctic, north-bluish color palette
-- `dracula` - Dark theme with purple and pink accents
+- `dracula` - Default dark theme with purple and pink accents
 - `catppuccin` - Soothing pastel theme (Mocha variant)
 - `github` - GitHub Dark theme
 - `retro` - Matrix-inspired green phosphor on black
@@ -222,6 +232,8 @@ On first run, the application will prompt you to enter your Azure DevOps PAT. Th
 - **macOS**: Keychain
 - **Linux**: Secret Service (gnome-keyring, KWallet, etc.)
 
+You can also set the `AZDO_PAT` environment variable as a fallback if your system doesn't support a keyring. To update your PAT at any time, run `azdo auth`.
+
 **Required PAT Scopes:**
 | Scope | Access | Used For |
 |-------|--------|----------|
@@ -234,18 +246,6 @@ To create a PAT:
 2. Click "New Token"
 3. Select the required scopes
 4. Copy the generated token
-
-## Usage
-
-```bash
-./azdo
-```
-
-Or if installed via `go install`:
-
-```bash
-azdo
-```
 
 ## Keyboard Shortcuts
 
@@ -270,6 +270,17 @@ azdo
 | Key | Action |
 |-----|--------|
 | `v` | Vote on pull request |
+| `enter` | View diff for selected file |
+
+### PR Diff / Code Review View
+| Key | Action |
+|-----|--------|
+| `c` | Create comment (on selected line or general) |
+| `p` | Reply to nearest thread |
+| `x` | Resolve nearest thread |
+| `n` | Jump to next comment |
+| `N` | Jump to previous comment |
+| `r` | Refresh changed files |
 
 ### Work Item Detail View
 | Key | Action |
@@ -282,56 +293,9 @@ azdo
 | `g` | Jump to top |
 | `G` | Jump to bottom |
 
-## Project Structure
-
-```
-azdo/
-├── cmd/azdo-tui/           # Application entry point
-├── internal/
-│   ├── app/                # Root Bubble Tea application with tab management
-│   ├── azdevops/           # Azure DevOps API client
-│   │   ├── client.go       # HTTP client with authentication
-│   │   ├── pipelines.go    # Pipeline runs API
-│   │   ├── timeline.go     # Build timeline API
-│   │   ├── logs.go         # Build logs API
-│   │   ├── pullrequests.go # Pull requests API
-│   │   ├── workitems.go    # Work items API
-│   │   └── types.go        # API response types
-│   ├── config/             # Configuration management
-│   │   ├── config.go       # YAML config with Viper
-│   │   └── keyring.go      # Secure PAT storage
-│   ├── polling/            # Live update system
-│   │   ├── poller.go       # Background polling
-│   │   ├── events.go       # Message types
-│   │   └── errorhandler.go # Graceful degradation
-│   └── ui/
-│       ├── components/     # Reusable UI components
-│       │   ├── statusbar.go    # Footer with keybindings
-│       │   ├── contextbar.go   # View-specific info bar
-│       │   ├── help.go         # Help modal overlay
-│       │   ├── spinner.go      # Loading indicator
-│       │   └── table/          # Local table fork (TrueColor fix)
-│       ├── styles/         # Theming system
-│       │   ├── theme.go        # Theme type definition
-│       │   ├── themes.go       # Built-in themes
-│       │   └── styles.go       # Lipgloss styles
-│       ├── pipelines/      # Pipeline views
-│       │   ├── list.go         # Pipeline runs table
-│       │   ├── detail.go       # Timeline tree view
-│       │   └── logviewer.go    # Log content viewer
-│       ├── pullrequests/   # Pull request views
-│       │   ├── list.go         # PR list table
-│       │   └── detail.go       # PR detail view
-│       ├── workitems/      # Work item views
-│       │   ├── list.go         # Work items table
-│       │   └── detail.go       # Work item detail view
-│       └── patinput/       # PAT input prompt
-├── config.yaml.example     # Example configuration
-└── Architecture.md         # Detailed architecture docs
-```
-
 ## Technology Stack
 
+- **Go 1.23+**
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) - Terminal UI framework
 - [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components (table, viewport)
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) - Styling and layout
@@ -360,64 +324,15 @@ go build -o azdo ./cmd/azdo-tui
 
 ### Releases
 
-This project uses [GoReleaser](https://goreleaser.com/) for automated cross-platform builds and releases.
+See [RELEASES.md](RELEASES.md) for release process and GoReleaser usage.
 
-**Supported Platforms:**
-- Linux (amd64, arm64)
-- macOS (amd64, arm64)
-- Windows (amd64, arm64)
+## FAQ
 
-**Local Testing:**
-
-```bash
-# Install goreleaser
-go install github.com/goreleaser/goreleaser/v2@latest
-
-# Build snapshot (without publishing)
-goreleaser build --snapshot --clean
-
-# Full release dry-run
-goreleaser release --snapshot --clean
-```
-
-**Creating a Release:**
-
-1. Ensure all changes are committed
-2. Create and push a new tag:
-   ```bash
-   git tag -a v0.1.0 -m "Release v0.1.0"
-   git push origin v0.1.0
-   ```
-3. GoReleaser will automatically create a GitHub release with binaries for all platforms
-
-Binaries will be available in the `dist/` directory after running GoReleaser locally, or as GitHub release assets when publishing.
-
+See [FAQ.md](FAQ.md) for common questions and troubleshooting.
 
 ## Contributing
 
-Contributions are welcome! Please check the `Architecture.md` file for implementation details.
-
-## Notes
-
-### Local Table Fork (TrueColor Fix)
-
-The table component at `internal/ui/components/table/` is a local fork of
-[charmbracelet/bubbles/table](https://github.com/charmbracelet/bubbles/tree/main/table).
-The only change is replacing `runewidth.Truncate` with `ansi.Truncate` from
-`github.com/charmbracelet/x/ansi` in the `headersView()` and `renderRow()`
-functions.
-
-**Why:** The upstream bubbles table uses `go-runewidth` for truncation, which is
-not ANSI-aware — it counts escape code characters (e.g. `\x1b[38;2;R;G;Bm`) as
-having visual width. This causes columns to misalign and text to get truncated
-when cell values contain styled ANSI content (like our colored status icons).
-The `x/ansi` package's `Truncate` function is a drop-in replacement that
-properly skips ANSI escape sequences.
-
-**When upgrading bubbletea/bubbles:** Check if the upstream table has switched
-from `runewidth.Truncate` to `ansi.Truncate`. If so, the local fork can be
-removed and we can go back to importing `github.com/charmbracelet/bubbles/table`
-directly.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
