@@ -58,6 +58,10 @@ azdo demo
 
 This launches the full TUI with realistic mock data (two fictional projects, pull requests with diffs, work items, pipeline runs with logs). All features work — you can navigate, view details, switch themes, and explore the UI. Perfect for evaluating the tool or taking screenshots.
 
+![Pull Requests list view](screenshots/pr-list.png)
+
+See more screenshots in the [screenshots](screenshots/) folder.
+
 ## CLI Usage
 
 ```bash
