@@ -399,20 +399,25 @@ func (m Model) headersView() string {
 }
 
 func (m *Model) renderRow(r int) string {
+	isSelected := r == m.cursor
 	s := make([]string, 0, len(m.cols))
 	for i, value := range m.rows[r] {
 		if m.cols[i].Width <= 0 {
 			continue
 		}
 		style := lipgloss.NewStyle().Width(m.cols[i].Width).MaxWidth(m.cols[i].Width).Inline(true)
-		renderedCell := m.styles.Cell.Render(style.Render(ansi.Truncate(value, m.cols[i].Width, "…")))
+		cellStyle := m.styles.Cell
+		if isSelected {
+			cellStyle = cellStyle.Inherit(m.styles.Selected)
+		}
+		renderedCell := cellStyle.Render(style.Render(ansi.Truncate(value, m.cols[i].Width, "…")))
 		s = append(s, renderedCell)
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, s...)
 
-	if r == m.cursor {
-		return m.styles.Selected.Render(row)
+	if isSelected {
+		return m.styles.Selected.Width(m.viewport.Width).Render(row)
 	}
 
 	return row

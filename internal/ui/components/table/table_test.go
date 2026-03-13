@@ -1,9 +1,13 @@
 package table
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func newTestTable() Model {
@@ -85,6 +89,78 @@ func TestDocumentedKeysStillWork(t *testing.T) {
 				t.Errorf("Key should move cursor down from %d, but cursor is at %d", pos, m.Cursor())
 			}
 		})
+	}
+}
+
+func TestSelectedRowHighlightsAllColumns(t *testing.T) {
+	// Force color output so ANSI escapes are actually emitted.
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	m := New(
+		WithColumns([]Column{{Title: "A", Width: 10}, {Title: "B", Width: 10}}),
+		WithRows([]Row{{"hello", "world"}}),
+		WithHeight(5),
+		WithFocused(true),
+	)
+
+	viewportWidth := 80
+	m.SetWidth(viewportWidth)
+
+	// Use a background color so we can detect it in the ANSI output.
+	styles := DefaultStyles()
+	styles.Selected = lipgloss.NewStyle().
+		Background(lipgloss.Color("62"))
+	styles.Cell = lipgloss.NewStyle().Padding(0, 1)
+	m.SetStyles(styles)
+
+	rendered := m.renderRow(0)
+
+	// The rendered row should fill the full viewport width.
+	printableWidth := ansi.StringWidth(rendered)
+	if printableWidth != viewportWidth {
+		t.Errorf("selected row width = %d, want %d (should fill full viewport width)", printableWidth, viewportWidth)
+	}
+
+	// The background escape sequence for color 62 should appear around
+	// BOTH cell values, not just the first one.
+	helloIdx := strings.Index(rendered, "hello")
+	worldIdx := strings.Index(rendered, "world")
+	if helloIdx < 0 || worldIdx < 0 {
+		t.Fatal("expected both 'hello' and 'world' in rendered row")
+	}
+
+	// After the first cell is rendered, lipgloss resets styles. If the
+	// selected style is only applied as an outer wrapper, the background
+	// won't be re-emitted before the second cell. We check that the
+	// background escape is present in the segment between the two values.
+	betweenCells := rendered[helloIdx+len("hello") : worldIdx]
+	bgEscape := "48;5;62" // SGR parameter for 256-color background 62
+	if !strings.Contains(betweenCells, bgEscape) {
+		t.Errorf("background color not active before second column; selected style must apply to every cell, not just the row wrapper\nbetween cells: %q", betweenCells)
+	}
+}
+
+func TestUnselectedRowDoesNotFillFullWidth(t *testing.T) {
+	m := New(
+		WithColumns([]Column{{Title: "A", Width: 10}, {Title: "B", Width: 10}}),
+		WithRows([]Row{{"hello", "world"}, {"foo", "bar"}}),
+		WithHeight(5),
+		WithFocused(true),
+	)
+
+	viewportWidth := 80
+	m.SetWidth(viewportWidth)
+
+	styles := DefaultStyles()
+	styles.Cell = lipgloss.NewStyle().Padding(0, 1)
+	m.SetStyles(styles)
+
+	rendered := m.renderRow(1) // row 1 is not selected (cursor defaults to 0)
+	printableWidth := ansi.StringWidth(rendered)
+
+	// Unselected row should NOT be padded to full width
+	if printableWidth >= viewportWidth {
+		t.Errorf("unselected row width = %d, should be less than viewport width %d", printableWidth, viewportWidth)
 	}
 }
 
