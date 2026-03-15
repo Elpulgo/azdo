@@ -289,11 +289,11 @@ func TestDetailModel_SKeyStartsLoading(t *testing.T) {
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
 
-	// Press 's' should start loading states
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	// Press 'w' should start loading states
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 
 	if !m.loading {
-		t.Error("Expected loading to be true after pressing 's'")
+		t.Error("Expected loading to be true after pressing 'w'")
 	}
 	if cmd == nil {
 		t.Error("Expected command to be returned for fetching states")
@@ -525,13 +525,13 @@ func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 	items := m.GetContextItems()
 	found := false
 	for _, item := range items {
-		if item.Key == "s" {
+		if item.Key == "w" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("Expected context items to include 's' keybinding for state change")
+		t.Error("Expected context items to include 'w' keybinding for state change")
 	}
 }
 

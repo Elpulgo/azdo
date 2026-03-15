@@ -117,7 +117,7 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "s":
+		case "w":
 			m.loading = true
 			m.spinner.SetVisible(true)
 			m.spinner.SetMessage("Loading states...")
@@ -292,7 +292,7 @@ func (m *DetailModel) SetSize(width, height int) {
 // GetContextItems returns context items for the detail view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
-		{Key: "s", Description: "Change state"},
+		{Key: "w", Description: "Change state"},
 		{Key: "↑↓", Description: "scroll"},
 		{Key: "esc", Description: "back"},
 	}
