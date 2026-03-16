@@ -8,8 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// minModalWidth is the minimum width for the help modal content
-const minModalWidth = 80
+// minModalWidth is defined in listpicker.go and shared across components
 
 // HelpBinding represents a single keybinding entry.
 type HelpBinding struct {
@@ -63,9 +62,11 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 					{Key: "f", Description: "Search / filter"},
 					{Key: "m", Description: "Toggle my items (work items)"},
 					{Key: "T", Description: "Filter by tag (work items)"},
+					{Key: "s", Description: "Filter by state (work items)"},
+					{Key: "S", Description: "Filter by status (pipelines)"},
 					{Key: "r", Description: "Refresh data"},
 					{Key: "v", Description: "Vote on PR (detail view)"},
-					{Key: "s", Description: "Change work item state (detail view)"},
+					{Key: "w", Description: "Change work item state (detail view)"},
 					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},
 					{Key: "q", Description: "Quit application"},

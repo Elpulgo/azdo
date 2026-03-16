@@ -12,8 +12,8 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
-	"github.com/Elpulgo/azdo/internal/version"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
+	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -76,10 +76,10 @@ type Model struct {
 	errorHandler     *polling.ErrorHandler
 	currentVersion   string
 	commitHash       string
-	width      int
-	height     int
-	footerRows int
-	err        error
+	width            int
+	height           int
+	footerRows       int
+	err              error
 }
 
 // formatVersionInfo formats the version and commit hash for display.
@@ -195,8 +195,8 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	return tea.Batch(
-		m.poller.FetchPipelineRuns(),  // Initial fetch - updates connection state
-		m.poller.StartPolling(),       // Start polling timer
+		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
+		m.poller.StartPolling(),      // Start polling timer
 		m.pullRequestsView.Init(),    // Load PR tab (default tab)
 		checkForUpdate(m.currentVersion),
 	)
@@ -621,6 +621,23 @@ func (m Model) workItemsKeybindings() string {
 		m.styles.Key.Render("f") + m.styles.Description.Render(" search") + sep +
 		m.styles.Key.Render("m") + m.styles.Description.Render(" my items") + sep +
 		m.styles.Key.Render("T") + m.styles.Description.Render(" tags") + sep +
+		m.styles.Key.Render("s") + m.styles.Description.Render(" state") + sep +
+		m.styles.Key.Render("esc") + m.styles.Description.Render(" back") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
+// pipelinesKeybindings returns the keybindings string for the pipelines list view.
+func (m Model) pipelinesKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("enter") + m.styles.Description.Render(" details") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" search") + sep +
+		m.styles.Key.Render("S") + m.styles.Description.Render(" status") + sep +
 		m.styles.Key.Render("esc") + m.styles.Description.Render(" back") + sep +
 		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
@@ -700,6 +717,18 @@ func (m Model) View() string {
 		return m.workItemsView.TagPickerView()
 	}
 
+	// If state picker is visible, show it as overlay
+	if m.activeTab == TabWorkItems && m.workItemsView.IsStatePickerVisible() {
+		m.workItemsView.SetStatePickerSize(m.width, m.height)
+		return m.workItemsView.StatePickerView()
+	}
+
+	// If status picker is visible, show it as overlay
+	if m.activeTab == TabPipelines && m.pipelinesView.IsStatusPickerVisible() {
+		m.pipelinesView.SetStatusPickerSize(m.width, m.height)
+		return m.pipelinesView.StatusPickerView()
+	}
+
 	// Render tab bar in its own bordered box
 	contentSize := m.contentViewSize()
 	tabBar := m.renderTabBar(contentSize.Width)
@@ -735,6 +764,8 @@ func (m Model) View() string {
 	// Set tab-specific keybindings on status bar
 	if m.activeTab == TabWorkItems && !hasContextBar {
 		m.statusBar.SetKeybindings(m.workItemsKeybindings())
+	} else if m.activeTab == TabPipelines && !hasContextBar {
+		m.statusBar.SetKeybindings(m.pipelinesKeybindings())
 	} else {
 		m.statusBar.SetKeybindings("")
 	}
@@ -747,6 +778,19 @@ func (m Model) View() string {
 		}
 		if m.workItemsView.IsTagFilterActive() {
 			labels = append(labels, "Tag: "+m.workItemsView.ActiveTag())
+		}
+		if m.workItemsView.IsStateFilterActive() {
+			labels = append(labels, "State: "+m.workItemsView.ActiveState())
+		}
+		if len(labels) > 0 {
+			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
+		} else {
+			m.statusBar.ClearFilterLabel()
+		}
+	} else if m.activeTab == TabPipelines {
+		var labels []string
+		if m.pipelinesView.IsStatusFilterActive() {
+			labels = append(labels, "Status: "+m.pipelinesView.ActiveStatus())
 		}
 		if len(labels) > 0 {
 			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))

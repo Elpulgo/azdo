@@ -24,13 +24,16 @@ const (
 
 // Model represents the pipeline list view with sub-views
 type Model struct {
-	list      listview.Model[azdevops.PipelineRun]
-	client    *azdevops.MultiClient
-	logViewer *LogViewerModel
-	viewMode  ViewMode
-	width     int
-	height    int
-	styles    *styles.Styles
+	list         listview.Model[azdevops.PipelineRun]
+	client       *azdevops.MultiClient
+	logViewer    *LogViewerModel
+	viewMode     ViewMode
+	width        int
+	height       int
+	styles       *styles.Styles
+	activeStatus string
+	statusPicker components.ListPicker
+	allRuns      []azdevops.PipelineRun
 }
 
 // NewModel creates a new pipeline list model with default styles
@@ -95,10 +98,11 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 	}
 
 	return Model{
-		list:     listview.New(cfg, s),
-		client:   client,
-		viewMode: ViewList,
-		styles:   s,
+		list:         listview.New(cfg, s),
+		client:       client,
+		viewMode:     ViewList,
+		styles:       s,
+		statusPicker: components.NewListPicker(s),
 	}
 }
 
@@ -127,13 +131,31 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		// For partial errors, treat data as valid (some projects succeeded)
 		var partialErr *azdevops.PartialError
 		if errors.As(msg.err, &partialErr) {
-			m.list = m.list.HandleFetchResult(msg.runs, nil)
+			m.allRuns = msg.runs
+			m.list = m.list.HandleFetchResult(m.applyStatusFilter(msg.runs), nil)
 			return m, nil
 		}
-		m.list = m.list.HandleFetchResult(msg.runs, msg.err)
+		m.allRuns = msg.runs
+		m.list = m.list.HandleFetchResult(m.applyStatusFilter(msg.runs), msg.err)
 		return m, nil
 	case SetRunsMsg:
-		m.list = m.list.SetItems(msg.Runs)
+		m.allRuns = msg.Runs
+		m.list = m.list.SetItems(m.applyStatusFilter(msg.Runs))
+		return m, nil
+	case components.ListPickerSelectedMsg:
+		m.activeStatus = msg.Value
+		m.statusPicker.Hide()
+		m.list = m.list.SetItems(m.applyStatusFilter(m.allRuns))
+		return m, nil
+	}
+
+	// When status picker is visible, route all input to it
+	if m.statusPicker.IsVisible() {
+		if kmsg, ok := msg.(tea.KeyMsg); ok {
+			var cmd tea.Cmd
+			m.statusPicker, cmd = m.statusPicker.Update(kmsg)
+			return m, cmd
+		}
 		return m, nil
 	}
 
@@ -144,6 +166,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case ViewDetail:
 		return m.updateDetail(msg)
 	default:
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "S" && !m.list.IsSearching() && m.viewMode == ViewList {
+			statuses := getPipelineStatuses()
+			options := make([]components.ListPickerOption, len(statuses))
+			for i, status := range statuses {
+				options[i] = components.ListPickerOption{Name: status.Name, Icon: status.Icon}
+			}
+			m.statusPicker.SetConfig("Filter by Status", options, m.activeStatus, true)
+			m.statusPicker.Show()
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		// Sync viewMode from generic model
@@ -410,6 +442,77 @@ func filterPipelineRunMulti(run azdevops.PipelineRun, query string) bool {
 		strings.Contains(strings.ToLower(run.Definition.Name), q) ||
 		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
 		strings.Contains(strings.ToLower(run.BuildNumber), q)
+}
+
+type pipelineStatus struct {
+	Name string
+	Icon string
+}
+
+func getPipelineStatuses() []pipelineStatus {
+	return []pipelineStatus{
+		{Name: "Running", Icon: "●"},
+		{Name: "Queued", Icon: "○"},
+		{Name: "Success", Icon: "✓"},
+		{Name: "Failed", Icon: "✗"},
+		{Name: "Cancel", Icon: "⊘"},
+		{Name: "Partial", Icon: "◐"},
+	}
+}
+
+func getStatusKey(status, result string) string {
+	statusLower := strings.ToLower(status)
+	resultLower := strings.ToLower(result)
+
+	switch {
+	case statusLower == "inprogress":
+		return "Running"
+	case statusLower == "notstarted":
+		return "Queued"
+	case resultLower == "succeeded":
+		return "Success"
+	case resultLower == "failed":
+		return "Failed"
+	case resultLower == "canceled":
+		return "Cancel"
+	case resultLower == "partiallysucceeded":
+		return "Partial"
+	default:
+		return ""
+	}
+}
+
+func (m Model) applyStatusFilter(runs []azdevops.PipelineRun) []azdevops.PipelineRun {
+	if m.activeStatus == "" {
+		return runs
+	}
+	var filtered []azdevops.PipelineRun
+	for _, run := range runs {
+		if getStatusKey(run.Status, run.Result) == m.activeStatus {
+			filtered = append(filtered, run)
+		}
+	}
+	return filtered
+}
+
+func (m Model) IsStatusFilterActive() bool {
+	return m.activeStatus != ""
+}
+
+func (m Model) ActiveStatus() string {
+	return m.activeStatus
+}
+
+func (m Model) IsStatusPickerVisible() bool {
+	return m.statusPicker.IsVisible()
+}
+
+func (m Model) StatusPickerView() string {
+	return m.statusPicker.View()
+}
+
+func (m *Model) SetStatusPickerSize(width, height int) {
+	m.statusPicker.SetSize(width, height)
 }
 
 // Messages

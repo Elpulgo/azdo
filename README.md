@@ -28,10 +28,13 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 - Detailed view showing work item details
 - Change work item state directly from the detail view (dynamically fetches available states)
 - Filter to show only your assigned items
+- Filter by tag (`T` key)
+- Filter by state (`s` key)
 
 ### Pipeline Dashboard
 - View recent pipeline runs in a sortable table
 - Color-coded status indicators (✓ Success, ✗ Failed, ● Running, ○ Queued)
+- Filter by status (`S` key)
 - Live auto-refresh with configurable polling interval
 - Connection status indicator in footer
 - Hierarchical detail view with stages, jobs, and tasks
@@ -279,6 +282,8 @@ To create a PAT:
 | `f` | Search / filter |
 | `m` | Toggle my items (work items) |
 | `T` | Filter by tag (work items) |
+| `s` | Filter by state (work items) |
+| `S` | Filter by status (pipelines) |
 | `esc` | Go back / dismiss search |
 | `?` | Toggle help modal |
 | `t` | Select theme |
@@ -303,7 +308,7 @@ To create a PAT:
 ### Work Item Detail View
 | Key | Action |
 |-----|--------|
-| `s` | Change work item state |
+| `w` | Change work item state |
 
 ### Log Viewer
 | Key | Action |

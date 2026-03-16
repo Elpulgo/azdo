@@ -35,9 +35,11 @@ type Model struct {
 	styles      *styles.Styles
 	myItemsOnly bool
 	allItems    []azdevops.WorkItem
-	myItems     []azdevops.WorkItem // base my-items set (before tag filter)
+	myItems     []azdevops.WorkItem // base my-items set (before tag/state filter)
 	activeTag   string
+	activeState string
 	tagPicker   components.TagPicker
+	statePicker components.ListPicker
 }
 
 // NewModel creates a new work items list model with default styles
@@ -102,10 +104,11 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 	}
 
 	return Model{
-		list:      listview.New(cfg, s),
-		client:    client,
-		styles:    s,
-		tagPicker: components.NewTagPicker(s),
+		list:        listview.New(cfg, s),
+		client:      client,
+		styles:      s,
+		tagPicker:   components.NewTagPicker(s),
+		statePicker: components.NewListPicker(s),
 	}
 }
 
@@ -152,17 +155,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			var partialErr *azdevops.PartialError
 			if errors.As(msg.err, &partialErr) {
 				m.myItems = msg.workItems
-				m.list = m.list.SetItems(applyTagFilter(msg.workItems, m.activeTag))
+				m.list = m.list.SetItems(m.applyAllFilters(msg.workItems))
 				return m, nil
 			}
 			// On error, fall back to showing all items and clear loading state
 			m.myItemsOnly = false
 			m.myItems = nil
-			m.list = m.list.SetItems(applyTagFilter(m.allItems, m.activeTag))
+			m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
 			return m, nil
 		}
 		m.myItems = msg.workItems
-		m.list = m.list.SetItems(applyTagFilter(msg.workItems, m.activeTag))
+		m.list = m.list.SetItems(m.applyAllFilters(msg.workItems))
 		return m, nil
 	case WorkItemStateChangedMsg:
 		// Re-fetch work items so the list reflects the updated state
@@ -170,18 +173,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case SetWorkItemsMsg:
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
-			m.list = m.list.SetItems(applyTagFilter(msg.WorkItems, m.activeTag))
+			m.list = m.list.SetItems(m.applyAllFilters(msg.WorkItems))
 		}
 		return m, nil
 	case components.TagSelectedMsg:
 		m.activeTag = msg.Tag
 		m.tagPicker.Hide()
-		// Re-apply tag filter on the appropriate base set
-		if m.myItemsOnly {
-			m.list = m.list.SetItems(applyTagFilter(m.myItems, m.activeTag))
-		} else {
-			m.list = m.list.SetItems(applyTagFilter(m.allItems, m.activeTag))
-		}
+		// Re-apply filters on the appropriate base set
+		m.list = m.list.SetItems(m.applyAllFilters(m.getBaseItems()))
+		return m, nil
+	case components.ListPickerSelectedMsg:
+		m.activeState = msg.Value
+		m.statePicker.Hide()
+		// Re-apply filters on the appropriate base set
+		m.list = m.list.SetItems(m.applyAllFilters(m.getBaseItems()))
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "T" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
@@ -195,9 +200,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if m.myItemsOnly {
 				return m, fetchMyWorkItemsMulti(m.client)
 			}
-			// Toggle OFF: restore all items (with tag filter if active)
+			// Toggle OFF: restore all items (with filters if active)
 			m.myItems = nil
-			m.list = m.list.SetItems(applyTagFilter(m.allItems, m.activeTag))
+			m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
+			return m, nil
+		}
+		if msg.String() == "s" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
+			states := collectUniqueStates(m.allItems)
+			options := make([]components.ListPickerOption, len(states))
+			for i, state := range states {
+				options[i] = components.ListPickerOption{Name: state, Icon: "●"}
+			}
+			m.statePicker.SetConfig("Filter by State", options, m.activeState, true)
+			m.statePicker.Show()
 			return m, nil
 		}
 	}
@@ -207,6 +222,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if kmsg, ok := msg.(tea.KeyMsg); ok {
 			var cmd tea.Cmd
 			m.tagPicker, cmd = m.tagPicker.Update(kmsg)
+			return m, cmd
+		}
+		return m, nil
+	}
+
+	// When state picker is visible, route all input to it
+	if m.statePicker.IsVisible() {
+		if kmsg, ok := msg.(tea.KeyMsg); ok {
+			var cmd tea.Cmd
+			m.statePicker, cmd = m.statePicker.Update(kmsg)
 			return m, cmd
 		}
 		return m, nil
@@ -295,6 +320,46 @@ func (m Model) TagPickerView() string {
 // SetTagPickerSize sets the dimensions for the tag picker overlay.
 func (m *Model) SetTagPickerSize(width, height int) {
 	m.tagPicker.SetSize(width, height)
+}
+
+// IsStateFilterActive returns true if a state filter is active.
+func (m Model) IsStateFilterActive() bool {
+	return m.activeState != ""
+}
+
+// ActiveState returns the currently active state filter, or "" if none.
+func (m Model) ActiveState() string {
+	return m.activeState
+}
+
+// IsStatePickerVisible returns true if the state picker modal is open.
+func (m Model) IsStatePickerVisible() bool {
+	return m.statePicker.IsVisible()
+}
+
+// StatePickerView returns the rendered state picker overlay.
+func (m Model) StatePickerView() string {
+	return m.statePicker.View()
+}
+
+// SetStatePickerSize sets the dimensions for the state picker overlay.
+func (m *Model) SetStatePickerSize(width, height int) {
+	m.statePicker.SetSize(width, height)
+}
+
+// getBaseItems returns the appropriate base items (allItems or myItems)
+func (m Model) getBaseItems() []azdevops.WorkItem {
+	if m.myItemsOnly {
+		return m.myItems
+	}
+	return m.allItems
+}
+
+// applyAllFilters applies tag and state filters to the given items.
+func (m Model) applyAllFilters(items []azdevops.WorkItem) []azdevops.WorkItem {
+	result := applyTagFilter(items, m.activeTag)
+	result = applyStateFilter(result, m.activeState)
+	return result
 }
 
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
@@ -457,6 +522,22 @@ func collectUniqueTags(items []azdevops.WorkItem) []string {
 	return tags
 }
 
+// collectUniqueStates extracts all unique states from the work items, sorted alphabetically.
+func collectUniqueStates(items []azdevops.WorkItem) []string {
+	seen := make(map[string]struct{})
+	for i := range items {
+		if items[i].Fields.State != "" {
+			seen[items[i].Fields.State] = struct{}{}
+		}
+	}
+	states := make([]string, 0, len(seen))
+	for state := range seen {
+		states = append(states, state)
+	}
+	sort.Strings(states)
+	return states
+}
+
 // applyTagFilter returns only work items that have the given tag.
 // If tag is empty, all items are returned unfiltered.
 func applyTagFilter(items []azdevops.WorkItem, tag string) []azdevops.WorkItem {
@@ -470,6 +551,21 @@ func applyTagFilter(items []azdevops.WorkItem, tag string) []azdevops.WorkItem {
 				filtered = append(filtered, wi)
 				break
 			}
+		}
+	}
+	return filtered
+}
+
+// applyStateFilter returns only work items that have the given state.
+// If state is empty, all items are returned unfiltered.
+func applyStateFilter(items []azdevops.WorkItem, state string) []azdevops.WorkItem {
+	if state == "" {
+		return items
+	}
+	var filtered []azdevops.WorkItem
+	for _, wi := range items {
+		if wi.Fields.State == state {
+			filtered = append(filtered, wi)
 		}
 	}
 	return filtered
