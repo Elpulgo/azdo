@@ -1001,3 +1001,75 @@ func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
 		t.Error("should not show update notification when already on latest")
 	}
 }
+
+// openTagPickerOnWorkItemsTab returns a Model with the work items tab active
+// and the tag picker open, ready for keypress tests.
+func openTagPickerOnWorkItemsTab(t *testing.T) Model {
+	t.Helper()
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "A", Tags: "Spring"}},
+	}
+	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: items})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	m = updated.(Model)
+
+	if !m.workItemsView.IsTagPickerVisible() {
+		t.Fatal("precondition failed: tag picker should be visible")
+	}
+	return m
+}
+
+func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {
+	cases := []struct {
+		name string
+		key  rune
+	}{
+		{"q_does_not_quit", 'q'},
+		{"t_does_not_open_theme_picker", 't'},
+		{"help_does_not_open", '?'},
+		{"digit_1_does_not_switch_tab", '1'},
+		{"digit_3_does_not_switch_tab", '3'},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := openTagPickerOnWorkItemsTab(t)
+
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+			m = updated.(Model)
+
+			if m.themePicker.IsVisible() {
+				t.Error("theme picker opened while tag picker was active")
+			}
+			if m.helpModal.IsVisible() {
+				t.Error("help modal opened while tag picker was active")
+			}
+			if m.activeTab != TabWorkItems {
+				t.Errorf("active tab changed while tag picker was active, got %d", m.activeTab)
+			}
+			if !m.workItemsView.IsTagPickerVisible() {
+				t.Error("tag picker was dismissed when it should have stayed open")
+			}
+			if got := m.workItemsView.TagPickerSearchQuery(); got != string(tc.key) {
+				t.Errorf("expected key %q to be typed into tag search, got %q", tc.key, got)
+			}
+		})
+	}
+}

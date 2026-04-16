@@ -298,10 +298,10 @@ func TestFilterWorkItem_MatchesTags(t *testing.T) {
 		query string
 		want  bool
 	}{
-		{"Sprint", true},   // partial tag match
-		{"sprint 1", true}, // case-insensitive tag match
-		{"backend", true},  // exact tag match (case-insensitive)
-		{"urgent", true},   // another tag
+		{"Sprint", true},    // partial tag match
+		{"sprint 1", true},  // case-insensitive tag match
+		{"backend", true},   // exact tag match (case-insensitive)
+		{"urgent", true},    // another tag
 		{"Sprint 2", false}, // no such tag
 	}
 
@@ -993,6 +993,65 @@ func TestApplyTagFilter(t *testing.T) {
 	filtered = applyTagFilter(items, "")
 	if len(filtered) != 3 {
 		t.Errorf("expected 3 items with empty filter, got %d", len(filtered))
+	}
+}
+
+// --- Tag picker shortcut passthrough tests ---
+//
+// When the tag picker modal is open, the workitems-level shortcuts T/m/s must
+// not fire — they should be typed into the tag picker's search input instead.
+
+func newModelWithTagPickerOpen(t *testing.T) Model {
+	t.Helper()
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "A", Tags: "Spring; Summer"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "B", Tags: "Monday"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	if !m.IsTagPickerVisible() {
+		t.Fatal("precondition failed: tag picker should be visible after pressing T")
+	}
+	return m
+}
+
+func TestTagPicker_SKeyTypedIntoSearch(t *testing.T) {
+	m := newModelWithTagPickerOpen(t)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+
+	if m.IsStatePickerVisible() {
+		t.Error("pressing 's' with tag picker open must not open state picker")
+	}
+	if got := m.TagPickerSearchQuery(); got != "s" {
+		t.Errorf("expected 's' to be typed into tag search, got %q", got)
+	}
+}
+
+func TestTagPicker_MKeyTypedIntoSearch(t *testing.T) {
+	m := newModelWithTagPickerOpen(t)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if m.IsMyItemsActive() {
+		t.Error("pressing 'm' with tag picker open must not toggle my items")
+	}
+	if got := m.TagPickerSearchQuery(); got != "m" {
+		t.Errorf("expected 'm' to be typed into tag search, got %q", got)
+	}
+}
+
+func TestTagPicker_TKeyTypedIntoSearch(t *testing.T) {
+	m := newModelWithTagPickerOpen(t)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+
+	if got := m.TagPickerSearchQuery(); got != "T" {
+		t.Errorf("expected 'T' to be typed into tag search (not re-open picker), got %q", got)
 	}
 }
 
