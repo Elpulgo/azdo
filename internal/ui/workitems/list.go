@@ -189,31 +189,36 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.list = m.list.SetItems(m.applyAllFilters(m.getBaseItems()))
 		return m, nil
 	case tea.KeyMsg:
-		if msg.String() == "T" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
-			tags := collectUniqueTags(m.allItems)
-			m.tagPicker.SetTags(tags, m.activeTag)
-			m.tagPicker.Show()
-			return m, nil
-		}
-		if msg.String() == "m" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
-			m.myItemsOnly = !m.myItemsOnly
-			if m.myItemsOnly {
-				return m, fetchMyWorkItemsMulti(m.client)
+		// When a picker modal is open, forward all keystrokes to it below so
+		// characters like T/m/s can be typed into the picker's search input.
+		pickerOpen := m.tagPicker.IsVisible() || m.statePicker.IsVisible()
+		if !pickerOpen {
+			if msg.String() == "T" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
+				tags := collectUniqueTags(m.allItems)
+				m.tagPicker.SetTags(tags, m.activeTag)
+				m.tagPicker.Show()
+				return m, nil
 			}
-			// Toggle OFF: restore all items (with filters if active)
-			m.myItems = nil
-			m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
-			return m, nil
-		}
-		if msg.String() == "s" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
-			states := collectUniqueStates(m.allItems)
-			options := make([]components.ListPickerOption, len(states))
-			for i, state := range states {
-				options[i] = components.ListPickerOption{Name: state, Icon: "●"}
+			if msg.String() == "m" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
+				m.myItemsOnly = !m.myItemsOnly
+				if m.myItemsOnly {
+					return m, fetchMyWorkItemsMulti(m.client)
+				}
+				// Toggle OFF: restore all items (with filters if active)
+				m.myItems = nil
+				m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
+				return m, nil
 			}
-			m.statePicker.SetConfig("Filter by State", options, m.activeState, true)
-			m.statePicker.Show()
-			return m, nil
+			if msg.String() == "s" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
+				states := collectUniqueStates(m.allItems)
+				options := make([]components.ListPickerOption, len(states))
+				for i, state := range states {
+					options[i] = components.ListPickerOption{Name: state, Icon: "●"}
+				}
+				m.statePicker.SetConfig("Filter by State", options, m.activeState, true)
+				m.statePicker.Show()
+				return m, nil
+			}
 		}
 	}
 
@@ -310,6 +315,12 @@ func (m Model) ActiveTag() string {
 // IsTagPickerVisible returns true if the tag picker modal is open.
 func (m Model) IsTagPickerVisible() bool {
 	return m.tagPicker.IsVisible()
+}
+
+// TagPickerSearchQuery returns the tag picker's current search input value
+// (for testing).
+func (m Model) TagPickerSearchQuery() string {
+	return m.tagPicker.SearchQuery()
 }
 
 // TagPickerView returns the rendered tag picker overlay.

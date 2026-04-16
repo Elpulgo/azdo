@@ -270,9 +270,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// When a child view is in search mode, skip all global shortcuts
-		// so keystrokes reach the search input instead.
-		if m.isActiveViewSearching() {
+		// When a child view is in search mode or has a modal picker open,
+		// skip all global shortcuts so keystrokes reach the input instead.
+		if m.isActiveViewCapturingInput() {
 			break
 		}
 
@@ -527,6 +527,22 @@ func (m Model) isActiveViewSearching() bool {
 		return m.pullRequestsView.IsSearching()
 	case TabWorkItems:
 		return m.workItemsView.IsSearching()
+	}
+	return false
+}
+
+// isActiveViewCapturingInput returns true when the active view is either in
+// search mode or has a modal picker open — in both cases global shortcuts
+// must yield so keystrokes land in the view's own input field.
+func (m Model) isActiveViewCapturingInput() bool {
+	if m.isActiveViewSearching() {
+		return true
+	}
+	switch m.activeTab {
+	case TabWorkItems:
+		return m.workItemsView.IsTagPickerVisible() || m.workItemsView.IsStatePickerVisible()
+	case TabPipelines:
+		return m.pipelinesView.IsStatusPickerVisible()
 	}
 	return false
 }

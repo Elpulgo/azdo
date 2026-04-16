@@ -104,21 +104,136 @@ func TestTagPickerNavigation(t *testing.T) {
 	}
 }
 
-func TestTagPickerNavigation_JK(t *testing.T) {
+func TestTagPickerTypingFiltersOptions(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTags([]string{"Sprint 1", "Backend", "Frontend", "bug"}, "")
+	picker.Show()
+	picker.SetSize(80, 24)
+
+	// Type "b" — should match "Backend" and "bug" (case-insensitive)
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+
+	view := picker.View()
+	if !strings.Contains(view, "Backend") {
+		t.Error("Expected Backend to remain visible after typing b")
+	}
+	if !strings.Contains(view, "bug") {
+		t.Error("Expected bug to remain visible after typing b")
+	}
+	if strings.Contains(view, "Sprint 1") {
+		t.Error("Expected Sprint 1 to be filtered out after typing b")
+	}
+	if strings.Contains(view, "Frontend") {
+		t.Error("Expected Frontend to be filtered out after typing b")
+	}
+}
+
+func TestTagPickerSearchBackspace(t *testing.T) {
 	picker := newTestTagPicker()
 	picker.SetTags([]string{"Sprint 1", "Backend"}, "")
 	picker.Show()
+	picker.SetSize(80, 24)
 
-	// j moves down
-	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+
+	view := picker.View()
+	if !strings.Contains(view, "Sprint 1") {
+		t.Error("Expected Sprint 1 to reappear after backspace clears filter")
+	}
+	if !strings.Contains(view, "Backend") {
+		t.Error("Expected Backend to remain visible after backspace")
+	}
+}
+
+func TestTagPickerSearchSelectsFilteredTag(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTags([]string{"Sprint 1", "Backend", "Frontend"}, "")
+	picker.Show()
+
+	// Type "fr" to filter down to Frontend
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	picker, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Expected command after selecting filtered tag")
+	}
+	msg := cmd()
+	tagMsg, ok := msg.(TagSelectedMsg)
+	if !ok {
+		t.Fatalf("Expected TagSelectedMsg, got %T", msg)
+	}
+	if tagMsg.Tag != "Frontend" {
+		t.Errorf("Expected tag 'Frontend', got %q", tagMsg.Tag)
+	}
+}
+
+func TestTagPickerSearchNavigationStaysInBounds(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTags([]string{"alpha", "beta", "gamma"}, "")
+	picker.Show()
+
+	// Start on "alpha" (cursor 0), move down to "beta", then filter down to just "alpha"
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if picker.GetCursor() != 1 {
-		t.Errorf("Expected cursor at 1 after j, got %d", picker.GetCursor())
+		t.Fatalf("Expected cursor at 1 before filtering, got %d", picker.GetCursor())
 	}
 
-	// k moves up
-	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if picker.GetCursor() != 0 {
-		t.Errorf("Expected cursor at 0 after k, got %d", picker.GetCursor())
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+
+	// Only "alpha" matches; cursor must be in-range so Enter selects a valid option
+	picker, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Expected command after selecting filtered tag")
+	}
+	tagMsg := cmd().(TagSelectedMsg)
+	if tagMsg.Tag != "alpha" {
+		t.Errorf("Expected 'alpha', got %q", tagMsg.Tag)
+	}
+}
+
+func TestTagPickerSearchNoMatches(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTags([]string{"alpha", "beta"}, "")
+	picker.Show()
+
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")})
+
+	// Enter with no matches must not emit a selection
+	_, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Error("Expected no command when selecting with zero filtered options")
+	}
+}
+
+func TestTagPickerSearchClearFilterAlwaysVisible(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTags([]string{"alpha", "beta"}, "alpha")
+	picker.Show()
+	picker.SetSize(80, 24)
+
+	// Filter to something that doesn't match "Clear filter" nor "alpha"
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")})
+
+	view := picker.View()
+	if !strings.Contains(view, "Clear filter") {
+		t.Error("Expected Clear filter option to stay visible regardless of search query")
+	}
+}
+
+func TestTagPickerSearchBarRendered(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTags([]string{"alpha"}, "")
+	picker.Show()
+	picker.SetSize(80, 24)
+
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+
+	view := picker.View()
+	if !strings.Contains(view, "a") {
+		t.Error("Expected search query to be reflected in the view")
 	}
 }
 
@@ -199,18 +314,6 @@ func TestTagPickerEscape(t *testing.T) {
 
 	if cmd != nil {
 		t.Error("Expected no command after escape (no selection)")
-	}
-}
-
-func TestTagPickerQuitKey(t *testing.T) {
-	picker := newTestTagPicker()
-	picker.SetTags([]string{"Sprint 1"}, "")
-	picker.Show()
-
-	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-
-	if picker.IsVisible() {
-		t.Error("Expected picker to be hidden after q")
 	}
 }
 
