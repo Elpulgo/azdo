@@ -710,6 +710,22 @@ func (m Model) workItemsKeybindings() string {
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }
 
+// pullRequestsKeybindings returns the keybindings string for the PR list view.
+func (m Model) pullRequestsKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("enter") + m.styles.Description.Render(" details") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" search") + sep +
+		m.styles.Key.Render("m") + m.styles.Description.Render(" my PRs") + sep +
+		m.styles.Key.Render("esc") + m.styles.Description.Render(" back") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
 // pipelinesKeybindings returns the keybindings string for the pipelines list view.
 func (m Model) pipelinesKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
@@ -845,7 +861,9 @@ func (m Model) View() string {
 	}
 
 	// Set tab-specific keybindings on status bar
-	if m.activeTab == TabWorkItems && !hasContextBar {
+	if m.activeTab == TabPullRequests && !hasContextBar {
+		m.statusBar.SetKeybindings(m.pullRequestsKeybindings())
+	} else if m.activeTab == TabWorkItems && !hasContextBar {
 		m.statusBar.SetKeybindings(m.workItemsKeybindings())
 	} else if m.activeTab == TabPipelines && !hasContextBar {
 		m.statusBar.SetKeybindings(m.pipelinesKeybindings())

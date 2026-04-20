@@ -728,6 +728,29 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestModel_PRTab_StatusBarShowsMyItemsKeybinding(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// On PR tab (default), status bar should advertise 'm' for my PRs and 'f' for search
+	view := m.View()
+	if !strings.Contains(view, "my PRs") {
+		t.Error("PR tab status bar should show 'm my PRs' keybinding")
+	}
+	if !strings.Contains(view, "search") {
+		t.Error("PR tab status bar should show 'f search' keybinding")
+	}
+}
+
 func TestModel_MyPRsToggle_EndToEnd(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",

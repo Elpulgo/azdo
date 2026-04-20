@@ -94,7 +94,7 @@ Keyboard shortcuts (in TUI):
 
   Actions:
     f            Search / filter
-    m            Toggle my items (work items)
+    m            Toggle my items (PRs / work items)
     T            Filter by tag (work items)
     r            Refresh data
     v            Vote on PR (detail view)
