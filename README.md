@@ -176,6 +176,10 @@ polling_interval: 60
 # Theme (optional, default: dark)
 # Available themes: dark, gruvbox, nord, dracula, catppuccin, github, retro, monokai
 theme: dark
+
+# Disable specific panes (optional, comma-separated)
+# Valid values: pipelines, workitems
+# disabled_panes: pipelines,workitems
 ```
 
 **Configuration Options:**
@@ -183,6 +187,7 @@ theme: dark
 - `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
+- `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
 
 **Available Themes:**
 - `dark` - Dark theme with blue and cyan accents

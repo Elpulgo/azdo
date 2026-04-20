@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -20,7 +21,24 @@ type Config struct {
 	DisplayNames    map[string]string `mapstructure:"-"` // API name → display name
 	PollingInterval int               `mapstructure:"polling_interval"`
 	Theme           string            `mapstructure:"theme"`
+	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
 	configPath      string            // internal field to store config path for saving
+}
+
+// validDisabledPanes lists the pane names that can be disabled.
+var validDisabledPanes = map[string]bool{
+	"pipelines": true,
+	"workitems": true,
+}
+
+// IsPaneEnabled returns true if the given pane is not in the disabled list.
+func (c *Config) IsPaneEnabled(pane string) bool {
+	for _, p := range c.DisabledPanes {
+		if p == pane {
+			return false
+		}
+	}
+	return true
 }
 
 // IsMultiProject returns true when more than one project is configured.
@@ -187,6 +205,17 @@ func LoadFrom(configPath string) (*Config, error) {
 	}
 	cfg.Project = "" // clear deprecated field
 
+	// Parse disabled_panes (comma-separated string)
+	if raw := v.GetString("disabled_panes"); raw != "" {
+		parts := strings.Split(raw, ",")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				cfg.DisabledPanes = append(cfg.DisabledPanes, p)
+			}
+		}
+	}
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -241,6 +270,12 @@ func (c *Config) Validate() error {
 
 	if c.Theme == "" {
 		return fmt.Errorf("theme cannot be empty")
+	}
+
+	for _, p := range c.DisabledPanes {
+		if !validDisabledPanes[p] {
+			return fmt.Errorf("invalid disabled pane %q: only 'pipelines' and 'workitems' can be disabled", p)
+		}
 	}
 
 	return nil
@@ -300,6 +335,10 @@ func (c *Config) Save() error {
 
 	v.Set("polling_interval", c.PollingInterval)
 	v.Set("theme", c.Theme)
+
+	if len(c.DisabledPanes) > 0 {
+		v.Set("disabled_panes", strings.Join(c.DisabledPanes, ","))
+	}
 
 	// Write config file
 	if err := v.WriteConfig(); err != nil {
