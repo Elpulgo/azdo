@@ -24,13 +24,16 @@ const (
 
 // Model represents the pull request list view with sub-views
 type Model struct {
-	list     listview.Model[azdevops.PullRequest]
-	client   *azdevops.MultiClient
-	diffView *DiffModel
-	viewMode ViewMode
-	width    int
-	height   int
-	styles   *styles.Styles
+	list       listview.Model[azdevops.PullRequest]
+	client     *azdevops.MultiClient
+	diffView   *DiffModel
+	viewMode   ViewMode
+	width      int
+	height     int
+	styles     *styles.Styles
+	myPRsOnly  bool
+	allPRs     []azdevops.PullRequest
+	myPRs      []azdevops.PullRequest
 }
 
 // NewModel creates a new pull request list model with default styles
@@ -120,21 +123,58 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case pullRequestsMsg:
 		criticalCmd := components.NewCriticalErrorCmd(msg.err)
 		if criticalCmd != nil {
-			// Critical errors are shown via the error modal; don't display inline
 			m.list = m.list.HandleFetchResult(nil, nil)
 			return m, criticalCmd
 		}
-		// For partial errors, treat data as valid (some projects succeeded)
 		var partialErr *azdevops.PartialError
 		if errors.As(msg.err, &partialErr) {
+			m.allPRs = msg.prs
+			if m.myPRsOnly {
+				return m, fetchMyPullRequestsMulti(m.client)
+			}
 			m.list = m.list.HandleFetchResult(msg.prs, nil)
 			return m, nil
 		}
+		m.allPRs = msg.prs
+		if m.myPRsOnly {
+			return m, fetchMyPullRequestsMulti(m.client)
+		}
 		m.list = m.list.HandleFetchResult(msg.prs, msg.err)
 		return m, nil
-	case SetPRsMsg:
-		m.list = m.list.SetItems(msg.PRs)
+	case myPullRequestsMsg:
+		if msg.err != nil {
+			var partialErr *azdevops.PartialError
+			if errors.As(msg.err, &partialErr) {
+				m.myPRs = msg.prs
+				m.list = m.list.SetItems(msg.prs)
+				return m, nil
+			}
+			// On error, fall back to showing all items
+			m.myPRsOnly = false
+			m.myPRs = nil
+			m.list = m.list.SetItems(m.allPRs)
+			return m, nil
+		}
+		m.myPRs = msg.prs
+		m.list = m.list.SetItems(msg.prs)
 		return m, nil
+	case SetPRsMsg:
+		m.allPRs = msg.PRs
+		if !m.myPRsOnly {
+			m.list = m.list.SetItems(msg.PRs)
+		}
+		return m, nil
+	case tea.KeyMsg:
+		if msg.String() == "m" && !m.list.IsSearching() && m.viewMode == ViewList {
+			m.myPRsOnly = !m.myPRsOnly
+			if m.myPRsOnly {
+				return m, fetchMyPullRequestsMulti(m.client)
+			}
+			// Toggle OFF: restore all items
+			m.myPRs = nil
+			m.list = m.list.SetItems(m.allPRs)
+			return m, nil
+		}
 	}
 
 	// Route by view mode
@@ -296,6 +336,11 @@ func (m Model) IsSearching() bool {
 		return true
 	}
 	return false
+}
+
+// IsMyPRsActive returns true if the "my PRs" filter is active.
+func (m Model) IsMyPRsActive() bool {
+	return m.myPRsOnly
 }
 
 // detailAdapter wraps *DetailModel to satisfy listview.DetailView
@@ -464,6 +509,11 @@ type pullRequestsMsg struct {
 	err error
 }
 
+type myPullRequestsMsg struct {
+	prs []azdevops.PullRequest
+	err error
+}
+
 // SetPRsMsg is a message to directly set the pull requests (from polling)
 type SetPRsMsg struct {
 	PRs []azdevops.PullRequest
@@ -477,5 +527,16 @@ func fetchPullRequestsMulti(client *azdevops.MultiClient) tea.Cmd {
 		}
 		prs, err := client.ListPullRequests(25)
 		return pullRequestsMsg{prs: prs, err: err}
+	}
+}
+
+// fetchMyPullRequestsMulti fetches pull requests created by the authenticated user.
+func fetchMyPullRequestsMulti(client *azdevops.MultiClient) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return myPullRequestsMsg{prs: nil, err: nil}
+		}
+		prs, err := client.ListMyPullRequests(25)
+		return myPullRequestsMsg{prs: prs, err: err}
 	}
 }

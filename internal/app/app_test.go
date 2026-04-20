@@ -728,6 +728,47 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestModel_MyPRsToggle_EndToEnd(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// We're on PR tab by default — press 'm' to toggle
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+
+	if !m.pullRequestsView.IsMyPRsActive() {
+		t.Error("expected my PRs filter to be active after pressing 'm'")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "My PRs") {
+		t.Error("status bar should show 'My PRs' badge when filter is active")
+	}
+
+	// Toggle off
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+
+	if m.pullRequestsView.IsMyPRsActive() {
+		t.Error("expected my PRs filter to be off after second 'm' press")
+	}
+
+	view = m.View()
+	if strings.Contains(view, "My PRs") {
+		t.Error("status bar should NOT show 'My PRs' badge when filter is inactive")
+	}
+}
+
 func TestModel_View_ShowsLogo(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",

@@ -880,6 +880,12 @@ func (m Model) View() string {
 		} else {
 			m.statusBar.ClearFilterLabel()
 		}
+	} else if m.activeTab == TabPullRequests {
+		if m.pullRequestsView.IsMyPRsActive() {
+			m.statusBar.SetFilterLabel("My PRs")
+		} else {
+			m.statusBar.ClearFilterLabel()
+		}
 	} else {
 		m.statusBar.ClearFilterLabel()
 	}

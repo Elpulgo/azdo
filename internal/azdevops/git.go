@@ -11,17 +11,17 @@ import (
 
 // PullRequest represents a pull request in Azure DevOps
 type PullRequest struct {
-	ID            int        `json:"pullRequestId"`
-	Title         string     `json:"title"`
-	Description   string     `json:"description"`
-	Status        string     `json:"status"` // "active", "completed", "abandoned"
-	CreationDate  time.Time  `json:"creationDate"`
-	SourceRefName string     `json:"sourceRefName"` // e.g., "refs/heads/feature/my-feature"
-	TargetRefName string     `json:"targetRefName"` // e.g., "refs/heads/main"
-	IsDraft       bool       `json:"isDraft"`
-	CreatedBy     Identity   `json:"createdBy"`
-	Repository    Repository `json:"repository"`
-	Reviewers     []Reviewer `json:"reviewers"`
+	ID                 int        `json:"pullRequestId"`
+	Title              string     `json:"title"`
+	Description        string     `json:"description"`
+	Status             string     `json:"status"` // "active", "completed", "abandoned"
+	CreationDate       time.Time  `json:"creationDate"`
+	SourceRefName      string     `json:"sourceRefName"` // e.g., "refs/heads/feature/my-feature"
+	TargetRefName      string     `json:"targetRefName"` // e.g., "refs/heads/main"
+	IsDraft            bool       `json:"isDraft"`
+	CreatedBy          Identity   `json:"createdBy"`
+	Repository         Repository `json:"repository"`
+	Reviewers          []Reviewer `json:"reviewers"`
 	ProjectName        string     `json:"-"` // Set by MultiClient, not from API
 	ProjectDisplayName string     `json:"-"` // Set by MultiClient, display name for UI
 }
@@ -105,6 +105,27 @@ func (c *Client) ListPullRequests(top int) ([]PullRequest, error) {
 	body, err := c.get(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pull requests: %w", err)
+	}
+
+	var response PullRequestsResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for pull requests: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
+	}
+
+	return response.Value, nil
+}
+
+// ListMyPullRequests retrieves active pull requests created by the given user.
+// creatorID: the Azure DevOps user ID (UUID) of the creator to filter by.
+// top: maximum number of pull requests to return.
+func (c *Client) ListMyPullRequests(creatorID string, top int) ([]PullRequest, error) {
+	path := fmt.Sprintf("/git/pullrequests?api-version=7.1&$top=%d&searchCriteria.status=active&searchCriteria.creatorId=%s", top, creatorID)
+
+	body, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list my pull requests: %w", err)
 	}
 
 	var response PullRequestsResponse
