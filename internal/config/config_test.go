@@ -605,6 +605,170 @@ func TestConfig_LoadFrom_MissingOrgShowsGuidance(t *testing.T) {
 	}
 }
 
+func TestConfig_IsPaneEnabled(t *testing.T) {
+	tests := []struct {
+		name          string
+		disabledPanes []string
+		pane          string
+		want          bool
+	}{
+		{"no disabled panes - pipelines enabled", nil, "pipelines", true},
+		{"no disabled panes - workitems enabled", nil, "workitems", true},
+		{"no disabled panes - pullrequests enabled", nil, "pullrequests", true},
+		{"pipelines disabled", []string{"pipelines"}, "pipelines", false},
+		{"pipelines disabled - workitems still enabled", []string{"pipelines"}, "workitems", true},
+		{"workitems disabled", []string{"workitems"}, "workitems", false},
+		{"workitems disabled - pipelines still enabled", []string{"workitems"}, "pipelines", true},
+		{"both disabled", []string{"pipelines", "workitems"}, "pipelines", false},
+		{"both disabled - workitems", []string{"pipelines", "workitems"}, "workitems", false},
+		{"both disabled - pullrequests always enabled", []string{"pipelines", "workitems"}, "pullrequests", true},
+		{"unknown pane name", []string{"unknown"}, "pipelines", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Organization:    "test-org",
+				Projects:        []string{"test-project"},
+				PollingInterval: 60,
+				Theme:           "dark",
+				DisabledPanes:   tt.disabledPanes,
+			}
+			if got := cfg.IsPaneEnabled(tt.pane); got != tt.want {
+				t.Errorf("IsPaneEnabled(%q) = %v, want %v", tt.pane, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_InvalidDisabledPane(t *testing.T) {
+	tests := []struct {
+		name          string
+		disabledPanes []string
+		wantErr       bool
+	}{
+		{"valid - no disabled panes", nil, false},
+		{"valid - pipelines disabled", []string{"pipelines"}, false},
+		{"valid - workitems disabled", []string{"workitems"}, false},
+		{"valid - both disabled", []string{"pipelines", "workitems"}, false},
+		{"invalid - unknown pane", []string{"unknown"}, true},
+		{"invalid - pullrequests cannot be disabled", []string{"pullrequests"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Organization:    "test-org",
+				Projects:        []string{"test-project"},
+				PollingInterval: 60,
+				Theme:           "dark",
+				DisabledPanes:   tt.disabledPanes,
+			}
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoad_WithDisabledPanes(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `organization: test-org
+projects:
+  - test-project
+polling_interval: 60
+theme: dark
+disabled_panes: pipelines,workitems
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if cfg.IsPaneEnabled("pipelines") {
+		t.Error("expected pipelines to be disabled")
+	}
+	if cfg.IsPaneEnabled("workitems") {
+		t.Error("expected workitems to be disabled")
+	}
+	if !cfg.IsPaneEnabled("pullrequests") {
+		t.Error("expected pullrequests to always be enabled")
+	}
+}
+
+func TestLoad_WithDisabledPanes_SinglePane(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `organization: test-org
+projects:
+  - test-project
+polling_interval: 60
+theme: dark
+disabled_panes: pipelines
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if cfg.IsPaneEnabled("pipelines") {
+		t.Error("expected pipelines to be disabled")
+	}
+	if !cfg.IsPaneEnabled("workitems") {
+		t.Error("expected workitems to be enabled")
+	}
+}
+
+func TestSave_PreservesDisabledPanes(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `organization: test-org
+projects:
+  - test-project
+polling_interval: 60
+theme: dark
+disabled_panes: pipelines,workitems
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	// Save and reload
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	reloaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() after save failed: %v", err)
+	}
+
+	if reloaded.IsPaneEnabled("pipelines") {
+		t.Error("expected pipelines to still be disabled after save")
+	}
+	if reloaded.IsPaneEnabled("workitems") {
+		t.Error("expected workitems to still be disabled after save")
+	}
+}
+
 func TestNewWithPath_CreatesValidConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")

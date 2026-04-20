@@ -17,6 +17,7 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 
 ### Pull Requests
 - List view of pull requests with status indicators
+- Filter to show only your created PRs (`m` key) or PRs where you're a reviewer (`A` key)
 - Detailed view showing PR information and metadata
 - Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
 - **Code review**: Diff viewer with file-by-file navigation
@@ -176,6 +177,10 @@ polling_interval: 60
 # Theme (optional, default: dark)
 # Available themes: dark, gruvbox, nord, dracula, catppuccin, github, retro, monokai
 theme: dark
+
+# Disable specific panes (optional, comma-separated)
+# Valid values: pipelines, workitems
+# disabled_panes: pipelines,workitems
 ```
 
 **Configuration Options:**
@@ -183,6 +188,7 @@ theme: dark
 - `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
+- `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
 
 **Available Themes:**
 - `dark` - Dark theme with blue and cyan accents
@@ -280,7 +286,8 @@ To create a PAT:
 | `pgup/pgdn` | Page up/down |
 | `enter` | View details / expand |
 | `f` | Search / filter |
-| `m` | Toggle my items (work items) |
+| `m` | Toggle my items (PRs / work items) |
+| `A` | Toggle as reviewer (PRs) |
 | `T` | Filter by tag (work items) |
 | `s` | Filter by state (work items) |
 | `S` | Filter by status (pipelines) |

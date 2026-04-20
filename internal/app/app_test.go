@@ -728,6 +728,128 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestModel_PRTab_StatusBarShowsMyItemsKeybinding(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// On PR tab (default), status bar should advertise 'm' for my PRs and 'f' for search
+	view := m.View()
+	if !strings.Contains(view, "my PRs") {
+		t.Error("PR tab status bar should show 'm my PRs' keybinding")
+	}
+	if !strings.Contains(view, "search") {
+		t.Error("PR tab status bar should show 'f search' keybinding")
+	}
+}
+
+func TestModel_MyPRsToggle_EndToEnd(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// We're on PR tab by default — press 'm' to toggle
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+
+	if !m.pullRequestsView.IsMyPRsActive() {
+		t.Error("expected my PRs filter to be active after pressing 'm'")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "My PRs") {
+		t.Error("status bar should show 'My PRs' badge when filter is active")
+	}
+
+	// Toggle off
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+
+	if m.pullRequestsView.IsMyPRsActive() {
+		t.Error("expected my PRs filter to be off after second 'm' press")
+	}
+
+	view = m.View()
+	if strings.Contains(view, "My PRs") {
+		t.Error("status bar should NOT show 'My PRs' badge when filter is inactive")
+	}
+}
+
+func TestModel_AsReviewerToggle_EndToEnd(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// On PR tab, press 'A' to toggle as-reviewer
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m = updated.(Model)
+
+	if !m.pullRequestsView.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be active after pressing 'A'")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Reviewer") {
+		t.Error("status bar should show 'As Reviewer' badge")
+	}
+
+	// Toggle off
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m = updated.(Model)
+
+	if m.pullRequestsView.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be off after second 'A'")
+	}
+	view = m.View()
+	if strings.Contains(view, "Reviewer") {
+		t.Error("status bar should NOT show 'As Reviewer' badge when off")
+	}
+}
+
+func TestModel_PRTab_StatusBarShowsAsReviewerKeybinding(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "as reviewer") {
+		t.Error("PR tab status bar should show 'A as reviewer' keybinding")
+	}
+}
+
 func TestModel_View_ShowsLogo(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -999,6 +1121,180 @@ func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
 	view := updatedModel.View()
 	if strings.Contains(view, "Update available") {
 		t.Error("should not show update notification when already on latest")
+	}
+}
+
+func TestModel_DisabledPanes_PipelinesDisabled_TabBarHidesPipelines(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pipelines"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Error("Tab bar should show '1: Pull Requests'")
+	}
+	if !strings.Contains(view, "2: Work Items") {
+		t.Error("Tab bar should show '2: Work Items'")
+	}
+	if strings.Contains(view, "Pipelines") {
+		t.Error("Tab bar should NOT show Pipelines when disabled")
+	}
+}
+
+func TestModel_DisabledPanes_WorkItemsDisabled_TabBarHidesWorkItems(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"workitems"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Error("Tab bar should show '1: Pull Requests'")
+	}
+	if strings.Contains(view, "Work Items") {
+		t.Error("Tab bar should NOT show Work Items when disabled")
+	}
+	if !strings.Contains(view, "2: Pipelines") {
+		t.Error("Tab bar should show '2: Pipelines' (renumbered)")
+	}
+}
+
+func TestModel_DisabledPanes_Key2_GoesToPipelines_WhenWorkItemsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"workitems"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	// Press '2' — should go to pipelines (since it's the 2nd enabled tab)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabPipelines {
+		t.Errorf("After pressing '2' with workitems disabled, expected TabPipelines, got %d", m.activeTab)
+	}
+}
+
+func TestModel_DisabledPanes_Key3_Noop_WhenOnlyTwoTabs(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"workitems"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	// Press '3' — should be a no-op (only 2 tabs)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	m = updated.(Model)
+
+	if m.activeTab != TabPullRequests {
+		t.Errorf("Pressing '3' with only 2 tabs should be no-op, got tab %d", m.activeTab)
+	}
+}
+
+func TestModel_DisabledPanes_ArrowKeys_SkipDisabledTabs(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"workitems"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	// Right arrow from PR → should go to Pipelines (skipping WorkItems)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(Model)
+
+	if m.activeTab != TabPipelines {
+		t.Errorf("Right arrow should skip disabled WorkItems tab, got %d", m.activeTab)
+	}
+
+	// Right arrow from Pipelines → should wrap to PR
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(Model)
+
+	if m.activeTab != TabPullRequests {
+		t.Errorf("Right arrow should wrap to PullRequests, got %d", m.activeTab)
+	}
+
+	// Left arrow from PR → should wrap to Pipelines
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(Model)
+
+	if m.activeTab != TabPipelines {
+		t.Errorf("Left arrow should wrap to Pipelines, got %d", m.activeTab)
+	}
+}
+
+func TestModel_DisabledPanes_EnabledTabs_AllEnabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	tabs := buildEnabledTabs(cfg)
+	if len(tabs) != 3 {
+		t.Fatalf("expected 3 enabled tabs, got %d", len(tabs))
+	}
+	if tabs[0] != TabPullRequests || tabs[1] != TabWorkItems || tabs[2] != TabPipelines {
+		t.Errorf("unexpected tab order: %v", tabs)
+	}
+}
+
+func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pipelines", "workitems"},
+	}
+
+	tabs := buildEnabledTabs(cfg)
+	if len(tabs) != 1 {
+		t.Fatalf("expected 1 enabled tab, got %d", len(tabs))
+	}
+	if tabs[0] != TabPullRequests {
+		t.Errorf("expected TabPullRequests, got %d", tabs[0])
 	}
 }
 

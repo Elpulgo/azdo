@@ -574,6 +574,292 @@ func TestUpdate_PullRequestsMsg_CriticalErrorNotShownInline(t *testing.T) {
 	}
 }
 
+func TestModel_MyPRsToggle(t *testing.T) {
+	model := NewModel(nil)
+
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1", DisplayName: "Me"}},
+		{ID: 2, Title: "Other PR", CreatedBy: azdevops.Identity{ID: "user-2", DisplayName: "Other"}},
+	}
+
+	// Load PRs
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	if model.IsMyPRsActive() {
+		t.Error("my PRs filter should be off initially")
+	}
+
+	// Press 'm' to toggle on
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if !model.IsMyPRsActive() {
+		t.Error("my PRs filter should be on after pressing 'm'")
+	}
+	// With nil client, fetch returns immediately with nil data
+	if cmd == nil {
+		t.Error("expected a fetch command when toggling on")
+	}
+
+	// Press 'm' again to toggle off — should restore all items
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	if model.IsMyPRsActive() {
+		t.Error("my PRs filter should be off after second 'm' press")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("after toggle off, expected 2 PRs, got %d", len(model.list.Items()))
+	}
+}
+
+func TestModel_MyPRsToggle_NotInSearchMode(t *testing.T) {
+	model := NewModel(nil)
+
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Enter search mode
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !model.IsSearching() {
+		t.Fatal("should be in search mode")
+	}
+
+	// Press 'm' while searching — should NOT toggle
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if model.IsMyPRsActive() {
+		t.Error("'m' should not toggle my PRs filter while in search mode")
+	}
+}
+
+func TestModel_MyPRsToggle_NotInDetailView(t *testing.T) {
+	model := NewModel(nil)
+
+	prs := []azdevops.PullRequest{
+		{
+			ID: 1, Title: "PR", Status: "active",
+			SourceRefName: "refs/heads/test", TargetRefName: "refs/heads/main",
+			CreatedBy: azdevops.Identity{DisplayName: "User"}, Repository: azdevops.Repository{Name: "repo"},
+		},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	// Enter detail view
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewDetail {
+		t.Fatal("should be in detail view")
+	}
+
+	// Press 'm' while in detail — should NOT toggle
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if model.IsMyPRsActive() {
+		t.Error("'m' should not toggle my PRs filter while in detail view")
+	}
+}
+
+func TestModel_MyPRsMsg_SetsItems(t *testing.T) {
+	model := NewModel(nil)
+
+	allPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
+		{ID: 2, Title: "Other PR", CreatedBy: azdevops.Identity{ID: "user-2"}},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
+
+	// Toggle on
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	// Simulate server returning filtered results
+	myPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
+	}
+	model, _ = model.Update(myPullRequestsMsg{prs: myPRs, err: nil})
+
+	if len(model.list.Items()) != 1 {
+		t.Errorf("expected 1 PR after my PRs fetch, got %d", len(model.list.Items()))
+	}
+	if model.list.Items()[0].ID != 1 {
+		t.Errorf("expected PR ID 1, got %d", model.list.Items()[0].ID)
+	}
+}
+
+func TestModel_MyPRsMsg_ErrorFallsBack(t *testing.T) {
+	model := NewModel(nil)
+
+	allPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
+
+	// Toggle on
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+
+	// Simulate error
+	model, _ = model.Update(myPullRequestsMsg{prs: nil, err: fmt.Errorf("fetch failed")})
+
+	// Should fall back to all items
+	if model.IsMyPRsActive() {
+		t.Error("should have toggled off on error")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("expected 2 PRs (fallback to all), got %d", len(model.list.Items()))
+	}
+}
+
+func TestModel_AsReviewerToggle(t *testing.T) {
+	model := NewModel(nil)
+
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	if model.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be off initially")
+	}
+
+	// Press 'A' to toggle on
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if !model.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be on after pressing 'A'")
+	}
+	if cmd == nil {
+		t.Error("expected fetch command when toggling on")
+	}
+
+	// Press 'A' again to toggle off — should restore all items
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if model.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be off after second 'A'")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("after toggle off, expected 2 PRs, got %d", len(model.list.Items()))
+	}
+}
+
+func TestModel_AsReviewerToggle_DisablesMyPRs(t *testing.T) {
+	model := NewModel(nil)
+	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
+
+	// Turn on my PRs
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if !model.IsMyPRsActive() {
+		t.Fatal("my PRs should be on")
+	}
+
+	// Toggle 'A' — should deactivate my PRs (mutually exclusive)
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if model.IsMyPRsActive() {
+		t.Error("'A' should turn off my PRs filter")
+	}
+	if !model.IsAsReviewerActive() {
+		t.Error("'A' should turn on as-reviewer filter")
+	}
+}
+
+func TestModel_MyPRsToggle_DisablesAsReviewer(t *testing.T) {
+	model := NewModel(nil)
+	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
+
+	// Turn on as-reviewer
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if !model.IsAsReviewerActive() {
+		t.Fatal("as-reviewer should be on")
+	}
+
+	// Toggle 'm' — should deactivate as-reviewer
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if model.IsAsReviewerActive() {
+		t.Error("'m' should turn off as-reviewer filter")
+	}
+	if !model.IsMyPRsActive() {
+		t.Error("'m' should turn on my PRs filter")
+	}
+}
+
+func TestModel_AsReviewerToggle_NotInSearchMode(t *testing.T) {
+	model := NewModel(nil)
+	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !model.IsSearching() {
+		t.Fatal("should be in search mode")
+	}
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if model.IsAsReviewerActive() {
+		t.Error("'A' should not toggle while searching")
+	}
+}
+
+func TestModel_AsReviewerToggle_NotInDetailView(t *testing.T) {
+	model := NewModel(nil)
+	prs := []azdevops.PullRequest{
+		{
+			ID: 1, Title: "PR", Status: "active",
+			SourceRefName: "refs/heads/x", TargetRefName: "refs/heads/main",
+			CreatedBy: azdevops.Identity{DisplayName: "User"}, Repository: azdevops.Repository{Name: "r"},
+		},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.GetViewMode() != ViewDetail {
+		t.Fatal("should be in detail view")
+	}
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if model.IsAsReviewerActive() {
+		t.Error("'A' should not toggle in detail view")
+	}
+}
+
+func TestModel_AsReviewerMsg_SetsItems(t *testing.T) {
+	model := NewModel(nil)
+
+	allPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
+
+	// Toggle on
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+
+	// Simulate server returning filtered results
+	reviewerPRs := []azdevops.PullRequest{{ID: 2, Title: "PR 2"}}
+	model, _ = model.Update(asReviewerPullRequestsMsg{prs: reviewerPRs, err: nil})
+
+	if len(model.list.Items()) != 1 {
+		t.Errorf("expected 1 PR, got %d", len(model.list.Items()))
+	}
+	if model.list.Items()[0].ID != 2 {
+		t.Errorf("expected PR ID 2, got %d", model.list.Items()[0].ID)
+	}
+}
+
+func TestModel_AsReviewerMsg_ErrorFallsBack(t *testing.T) {
+	model := NewModel(nil)
+
+	allPRs := []azdevops.PullRequest{{ID: 1}, {ID: 2}}
+	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+
+	model, _ = model.Update(asReviewerPullRequestsMsg{prs: nil, err: fmt.Errorf("fetch failed")})
+
+	if model.IsAsReviewerActive() {
+		t.Error("should have toggled off on error")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("expected 2 PRs (fallback to all), got %d", len(model.list.Items()))
+	}
+}
+
 func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
 	pr := azdevops.PullRequest{
 		Title:       "Test PR",

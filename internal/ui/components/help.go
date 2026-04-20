@@ -60,7 +60,8 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 				Title: "Actions",
 				Bindings: []HelpBinding{
 					{Key: "f", Description: "Search / filter"},
-					{Key: "m", Description: "Toggle my items (work items)"},
+					{Key: "m", Description: "Toggle my items (PRs / work items)"},
+					{Key: "A", Description: "Toggle as reviewer (PRs)"},
 					{Key: "T", Description: "Filter by tag (work items)"},
 					{Key: "s", Description: "Filter by state (work items)"},
 					{Key: "S", Description: "Filter by status (pipelines)"},
@@ -135,6 +136,51 @@ func (h *HelpModal) AddSection(title string, bindings []HelpBinding) {
 		Title:    title,
 		Bindings: bindings,
 	})
+}
+
+// RemoveSection removes a section by title.
+func (h *HelpModal) RemoveSection(title string) {
+	filtered := h.sections[:0]
+	for _, s := range h.sections {
+		if s.Title != title {
+			filtered = append(filtered, s)
+		}
+	}
+	h.sections = filtered
+}
+
+// RemoveBindingsByDescription removes specific bindings from the Actions section
+// whose description contains the given substring.
+func (h *HelpModal) RemoveBindingsByDescription(substr string) {
+	for i, section := range h.sections {
+		if section.Title == "Actions" {
+			filtered := section.Bindings[:0]
+			for _, b := range section.Bindings {
+				if !containsSubstring(b.Description, substr) {
+					filtered = append(filtered, b)
+				}
+			}
+			h.sections[i].Bindings = filtered
+		}
+	}
+}
+
+func containsSubstring(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+}
+
+// UpdateTabsBinding replaces the tab keys and descriptions in the Tabs section.
+func (h *HelpModal) UpdateTabsBinding(keys, description string) {
+	for i, section := range h.sections {
+		if section.Title == "Tabs" {
+			for j, b := range section.Bindings {
+				if strings.Contains(b.Key, "/") && strings.Contains(b.Description, "/") {
+					h.sections[i].Bindings[j] = HelpBinding{Key: keys, Description: description}
+					return
+				}
+			}
+		}
+	}
 }
 
 // Update handles key events for the help modal.

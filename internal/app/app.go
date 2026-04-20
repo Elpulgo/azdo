@@ -64,6 +64,7 @@ type Model struct {
 	config           *config.Config
 	styles           *styles.Styles
 	activeTab        Tab
+	enabledTabs      []Tab // ordered list of enabled tabs
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
 	workItemsView    workitems.Model
@@ -80,6 +81,64 @@ type Model struct {
 	height           int
 	footerRows       int
 	err              error
+}
+
+// isTabEnabled returns true if the given tab is in the enabledTabs list.
+func (m Model) isTabEnabled(tab Tab) bool {
+	for _, t := range m.enabledTabs {
+		if t == tab {
+			return true
+		}
+	}
+	return false
+}
+
+// nextTab returns the next enabled tab after the current one (wrapping).
+func (m Model) nextTab() Tab {
+	for i, t := range m.enabledTabs {
+		if t == m.activeTab {
+			return m.enabledTabs[(i+1)%len(m.enabledTabs)]
+		}
+	}
+	return m.enabledTabs[0]
+}
+
+// prevTab returns the previous enabled tab before the current one (wrapping).
+func (m Model) prevTab() Tab {
+	for i, t := range m.enabledTabs {
+		if t == m.activeTab {
+			prev := i - 1
+			if prev < 0 {
+				prev = len(m.enabledTabs) - 1
+			}
+			return m.enabledTabs[prev]
+		}
+	}
+	return m.enabledTabs[0]
+}
+
+// buildEnabledTabs returns the list of enabled tabs based on config.
+func buildEnabledTabs(cfg *config.Config) []Tab {
+	tabs := []Tab{TabPullRequests} // always enabled
+	if cfg.IsPaneEnabled("workitems") {
+		tabs = append(tabs, TabWorkItems)
+	}
+	if cfg.IsPaneEnabled("pipelines") {
+		tabs = append(tabs, TabPipelines)
+	}
+	return tabs
+}
+
+// initTabCmd returns the Init command for the given tab, or nil for pipelines
+// (which is populated by the poller).
+func (m Model) initTabCmd(tab Tab) tea.Cmd {
+	switch tab {
+	case TabPullRequests:
+		return m.pullRequestsView.Init()
+	case TabWorkItems:
+		return m.workItemsView.Init()
+	}
+	return nil
 }
 
 // formatVersionInfo formats the version and commit hash for display.
@@ -134,6 +193,36 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
+	// Configure help modal based on disabled panes
+	if !cfg.IsPaneEnabled("workitems") {
+		helpModal.RemoveBindingsByDescription("work items")
+		helpModal.RemoveBindingsByDescription("work item")
+	}
+	if !cfg.IsPaneEnabled("pipelines") {
+		helpModal.RemoveSection("Log Viewer (pipelines)")
+		helpModal.RemoveBindingsByDescription("pipelines")
+	}
+
+	// Update tab description in help modal based on enabled tabs
+	enabledTabNames := []string{"PR"}
+	if cfg.IsPaneEnabled("workitems") {
+		enabledTabNames = append(enabledTabNames, "Work Items")
+	}
+	if cfg.IsPaneEnabled("pipelines") {
+		enabledTabNames = append(enabledTabNames, "Pipelines")
+	}
+	if len(enabledTabNames) < 3 {
+		// Build key hint like "1/2" and description like "PR / Pipelines"
+		keys := make([]string, len(enabledTabNames))
+		for i := range enabledTabNames {
+			keys[i] = fmt.Sprintf("%d", i+1)
+		}
+		helpModal.UpdateTabsBinding(
+			strings.Join(keys, "/"),
+			strings.Join(enabledTabNames, " / "),
+		)
+	}
+
 	// Set version info in help modal
 	helpModal.SetVersionInfo(formatVersionInfo(currentVersion, commitHash))
 
@@ -166,11 +255,14 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		errorHandler.SetError(themeNotFoundErr)
 	}
 
+	enabledTabs := buildEnabledTabs(cfg)
+
 	return Model{
 		client:           client,
 		config:           cfg,
 		styles:           appStyles,
 		activeTab:        TabPullRequests,
+		enabledTabs:      enabledTabs,
 		logo:             logo,
 		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
@@ -194,12 +286,14 @@ func (m Model) Init() tea.Cmd {
 		m.statusBar.SetWarningMessage(m.errorHandler.ErrorMessage())
 	}
 
-	return tea.Batch(
+	initCmds := []tea.Cmd{
 		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
 		m.poller.StartPolling(),      // Start polling timer
 		m.pullRequestsView.Init(),    // Load PR tab (default tab)
 		checkForUpdate(m.currentVersion),
-	)
+	}
+
+	return tea.Batch(initCmds...)
 }
 
 // checkForUpdate returns a tea.Cmd that checks GitHub for a newer version.
@@ -288,58 +382,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themePicker.SetSize(m.width, m.height)
 			m.themePicker.Show()
 			return m, nil
-		case "1":
-			if m.activeTab != TabPullRequests {
-				m.activeTab = TabPullRequests
-				m.resizeActiveViewIfNeeded()
-				// Trigger initial load when switching to PR tab
-				return m, m.pullRequestsView.Init()
+		case "1", "2", "3":
+			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2
+			if idx >= 0 && idx < len(m.enabledTabs) {
+				target := m.enabledTabs[idx]
+				if target != m.activeTab {
+					m.activeTab = target
+					m.resizeActiveViewIfNeeded()
+					return m, m.initTabCmd(target)
+				}
 			}
-			return m, nil
-		case "2":
-			if m.activeTab != TabWorkItems {
-				m.activeTab = TabWorkItems
-				m.resizeActiveViewIfNeeded()
-				// Trigger initial load when switching to Work Items tab
-				return m, m.workItemsView.Init()
-			}
-			return m, nil
-		case "3":
-			m.activeTab = TabPipelines
-			m.resizeActiveViewIfNeeded()
 			return m, nil
 		case "left":
-			// Navigate to previous tab (with wraparound)
-			switch m.activeTab {
-			case TabPullRequests:
-				m.activeTab = TabPipelines
+			prev := m.prevTab()
+			if prev != m.activeTab {
+				m.activeTab = prev
 				m.resizeActiveViewIfNeeded()
-				return m, nil
-			case TabWorkItems:
-				m.activeTab = TabPullRequests
-				m.resizeActiveViewIfNeeded()
-				return m, m.pullRequestsView.Init()
-			case TabPipelines:
-				m.activeTab = TabWorkItems
-				m.resizeActiveViewIfNeeded()
-				return m, m.workItemsView.Init()
+				return m, m.initTabCmd(prev)
 			}
 			return m, nil
 		case "right":
-			// Navigate to next tab (with wraparound)
-			switch m.activeTab {
-			case TabPullRequests:
-				m.activeTab = TabWorkItems
+			next := m.nextTab()
+			if next != m.activeTab {
+				m.activeTab = next
 				m.resizeActiveViewIfNeeded()
-				return m, m.workItemsView.Init()
-			case TabWorkItems:
-				m.activeTab = TabPipelines
-				m.resizeActiveViewIfNeeded()
-				return m, nil
-			case TabPipelines:
-				m.activeTab = TabPullRequests
-				m.resizeActiveViewIfNeeded()
-				return m, m.pullRequestsView.Init()
+				return m, m.initTabCmd(next)
 			}
 			return m, nil
 		}
@@ -643,6 +710,23 @@ func (m Model) workItemsKeybindings() string {
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }
 
+// pullRequestsKeybindings returns the keybindings string for the PR list view.
+func (m Model) pullRequestsKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("enter") + m.styles.Description.Render(" details") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" search") + sep +
+		m.styles.Key.Render("m") + m.styles.Description.Render(" my PRs") + sep +
+		m.styles.Key.Render("A") + m.styles.Description.Render(" as reviewer") + sep +
+		m.styles.Key.Render("esc") + m.styles.Description.Render(" back") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
 // pipelinesKeybindings returns the keybindings string for the pipelines list view.
 func (m Model) pipelinesKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
@@ -668,24 +752,24 @@ func (m Model) measureFooterHeight() int {
 // renderTabBar renders the tab header content wrapped in its own bordered box,
 // with tabs on the left and the ASCII art logo on the right.
 func (m Model) renderTabBar(innerWidth int) string {
-	var tab1, tab2, tab3 string
-
-	switch m.activeTab {
-	case TabPullRequests:
-		tab1 = m.styles.TabActive.Render("1: Pull Requests")
-		tab2 = m.styles.TabInactive.Render("2: Work Items")
-		tab3 = m.styles.TabInactive.Render("3: Pipelines")
-	case TabWorkItems:
-		tab1 = m.styles.TabInactive.Render("1: Pull Requests")
-		tab2 = m.styles.TabActive.Render("2: Work Items")
-		tab3 = m.styles.TabInactive.Render("3: Pipelines")
-	case TabPipelines:
-		tab1 = m.styles.TabInactive.Render("1: Pull Requests")
-		tab2 = m.styles.TabInactive.Render("2: Work Items")
-		tab3 = m.styles.TabActive.Render("3: Pipelines")
+	// Tab label and number are derived from position in enabledTabs
+	tabLabels := map[Tab]string{
+		TabPullRequests: "Pull Requests",
+		TabWorkItems:    "Work Items",
+		TabPipelines:    "Pipelines",
 	}
 
-	tabs := tab1 + " " + tab2 + " " + tab3
+	var renderedTabs []string
+	for i, tab := range m.enabledTabs {
+		label := fmt.Sprintf("%d: %s", i+1, tabLabels[tab])
+		if tab == m.activeTab {
+			renderedTabs = append(renderedTabs, m.styles.TabActive.Render(label))
+		} else {
+			renderedTabs = append(renderedTabs, m.styles.TabInactive.Render(label))
+		}
+	}
+
+	tabs := strings.Join(renderedTabs, " ")
 	logo := m.logo.View()
 
 	// Place tabs on the left (top-aligned) and logo on the right.
@@ -778,7 +862,9 @@ func (m Model) View() string {
 	}
 
 	// Set tab-specific keybindings on status bar
-	if m.activeTab == TabWorkItems && !hasContextBar {
+	if m.activeTab == TabPullRequests && !hasContextBar {
+		m.statusBar.SetKeybindings(m.pullRequestsKeybindings())
+	} else if m.activeTab == TabWorkItems && !hasContextBar {
 		m.statusBar.SetKeybindings(m.workItemsKeybindings())
 	} else if m.activeTab == TabPipelines && !hasContextBar {
 		m.statusBar.SetKeybindings(m.pipelinesKeybindings())
@@ -811,6 +897,15 @@ func (m Model) View() string {
 		if len(labels) > 0 {
 			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
 		} else {
+			m.statusBar.ClearFilterLabel()
+		}
+	} else if m.activeTab == TabPullRequests {
+		switch {
+		case m.pullRequestsView.IsMyPRsActive():
+			m.statusBar.SetFilterLabel("My PRs")
+		case m.pullRequestsView.IsAsReviewerActive():
+			m.statusBar.SetFilterLabel("Reviewer")
+		default:
 			m.statusBar.ClearFilterLabel()
 		}
 	} else {
