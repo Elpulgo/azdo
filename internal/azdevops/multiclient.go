@@ -241,6 +241,72 @@ func (mc *MultiClient) ListMyPullRequests(top int) ([]PullRequest, error) {
 	return allPRs, nil
 }
 
+// ListPullRequestsAsReviewer fetches PRs where the authenticated user is a
+// reviewer from all projects concurrently, tags each with ProjectName, merges
+// and sorts by CreationDate descending.
+func (mc *MultiClient) ListPullRequestsAsReviewer(top int) ([]PullRequest, error) {
+	var userID string
+	for _, client := range mc.clients {
+		id, err := client.GetCurrentUserID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current user ID: %w", err)
+		}
+		userID = id
+		break
+	}
+
+	type result struct {
+		project string
+		prs     []PullRequest
+		err     error
+	}
+
+	var wg sync.WaitGroup
+	ch := make(chan result, len(mc.clients))
+
+	for project, client := range mc.clients {
+		wg.Add(1)
+		go func(p string, c *Client) {
+			defer wg.Done()
+			prs, err := c.ListPullRequestsAsReviewer(userID, top)
+			ch <- result{p, prs, err}
+		}(project, client)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	var allPRs []PullRequest
+	var errs []error
+	for r := range ch {
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		for i := range r.prs {
+			r.prs[i].ProjectName = r.project
+			r.prs[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
+		}
+		allPRs = append(allPRs, r.prs...)
+	}
+
+	if len(errs) == len(mc.clients) {
+		return nil, fmt.Errorf("all projects failed: %v", errs)
+	}
+
+	sort.Slice(allPRs, func(i, j int) bool {
+		return allPRs[i].CreationDate.After(allPRs[j].CreationDate)
+	})
+
+	if len(errs) > 0 {
+		return allPRs, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
+
+	return allPRs, nil
+}
+
 // ListWorkItems fetches work items from all projects concurrently,
 // tags each with ProjectName, merges and sorts by ChangedDate descending.
 func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {

@@ -138,6 +138,28 @@ func (c *Client) ListMyPullRequests(creatorID string, top int) ([]PullRequest, e
 	return response.Value, nil
 }
 
+// ListPullRequestsAsReviewer retrieves active pull requests where the given
+// user is listed as a reviewer.
+// reviewerID: the Azure DevOps user ID (UUID) of the reviewer to filter by.
+// top: maximum number of pull requests to return.
+func (c *Client) ListPullRequestsAsReviewer(reviewerID string, top int) ([]PullRequest, error) {
+	path := fmt.Sprintf("/git/pullrequests?api-version=7.1&$top=%d&searchCriteria.status=active&searchCriteria.reviewerId=%s", top, reviewerID)
+
+	body, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pull requests as reviewer: %w", err)
+	}
+
+	var response PullRequestsResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse Azure DevOps API response for pull requests: %w. "+
+			"This may indicate an API structure change. Please check for updates or report this issue", err)
+	}
+
+	return response.Value, nil
+}
+
 // Thread represents a comment thread on a pull request
 type Thread struct {
 	ID              int            `json:"id"`

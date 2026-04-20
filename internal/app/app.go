@@ -721,6 +721,7 @@ func (m Model) pullRequestsKeybindings() string {
 		m.styles.Key.Render("enter") + m.styles.Description.Render(" details") + sep +
 		m.styles.Key.Render("f") + m.styles.Description.Render(" search") + sep +
 		m.styles.Key.Render("m") + m.styles.Description.Render(" my PRs") + sep +
+		m.styles.Key.Render("A") + m.styles.Description.Render(" as reviewer") + sep +
 		m.styles.Key.Render("esc") + m.styles.Description.Render(" back") + sep +
 		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
@@ -899,9 +900,12 @@ func (m Model) View() string {
 			m.statusBar.ClearFilterLabel()
 		}
 	} else if m.activeTab == TabPullRequests {
-		if m.pullRequestsView.IsMyPRsActive() {
+		switch {
+		case m.pullRequestsView.IsMyPRsActive():
 			m.statusBar.SetFilterLabel("My PRs")
-		} else {
+		case m.pullRequestsView.IsAsReviewerActive():
+			m.statusBar.SetFilterLabel("Reviewer")
+		default:
 			m.statusBar.ClearFilterLabel()
 		}
 	} else {

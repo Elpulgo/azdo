@@ -17,7 +17,7 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 
 ### Pull Requests
 - List view of pull requests with status indicators
-- Filter to show only your created PRs (`m` key)
+- Filter to show only your created PRs (`m` key) or PRs where you're a reviewer (`A` key)
 - Detailed view showing PR information and metadata
 - Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
 - **Code review**: Diff viewer with file-by-file navigation
@@ -287,6 +287,7 @@ To create a PAT:
 | `enter` | View details / expand |
 | `f` | Search / filter |
 | `m` | Toggle my items (PRs / work items) |
+| `A` | Toggle as reviewer (PRs) |
 | `T` | Filter by tag (work items) |
 | `s` | Filter by state (work items) |
 | `S` | Filter by status (pipelines) |

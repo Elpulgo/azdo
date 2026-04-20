@@ -792,6 +792,64 @@ func TestModel_MyPRsToggle_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestModel_AsReviewerToggle_EndToEnd(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// On PR tab, press 'A' to toggle as-reviewer
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m = updated.(Model)
+
+	if !m.pullRequestsView.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be active after pressing 'A'")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Reviewer") {
+		t.Error("status bar should show 'As Reviewer' badge")
+	}
+
+	// Toggle off
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m = updated.(Model)
+
+	if m.pullRequestsView.IsAsReviewerActive() {
+		t.Error("as-reviewer filter should be off after second 'A'")
+	}
+	view = m.View()
+	if strings.Contains(view, "Reviewer") {
+		t.Error("status bar should NOT show 'As Reviewer' badge when off")
+	}
+}
+
+func TestModel_PRTab_StatusBarShowsAsReviewerKeybinding(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "as reviewer") {
+		t.Error("PR tab status bar should show 'A as reviewer' keybinding")
+	}
+}
+
 func TestModel_View_ShowsLogo(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
