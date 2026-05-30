@@ -121,6 +121,15 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.votePicker.SetSize(m.width, m.height)
 			m.votePicker.Show()
 			return m, nil
+		case "o":
+			if m.client == nil {
+				return m, nil
+			}
+			url := (&m.pr).URL(m.client.GetOrg())
+			return m, func() tea.Msg {
+				openBrowser(url) //nolint:errcheck
+				return nil
+			}
 		case "r":
 			m.loading = true
 			m.threadsLoaded = false
@@ -546,6 +555,7 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 		{Key: "enter", Description: "open"},
 		{Key: "↑↓", Description: "navigate"},
 		{Key: "v", Description: "vote"},
+		{Key: "o", Description: "browser"},
 		{Key: "r", Description: "refresh"},
 	}
 }

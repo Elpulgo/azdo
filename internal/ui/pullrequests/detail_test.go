@@ -1479,6 +1479,75 @@ func TestDetailView_LongPRDescriptionWrapsWithinViewWidth(t *testing.T) {
 	}
 }
 
+func TestDetailModel_OKey_OpensBrowserWithPR(t *testing.T) {
+	orig := openBrowser
+	t.Cleanup(func() { openBrowser = orig })
+
+	var capturedURL string
+	openBrowser = func(url string) error {
+		capturedURL = url
+		return nil
+	}
+
+	client, err := azdevops.NewClient("myorg", "myproject", "mypat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := azdevops.PullRequest{
+		ID:          42,
+		ProjectName: "myproject",
+		Repository:  azdevops.Repository{Name: "myrepo"},
+	}
+	model := NewDetailModel(client, pr)
+	model.SetSize(80, 24)
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("expected a command from 'o' key")
+	}
+	cmd()
+
+	want := "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/42"
+	if capturedURL != want {
+		t.Errorf("got URL %q, want %q", capturedURL, want)
+	}
+}
+
+func TestDetailModel_OKey_NilClientNoOp(t *testing.T) {
+	orig := openBrowser
+	t.Cleanup(func() { openBrowser = orig })
+
+	called := false
+	openBrowser = func(url string) error {
+		called = true
+		return nil
+	}
+
+	pr := azdevops.PullRequest{ID: 42, ProjectName: "myproject", Repository: azdevops.Repository{Name: "myrepo"}}
+	model := NewDetailModel(nil, pr)
+	model.SetSize(80, 24)
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd != nil {
+		cmd()
+	}
+	if called {
+		t.Error("openBrowser should not be called when client is nil")
+	}
+}
+
+func TestDetailModel_ContextItems_IncludesBrowser(t *testing.T) {
+	model := NewDetailModel(nil, azdevops.PullRequest{})
+	items := model.GetContextItems()
+
+	for _, item := range items {
+		if item.Key == "o" && item.Description == "browser" {
+			return
+		}
+	}
+	t.Error("GetContextItems should include {Key: \"o\", Description: \"browser\"}")
+}
+
 func TestDetailView_WrappedPRDescriptionPreservesContent(t *testing.T) {
 	description := "Implements the new caching layer with Redis integration for session management and rate limiting"
 	pr := azdevops.PullRequest{
