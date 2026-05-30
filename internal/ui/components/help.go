@@ -24,13 +24,14 @@ type HelpSection struct {
 
 // HelpModal is an overlay that displays available keybindings.
 type HelpModal struct {
-	styles      *styles.Styles
-	visible     bool
-	width       int
-	height      int
-	sections    []HelpSection
-	configPath  string
-	versionInfo string
+	styles       *styles.Styles
+	visible      bool
+	width        int
+	height       int
+	sections     []HelpSection
+	configPath   string
+	versionInfo  string
+	scrollOffset int
 }
 
 // NewHelpModal creates a new HelpModal with default keybindings.
@@ -68,6 +69,7 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 					{Key: "r", Description: "Refresh data"},
 					{Key: "v", Description: "Vote on PR (detail view)"},
 					{Key: "w", Description: "Change work item state (detail view)"},
+					{Key: "o", Description: "Open in browser (PR / work item detail)"},
 					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},
 					{Key: "q", Description: "Quit application"},
@@ -97,16 +99,21 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 // Show makes the help modal visible.
 func (h *HelpModal) Show() {
 	h.visible = true
+	h.scrollOffset = 0
 }
 
 // Hide hides the help modal.
 func (h *HelpModal) Hide() {
 	h.visible = false
+	h.scrollOffset = 0
 }
 
 // Toggle toggles the help modal visibility.
 func (h *HelpModal) Toggle() {
 	h.visible = !h.visible
+	if !h.visible {
+		h.scrollOffset = 0
+	}
 }
 
 // IsVisible returns true if the modal is visible.
@@ -195,21 +202,73 @@ func (h *HelpModal) Update(msg tea.Msg) (*HelpModal, tea.Cmd) {
 		case "esc", "q", "?":
 			h.Hide()
 			return h, nil
+		case "down", "j":
+			h.scrollBy(1)
+			return h, nil
+		case "up", "k":
+			h.scrollBy(-1)
+			return h, nil
+		case "pgdown":
+			h.scrollBy(h.pageStep())
+			return h, nil
+		case "pgup":
+			h.scrollBy(-h.pageStep())
+			return h, nil
 		}
 	}
 
 	return h, nil
 }
 
-// View renders the help modal overlay.
-func (h *HelpModal) View() string {
-	if !h.visible {
-		return ""
+// scrollBy adjusts the scroll offset and clamps it to the valid range
+// for the current content.
+func (h *HelpModal) scrollBy(delta int) {
+	h.scrollOffset += delta
+	if max := h.maxScrollOffset(); h.scrollOffset > max {
+		h.scrollOffset = max
 	}
+	if h.scrollOffset < 0 {
+		h.scrollOffset = 0
+	}
+}
 
-	// Calculate content width (minimum width or longest content)
+// pageStep returns the number of lines a page-up/page-down should move,
+// based on the current body viewport height. Falls back to a sensible
+// minimum so paging always makes progress.
+func (h *HelpModal) pageStep() int {
+	step := h.bodyHeight() - 1
+	if step < 1 {
+		step = 1
+	}
+	return step
+}
+
+// maxScrollOffset is the highest scroll offset that keeps the last line
+// of the body visible.
+func (h *HelpModal) maxScrollOffset() int {
+	lines := h.bodyLines(h.contentWidth())
+	max := len(lines) - h.bodyHeight()
+	if max < 0 {
+		return 0
+	}
+	return max
+}
+
+// modalChromeRows counts the non-body lines the rendered modal always
+// consumes: top + bottom border (2), top + bottom padding (2), the title
+// row plus its bottom margin (2), the blank spacer above the footer (1),
+// and the footer line itself (1).
+const modalChromeRows = 8
+
+// contentWidth returns the rendered modal's inner content width. It is
+// computed against the longest possible footer (with scroll hint) so the
+// width stays stable regardless of whether the modal is currently
+// scrollable.
+func (h *HelpModal) contentWidth() int {
 	titleText := "⌨ Keyboard Shortcuts"
-	footerText := "Press esc, q, or ? to close"
+	// Width must not depend on isScrollable() — otherwise contentWidth ↔
+	// isScrollable ↔ footerText form a cycle.
+	footerText := footerHintBase + footerHintScrollSuffix
 
 	contentWidth := minModalWidth
 	if len(titleText) > contentWidth {
@@ -219,37 +278,50 @@ func (h *HelpModal) View() string {
 		contentWidth = len(footerText)
 	}
 
-	// Check section titles and bindings
 	for _, section := range h.sections {
 		if len(section.Title) > contentWidth {
 			contentWidth = len(section.Title)
 		}
 		for _, binding := range section.Bindings {
-			lineLen := 12 + len(binding.Description) // Key width + description
+			lineLen := 12 + len(binding.Description)
 			if lineLen > contentWidth {
 				contentWidth = lineLen
 			}
 		}
 	}
+	return contentWidth
+}
 
-	// Build styles from theme
-	helpModalStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(h.styles.Theme.Accent)).
-		Padding(1, 2).
-		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+const (
+	footerHintBase         = "Press esc, q, or ? to close"
+	footerHintScrollSuffix = " • ↑↓ scroll"
+)
 
-	helpTitleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
-		Bold(true).
-		MarginBottom(1).
-		Width(contentWidth).
-		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+// bodyHeight returns the number of rows available for the scrollable
+// body inside the modal. When the terminal height is unknown (h.height
+// == 0), the full body is shown.
+func (h *HelpModal) bodyHeight() int {
+	if h.height <= 0 {
+		return len(h.bodyLines(h.contentWidth()))
+	}
+	avail := h.height - modalChromeRows
+	if avail < 1 {
+		avail = 1
+	}
+	full := len(h.bodyLines(h.contentWidth()))
+	if avail > full {
+		return full
+	}
+	return avail
+}
 
+// bodyLines builds the styled, line-by-line representation of the
+// section list and Info block. The returned slice is the unit the
+// scroll offset indexes into.
+func (h *HelpModal) bodyLines(contentWidth int) []string {
 	helpSectionStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
 		Bold(true).
-		MarginTop(1).
 		Width(contentWidth).
 		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
 
@@ -264,68 +336,113 @@ func (h *HelpModal) View() string {
 		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
 		Width(contentWidth - 12)
 
-	footerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+	blankLine := lipgloss.NewStyle().
 		Width(contentWidth).
-		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+		Render("")
 
-	var content strings.Builder
-
-	// Title
-	content.WriteString(helpTitleStyle.Render("⌨ Keyboard Shortcuts"))
-	content.WriteString("\n")
-
-	// Sections
-	for _, section := range h.sections {
-		content.WriteString(helpSectionStyle.Render(section.Title))
-		content.WriteString("\n")
-
+	var lines []string
+	for i, section := range h.sections {
+		if i > 0 {
+			lines = append(lines, blankLine)
+		}
+		lines = append(lines, helpSectionStyle.Render(section.Title))
 		for _, binding := range section.Bindings {
-			line := helpKeyStyle.Render(binding.Key) + helpDescStyle.Render(binding.Description)
-			content.WriteString(line)
-			content.WriteString("\n")
+			lines = append(lines, helpKeyStyle.Render(binding.Key)+helpDescStyle.Render(binding.Description))
 		}
 	}
 
-	// Info section (version, config path)
 	if h.versionInfo != "" || h.configPath != "" {
-		infoSectionStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(h.styles.Theme.Secondary)).
-			Bold(true).
-			MarginTop(1).
-			Width(contentWidth).
-			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
-
 		infoValueStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
 			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
 			Width(contentWidth)
 
-		content.WriteString(infoSectionStyle.Render("Info"))
-		content.WriteString("\n")
+		lines = append(lines, blankLine)
+		lines = append(lines, helpSectionStyle.Render("Info"))
 		if h.versionInfo != "" {
-			content.WriteString(infoValueStyle.Render("Version: " + h.versionInfo))
-			content.WriteString("\n")
+			lines = append(lines, infoValueStyle.Render("Version: "+h.versionInfo))
 		}
 		if h.configPath != "" {
-			content.WriteString(infoValueStyle.Render("Config: " + h.configPath))
-			content.WriteString("\n")
+			lines = append(lines, infoValueStyle.Render("Config: "+h.configPath))
 		}
 	}
+	return lines
+}
 
-	// Footer hint
+// footerText returns the footer hint, with scroll keys appended when
+// the body is scrollable.
+func (h *HelpModal) footerText() string {
+	if h.isScrollable() {
+		return footerHintBase + footerHintScrollSuffix
+	}
+	return footerHintBase
+}
+
+// isScrollable returns true when the body has more lines than the
+// available body height.
+func (h *HelpModal) isScrollable() bool {
+	if h.height <= 0 {
+		return false
+	}
+	avail := h.height - modalChromeRows
+	return avail >= 1 && len(h.bodyLines(h.contentWidth())) > avail
+}
+
+// View renders the help modal overlay.
+func (h *HelpModal) View() string {
+	if !h.visible {
+		return ""
+	}
+
+	contentWidth := h.contentWidth()
+
+	helpModalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(h.styles.Theme.Accent)).
+		Padding(1, 2).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	helpTitleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
+		Bold(true).
+		MarginBottom(1).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+		Width(contentWidth).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt))
+
+	bodyAll := h.bodyLines(contentWidth)
+	bodyH := h.bodyHeight()
+	if h.scrollOffset > len(bodyAll)-bodyH {
+		h.scrollOffset = len(bodyAll) - bodyH
+	}
+	if h.scrollOffset < 0 {
+		h.scrollOffset = 0
+	}
+	end := h.scrollOffset + bodyH
+	if end > len(bodyAll) {
+		end = len(bodyAll)
+	}
+	bodyVisible := bodyAll[h.scrollOffset:end]
+
+	var content strings.Builder
+	content.WriteString(helpTitleStyle.Render("⌨ Keyboard Shortcuts"))
 	content.WriteString("\n")
-	content.WriteString(footerStyle.Render("Press esc, q, or ? to close"))
+	content.WriteString(strings.Join(bodyVisible, "\n"))
+	content.WriteString("\n\n")
+	content.WriteString(footerStyle.Render(h.footerText()))
 
-	// Render the modal box
 	modal := helpModalStyle.Render(content.String())
 
-	// Center the modal on screen
+	// Center the modal on screen.
 	if h.width > 0 && h.height > 0 {
 		modalWidth := lipgloss.Width(modal)
 		modalHeight := lipgloss.Height(modal)
 
-		// Calculate padding to center
 		leftPad := (h.width - modalWidth) / 2
 		topPad := (h.height - modalHeight) / 2
 
@@ -336,17 +453,18 @@ func (h *HelpModal) View() string {
 			topPad = 0
 		}
 
-		// Build centered output
 		var centered strings.Builder
 		for i := 0; i < topPad; i++ {
 			centered.WriteString("\n")
 		}
 
 		lines := strings.Split(modal, "\n")
-		for _, line := range lines {
+		for i, line := range lines {
 			centered.WriteString(strings.Repeat(" ", leftPad))
 			centered.WriteString(line)
-			centered.WriteString("\n")
+			if i < len(lines)-1 {
+				centered.WriteString("\n")
+			}
 		}
 
 		return centered.String()

@@ -1502,3 +1502,101 @@ func TestDetailView_WrappedPRDescriptionPreservesContent(t *testing.T) {
 		}
 	}
 }
+
+func TestDetailModel_GetContextItemsIncludesOpenInBrowser(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 1}
+	m := NewDetailModel(nil, pr)
+
+	items := m.GetContextItems()
+	found := false
+	for _, item := range items {
+		if item.Key == "o" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected context items to include 'o' keybinding for open in browser")
+	}
+}
+
+func TestDetailModel_OKeyOpensBrowser(t *testing.T) {
+	origOpen := openURL
+	defer func() { openURL = origOpen }()
+
+	var openedURL string
+	openURL = func(url string) error {
+		openedURL = url
+		return nil
+	}
+
+	pr := azdevops.PullRequest{
+		ID:         42,
+		Title:      "Add feature",
+		Repository: azdevops.Repository{ID: "repo-xyz"},
+	}
+	client, _ := azdevops.NewClient("myorg", "myproject", "fake-pat")
+	m := NewDetailModel(client, pr)
+	m.SetSize(80, 30)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if cmd == nil {
+		t.Fatal("Expected command after pressing 'o'")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(openURLResultMsg); !ok {
+		t.Fatalf("Expected openURLResultMsg, got %T", msg)
+	}
+
+	want := "https://dev.azure.com/myorg/myproject/_git/repo-xyz/pullrequest/42"
+	if openedURL != want {
+		t.Errorf("openURL called with %q, want %q", openedURL, want)
+	}
+}
+
+func TestDetailModel_OKeyNoClientSetsStatusMessage(t *testing.T) {
+	origOpen := openURL
+	defer func() { openURL = origOpen }()
+	openURL = func(string) error {
+		t.Fatal("openURL must not be called when no URL can be built")
+		return nil
+	}
+
+	pr := azdevops.PullRequest{ID: 1}
+	m := NewDetailModel(nil, pr)
+	m.SetSize(80, 30)
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if cmd != nil {
+		t.Error("Expected no command when URL cannot be built")
+	}
+	if m.GetStatusMessage() == "" {
+		t.Error("Expected status message when URL cannot be built")
+	}
+}
+
+func TestDetailModel_OpenURLResultSuccessSetsStatusMessage(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 1}
+	m := NewDetailModel(nil, pr)
+	m.SetSize(80, 30)
+
+	m, _ = m.Update(openURLResultMsg{err: nil})
+
+	if m.GetStatusMessage() == "" {
+		t.Error("Expected a success status message after opening in browser")
+	}
+}
+
+func TestDetailModel_OpenURLResultErrorSetsStatusMessage(t *testing.T) {
+	pr := azdevops.PullRequest{ID: 1}
+	m := NewDetailModel(nil, pr)
+	m.SetSize(80, 30)
+
+	m, _ = m.Update(openURLResultMsg{err: fmt.Errorf("no browser")})
+
+	if !strings.Contains(strings.ToLower(m.GetStatusMessage()), "fail") &&
+		!strings.Contains(strings.ToLower(m.GetStatusMessage()), "error") {
+		t.Errorf("Expected error status message, got %q", m.GetStatusMessage())
+	}
+}

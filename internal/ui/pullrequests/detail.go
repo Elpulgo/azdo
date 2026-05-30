@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/diff"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
@@ -13,6 +14,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// openURL is a package-level seam so tests can intercept browser launches.
+var openURL = browser.Open
+
+// openURLResultMsg is sent when an attempt to open a URL in the browser completes.
+type openURLResultMsg struct {
+	err error
+}
 
 // DetailModel represents the PR detail view showing description, reviewers, and changed files
 type DetailModel struct {
@@ -127,6 +136,8 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.filesLoaded = false
 			m.spinner.SetVisible(true)
 			return m, tea.Batch(m.fetchThreads(), m.fetchChangedFiles(), m.spinner.Tick())
+		case "o":
+			return m, m.openInBrowser()
 		}
 
 	case threadsMsg:
@@ -157,6 +168,14 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		m.loading = true
 		m.spinner.SetVisible(true)
 		return m, tea.Batch(m.fetchThreads(), m.spinner.Tick())
+
+	case openURLResultMsg:
+		if msg.err != nil {
+			m.statusMessage = fmt.Sprintf("Failed to open browser: %v", msg.err)
+		} else {
+			m.statusMessage = "Opened in browser"
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -546,7 +565,26 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 		{Key: "enter", Description: "open"},
 		{Key: "↑↓", Description: "navigate"},
 		{Key: "v", Description: "vote"},
+		{Key: "o", Description: "open in browser"},
 		{Key: "r", Description: "refresh"},
+	}
+}
+
+// openInBrowser returns a command that opens the PR overview URL in the
+// user's default browser. If no URL can be built, it sets a status
+// message and returns nil.
+func (m *DetailModel) openInBrowser() tea.Cmd {
+	if m.client == nil {
+		m.statusMessage = "Cannot open: no Azure DevOps client"
+		return nil
+	}
+	url := buildPROverviewURL(m.client.GetOrg(), m.client.GetProject(), m.pr.Repository.ID, m.pr.ID)
+	if url == "" {
+		m.statusMessage = "Cannot open: missing organization, project, or repository"
+		return nil
+	}
+	return func() tea.Msg {
+		return openURLResultMsg{err: openURL(url)}
 	}
 }
 
