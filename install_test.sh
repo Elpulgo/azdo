@@ -324,6 +324,22 @@ test_download_url() {
     assert_eq "$expected" "$DOWNLOAD_URL" "Download URL is correctly constructed"
 }
 
+# ─── Test: macOS re-sign guard ────────────────────────────────────────────────
+
+test_resign_macos_binary_skips_on_linux() {
+    printf "\n\033[1mTest: macOS re-sign guard\033[0m\n"
+
+    # Should be a silent no-op when OS_NAME is not Darwin, even if the binary
+    # path doesn't exist — the function must short-circuit before touching it.
+    OS_NAME="Linux"
+    BINARY_NAME="azdo"
+    out=$(resign_macos_binary /no/such/path 2>&1)
+    rc=$?
+
+    assert_eq "0" "$rc" "Returns 0 on non-Darwin"
+    assert_eq "" "$out" "Produces no output on non-Darwin"
+}
+
 # ─── Run all tests ─────────────────────────────────────────────────────────────
 
 main() {
@@ -348,6 +364,7 @@ main() {
         test_skip_config
         test_parse_args
         test_download_url
+        test_resign_macos_binary_skips_on_linux
 
         # Print summary
         printf "\n\033[1m==============================\033[0m\n"

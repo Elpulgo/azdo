@@ -39,6 +39,15 @@ builds:
       # - goos: windows
       #   goarch: arm64
 
+    # Post-build hooks. Replace Go's linker-signed signature on darwin binaries
+    # with a real ad-hoc signature via rcodesign — macOS Sequoia+ kills
+    # binaries that only carry the linker-signed flag (which is what
+    # cross-compiled darwin builds from Linux produce). The wrapper script is
+    # a no-op on non-darwin builds and when rcodesign is not installed.
+    hooks:
+      post:
+        - "sh scripts/sign-darwin.sh {{ .Path }}"
+
 # Archive configuration
 archives:
   - # Archive name template
@@ -54,7 +63,7 @@ archives:
     # Use zip for Windows instead of tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ["zip"]
 
     # Files to include in archive
     files:
