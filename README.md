@@ -300,6 +300,7 @@ To create a PAT:
 | Key | Action |
 |-----|--------|
 | `v` | Vote on pull request |
+| `o` | Open in browser |
 | `enter` | View diff for selected file |
 
 ### PR Diff / Code Review View
