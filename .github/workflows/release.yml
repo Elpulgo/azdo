@@ -25,6 +25,19 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      # rcodesign re-signs darwin binaries to replace Go's linker-signed
+      # signature, which macOS Sequoia+ rejects with SIGKILL on launch.
+      - name: Install rcodesign
+        run: |
+          set -euo pipefail
+          version="0.29.0"
+          archive="apple-codesign-${version}-x86_64-unknown-linux-musl"
+          url="https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${version}/${archive}.tar.gz"
+          curl -fsSL "$url" -o /tmp/rcodesign.tar.gz
+          tar -xzf /tmp/rcodesign.tar.gz -C /tmp
+          sudo install -m 0755 "/tmp/${archive}/rcodesign" /usr/local/bin/rcodesign
+          rcodesign --version
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

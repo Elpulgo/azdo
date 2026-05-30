@@ -392,7 +392,37 @@ download_and_install() {
 
     chmod +x "$INSTALL_DIR/$BINARY_FILE" 2>/dev/null || true
 
+    resign_macos_binary "$INSTALL_DIR/$BINARY_FILE"
+
     success "Installed $BINARY_FILE to $INSTALL_DIR/$BINARY_FILE"
+}
+
+# ─── macOS re-sign ────────────────────────────────────────────────────────────
+
+# Replace the binary's linker-signed signature with a real ad-hoc signature.
+# macOS Sequoia+ kills binaries that only carry the linker-signed flag, which
+# is what Go's linker stamps onto cross-compiled darwin builds. This is a
+# safety net for archives that were not re-signed at release time.
+resign_macos_binary() {
+    binary_path="$1"
+
+    if [ "$OS_NAME" != "Darwin" ]; then
+        return 0
+    fi
+
+    if ! command -v codesign >/dev/null 2>&1; then
+        warn "codesign not found — skipping macOS re-sign step."
+        warn "If '$BINARY_NAME' is killed on launch, run: codesign --sign - --force '$binary_path'"
+        return 0
+    fi
+
+    info "Re-signing binary for macOS..."
+    if codesign --sign - --force "$binary_path" >/dev/null 2>&1; then
+        success "Re-signed binary"
+    else
+        warn "codesign failed — binary may still be killed by macOS on launch."
+        warn "Try manually: codesign --sign - --force '$binary_path'"
+    fi
 }
 
 # ─── Summary ───────────────────────────────────────────────────────────────────
