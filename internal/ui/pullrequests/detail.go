@@ -127,8 +127,7 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			}
 			url := (&m.pr).URL(m.client.GetOrg())
 			return m, func() tea.Msg {
-				openBrowser(url) //nolint:errcheck
-				return nil
+				return browserOpenMsg{err: openBrowser(url)}
 			}
 		case "r":
 			m.loading = true
@@ -166,6 +165,12 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		m.loading = true
 		m.spinner.SetVisible(true)
 		return m, tea.Batch(m.fetchThreads(), m.spinner.Tick())
+
+	case browserOpenMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -746,6 +751,10 @@ type openFileDiffMsg struct {
 
 // openGeneralCommentsMsg signals that the user wants to view general PR comments
 type openGeneralCommentsMsg struct{}
+
+type browserOpenMsg struct {
+	err error
+}
 
 // fetchThreads fetches PR threads from Azure DevOps
 func (m *DetailModel) fetchThreads() tea.Cmd {
