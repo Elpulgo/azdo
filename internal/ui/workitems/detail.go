@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -13,6 +14,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// openURL is a package-level seam so tests can intercept browser launches.
+var openURL = browser.Open
+
+// openURLResultMsg is sent when an attempt to open a URL in the browser completes.
+type openURLResultMsg struct {
+	err error
+}
 
 // stateUpdateResultMsg is sent when a state update completes
 type stateUpdateResultMsg struct {
@@ -92,6 +101,14 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		// Signal the list to refresh so the new state is visible
 		return m, func() tea.Msg { return WorkItemStateChangedMsg{} }
 
+	case openURLResultMsg:
+		if msg.err != nil {
+			m.statusMessage = fmt.Sprintf("Failed to open browser: %v", msg.err)
+		} else {
+			m.statusMessage = "Opened in browser"
+		}
+		return m, nil
+
 	case statesLoadedMsg:
 		m.loading = false
 		m.spinner.SetVisible(false)
@@ -122,6 +139,8 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.spinner.SetVisible(true)
 			m.spinner.SetMessage("Loading states...")
 			return m, tea.Batch(m.fetchStates(), m.spinner.Tick())
+		case "o":
+			return m, m.openInBrowser()
 		case "up", "k":
 			m.viewport.LineUp(1)
 		case "down", "j":
@@ -134,6 +153,24 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// openInBrowser returns a command that opens the work item URL in the
+// user's default browser. If no URL can be built (e.g. the client is nil),
+// it sets a status message and returns nil.
+func (m *DetailModel) openInBrowser() tea.Cmd {
+	if m.client == nil {
+		m.statusMessage = "Cannot open: no Azure DevOps client"
+		return nil
+	}
+	url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), m.workItem.ID)
+	if url == "" {
+		m.statusMessage = "Cannot open: missing organization or project"
+		return nil
+	}
+	return func() tea.Msg {
+		return openURLResultMsg{err: openURL(url)}
+	}
 }
 
 // fetchStates fetches available states for the work item type
@@ -293,6 +330,7 @@ func (m *DetailModel) SetSize(width, height int) {
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "w", Description: "Change state"},
+		{Key: "o", Description: "open in browser"},
 		{Key: "↑↓", Description: "scroll"},
 		{Key: "esc", Description: "back"},
 	}

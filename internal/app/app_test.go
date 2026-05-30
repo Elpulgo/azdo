@@ -275,10 +275,10 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 
 	m := NewModel(client, cfg, "dev", "")
 	m.width = 200
-	m.height = 30
+	m.height = 60
 
 	// Update with window size
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
 	m = updated.(Model)
 
 	// Open help modal
@@ -1047,10 +1047,10 @@ func TestModel_HelpModalShowsVersionInfo(t *testing.T) {
 
 	m := NewModel(client, cfg, "1.5.0", "abc1234")
 	m.width = 200
-	m.height = 30
+	m.height = 60
 
 	// Update with window size
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
 	m = updated.(Model)
 
 	// Open help modal
@@ -1078,9 +1078,9 @@ func TestModel_HelpModalShowsDevVersion(t *testing.T) {
 
 	m := NewModel(client, cfg, "dev", "none")
 	m.width = 200
-	m.height = 30
+	m.height = 60
 
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
 	m = updated.(Model)
 
 	// Open help modal

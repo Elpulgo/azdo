@@ -100,6 +100,7 @@ Keyboard shortcuts (in TUI):
     r            Refresh data
     v            Vote on PR (detail view)
     s            Change work item state (detail view)
+    o            Open in browser (PR / work item detail)
     t            Select theme
     ?            Toggle help overlay
     q            Quit

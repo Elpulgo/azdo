@@ -77,7 +77,7 @@ func TestHelpModal_View_ContainsTitle(t *testing.T) {
 
 func TestHelpModal_View_ContainsKeybindings(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(80, 24)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
@@ -183,12 +183,91 @@ func TestHelpModal_SetSize_AffectsViewCentering(t *testing.T) {
 	}
 }
 
+func TestHelpModal_ScrollableWhenContentOverflows(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	// Small terminal — default sections won't all fit.
+	h.SetSize(80, 12)
+	h.Show()
+
+	before := h.View()
+
+	// Scroll down
+	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyDown})
+	after := h.View()
+
+	if before == after {
+		t.Error("expected modal view to change after scrolling down when content overflows")
+	}
+}
+
+func TestHelpModal_ScrollKeysDoNotCloseWhenScrollable(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 12)
+	h.Show()
+
+	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !h.IsVisible() {
+		t.Error("down key should not close the modal when scrollable")
+	}
+
+	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if !h.IsVisible() {
+		t.Error("'j' key should not close the modal when scrollable")
+	}
+
+	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if !h.IsVisible() {
+		t.Error("pgdn key should not close the modal when scrollable")
+	}
+}
+
+func TestHelpModal_FitsInTerminalHeight(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 12)
+	h.Show()
+
+	view := h.View()
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+
+	if len(lines) > 12 {
+		t.Errorf("help modal output is %d lines but terminal height is 12 — modal must fit within available height", len(lines))
+	}
+}
+
+func TestHelpModal_EscClosesEvenWhenScrollable(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 12)
+	h.Show()
+
+	h, _ = h.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if h.IsVisible() {
+		t.Error("esc should still close the modal when scrollable")
+	}
+}
+
+func TestHelpModal_View_ContainsOpenInBrowserBinding(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.Show()
+
+	view := h.View()
+	lower := strings.ToLower(view)
+
+	if !strings.Contains(lower, "open in browser") {
+		t.Error("help modal should describe the 'open in browser' action")
+	}
+	// The key should also be present somewhere in the rendered modal.
+	if !strings.Contains(view, "o") {
+		t.Error("help modal should list the 'o' key for open in browser")
+	}
+}
+
 func TestHelpModal_AddSection(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.AddSection("Custom", []HelpBinding{
 		{Key: "x", Description: "do something"},
 	})
-	h.SetSize(80, 24)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
@@ -204,7 +283,7 @@ func TestHelpModal_AddSection(t *testing.T) {
 func TestHelpModal_SetConfigPath_ShowsInView(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
-	h.SetSize(80, 40)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
@@ -216,7 +295,7 @@ func TestHelpModal_SetConfigPath_ShowsInView(t *testing.T) {
 
 func TestHelpModal_NoConfigPath_NotShown(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(80, 40)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
@@ -229,7 +308,7 @@ func TestHelpModal_NoConfigPath_NotShown(t *testing.T) {
 func TestHelpModal_SetVersionInfo_ShowsInView(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.SetVersionInfo("1.2.3 (abc1234)")
-	h.SetSize(80, 40)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
@@ -244,7 +323,7 @@ func TestHelpModal_SetVersionInfo_ShowsInView(t *testing.T) {
 
 func TestHelpModal_EmptyVersionInfo_NotShown(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
-	h.SetSize(80, 40)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
@@ -258,7 +337,7 @@ func TestHelpModal_VersionAndConfig_BothInInfoSection(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.SetVersionInfo("2.0.0 (def5678)")
 	h.SetConfigPath("/home/user/.config/azdo-tui/config.yaml")
-	h.SetSize(80, 40)
+	h.SetSize(80, 60)
 	h.Show()
 
 	view := h.View()
