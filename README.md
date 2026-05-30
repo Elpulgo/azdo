@@ -7,6 +7,79 @@ A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work it
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 ![GitHub Release](https://img.shields.io/github/v/release/Elpulgo/azdo)
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Features](#features)
+- [Demo Mode](#demo-mode)
+- [CLI Usage](#cli-usage)
+- [Configuration](#configuration)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Technology Stack](#technology-stack)
+- [Development](#development)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Installation
+
+### Quick Install (Recommended)
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Elpulgo/azdo/main/install.ps1 | iex
+```
+
+The install scripts will automatically:
+- Detect your OS and architecture
+- Download the latest release from GitHub
+- Install the binary to the appropriate location
+- Create a config file with placeholder values
+- Verify the download checksum
+
+**Install options:**
+```bash
+# Install a specific version
+curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh -s -- --version v0.1.0
+
+# Install to a custom directory
+./install.sh --install-dir ~/bin
+```
+
+### Manual Download
+
+Download the latest release for your platform from the [Releases page](https://github.com/Elpulgo/azdo/releases).
+
+| Platform | Architecture | File |
+|----------|-------------|------|
+| Linux    | x86_64      | `azdo_*_Linux_x86_64.tar.gz` |
+| Linux    | ARM64       | `azdo_*_Linux_arm64.tar.gz` |
+| macOS    | x86_64      | `azdo_*_Darwin_x86_64.tar.gz` |
+| macOS    | ARM64 (M1+) | `azdo_*_Darwin_arm64.tar.gz` |
+| Windows  | x86_64      | `azdo_*_Windows_x86_64.zip` |
+| Windows  | ARM64       | `azdo_*_Windows_arm64.zip` |
+
+Extract the archive and move the binary to a directory in your `PATH`.
+
+### From Source
+
+```bash
+git clone https://github.com/Elpulgo/azdo.git
+cd azdo
+go build -o azdo-tui ./cmd/azdo-tui
+```
+
+### Using Go Install
+
+```bash
+go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
+```
+
 ## Features
 
 ### Multi-Tab Interface
@@ -83,65 +156,6 @@ azdo --version
 
 # Show help
 azdo --help
-```
-
-## Installation
-
-### Quick Install (Recommended)
-
-**Linux / macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/Elpulgo/azdo/main/install.ps1 | iex
-```
-
-The install scripts will automatically:
-- Detect your OS and architecture
-- Download the latest release from GitHub
-- Install the binary to the appropriate location
-- Create a config file with placeholder values
-- Verify the download checksum
-
-**Install options:**
-```bash
-# Install a specific version
-curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh -s -- --version v0.1.0
-
-# Install to a custom directory
-./install.sh --install-dir ~/bin
-```
-
-### Manual Download
-
-Download the latest release for your platform from the [Releases page](https://github.com/Elpulgo/azdo/releases).
-
-| Platform | Architecture | File |
-|----------|-------------|------|
-| Linux    | x86_64      | `azdo_*_Linux_x86_64.tar.gz` |
-| Linux    | ARM64       | `azdo_*_Linux_arm64.tar.gz` |
-| macOS    | x86_64      | `azdo_*_Darwin_x86_64.tar.gz` |
-| macOS    | ARM64 (M1+) | `azdo_*_Darwin_arm64.tar.gz` |
-| Windows  | x86_64      | `azdo_*_Windows_x86_64.zip` |
-| Windows  | ARM64       | `azdo_*_Windows_arm64.zip` |
-
-Extract the archive and move the binary to a directory in your `PATH`.
-
-### From Source
-
-```bash
-git clone https://github.com/Elpulgo/azdo.git
-cd azdo
-go build -o azdo-tui ./cmd/azdo-tui
-```
-
-### Using Go Install
-
-```bash
-go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 ```
 
 ## Configuration
