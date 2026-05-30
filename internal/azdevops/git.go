@@ -78,6 +78,13 @@ func (pr *PullRequest) TargetBranchShortName() string {
 	return pr.TargetRefName
 }
 
+// URL returns the Azure DevOps web URL for this pull request.
+// org is the Azure DevOps organization name (e.g. "contoso").
+func (pr *PullRequest) URL(org string) string {
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
+		org, pr.ProjectName, pr.Repository.Name, pr.ID)
+}
+
 // VoteDescription returns a human-readable description of the reviewer's vote
 func (r *Reviewer) VoteDescription() string {
 	switch r.Vote {

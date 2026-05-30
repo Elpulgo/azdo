@@ -335,6 +335,44 @@ func TestPullRequest_TargetBranchShortName(t *testing.T) {
 	}
 }
 
+func TestPullRequest_URL(t *testing.T) {
+	tests := []struct {
+		name string
+		pr   PullRequest
+		org  string
+		want string
+	}{
+		{
+			name: "standard PR URL",
+			pr: PullRequest{
+				ID:          42,
+				ProjectName: "myproject",
+				Repository:  Repository{Name: "myrepo"},
+			},
+			org:  "myorg",
+			want: "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/42",
+		},
+		{
+			name: "different values",
+			pr: PullRequest{
+				ID:          1,
+				ProjectName: "contoso-project",
+				Repository:  Repository{Name: "backend-api"},
+			},
+			org:  "contoso",
+			want: "https://dev.azure.com/contoso/contoso-project/_git/backend-api/pullrequest/1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.pr.URL(tt.org)
+			if got != tt.want {
+				t.Errorf("URL(%q) = %q, want %q", tt.org, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReviewer_VoteDescription(t *testing.T) {
 	tests := []struct {
 		name string
