@@ -452,6 +452,34 @@ func (m Model[T]) Detail() DetailView {
 	return m.detail
 }
 
+// FindIndex returns the index of the first item in the underlying items
+// list that satisfies pred, or -1 if none match. Search/filter state is
+// ignored — the search runs over the full populated set, which is what
+// startup restore wants.
+func (m Model[T]) FindIndex(pred func(T) bool) int {
+	for i, it := range m.items {
+		if pred(it) {
+			return i
+		}
+	}
+	return -1
+}
+
+// SetCursor moves the table cursor to the given row index. Out-of-range
+// indices are silently ignored.
+func (m *Model[T]) SetCursor(idx int) {
+	if idx < 0 || idx >= len(m.items) {
+		return
+	}
+	m.table.SetCursor(idx)
+}
+
+// OpenSelectedDetail enters the detail view for the row currently under
+// the cursor, returning the detail's Init command (may be nil).
+func (m Model[T]) OpenSelectedDetail() (Model[T], tea.Cmd) {
+	return m.enterDetailView()
+}
+
 // cellPadding is the horizontal space added by each table cell's Padding(0, 1) style.
 const cellPadding = 2
 

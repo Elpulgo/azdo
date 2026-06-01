@@ -40,6 +40,11 @@ type Model struct {
 	activeState string
 	tagPicker   components.TagPicker
 	statePicker components.ListPicker
+
+	// pendingDetailID is the work-item ID requested by startup state
+	// restore. Cleared on first populate so polling can't re-trigger it.
+	pendingDetailID       int
+	pendingRestoreHandled bool
 }
 
 // NewModel creates a new work items list model with default styles
@@ -130,7 +135,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					return m, fetchMyWorkItemsMulti(m.client)
 				}
 				m.list = m.list.HandleFetchResult(msg.workItems, nil)
-				return m, nil
+				return m.withRestore(nil)
 			}
 
 			criticalCmd := components.NewCriticalErrorCmd(msg.err)
@@ -140,7 +145,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, criticalCmd
 			}
 			m.list = m.list.HandleFetchResult(msg.workItems, msg.err)
-			return m, nil
+			return m.withRestore(nil)
 		}
 		m.allItems = msg.workItems
 		if m.myItemsOnly {
@@ -148,7 +153,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, fetchMyWorkItemsMulti(m.client)
 		}
 		m.list = m.list.HandleFetchResult(msg.workItems, nil)
-		return m, nil
+		return m.withRestore(nil)
 	case myWorkItemsMsg:
 		if msg.err != nil {
 			// For partial errors, use partial data as valid
@@ -156,17 +161,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if errors.As(msg.err, &partialErr) {
 				m.myItems = msg.workItems
 				m.list = m.list.SetItems(m.applyAllFilters(msg.workItems))
-				return m, nil
+				return m.withRestore(nil)
 			}
 			// On error, fall back to showing all items and clear loading state
 			m.myItemsOnly = false
 			m.myItems = nil
 			m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
-			return m, nil
+			return m.withRestore(nil)
 		}
 		m.myItems = msg.workItems
 		m.list = m.list.SetItems(m.applyAllFilters(msg.workItems))
-		return m, nil
+		return m.withRestore(nil)
 	case WorkItemStateChangedMsg:
 		// Re-fetch work items so the list reflects the updated state
 		return m, fetchWorkItemsMulti(m.client)
@@ -174,6 +179,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
 			m.list = m.list.SetItems(m.applyAllFilters(msg.WorkItems))
+			return m.withRestore(nil)
 		}
 		return m, nil
 	case components.TagSelectedMsg:
@@ -300,6 +306,62 @@ func (m Model) IsSearching() bool {
 // IsMyItemsActive returns true if the "my items" filter is active.
 func (m Model) IsMyItemsActive() bool {
 	return m.myItemsOnly
+}
+
+// DetailItemID returns the ID of the work item whose detail view is
+// currently open, or 0 when the user is on the list. Used by the state
+// store to persist the last-viewed item across sessions.
+func (m Model) DetailItemID() int {
+	if m.GetViewMode() != ViewDetail {
+		return 0
+	}
+	adapter, ok := m.list.Detail().(*detailAdapter)
+	if !ok || adapter == nil {
+		return 0
+	}
+	return adapter.model.GetWorkItem().ID
+}
+
+// WithPendingDetailRestore queues a one-shot request to open the work
+// item with this ID in detail view once the list is populated.
+func (m Model) WithPendingDetailRestore(id int) Model {
+	m.pendingDetailID = id
+	m.pendingRestoreHandled = false
+	return m
+}
+
+// tryRestoreDetail attempts to open detail for the pending ID, if any.
+func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
+	if m.pendingRestoreHandled || m.pendingDetailID == 0 {
+		return m, nil
+	}
+	target := m.pendingDetailID
+	m.pendingDetailID = 0
+	m.pendingRestoreHandled = true
+
+	idx := m.list.FindIndex(func(wi azdevops.WorkItem) bool {
+		return wi.ID == target
+	})
+	if idx < 0 {
+		return m, nil
+	}
+	m.list.SetCursor(idx)
+	list, cmd := m.list.OpenSelectedDetail()
+	m.list = list
+	return m, cmd
+}
+
+// withRestore combines tryRestoreDetail with a caller-supplied cmd.
+func (m Model) withRestore(prev tea.Cmd) (Model, tea.Cmd) {
+	m, restoreCmd := m.tryRestoreDetail()
+	switch {
+	case prev == nil:
+		return m, restoreCmd
+	case restoreCmd == nil:
+		return m, prev
+	default:
+		return m, tea.Batch(prev, restoreCmd)
+	}
 }
 
 // IsTagFilterActive returns true if a tag filter is active.

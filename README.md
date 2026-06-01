@@ -124,6 +124,7 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 - Eight built-in themes with true color support
 - **Theme switcher** modal (press `t`) to change themes on the fly
 - **Multi-project support** with display name customization
+- **State persistence** — remembers the last active tab and the last opened PR / work item detail across sessions, so you can pick up where you left off
 
 ## Demo Mode
 
@@ -265,6 +266,15 @@ You can create your own custom themes by placing JSON theme files in the themes 
 See `example-theme.json` in the repository for a complete template with all available color properties. Colors can be specified as:
 - Hex values: `#ff0000` or `#f00`
 - ANSI 256 colors: `"1"`, `"33"`, `"196"`
+
+### State File
+
+The application persists a small amount of navigation state between runs (last active tab, last opened PR / work item detail) so you land back where you left off. The file is written to:
+
+- **Linux/macOS**: `$XDG_STATE_HOME/azdo-tui/state.yaml` if set, otherwise `~/.local/state/azdo-tui/state.yaml`
+- **Windows**: `%USERPROFILE%\.local\state\azdo-tui\state.yaml`
+
+The file is created lazily — no state file is required to run the app. Writes are debounced and flushed on clean exit (including SIGINT / SIGTERM / SIGHUP). Delete the file to reset the saved view.
 
 ### 2. Azure DevOps Personal Access Token (PAT)
 

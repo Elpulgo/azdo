@@ -59,6 +59,15 @@ Press `m` in the Work Items tab to toggle the "my items" filter. This shows only
 
 You can also press `f` to open the search/filter bar and type to filter by text, or press `T` to filter by tag.
 
+## Where is the state file and how do I reset it?
+
+The app persists a small amount of navigation state (last active tab, last opened PR / work item detail) so you resume where you left off. The file lives at:
+
+- **Linux/macOS**: `$XDG_STATE_HOME/azdo-tui/state.yaml` if set, otherwise `~/.local/state/azdo-tui/state.yaml`
+- **Windows**: `%USERPROFILE%\.local\state\azdo-tui\state.yaml`
+
+It is created lazily on first save — a missing file is normal and not an error. Delete it to reset to the default view (Pull Requests tab, no detail open). Pipeline detail is intentionally not persisted.
+
 ## The app shows connection errors, what do I do?
 
 Check the following:
