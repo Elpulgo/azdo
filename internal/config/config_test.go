@@ -802,3 +802,155 @@ func TestNewWithPath_CreatesValidConfig(t *testing.T) {
 		t.Errorf("loaded Organization = %q, want %q", loaded.Organization, "my-org")
 	}
 }
+
+func TestLoad_MetricsDefaults_WhenBlockAbsent(t *testing.T) {
+	tempDir := t.TempDir()
+	configFile := filepath.Join(tempDir, "config.yaml")
+	configContent := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configFile)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Metrics.Enabled {
+		t.Error("Metrics.Enabled = true by default; want false (opt-in)")
+	}
+	if cfg.Metrics.IntervalDays != DefaultMetricsIntervalDays {
+		t.Errorf("Metrics.IntervalDays = %d, want %d", cfg.Metrics.IntervalDays, DefaultMetricsIntervalDays)
+	}
+	if cfg.Metrics.ActiveStaleDays != DefaultMetricsActiveStaleDays {
+		t.Errorf("Metrics.ActiveStaleDays = %d, want %d", cfg.Metrics.ActiveStaleDays, DefaultMetricsActiveStaleDays)
+	}
+	if cfg.Metrics.RFTStaleDays != DefaultMetricsRFTStaleDays {
+		t.Errorf("Metrics.RFTStaleDays = %d, want %d", cfg.Metrics.RFTStaleDays, DefaultMetricsRFTStaleDays)
+	}
+	if cfg.Metrics.WIPLimit != DefaultMetricsWIPLimit {
+		t.Errorf("Metrics.WIPLimit = %d, want %d", cfg.Metrics.WIPLimit, DefaultMetricsWIPLimit)
+	}
+}
+
+func TestLoad_MetricsBlockParsed(t *testing.T) {
+	tempDir := t.TempDir()
+	configFile := filepath.Join(tempDir, "config.yaml")
+	configContent := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+metrics:
+  enabled: true
+  interval_days: 21
+  active_stale_days: 5
+  rft_stale_days: 1
+  wip_limit: 6
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configFile)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if !cfg.Metrics.Enabled {
+		t.Error("Metrics.Enabled = false, want true")
+	}
+	if cfg.Metrics.IntervalDays != 21 {
+		t.Errorf("Metrics.IntervalDays = %d, want 21", cfg.Metrics.IntervalDays)
+	}
+	if cfg.Metrics.ActiveStaleDays != 5 {
+		t.Errorf("Metrics.ActiveStaleDays = %d, want 5", cfg.Metrics.ActiveStaleDays)
+	}
+	if cfg.Metrics.RFTStaleDays != 1 {
+		t.Errorf("Metrics.RFTStaleDays = %d, want 1", cfg.Metrics.RFTStaleDays)
+	}
+	if cfg.Metrics.WIPLimit != 6 {
+		t.Errorf("Metrics.WIPLimit = %d, want 6", cfg.Metrics.WIPLimit)
+	}
+}
+
+func TestConfig_Validate_MetricsRejectsNonPositive(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			Organization:    "org",
+			Projects:        []string{"p"},
+			PollingInterval: 60,
+			Theme:           "dark",
+			Metrics: MetricsConfig{
+				Enabled:         true,
+				IntervalDays:    14,
+				ActiveStaleDays: 3,
+				RFTStaleDays:    2,
+				WIPLimit:        4,
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:    "interval_days zero",
+			mutate:  func(c *Config) { c.Metrics.IntervalDays = 0 },
+			wantErr: "interval_days",
+		},
+		{
+			name:    "active_stale_days negative",
+			mutate:  func(c *Config) { c.Metrics.ActiveStaleDays = -1 },
+			wantErr: "active_stale_days",
+		},
+		{
+			name:    "rft_stale_days negative",
+			mutate:  func(c *Config) { c.Metrics.RFTStaleDays = -1 },
+			wantErr: "rft_stale_days",
+		},
+		{
+			name:    "wip_limit zero",
+			mutate:  func(c *Config) { c.Metrics.WIPLimit = 0 },
+			wantErr: "wip_limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base()
+			tt.mutate(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() = nil, want error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Validate() error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_MetricsDisabledSkipsThresholdChecks(t *testing.T) {
+	// When disabled the block is inert, so invalid values shouldn't break Load.
+	cfg := &Config{
+		Organization:    "org",
+		Projects:        []string{"p"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Metrics: MetricsConfig{
+			Enabled:      false,
+			IntervalDays: 0, // would be invalid if enabled
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() with disabled metrics = %v, want nil", err)
+	}
+}

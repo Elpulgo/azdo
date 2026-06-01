@@ -22,7 +22,18 @@ type Config struct {
 	PollingInterval int               `mapstructure:"polling_interval"`
 	Theme           string            `mapstructure:"theme"`
 	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
+	Metrics         MetricsConfig     `mapstructure:"metrics"`
 	configPath      string            // internal field to store config path for saving
+}
+
+// MetricsConfig holds opt-in settings for the metrics dashboard tab.
+// The tab is hidden entirely unless Enabled is true.
+type MetricsConfig struct {
+	Enabled         bool `mapstructure:"enabled"`
+	IntervalDays    int  `mapstructure:"interval_days"`     // window for points-closed / velocity
+	ActiveStaleDays int  `mapstructure:"active_stale_days"` // dwell in Active above this flags the item
+	RFTStaleDays    int  `mapstructure:"rft_stale_days"`    // dwell in Ready for Test above this flags the item
+	WIPLimit        int  `mapstructure:"wip_limit"`         // in-flight strictly above this marks a user overloaded
 }
 
 // validDisabledPanes lists the pane names that can be disabled.
@@ -103,6 +114,11 @@ func parseProjects(raw []interface{}) ([]string, map[string]string) {
 const (
 	DefaultPollingInterval = 60 // seconds
 	DefaultTheme           = "dark"
+
+	DefaultMetricsIntervalDays    = 14 // days
+	DefaultMetricsActiveStaleDays = 3
+	DefaultMetricsRFTStaleDays    = 2
+	DefaultMetricsWIPLimit        = 4
 )
 
 // GetPath returns the path to the config file
@@ -150,6 +166,11 @@ func LoadFrom(configPath string) (*Config, error) {
 	// Set defaults
 	v.SetDefault("polling_interval", DefaultPollingInterval)
 	v.SetDefault("theme", DefaultTheme)
+	v.SetDefault("metrics.enabled", false)
+	v.SetDefault("metrics.interval_days", DefaultMetricsIntervalDays)
+	v.SetDefault("metrics.active_stale_days", DefaultMetricsActiveStaleDays)
+	v.SetDefault("metrics.rft_stale_days", DefaultMetricsRFTStaleDays)
+	v.SetDefault("metrics.wip_limit", DefaultMetricsWIPLimit)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -275,6 +296,21 @@ func (c *Config) Validate() error {
 	for _, p := range c.DisabledPanes {
 		if !validDisabledPanes[p] {
 			return fmt.Errorf("invalid disabled pane %q: only 'pipelines' and 'workitems' can be disabled", p)
+		}
+	}
+
+	if c.Metrics.Enabled {
+		if c.Metrics.IntervalDays <= 0 {
+			return fmt.Errorf("metrics.interval_days must be > 0, got %d", c.Metrics.IntervalDays)
+		}
+		if c.Metrics.ActiveStaleDays < 0 {
+			return fmt.Errorf("metrics.active_stale_days must be >= 0, got %d", c.Metrics.ActiveStaleDays)
+		}
+		if c.Metrics.RFTStaleDays < 0 {
+			return fmt.Errorf("metrics.rft_stale_days must be >= 0, got %d", c.Metrics.RFTStaleDays)
+		}
+		if c.Metrics.WIPLimit <= 0 {
+			return fmt.Errorf("metrics.wip_limit must be > 0, got %d", c.Metrics.WIPLimit)
 		}
 	}
 

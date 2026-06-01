@@ -25,3 +25,14 @@ polling_interval: 60
 # Custom themes: Place JSON theme files in ~/.config/azdo-tui/themes/
 # Example: If you have ~/.config/azdo-tui/themes/mytheme.json, use: theme: mytheme
 theme: dark
+
+# Metrics tab (opt-in, management dashboard). Disabled unless enabled: true.
+# When enabled a fourth tab surfaces per-user WIP, stuck-item flags, and
+# points-closed over the configured interval.
+#
+# metrics:
+#   enabled: false
+#   interval_days: 14         # window for "points closed" / velocity
+#   active_stale_days: 3      # dwell in Active above this flags the item
+#   rft_stale_days: 2         # dwell in Ready for Test above this flags the item
+#   wip_limit: 4              # in-flight strictly above this marks a user overloaded

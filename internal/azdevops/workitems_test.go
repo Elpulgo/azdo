@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkItem_StateIcon(t *testing.T) {
@@ -716,6 +717,183 @@ func TestClient_GetWorkItems_RequestsTagsField(t *testing.T) {
 
 	if !strings.Contains(capturedPath, "System.Tags") {
 		t.Errorf("GetWorkItems request must include System.Tags field.\nGot path: %s", capturedPath)
+	}
+}
+
+func TestWorkItem_TimeInCurrentState(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		stateChangeDate time.Time
+		want            time.Duration
+	}{
+		{
+			name:            "zero StateChangeDate returns 0",
+			stateChangeDate: time.Time{},
+			want:            0,
+		},
+		{
+			name:            "3 days ago",
+			stateChangeDate: now.Add(-3 * 24 * time.Hour),
+			want:            3 * 24 * time.Hour,
+		},
+		{
+			name:            "2 hours ago",
+			stateChangeDate: now.Add(-2 * time.Hour),
+			want:            2 * time.Hour,
+		},
+		{
+			name:            "exactly now",
+			stateChangeDate: now,
+			want:            0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wi := WorkItem{Fields: WorkItemFields{StateChangeDate: tt.stateChangeDate}}
+			got := wi.TimeInCurrentState(now)
+			if got != tt.want {
+				t.Errorf("TimeInCurrentState() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkItem_EffectivePoints(t *testing.T) {
+	tests := []struct {
+		name        string
+		storyPoints float64
+		want        float64
+	}{
+		{name: "zero points", storyPoints: 0, want: 0},
+		{name: "small integer points", storyPoints: 3, want: 3},
+		{name: "fractional points", storyPoints: 1.5, want: 1.5},
+		{name: "large points", storyPoints: 21, want: 21},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wi := WorkItem{Fields: WorkItemFields{StoryPoints: tt.storyPoints}}
+			got := wi.EffectivePoints()
+			if got != tt.want {
+				t.Errorf("EffectivePoints() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkItem_IsCompletedSince(t *testing.T) {
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		state      string
+		closedDate time.Time
+		want       bool
+	}{
+		{
+			name:       "active item is never completed",
+			state:      "Active",
+			closedDate: start.Add(5 * 24 * time.Hour),
+			want:       false,
+		},
+		{
+			name:       "closed item with zero ClosedDate",
+			state:      "Closed",
+			closedDate: time.Time{},
+			want:       false,
+		},
+		{
+			name:       "closed before interval start",
+			state:      "Closed",
+			closedDate: start.Add(-1 * 24 * time.Hour),
+			want:       false,
+		},
+		{
+			name:       "closed exactly at interval start is excluded",
+			state:      "Closed",
+			closedDate: start,
+			want:       false,
+		},
+		{
+			name:       "closed inside the interval",
+			state:      "Closed",
+			closedDate: start.Add(3 * 24 * time.Hour),
+			want:       true,
+		},
+		{
+			name:       "case-insensitive state match",
+			state:      "closed",
+			closedDate: start.Add(3 * 24 * time.Hour),
+			want:       true,
+		},
+		{
+			name:       "new state is not completed",
+			state:      "New",
+			closedDate: start.Add(3 * 24 * time.Hour),
+			want:       false,
+		},
+		{
+			name:       "ready for test is not completed",
+			state:      "Ready for Test",
+			closedDate: start.Add(3 * 24 * time.Hour),
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wi := WorkItem{Fields: WorkItemFields{
+				State:      tt.state,
+				ClosedDate: tt.closedDate,
+			}}
+			got := wi.IsCompletedSince(start)
+			if got != tt.want {
+				t.Errorf("IsCompletedSince() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_GetWorkItems_RequestsMetricsFields(t *testing.T) {
+	var capturedPath string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.String()
+		response := WorkItemsResponse{
+			Count: 1,
+			Value: []WorkItem{{ID: 1, Fields: WorkItemFields{Title: "Item"}}},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.GetWorkItems([]int{1})
+	if err != nil {
+		t.Fatalf("GetWorkItems() error = %v", err)
+	}
+
+	required := []string{
+		"Microsoft.VSTS.Scheduling.StoryPoints",
+		"Microsoft.VSTS.Common.StateChangeDate",
+		"Microsoft.VSTS.Common.ActivatedDate",
+		"Microsoft.VSTS.Common.ClosedDate",
+		"System.CreatedDate",
+	}
+	for _, f := range required {
+		if !strings.Contains(capturedPath, f) {
+			t.Errorf("GetWorkItems request must include %s field.\nGot path: %s", f, capturedPath)
+		}
 	}
 }
 

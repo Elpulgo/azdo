@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/metrics"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
@@ -37,6 +38,7 @@ const (
 	TabPullRequests Tab = iota // Pull Requests tab (key '1')
 	TabWorkItems               // Work Items tab (key '2')
 	TabPipelines               // Pipelines tab (key '3')
+	TabMetrics                 // Metrics dashboard tab (opt-in via metrics.enabled)
 )
 
 // Layout constants for the bordered content area.
@@ -68,6 +70,7 @@ type Model struct {
 	pipelinesView    pipelines.Model
 	pullRequestsView pullrequests.Model
 	workItemsView    workitems.Model
+	metricsView      metrics.Model
 	logo             *components.Logo
 	statusBar        *components.StatusBar
 	helpModal        *components.HelpModal
@@ -117,6 +120,19 @@ func (m Model) prevTab() Tab {
 	return m.enabledTabs[0]
 }
 
+// equalSlices reports whether two string slices have identical contents.
+func equalSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // buildEnabledTabs returns the list of enabled tabs based on config.
 func buildEnabledTabs(cfg *config.Config) []Tab {
 	tabs := []Tab{TabPullRequests} // always enabled
@@ -125,6 +141,9 @@ func buildEnabledTabs(cfg *config.Config) []Tab {
 	}
 	if cfg.IsPaneEnabled("pipelines") {
 		tabs = append(tabs, TabPipelines)
+	}
+	if cfg.Metrics.Enabled {
+		tabs = append(tabs, TabMetrics)
 	}
 	return tabs
 }
@@ -137,6 +156,8 @@ func (m Model) initTabCmd(tab Tab) tea.Cmd {
 		return m.pullRequestsView.Init()
 	case TabWorkItems:
 		return m.workItemsView.Init()
+	case TabMetrics:
+		return m.metricsView.Init()
 	}
 	return nil
 }
@@ -211,8 +232,14 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	if cfg.IsPaneEnabled("pipelines") {
 		enabledTabNames = append(enabledTabNames, "Pipelines")
 	}
-	if len(enabledTabNames) < 3 {
-		// Build key hint like "1/2" and description like "PR / Pipelines"
+	if cfg.Metrics.Enabled {
+		enabledTabNames = append(enabledTabNames, "Metrics")
+	}
+	// Rebuild the tabs help line whenever the set differs from the default
+	// "1/2/3 — PR / Work Items / Pipelines" (e.g. a pane disabled, metrics
+	// enabled, or both).
+	defaultTabs := []string{"PR", "Work Items", "Pipelines"}
+	if !equalSlices(enabledTabNames, defaultTabs) {
 		keys := make([]string, len(enabledTabNames))
 		for i := range enabledTabNames {
 			keys[i] = fmt.Sprintf("%d", i+1)
@@ -221,6 +248,18 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 			strings.Join(keys, "/"),
 			strings.Join(enabledTabNames, " / "),
 		)
+	}
+	if cfg.Metrics.Enabled {
+		helpModal.AddSection("Metrics tab", []components.HelpBinding{
+			{Key: "Tab", Description: "Switch focus between stuck-items and per-user pane"},
+			{Key: "↑/↓", Description: "Move cursor in focused pane (auto-scrolls)"},
+			{Key: "pgup/pgdn", Description: "Scroll dashboard body"},
+			{Key: "f", Description: "Cycle flag filter (All / Active-stale / RFT-stale)"},
+			{Key: "T", Description: "Filter by tag"},
+			{Key: "esc", Description: "Clear tag filter"},
+			{Key: "o", Description: "Open focused item in browser"},
+			{Key: "r", Description: "Refresh metrics"},
+		})
 	}
 
 	// Set version info in help modal
@@ -267,6 +306,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(client, appStyles),
+		metricsView:      metrics.NewModelWithStyles(client, cfg, appStyles),
 		statusBar:        statusBar,
 		helpModal:        helpModal,
 		errorModal:       errorModal,
@@ -382,8 +422,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themePicker.SetSize(m.width, m.height)
 			m.themePicker.Show()
 			return m, nil
-		case "1", "2", "3":
-			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2
+		case "1", "2", "3", "4":
+			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2, "4"→3
 			if idx >= 0 && idx < len(m.enabledTabs) {
 				target := m.enabledTabs[idx]
 				if target != m.activeTab {
@@ -472,6 +512,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
 		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
+		m.metricsView = metrics.NewModelWithStyles(m.client, m.config, m.styles)
 
 		// CRITICAL: Set window size for all views before they try to render
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
@@ -481,6 +522,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
 			m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 			m.workItemsView, _ = m.workItemsView.Update(contentSize)
+			m.metricsView, _ = m.metricsView.Update(contentSize)
 		}
 
 		// Re-initialize views to fetch data again
@@ -490,6 +532,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.activeTab == TabWorkItems {
 			cmds = append(cmds, m.workItemsView.Init())
+		}
+		if m.activeTab == TabMetrics {
+			cmds = append(cmds, m.metricsView.Init())
 		}
 
 		return m, tea.Batch(cmds...)
@@ -507,6 +552,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
+		m.metricsView, _ = m.metricsView.Update(contentSize)
 		return m, nil
 
 	case updateCheckMsg:
@@ -570,6 +616,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pullRequestsView, cmd = m.pullRequestsView.Update(msg)
 	case TabWorkItems:
 		m.workItemsView, cmd = m.workItemsView.Update(msg)
+	case TabMetrics:
+		m.metricsView, cmd = m.metricsView.Update(msg)
 	default:
 		m.pipelinesView, cmd = m.pipelinesView.Update(msg)
 	}
@@ -594,6 +642,8 @@ func (m Model) isActiveViewSearching() bool {
 		return m.pullRequestsView.IsSearching()
 	case TabWorkItems:
 		return m.workItemsView.IsSearching()
+	case TabMetrics:
+		return m.metricsView.IsSearching()
 	}
 	return false
 }
@@ -610,6 +660,8 @@ func (m Model) isActiveViewCapturingInput() bool {
 		return m.workItemsView.IsTagPickerVisible() || m.workItemsView.IsStatePickerVisible()
 	case TabPipelines:
 		return m.pipelinesView.IsStatusPickerVisible()
+	case TabMetrics:
+		return m.metricsView.IsTagPickerVisible()
 	}
 	return false
 }
@@ -661,6 +713,8 @@ func (m *Model) resizeActiveViewIfNeeded() {
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 	case TabWorkItems:
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
+	case TabMetrics:
+		m.metricsView, _ = m.metricsView.Update(contentSize)
 	default:
 		m.pipelinesView, _ = m.pipelinesView.Update(contentSize)
 	}
@@ -680,6 +734,9 @@ func (m *Model) syncStatusBarContext() {
 	case TabWorkItems:
 		hasContextBar = m.workItemsView.HasContextBar()
 		contextItems = m.workItemsView.GetContextItems()
+	case TabMetrics:
+		hasContextBar = m.metricsView.HasContextBar()
+		contextItems = m.metricsView.GetContextItems()
 	default:
 		hasContextBar = m.pipelinesView.HasContextBar()
 		contextItems = m.pipelinesView.GetContextItems()
@@ -727,6 +784,23 @@ func (m Model) pullRequestsKeybindings() string {
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }
 
+// metricsKeybindings returns the keybindings string for the metrics dashboard.
+func (m Model) metricsKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("Tab") + m.styles.Description.Render(" focus pane") + sep +
+		m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("T") + m.styles.Description.Render(" tag") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" flag filter") + sep +
+		m.styles.Key.Render("o") + m.styles.Description.Render(" open") + sep +
+		m.styles.Key.Render("esc") + m.styles.Description.Render(" clear tag") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
 // pipelinesKeybindings returns the keybindings string for the pipelines list view.
 func (m Model) pipelinesKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
@@ -757,6 +831,7 @@ func (m Model) renderTabBar(innerWidth int) string {
 		TabPullRequests: "Pull Requests",
 		TabWorkItems:    "Work Items",
 		TabPipelines:    "Pipelines",
+		TabMetrics:      "Metrics",
 	}
 
 	var renderedTabs []string
@@ -829,6 +904,12 @@ func (m Model) View() string {
 		return m.pipelinesView.StatusPickerView()
 	}
 
+	// Metrics tag picker overlay
+	if m.activeTab == TabMetrics && m.metricsView.IsTagPickerVisible() {
+		m.metricsView.SetTagPickerSize(m.width, m.height)
+		return m.metricsView.TagPickerView()
+	}
+
 	// Render tab bar in its own bordered box
 	contentSize := m.contentViewSize()
 	tabBar := m.renderTabBar(contentSize.Width)
@@ -853,6 +934,12 @@ func (m Model) View() string {
 		contextItems = m.workItemsView.GetContextItems()
 		scrollPercent = m.workItemsView.GetScrollPercent()
 		statusMessage = m.workItemsView.GetStatusMessage()
+	case TabMetrics:
+		content = m.metricsView.View()
+		hasContextBar = m.metricsView.HasContextBar()
+		contextItems = m.metricsView.GetContextItems()
+		scrollPercent = m.metricsView.GetScrollPercent()
+		statusMessage = m.metricsView.GetStatusMessage()
 	default:
 		content = m.pipelinesView.View()
 		hasContextBar = m.pipelinesView.HasContextBar()
@@ -868,6 +955,8 @@ func (m Model) View() string {
 		m.statusBar.SetKeybindings(m.workItemsKeybindings())
 	} else if m.activeTab == TabPipelines && !hasContextBar {
 		m.statusBar.SetKeybindings(m.pipelinesKeybindings())
+	} else if m.activeTab == TabMetrics && !hasContextBar {
+		m.statusBar.SetKeybindings(m.metricsKeybindings())
 	} else {
 		m.statusBar.SetKeybindings("")
 	}
@@ -906,6 +995,12 @@ func (m Model) View() string {
 		case m.pullRequestsView.IsAsReviewerActive():
 			m.statusBar.SetFilterLabel("Reviewer")
 		default:
+			m.statusBar.ClearFilterLabel()
+		}
+	} else if m.activeTab == TabMetrics {
+		if m.metricsView.IsTagFilterActive() {
+			m.statusBar.SetFilterLabel("Tag: " + m.metricsView.ActiveTag())
+		} else {
 			m.statusBar.ClearFilterLabel()
 		}
 	} else {
