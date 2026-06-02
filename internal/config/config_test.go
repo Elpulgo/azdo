@@ -836,6 +836,35 @@ theme: dark
 	if cfg.Metrics.WIPLimit != DefaultMetricsWIPLimit {
 		t.Errorf("Metrics.WIPLimit = %d, want %d", cfg.Metrics.WIPLimit, DefaultMetricsWIPLimit)
 	}
+	if cfg.Metrics.RunOneShotBackfill {
+		t.Error("Metrics.RunOneShotBackfill = true by default; want false (opt-in)")
+	}
+}
+
+func TestLoad_MetricsRunOneShotBackfill_Parsed(t *testing.T) {
+	tempDir := t.TempDir()
+	configFile := filepath.Join(tempDir, "config.yaml")
+	configContent := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+metrics:
+  enabled: true
+  run_one_shot_backfill: true
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configFile)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if !cfg.Metrics.RunOneShotBackfill {
+		t.Error("Metrics.RunOneShotBackfill = false, want true")
+	}
 }
 
 func TestLoad_MetricsBlockParsed(t *testing.T) {

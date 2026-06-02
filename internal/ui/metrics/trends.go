@@ -89,8 +89,12 @@ func (m Model) renderTrends() string {
 	b.WriteString(strings.Repeat("─", lipglossSafeWidth(rangeLine)))
 	b.WriteString("\n")
 
-	// Per-user rows
-	for _, row := range m.trendRows {
+	// Per-user rows, with a blank line between them so the 4-line block per
+	// user reads as one group.
+	for i, row := range m.trendRows {
+		if i > 0 {
+			b.WriteString("\n")
+		}
 		m.appendTrendRow(&b, row.User, row.Cells)
 	}
 
@@ -107,28 +111,92 @@ func (m Model) renderTrends() string {
 func (m Model) appendTrendRow(b *strings.Builder, user string, cells []coremetrics.TrendCell) {
 	gap := strings.Repeat(" ", trendCellGap)
 
-	line1 := padCol(user, trendUserColW)
-	line2 := padCol("", trendUserColW)
+	// One line per metric so each value gets its own row — easier to scan than
+	// the previous 2x2 layout.
+	userCell := padCol(user, trendUserColW)
+	if m.styles != nil {
+		userCell = m.styles.Header.Render(userCell)
+	}
+	indent := padCol("", trendUserColW)
+
+	linePts := userCell
+	lineWIP := indent
+	lineStuck := indent
+	lineCy := indent
+
 	for _, c := range cells {
 		wipMark := ""
 		if c.OverloadedAnyDay {
 			wipMark = "⚠"
 		}
-		cellL1 := fmt.Sprintf("pts:%s  wip:%s%s",
-			fmtPoints(c.Points), fmtFloat1(c.AvgWIP), wipMark)
-		cellL2 := fmt.Sprintf("stuck:%d  cy:%s",
-			c.StuckCount, fmtDwell(c.CycleTime))
-		line1 += gap + padCol(cellL1, trendCellW)
-		line2 += gap + padCol(cellL2, trendCellW)
+		ptsText := fmt.Sprintf("pts:%s", fmtPoints(c.Points))
+		wipText := fmt.Sprintf("wip:%s%s", fmtFloat1(c.AvgWIP), wipMark)
+		stuckText := fmt.Sprintf("stuck:%d", c.StuckCount)
+		cyText := fmt.Sprintf("cy:%s", fmtDwell(c.CycleTime))
+
+		linePts += gap + padCol(m.colorPoints(ptsText, c.Points), trendCellW)
+		lineWIP += gap + padCol(m.colorWIP(wipText, c), trendCellW)
+		lineStuck += gap + padCol(m.colorStuck(stuckText, c.StuckCount), trendCellW)
+		lineCy += gap + padCol(m.colorCycle(cyText, c.CycleTime), trendCellW)
 	}
-	if m.styles != nil {
-		line1 = m.styles.Value.Render(line1)
-		line2 = m.styles.Muted.Render(line2)
+
+	b.WriteString(linePts)
+	b.WriteString("\n")
+	b.WriteString(lineWIP)
+	b.WriteString("\n")
+	b.WriteString(lineStuck)
+	b.WriteString("\n")
+	b.WriteString(lineCy)
+	b.WriteString("\n")
+}
+
+// colorPoints: green when there's something to celebrate, muted at zero.
+func (m Model) colorPoints(s string, pts float64) string {
+	if m.styles == nil {
+		return s
 	}
-	b.WriteString(line1)
-	b.WriteString("\n")
-	b.WriteString(line2)
-	b.WriteString("\n")
+	if pts > 0 {
+		return m.styles.Success.Render(s)
+	}
+	return m.styles.Muted.Render(s)
+}
+
+// colorWIP: yellow if the user was overloaded on any day in the window
+// (the ⚠ marker), neutral when in flight, muted at zero.
+func (m Model) colorWIP(s string, c coremetrics.TrendCell) string {
+	if m.styles == nil {
+		return s
+	}
+	if c.OverloadedAnyDay {
+		return m.styles.Warning.Render(s)
+	}
+	if c.AvgWIP > 0 {
+		return m.styles.Value.Render(s)
+	}
+	return m.styles.Muted.Render(s)
+}
+
+// colorStuck: red whenever a single stuck item is in the window, muted at zero.
+func (m Model) colorStuck(s string, n int) string {
+	if m.styles == nil {
+		return s
+	}
+	if n > 0 {
+		return m.styles.Error.Render(s)
+	}
+	return m.styles.Muted.Render(s)
+}
+
+// colorCycle: neutral. No clear universal threshold for "too slow" — we leave
+// the value uncoloured rather than guessing.
+func (m Model) colorCycle(s string, d time.Duration) string {
+	if m.styles == nil {
+		return s
+	}
+	if d > 0 {
+		return m.styles.Value.Render(s)
+	}
+	return m.styles.Muted.Render(s)
 }
 
 // computeTeamTotal aggregates per-user cells into a team-total row.

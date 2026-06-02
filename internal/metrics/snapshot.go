@@ -9,10 +9,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 )
+
+// appendMu serializes AppendSnapshots calls so the daily snapshot writer and
+// the one-shot backfill cannot race on the read-merge-write-rename sequence.
+// Calls are seconds-scale at most and rare in practice, so a single
+// process-wide mutex is the simplest correct choice.
+var appendMu sync.Mutex
 
 // DefaultSnapshotPath returns the standard snapshot file location
 // (~/.config/azdo-tui/metrics.jsonl). The parent directory is not created;
@@ -94,6 +101,9 @@ func ReadSnapshots(path string) ([]Snapshot, error) {
 // retention measured from now. Writes atomically via a temp file + rename so
 // the caller never sees a partially-written file.
 func AppendSnapshots(path string, newSnaps []Snapshot, retention time.Duration, now time.Time) error {
+	appendMu.Lock()
+	defer appendMu.Unlock()
+
 	existing, err := ReadSnapshots(path)
 	if err != nil {
 		return err

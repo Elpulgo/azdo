@@ -161,9 +161,15 @@ func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *sty
 }
 
 // Init kicks off the initial live fetch and loads any persisted snapshot data
-// + sprint selection in parallel.
+// + sprint selection in parallel. If the user has opted into the one-shot
+// /updates backfill, that cmd is dispatched alongside (a marker file inside
+// the cmd short-circuits it on subsequent launches).
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.fetch(), loadSnapshotsCmd())
+	cmds := []tea.Cmd{m.fetch(), loadSnapshotsCmd()}
+	if m.config != nil && m.config.Metrics.RunOneShotBackfill {
+		cmds = append(cmds, runBackfillCmd(m.client, m.now()))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles incoming messages.
@@ -219,6 +225,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		// Reload from disk so the Trends view reflects the new rows.
 		return m, loadSnapshotsCmd()
+
+	case backfillDoneMsg:
+		switch {
+		case msg.err != nil:
+			m.statusMessage = "Backfill failed: " + msg.err.Error()
+			return m, nil
+		case msg.alreadyDone:
+			// Quiet: backfill already ran on a previous launch.
+			return m, nil
+		default:
+			m.statusMessage = fmt.Sprintf(
+				"Backfill complete · %d rows from %d items, %d skipped — set run_one_shot_backfill: false to stop seeing this",
+				msg.saved, msg.total, msg.skipped,
+			)
+			// Reload so Trends picks up the synthesized rows.
+			return m, loadSnapshotsCmd()
+		}
 
 	case snapshotsLoadedMsg:
 		if msg.err != nil {

@@ -204,3 +204,45 @@ func equalStringSlices(a, b []string) bool {
 	}
 	return true
 }
+
+// TestAppendSnapshots_ConcurrentCallsPreserveAllRows verifies that two
+// concurrent writers (daily snapshot + one-shot backfill in PR 3) do not
+// clobber each other. Without a mutex, the merge-then-rename pattern is
+// last-rename-wins and rows from the loser are dropped.
+func TestAppendSnapshots_ConcurrentCallsPreserveAllRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.jsonl")
+	const perWriter = 50
+
+	a := make([]Snapshot, 0, perWriter)
+	b := make([]Snapshot, 0, perWriter)
+	for i := 0; i < perWriter; i++ {
+		a = append(a, Snapshot{TS: "2026-05-28", ID: 1000 + i, State: "Active", Source: SourceSnapshot})
+		b = append(b, Snapshot{TS: "2026-05-28", ID: 2000 + i, State: "Active", Source: SourceUpdates})
+	}
+
+	done := make(chan error, 2)
+	go func() { done <- AppendSnapshots(path, a, 90*24*time.Hour, snapNow) }()
+	go func() { done <- AppendSnapshots(path, b, 90*24*time.Hour, snapNow) }()
+	for i := 0; i < 2; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("writer %d: %v", i, err)
+		}
+	}
+
+	got, err := ReadSnapshots(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	ids := make(map[int]bool, len(got))
+	for _, s := range got {
+		ids[s.ID] = true
+	}
+	for i := 0; i < perWriter; i++ {
+		if !ids[1000+i] {
+			t.Fatalf("missing row %d from writer A — concurrent writes clobbered (rows kept: %d)", 1000+i, len(got))
+		}
+		if !ids[2000+i] {
+			t.Fatalf("missing row %d from writer B — concurrent writes clobbered (rows kept: %d)", 2000+i, len(got))
+		}
+	}
+}

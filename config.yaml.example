@@ -32,7 +32,10 @@ theme: dark
 #
 # metrics:
 #   enabled: false
-#   interval_days: 14         # window for "points closed" / velocity
-#   active_stale_days: 3      # dwell in Active above this flags the item
-#   rft_stale_days: 2         # dwell in Ready for Test above this flags the item
-#   wip_limit: 4              # in-flight strictly above this marks a user overloaded
+#   interval_days: 14            # window for "points closed" / velocity
+#   active_stale_days: 3         # dwell in Active above this flags the item
+#   rft_stale_days: 2            # dwell in Ready for Test above this flags the item
+#   wip_limit: 4                 # in-flight strictly above this marks a user overloaded
+#   run_one_shot_backfill: false # set true once to seed 90 days of history via /updates;
+#                                # creates a marker file so it never runs twice. Delete
+#                                # ~/.config/azdo-tui/.metrics-backfill-done to re-run.

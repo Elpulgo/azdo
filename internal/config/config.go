@@ -29,11 +29,12 @@ type Config struct {
 // MetricsConfig holds opt-in settings for the metrics dashboard tab.
 // The tab is hidden entirely unless Enabled is true.
 type MetricsConfig struct {
-	Enabled         bool `mapstructure:"enabled"`
-	IntervalDays    int  `mapstructure:"interval_days"`     // window for points-closed / velocity
-	ActiveStaleDays int  `mapstructure:"active_stale_days"` // dwell in Active above this flags the item
-	RFTStaleDays    int  `mapstructure:"rft_stale_days"`    // dwell in Ready for Test above this flags the item
-	WIPLimit        int  `mapstructure:"wip_limit"`         // in-flight strictly above this marks a user overloaded
+	Enabled            bool `mapstructure:"enabled"`
+	IntervalDays       int  `mapstructure:"interval_days"`         // window for points-closed / velocity
+	ActiveStaleDays    int  `mapstructure:"active_stale_days"`     // dwell in Active above this flags the item
+	RFTStaleDays       int  `mapstructure:"rft_stale_days"`        // dwell in Ready for Test above this flags the item
+	WIPLimit           int  `mapstructure:"wip_limit"`             // in-flight strictly above this marks a user overloaded
+	RunOneShotBackfill bool `mapstructure:"run_one_shot_backfill"` // PR 3: opt-in 90-day /updates seed
 }
 
 // validDisabledPanes lists the pane names that can be disabled.
@@ -171,6 +172,7 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.active_stale_days", DefaultMetricsActiveStaleDays)
 	v.SetDefault("metrics.rft_stale_days", DefaultMetricsRFTStaleDays)
 	v.SetDefault("metrics.wip_limit", DefaultMetricsWIPLimit)
+	v.SetDefault("metrics.run_one_shot_backfill", false)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {

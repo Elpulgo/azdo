@@ -401,3 +401,38 @@ func TestModel_TagsSelectedMsg_UpdatesSelection(t *testing.T) {
 		t.Errorf("selectedSprints = %v, want [sprint-42]", m.selectedSprints)
 	}
 }
+
+// TestModel_BackfillDoneMsg_SuccessSetsStatus verifies the status footer
+// communicates the backfill result and includes the disable-hint.
+func TestModel_BackfillDoneMsg_SuccessSetsStatus(t *testing.T) {
+	m := makeModel()
+	m, _ = m.Update(backfillDoneMsg{total: 47, saved: 1234, skipped: 2})
+	if !strings.Contains(m.statusMessage, "1234") {
+		t.Errorf("statusMessage = %q, want it to mention saved=1234", m.statusMessage)
+	}
+	if !strings.Contains(m.statusMessage, "run_one_shot_backfill") {
+		t.Errorf("statusMessage = %q, want it to hint about disabling run_one_shot_backfill", m.statusMessage)
+	}
+}
+
+// TestModel_BackfillDoneMsg_ErrorSurfaced verifies a failure is shown to the
+// user (so they know to retry / investigate).
+func TestModel_BackfillDoneMsg_ErrorSurfaced(t *testing.T) {
+	m := makeModel()
+	m, _ = m.Update(backfillDoneMsg{err: errors.New("HTTP 503")})
+	if !strings.Contains(m.statusMessage, "503") {
+		t.Errorf("statusMessage = %q, want it to surface the error", m.statusMessage)
+	}
+}
+
+// TestModel_BackfillDoneMsg_AlreadyDoneIsQuiet keeps the footer clean on the
+// common case (backfill ran previously, marker is present).
+func TestModel_BackfillDoneMsg_AlreadyDoneIsQuiet(t *testing.T) {
+	m := makeModel()
+	m.statusMessage = ""
+	m, _ = m.Update(backfillDoneMsg{alreadyDone: true})
+	if m.statusMessage != "" {
+		t.Errorf("statusMessage = %q, want empty for alreadyDone", m.statusMessage)
+	}
+}
+

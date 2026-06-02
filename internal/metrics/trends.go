@@ -99,11 +99,11 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 	users := make(map[string]bool)
 	// per (user, windowIdx) accumulators
 	type acc struct {
-		points          float64
-		dailyWIP        map[string]map[int]struct{}     // day → set of item IDs in-flight
+		closedPoints    map[int]float64                        // item → points, summed once at finalize
+		dailyWIP        map[string]map[int]struct{}            // day → set of item IDs in-flight
 		stateDays       map[int]map[string]map[string]struct{} // item → state → set of TS
-		closedItemFirst map[int]time.Time               // item → first-Active observation
-		closedItemDone  map[int]time.Time               // item → first-Closed observation
+		closedItemFirst map[int]time.Time                      // item → first-Active observation
+		closedItemDone  map[int]time.Time                      // item → first-Closed observation
 	}
 	cells := make([][]*acc, len(windows))
 	for i := range cells {
@@ -120,6 +120,7 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 		a := store[k]
 		if a == nil {
 			a = &acc{
+				closedPoints:    make(map[int]float64),
 				dailyWIP:        make(map[string]map[int]struct{}),
 				stateDays:       make(map[int]map[string]map[string]struct{}),
 				closedItemFirst: make(map[int]time.Time),
@@ -133,6 +134,11 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 	_ = th // thresholds applied at finalize, see stuck-count calc below
 
 	for _, s := range snaps {
+		// Skip unassigned rows — they're not a developer signal and would
+		// otherwise produce a no-owner row in the grid.
+		if s.AssignedTo == "" || s.AssignedTo == "-" {
+			continue
+		}
 		d, err := time.Parse("2006-01-02", s.TS)
 		if err != nil {
 			continue
@@ -177,7 +183,10 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 				if cur, ok := a.closedItemDone[s.ID]; !ok || d.Before(cur) {
 					a.closedItemDone[s.ID] = d
 				}
-				a.points += s.Points
+				// Record the item's points keyed by ID — multiple daily Closed
+				// rows for the same item overwrite the same key, so the total
+				// is summed once per distinct item at finalize.
+				a.closedPoints[s.ID] = s.Points
 			}
 		}
 	}
@@ -251,8 +260,13 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 				}
 			}
 
+			var points float64
+			for _, p := range a.closedPoints {
+				points += p
+			}
+
 			row.Cells[wIdx] = TrendCell{
-				Points:           a.points,
+				Points:           points,
 				AvgWIP:           avg,
 				StuckCount:       len(stuckSet),
 				CycleTime:        cy,

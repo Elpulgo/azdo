@@ -85,6 +85,62 @@ func TestTrendAggregate_PointsClosed(t *testing.T) {
 	}
 }
 
+// TestTrendAggregate_SkipsUnassigned drops rows whose AssignedTo is "-" or
+// empty — unassigned work items are not a developer signal and pollute the
+// per-user grid with a row no one owns.
+func TestTrendAggregate_SkipsUnassigned(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	snaps := []Snapshot{
+		snap("2026-05-10", 1, "Closed", "Alice", 3, "sprint-42"),
+		snap("2026-05-11", 2, "Closed", "-", 5, "sprint-42"),
+		snap("2026-05-12", 3, "Closed", "", 7, "sprint-42"),
+	}
+	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-13")}
+
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4}, now)
+
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 (only Alice); got users: %v", len(rows), rowNames(rows))
+	}
+	if rows[0].User != "Alice" {
+		t.Errorf("row user = %q, want Alice", rows[0].User)
+	}
+}
+
+func rowNames(rows []TrendRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.User
+	}
+	return out
+}
+
+// TestTrendAggregate_PointsClosed_NotDoubleCountedAcrossDays guards against a
+// bug where each daily Closed snapshot row added its points to the total.
+// With 90 days of backfill, a 5-pt item closed once could contribute 5*N to
+// the sprint, inflating "pts" by an order of magnitude.
+func TestTrendAggregate_PointsClosed_NotDoubleCountedAcrossDays(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	// Item 1 worth 5 pts is closed on day 1 of the window and stays Closed
+	// for 5 days. Item 2 worth 8 pts is closed on day 4 and stays Closed for
+	// 2 days. Each item should contribute its own points exactly once.
+	snaps := []Snapshot{
+		snap("2026-05-10", 1, "Closed", "Alice", 5, "sprint-42"),
+		snap("2026-05-11", 1, "Closed", "Alice", 5, "sprint-42"),
+		snap("2026-05-12", 1, "Closed", "Alice", 5, "sprint-42"),
+		snap("2026-05-13", 1, "Closed", "Alice", 5, "sprint-42"),
+		snap("2026-05-14", 1, "Closed", "Alice", 5, "sprint-42"),
+		snap("2026-05-13", 2, "Closed", "Alice", 8, "sprint-42"),
+		snap("2026-05-14", 2, "Closed", "Alice", 8, "sprint-42"),
+	}
+	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-15")}
+
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4}, now)
+	if got, want := rows[0].Cells[0].Points, 13.0; got != want {
+		t.Errorf("Points = %v, want %v (5 + 8, not 5*5 + 8*2 = 41)", got, want)
+	}
+}
+
 func TestTrendAggregate_AvgWIPAcrossDays(t *testing.T) {
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	// Window: 3 days (May 10-12). Alice has 1 in-flight on day 10, 3 on day 11, 2 on day 12.
