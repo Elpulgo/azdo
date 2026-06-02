@@ -220,3 +220,82 @@ func TestClient_MetricsWorkItems_NoResults(t *testing.T) {
 		t.Errorf("expected 0 items, got %d", len(items))
 	}
 }
+
+func TestParseStateTransitions(t *testing.T) {
+	// Build a payload mimicking Azure DevOps /updates: out-of-order events,
+	// some lacking System.State or System.ChangedDate.
+	updates := []workItemUpdate{
+		{Fields: map[string]workItemFieldChange{
+			"System.State":       {NewValue: "Closed"},
+			"System.ChangedDate": {NewValue: "2026-05-15T10:00:00Z"},
+		}},
+		{Fields: map[string]workItemFieldChange{
+			// No state change in this revision (other fields updated)
+			"System.AssignedTo":  {NewValue: "Alice"},
+			"System.ChangedDate": {NewValue: "2026-05-12T10:00:00Z"},
+		}},
+		{Fields: map[string]workItemFieldChange{
+			"System.State":       {NewValue: "Active"},
+			"System.ChangedDate": {NewValue: "2026-05-10T10:00:00Z"},
+		}},
+		{Fields: map[string]workItemFieldChange{
+			"System.State":       {NewValue: "Ready for Test"},
+			"System.ChangedDate": {NewValue: "2026-05-13T10:00:00Z"},
+		}},
+		{Fields: map[string]workItemFieldChange{
+			// State change with no timestamp — skipped
+			"System.State": {NewValue: "Resolved"},
+		}},
+	}
+	got := parseStateTransitions(updates)
+	if len(got) != 3 {
+		t.Fatalf("got %d transitions, want 3 (drops the no-state and no-date entries)", len(got))
+	}
+	wantOrder := []string{"Active", "Ready for Test", "Closed"}
+	for i, w := range wantOrder {
+		if got[i].State != w {
+			t.Errorf("transition %d state = %q, want %q (sorted by time)", i, got[i].State, w)
+		}
+	}
+}
+
+func TestClient_WorkItemUpdates_ParsesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/wit/workItems/42/updates") {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		resp := workItemUpdatesResponse{
+			Value: []workItemUpdate{
+				{Fields: map[string]workItemFieldChange{
+					"System.State":       {NewValue: "Active"},
+					"System.ChangedDate": {NewValue: "2026-05-10T10:00:00Z"},
+				}},
+				{Fields: map[string]workItemFieldChange{
+					"System.State":       {NewValue: "Ready for Test"},
+					"System.ChangedDate": {NewValue: "2026-05-13T10:00:00Z"},
+				}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	transitions, err := client.WorkItemUpdates(42)
+	if err != nil {
+		t.Fatalf("WorkItemUpdates: %v", err)
+	}
+	if len(transitions) != 2 {
+		t.Fatalf("got %d transitions, want 2", len(transitions))
+	}
+	if transitions[0].State != "Active" || transitions[1].State != "Ready for Test" {
+		t.Errorf("unexpected order: %v", transitions)
+	}
+}

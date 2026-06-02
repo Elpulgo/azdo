@@ -11,19 +11,27 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// TagSelectedMsg is sent when a tag option is selected.
+// TagSelectedMsg is sent when a single tag is selected (single-select mode).
 // An empty Tag means "clear filter".
 type TagSelectedMsg struct {
 	Tag string
 }
 
-// tagOption represents a single tag choice in the picker
-type tagOption struct {
-	Name    string
-	IsClear bool // true for the "Clear filter" option
+// TagsSelectedMsg is sent when a multi-select picker is confirmed with enter.
+// An empty slice means "clear selection".
+type TagsSelectedMsg struct {
+	Tags []string
 }
 
-// TagPicker is a modal component for selecting a tag to filter by
+// tagOption represents a single tag choice in the picker
+type tagOption struct {
+	Name     string
+	IsClear  bool // true for the "Clear filter" option
+	Selected bool // multi-select mode: whether this tag is currently chosen
+}
+
+// TagPicker is a modal component for selecting tag(s) to filter by. Defaults
+// to single-select; call SetTagsMulti to switch to multi-select mode.
 type TagPicker struct {
 	styles      *styles.Styles
 	visible     bool
@@ -32,6 +40,8 @@ type TagPicker struct {
 	options     []tagOption
 	cursor      int
 	activeTag   string
+	multiSelect bool
+	title       string // overridden in multi-select mode
 	searchInput textinput.Model
 }
 
@@ -51,8 +61,11 @@ func NewTagPicker(s *styles.Styles) TagPicker {
 }
 
 // SetTags sets the available tags and positions the cursor on the active tag.
-// When activeTag is non-empty, a "Clear filter" option is prepended.
+// Single-select mode. When activeTag is non-empty, a "Clear filter" option is
+// prepended.
 func (tp *TagPicker) SetTags(tags []string, activeTag string) {
+	tp.multiSelect = false
+	tp.title = "Filter by Tag"
 	tp.activeTag = activeTag
 	tp.cursor = 0
 	tp.searchInput.SetValue("")
@@ -66,13 +79,33 @@ func (tp *TagPicker) SetTags(tags []string, activeTag string) {
 	for i, tag := range tags {
 		tp.options = append(tp.options, tagOption{Name: tag})
 		if tag == activeTag {
-			// +1 offset if "Clear filter" is present
 			offset := 0
 			if activeTag != "" {
 				offset = 1
 			}
 			tp.cursor = i + offset
 		}
+	}
+}
+
+// SetTagsMulti switches the picker into multi-select mode. `selected` is the
+// initial set of chosen tags. Confirm with enter, which emits TagsSelectedMsg.
+func (tp *TagPicker) SetTagsMulti(tags []string, selected []string) {
+	tp.multiSelect = true
+	tp.title = "Pick sprints"
+	tp.activeTag = ""
+	tp.cursor = 0
+	tp.searchInput.SetValue("")
+
+	sel := make(map[string]struct{}, len(selected))
+	for _, s := range selected {
+		sel[s] = struct{}{}
+	}
+
+	tp.options = make([]tagOption, 0, len(tags))
+	for _, tag := range tags {
+		_, isSelected := sel[tag]
+		tp.options = append(tp.options, tagOption{Name: tag, Selected: isSelected})
 	}
 }
 
@@ -156,8 +189,40 @@ func (tp TagPicker) Update(msg tea.Msg) (TagPicker, tea.Cmd) {
 		}
 		return tp, nil
 
+	case key.Matches(keyMsg, key.NewBinding(key.WithKeys(" "))):
+		// Space toggles selection in multi-select mode; ignored in single-select.
+		if !tp.multiSelect {
+			break
+		}
+		opts := tp.visibleOptions()
+		if len(opts) == 0 || tp.cursor >= len(opts) {
+			return tp, nil
+		}
+		name := opts[tp.cursor].Name
+		for i := range tp.options {
+			if tp.options[i].Name == name {
+				tp.options[i].Selected = !tp.options[i].Selected
+				break
+			}
+		}
+		return tp, nil
+
 	case key.Matches(keyMsg, key.NewBinding(key.WithKeys("enter"))):
 		opts := tp.visibleOptions()
+		if tp.multiSelect {
+			// Multi-select confirm: emit the full chosen set.
+			tp.visible = false
+			tp.searchInput.Blur()
+			var chosen []string
+			for _, o := range tp.options {
+				if o.Selected {
+					chosen = append(chosen, o.Name)
+				}
+			}
+			return tp, func() tea.Msg {
+				return TagsSelectedMsg{Tags: chosen}
+			}
+		}
 		if len(opts) == 0 || tp.cursor >= len(opts) {
 			return tp, nil
 		}
@@ -188,8 +253,14 @@ func (tp TagPicker) View() string {
 		return ""
 	}
 
-	titleText := "Filter by Tag"
+	titleText := tp.title
+	if titleText == "" {
+		titleText = "Filter by Tag"
+	}
 	helpTextStr := "type to search • ↑/↓: navigate • enter: select • esc: cancel"
+	if tp.multiSelect {
+		helpTextStr = "type to search • ↑/↓: navigate • space: toggle • enter: confirm • esc: cancel"
+	}
 
 	opts := tp.visibleOptions()
 	searchView := tp.searchInput.View()
@@ -230,6 +301,13 @@ func (tp TagPicker) View() string {
 		icon := "●"
 		if opt.IsClear {
 			icon = "✕"
+		}
+		if tp.multiSelect {
+			if opt.Selected {
+				icon = "☑"
+			} else {
+				icon = "☐"
+			}
 		}
 
 		line := fmt.Sprintf("%s %s %s", cursor, icon, opt.Name)

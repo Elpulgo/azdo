@@ -73,6 +73,15 @@ const (
 	paneUsers
 )
 
+// viewMode toggles between the Live dashboard and the Trends sprint-on-sprint
+// comparison. Swapped with the `v` key.
+type viewMode int
+
+const (
+	viewLive viewMode = iota
+	viewTrends
+)
+
 // flagFilter is the f-key cycle position.
 type flagFilter int
 
@@ -110,6 +119,13 @@ type Model struct {
 	userCursor  int
 	flagCursor  int
 
+	mode             viewMode
+	snapshots        []coremetrics.Snapshot
+	selectedSprints  []string
+	sprintWindows    []coremetrics.SprintWindow
+	trendRows        []coremetrics.TrendRow
+	availableSprints []string
+
 	loading       bool
 	lastUpdated   time.Time
 	statusMessage string
@@ -144,9 +160,10 @@ func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *sty
 	return m
 }
 
-// Init kicks off the initial fetch.
+// Init kicks off the initial live fetch and loads any persisted snapshot data
+// + sprint selection in parallel.
 func (m Model) Init() tea.Cmd {
-	return m.fetch()
+	return tea.Batch(m.fetch(), loadSnapshotsCmd())
 }
 
 // Update handles incoming messages.
@@ -171,7 +188,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					"%d of %d projects failed — partial data shown",
 					pe.Failed, pe.Total,
 				)
-				return m, nil
+				return m, saveSnapshotCmd(m.client, msg.items, m.now())
 			}
 			m.allItems = nil
 			m.userRows = nil
@@ -182,7 +199,57 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.allItems = msg.items
 		m.statusMessage = ""
 		m.recompute()
+		return m, saveSnapshotCmd(m.client, msg.items, m.now())
+
+	case snapshotSavedMsg:
+		switch {
+		case msg.err != nil:
+			m.statusMessage = "Snapshot save failed: " + msg.err.Error()
+			return m, nil
+		case msg.alreadyToday:
+			// Quiet: don't overwrite a successful "updated" message.
+			if m.statusMessage == "" {
+				m.statusMessage = "Snapshot skipped (already saved today)"
+			}
+			return m, nil
+		case msg.skipped > 0:
+			m.statusMessage = fmt.Sprintf("Snapshot saved · %d rows, %d items couldn't be backfilled", msg.saved, msg.skipped)
+		default:
+			m.statusMessage = fmt.Sprintf("Snapshot saved · %d rows appended", msg.saved)
+		}
+		// Reload from disk so the Trends view reflects the new rows.
+		return m, loadSnapshotsCmd()
+
+	case snapshotsLoadedMsg:
+		if msg.err != nil {
+			// Don't disrupt the live view — trends just stays empty.
+			return m, nil
+		}
+		m.snapshots = msg.snaps
+		m.availableSprints = collectUniqueTagsFromSnaps(msg.snaps)
+		// Only adopt the persisted selection on first load (when the
+		// in-session selection is still empty). After that, user picks win.
+		if m.selectedSprints == nil {
+			m.selectedSprints = coremetrics.FilterAvailable(msg.selected, m.availableSprints)
+		} else {
+			// Existing in-session selection might reference tags newly added
+			// or removed; refilter against the freshly loaded snapshot.
+			m.selectedSprints = coremetrics.FilterAvailable(m.selectedSprints, m.availableSprints)
+		}
+		m.recomputeTrends()
+		if m.mode == viewTrends {
+			m.updateViewportContent()
+		}
 		return m, nil
+
+	case components.TagsSelectedMsg:
+		m.selectedSprints = append([]string(nil), msg.Tags...)
+		m.tagPicker.Hide()
+		m.recomputeTrends()
+		if m.mode == viewTrends {
+			m.updateViewportContent()
+		}
+		return m, saveSelectionCmd(m.selectedSprints)
 
 	case openURLResultMsg:
 		if msg.err != nil {
@@ -216,6 +283,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch keyMsg.Type {
 	case tea.KeyTab:
+		// Pane focus only matters in Live mode.
+		if m.mode == viewTrends {
+			return m, nil
+		}
 		if m.focusedPane == paneFlags {
 			m.focusedPane = paneUsers
 		} else {
@@ -225,11 +296,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.scrollCursorIntoView()
 		return m, nil
 	case tea.KeyUp:
+		if m.mode == viewTrends {
+			if m.ready {
+				m.viewport.LineUp(1)
+			}
+			return m, nil
+		}
 		m.moveCursor(-1)
 		m.updateViewportContent()
 		m.scrollCursorIntoView()
 		return m, nil
 	case tea.KeyDown:
+		if m.mode == viewTrends {
+			if m.ready {
+				m.viewport.LineDown(1)
+			}
+			return m, nil
+		}
 		m.moveCursor(1)
 		m.updateViewportContent()
 		m.scrollCursorIntoView()
@@ -245,7 +328,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyEsc:
-		if m.activeTag != "" {
+		// Esc in Live mode clears the tag filter. In Trends mode it's a no-op
+		// — clearing the sprint selection should be deliberate (open picker).
+		if m.mode == viewLive && m.activeTag != "" {
 			m.activeTag = ""
 			m.recompute()
 		}
@@ -256,8 +341,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case "r":
 		m.loading = true
 		m.statusMessage = ""
-		return m, m.fetch()
+		return m, tea.Batch(m.fetch(), loadSnapshotsCmd())
+	case "v":
+		if m.mode == viewLive {
+			m.mode = viewTrends
+		} else {
+			m.mode = viewLive
+		}
+		m.updateViewportContent()
+		if m.ready {
+			m.viewport.SetYOffset(0)
+		}
+		return m, nil
 	case "f":
+		// Flag filter is Live-only.
+		if m.mode == viewTrends {
+			return m, nil
+		}
 		m.flagFilter = (m.flagFilter + 1) % 3
 		m.flagCursor = 0
 		m.updateViewportContent()
@@ -267,11 +367,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.styles == nil {
 			return m, nil
 		}
-		tags := collectUniqueTags(m.allItems)
-		m.tagPicker.SetTags(tags, m.activeTag)
+		if m.mode == viewTrends {
+			m.tagPicker.SetTagsMulti(m.availableSprints, m.selectedSprints)
+		} else {
+			tags := collectUniqueTags(m.allItems)
+			m.tagPicker.SetTags(tags, m.activeTag)
+		}
 		m.tagPicker.Show()
 		return m, nil
 	case "o":
+		// Open-in-browser is Live-only (no focused item in Trends).
+		if m.mode == viewTrends {
+			return m, nil
+		}
 		return m.openFocused()
 	}
 
@@ -294,6 +402,49 @@ func (m Model) fetch() tea.Cmd {
 		items, err := client.MetricsWorkItems(since)
 		return metricsLoadedMsg{items: items, err: err, fetchedAt: now()}
 	}
+}
+
+// recomputeTrends rebuilds sprintWindows + trendRows from the current
+// selection. Called whenever snapshots or selection change.
+func (m *Model) recomputeTrends() {
+	if len(m.selectedSprints) == 0 {
+		m.sprintWindows = nil
+		m.trendRows = nil
+		return
+	}
+	var windows []coremetrics.SprintWindow
+	for _, tag := range m.selectedSprints {
+		w, ok := coremetrics.DeriveSprintWindow(m.snapshots, tag, m.now())
+		if !ok {
+			continue
+		}
+		windows = append(windows, w)
+	}
+	m.sprintWindows = windows
+	m.trendRows = coremetrics.TrendAggregate(m.snapshots, windows, coremetrics.Thresholds{
+		ActiveStaleDays: m.config.Metrics.ActiveStaleDays,
+		RFTStaleDays:    m.config.Metrics.RFTStaleDays,
+		WIPLimit:        m.config.Metrics.WIPLimit,
+	}, m.now())
+}
+
+// collectUniqueTagsFromSnaps returns the sorted set of tags across the
+// snapshot file. Differs from collectUniqueTags(items) — that one only
+// surfaces tags on currently in-flight items, which would prevent the
+// user from picking retired sprints.
+func collectUniqueTagsFromSnaps(snaps []coremetrics.Snapshot) []string {
+	seen := make(map[string]struct{})
+	for _, s := range snaps {
+		for _, t := range s.Tags {
+			seen[t] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // recompute re-runs Aggregate on the currently filtered base set.
@@ -340,12 +491,18 @@ func (m *Model) resizeViewport() {
 }
 
 // updateViewportContent rebuilds the viewport's rendered body. Called whenever
-// data, focus, filters, or cursors change so the visible body stays in sync.
+// data, focus, filters, mode, or cursors change so the visible body stays in
+// sync.
 func (m *Model) updateViewportContent() {
 	if !m.ready {
 		return
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, m.renderFlagsPane(), "", m.renderUsersPane())
+	var body string
+	if m.mode == viewTrends {
+		body = m.renderTrends()
+	} else {
+		body = lipgloss.JoinVertical(lipgloss.Left, m.renderFlagsPane(), "", m.renderUsersPane())
+	}
 	m.viewport.SetContent(body)
 }
 
@@ -575,13 +732,16 @@ func buildWorkItemURL(org, project string, id int) string {
 
 // View renders the metrics dashboard.
 func (m Model) View() string {
-	if m.loading && len(m.userRows) == 0 && m.statusMessage == "" {
+	if m.loading && len(m.userRows) == 0 && m.statusMessage == "" && m.mode == viewLive {
 		return m.renderLoading()
 	}
 
 	header := m.renderHeader()
 	if !m.ready {
 		// No window size yet — fall back to inline rendering.
+		if m.mode == viewTrends {
+			return header + "\n\n" + m.renderTrends()
+		}
 		flagsPane := m.renderFlagsPane()
 		userPane := m.renderUsersPane()
 		parts := []string{header, "", flagsPane, "", userPane}
@@ -601,20 +761,27 @@ func (m Model) renderLoading() string {
 func (m Model) renderHeader() string {
 	mc := m.config.Metrics
 	parts := []string{"Metrics"}
-	if m.activeTag != "" {
-		parts = append(parts, "Tag: "+m.activeTag)
+	if m.mode == viewTrends {
+		parts = append(parts, "Trends")
+	} else {
+		parts = append(parts, "Live")
+		if m.activeTag != "" {
+			parts = append(parts, "Tag: "+m.activeTag)
+		}
+		parts = append(parts,
+			fmt.Sprintf("Interval %dd", mc.IntervalDays),
+			fmt.Sprintf("Active-stale >%dd", mc.ActiveStaleDays),
+			fmt.Sprintf("RFT-stale >%dd", mc.RFTStaleDays),
+		)
 	}
-	parts = append(parts,
-		fmt.Sprintf("Interval %dd", mc.IntervalDays),
-		fmt.Sprintf("Active-stale >%dd", mc.ActiveStaleDays),
-		fmt.Sprintf("RFT-stale >%dd", mc.RFTStaleDays),
-		"Updated "+m.lastUpdatedLabel(),
-	)
-	switch m.flagFilter {
-	case flagFilterActiveStale:
-		parts = append(parts, "Filter: Active-stale")
-	case flagFilterRFTStale:
-		parts = append(parts, "Filter: RFT-stale")
+	parts = append(parts, "Updated "+m.lastUpdatedLabel())
+	if m.mode == viewLive {
+		switch m.flagFilter {
+		case flagFilterActiveStale:
+			parts = append(parts, "Filter: Active-stale")
+		case flagFilterRFTStale:
+			parts = append(parts, "Filter: RFT-stale")
+		}
 	}
 	line := strings.Join(parts, " · ")
 	if m.styles != nil {

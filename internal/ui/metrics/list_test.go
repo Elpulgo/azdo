@@ -374,3 +374,30 @@ func TestModel_Viewport_CursorAutoScrolls(t *testing.T) {
 		t.Errorf("userCursor = %d, want 19", m.userCursor)
 	}
 }
+
+// TestModel_VToggle_SwitchesMode ensures pressing 'v' flips the metrics tab
+// between Live and Trends views.
+func TestModel_VToggle_SwitchesMode(t *testing.T) {
+	m := makeModel()
+	if m.mode != viewLive {
+		t.Fatalf("initial mode = %v, want viewLive", m.mode)
+	}
+	m, _ = m.Update(runeKeyMsg('v'))
+	if m.mode != viewTrends {
+		t.Errorf("after 1st v = %v, want viewTrends", m.mode)
+	}
+	m, _ = m.Update(runeKeyMsg('v'))
+	if m.mode != viewLive {
+		t.Errorf("after 2nd v = %v, want viewLive", m.mode)
+	}
+}
+
+// TestModel_TagsSelectedMsg_UpdatesSelection feeds a TagsSelectedMsg and
+// verifies the model adopts the selection and recomputes trends.
+func TestModel_TagsSelectedMsg_UpdatesSelection(t *testing.T) {
+	m := makeModel()
+	m, _ = m.Update(components.TagsSelectedMsg{Tags: []string{"sprint-42"}})
+	if len(m.selectedSprints) != 1 || m.selectedSprints[0] != "sprint-42" {
+		t.Errorf("selectedSprints = %v, want [sprint-42]", m.selectedSprints)
+	}
+}

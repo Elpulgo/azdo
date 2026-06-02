@@ -251,14 +251,15 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	}
 	if cfg.Metrics.Enabled {
 		helpModal.AddSection("Metrics tab", []components.HelpBinding{
-			{Key: "Tab", Description: "Switch focus between stuck-items and per-user pane"},
-			{Key: "↑/↓", Description: "Move cursor in focused pane (auto-scrolls)"},
+			{Key: "v", Description: "Toggle Live ↔ Trends sub-view"},
+			{Key: "Tab", Description: "Switch focus between stuck-items and per-user pane (Live)"},
+			{Key: "↑/↓", Description: "Live: move cursor; Trends: scroll"},
 			{Key: "pgup/pgdn", Description: "Scroll dashboard body"},
-			{Key: "f", Description: "Cycle flag filter (All / Active-stale / RFT-stale)"},
-			{Key: "T", Description: "Filter by tag"},
-			{Key: "esc", Description: "Clear tag filter"},
-			{Key: "o", Description: "Open focused item in browser"},
-			{Key: "r", Description: "Refresh metrics"},
+			{Key: "f", Description: "Cycle flag filter — Live only (All / Active-stale / RFT-stale)"},
+			{Key: "T", Description: "Live: filter by tag. Trends: multi-select sprint picker"},
+			{Key: "esc", Description: "Clear tag filter (Live)"},
+			{Key: "o", Description: "Open focused item in browser (Live)"},
+			{Key: "r", Description: "Refresh metrics + reload snapshot file"},
 		})
 	}
 
@@ -791,6 +792,7 @@ func (m Model) metricsKeybindings() string {
 	sep := sepStyle.Render(" • ")
 
 	return m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("v") + m.styles.Description.Render(" live/trends") + sep +
 		m.styles.Key.Render("Tab") + m.styles.Description.Render(" focus pane") + sep +
 		m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
 		m.styles.Key.Render("T") + m.styles.Description.Render(" tag") + sep +
