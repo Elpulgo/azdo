@@ -115,6 +115,26 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 - Duration tracking for each step
 - Full log viewer with scrollable viewport
 
+### Metrics Dashboard (opt-in)
+
+A management view for team leads, **disabled by default**. Enable it via `metrics.enabled: true` in `config.yaml` and a fourth tab appears.
+
+Two sub-views, toggled with `v`:
+
+- **Live** — current-state dwell per work item, per-user roll-up (WIP, in-flight, oldest Active / Ready for Test, points closed in the configured interval), and a worst-first "stuck items" pane. Sourced from the live work-item fetch — no local state, on-demand refresh only.
+- **Trends** — sprint-on-sprint comparison from a local 90-day snapshot file. Pick any combination of sprint tags with `T` (multi-select; space toggles, enter confirms) and see per-user **points closed**, **average WIP**, **stuck count**, and **cycle time** side-by-side. Values are colored: green for closed points, yellow when overloaded, red for stuck items.
+
+The snapshot file lives at `~/.config/azdo-tui/metrics.jsonl`. One row per work item per day is appended on first metrics-tab launch each day, then pruned to a 90-day window. No database — append-only JSONL.
+
+**One-shot backfill (optional).** A fresh install starts with an empty snapshot file, so the Trends view shows "Insufficient snapshot history" for the first ~2 sprints. To seed the file from your team's actual recent history, set:
+
+```yaml
+metrics:
+  run_one_shot_backfill: true
+```
+
+On the next launch the tab walks every in-flight or recently-closed work item across all configured projects, reads each item's revision history via `/updates`, and synthesizes daily snapshot rows back 90 days. The footer reports progress and the result. A marker file (`~/.config/azdo-tui/.metrics-backfill-done`) prevents re-running — delete it if you want to re-seed. Flip the flag back to `false` once it's done so the footer hint stops appearing.
+
 ### User Experience
 - **Setup wizard** on first run guides you through configuration
 - Help modal with all keyboard shortcuts (press `?`)
@@ -195,6 +215,15 @@ theme: dark
 # Disable specific panes (optional, comma-separated)
 # Valid values: pipelines, workitems
 # disabled_panes: pipelines,workitems
+
+# Metrics dashboard (opt-in, management feature). Hidden unless enabled.
+# metrics:
+#   enabled: false
+#   interval_days: 14            # window for the Live "closed pts" column
+#   active_stale_days: 3         # dwell in Active above this flags the item
+#   rft_stale_days: 2            # dwell in Ready for Test above this flags the item
+#   wip_limit: 4                 # in-flight strictly above this marks a user overloaded
+#   run_one_shot_backfill: false # one-time /updates seed (see Features → Metrics)
 ```
 
 **Configuration Options:**
@@ -203,6 +232,7 @@ theme: dark
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
 - `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
+- `metrics`: Opt-in management dashboard. See [Features → Metrics Dashboard](#metrics-dashboard-opt-in) for what it does. Keys: `enabled` (off by default), `interval_days`, `active_stale_days`, `rft_stale_days`, `wip_limit`, `run_one_shot_backfill`. All optional.
 
 **Available Themes:**
 - `dark` - Dark theme with blue and cyan accents

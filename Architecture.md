@@ -61,11 +61,25 @@ azdo/
 │   │   │   ├── list.go                 # Work item list with filtering
 │   │   │   └── detail.go              # Work item detail & state changes
 │   │   │
+│   │   ├── metrics/                    # Metrics dashboard tab (opt-in)
+│   │   │   ├── list.go                 # Live view: per-user roll-up + stuck pane
+│   │   │   ├── trends.go               # Trends sub-view: sprint × user grid
+│   │   │   ├── snapshot.go             # Daily snapshot writer command + gap fallback
+│   │   │   └── backfill.go             # One-shot /updates backfill orchestrator
+│   │   │
 │   │   ├── patinput/
 │   │   │   └── patinput.go            # PAT input modal for auth setup
 │   │   │
 │   │   └── setupwizard/
 │   │       └── setupwizard.go         # Interactive first-run config wizard
+│   │
+│   ├── metrics/                        # Pure metrics core (no UI, no I/O on hot path)
+│   │   ├── aggregate.go                # Live aggregation: WIP, stuck, closed pts
+│   │   ├── snapshot.go                 # JSONL read/write, dedup, prune, mutex
+│   │   ├── transitions.go              # /updates fold + gap-fallback classifier
+│   │   ├── trends.go                   # Sprint windowing + TrendAggregate
+│   │   ├── selection.go                # Persisted sprint-picker selection
+│   │   └── backfill.go                 # Marker-file helpers for one-shot backfill
 │   │
 │   ├── config/
 │   │   ├── config.go                   # YAML config loading (viper)
@@ -255,6 +269,35 @@ Each tab implements a drill-down navigation pattern:
 | Work Items | Item list | Detail (description, links) | — |
 
 Navigation is `enter` to drill down, `esc` to go back. The `viewMode` field on each model tracks the current level.
+
+### 10. Metrics Dashboard (opt-in tab)
+
+The metrics tab is the only feature with persistent local state. It's gated behind `metrics.enabled` so the default install pays no cost (no extra API calls, no file on disk).
+
+**Two-package split.** Logic is divided to keep the core pure and table-testable:
+
+- **`internal/metrics`** — pure aggregation, snapshot I/O, transition algebra. No bubbletea, no HTTP, no UI types. Heavy table-driven tests.
+- **`internal/ui/metrics`** — bubbletea model, `tea.Cmd` orchestrators, rendering. Wraps the core with HTTP via `MultiClient` and writes via the snapshot writer.
+
+**Three data tiers.** The tab combines three sources of work-item state, each filling a different role:
+
+| Tier | Field / Source | Cost | Used for |
+|------|----------------|------|----------|
+| 1 | `Microsoft.VSTS.Common.StateChangeDate` (current-state dwell) | One field on existing fetch | Live: "who's stuck right now" |
+| 2 | `/updates` REST endpoint (per-item revision history) | One call per item | One-shot 90-day backfill + gap-fallback when a state was skipped between days |
+| 3 | Local 90-day JSONL snapshot file | Free — reuses Tier 1 fetch | Trends: sprint-on-sprint comparison |
+
+Tier 3 is the only persistent state. Tier 2 is bounded (only used in two specific paths, never on every poll).
+
+**Snapshot file.** `~/.config/azdo-tui/metrics.jsonl`, one row per (work item, day, observed state). Written once per calendar day on first metrics-tab open. The writer reads existing rows, dedups by `(TS, ID)` latest-wins, prunes anything older than 90 days, and atomically renames a temp file. A package-level `sync.Mutex` serializes calls so the daily writer and the one-shot backfill cannot race on the read-merge-rename sequence.
+
+**Gap fallback.** If today's observed state can't be reconciled with the previous snapshot row in a single legal transition (e.g. Active → Closed with no RFT row in between), the writer fires `/updates` for that item and synthesizes the missing intermediate rows. Bounded concurrency (cap 4) and per-item failures don't fail the whole snapshot save.
+
+**One-shot backfill.** Opt-in via `metrics.run_one_shot_backfill: true`. On launch, walks every in-flight or recently-closed item across all configured projects, fans `/updates` calls with the same bounded-concurrency pattern, and synthesizes 90 days of snapshot rows tagged `Source="updates"`. A marker file at `~/.config/azdo-tui/.metrics-backfill-done` prevents re-runs; delete it to re-seed. Reuses the same `SynthesizeGapRows` helper as gap-fallback.
+
+**Trends sub-view.** Toggled with `v`. Reads exclusively from the snapshot file — no live fetch. The user picks sprint tags through a multi-select picker (`T`); selection is persisted to `~/.config/azdo-tui/metrics-selection.json`. Sprint windows are derived purely from the snapshot rows (`Start` = earliest observation of the tag, `End` = latest non-Closed observation, or `now` if the sprint is still in flight). `TrendAggregate` then produces a users × sprints grid with points closed, average WIP, stuck count, cycle time, and an overloaded-any-day flag — each computed from the daily rows within the window.
+
+**TUI error surfacing.** All metrics paths use the standard `PartialError` (multi-project partial fetch) + `GetStatusMessage()` (footer status) conventions. Nothing in the metrics layer writes to `log`/stderr — that would corrupt the rendered grid.
 
 ## Data Flow
 
