@@ -24,13 +24,37 @@ func TestClassifyTransition(t *testing.T) {
 		{"rft -> active backward", "Ready for Test", "Active", GapNeedsFallback},
 		{"case-insensitive match", "ACTIVE", "ready for test", GapWrite},
 		{"unknown forward jump", "Active", "Resolved", GapNeedsFallback},
+		{"new -> active (unknown prev)", "New", "Active", GapNeedsFallback},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ClassifyTransition(c.prev, c.curr); got != c.want {
+			if got := ClassifyTransition(c.prev, c.curr, DefaultStates()); got != c.want {
 				t.Errorf("ClassifyTransition(%q, %q) = %v, want %v", c.prev, c.curr, got, c.want)
 			}
 		})
+	}
+}
+
+// TestClassifyTransition_CustomWorkflow exercises a team that uses
+// In Progress / RFT / Done. The classifier should treat the same transition
+// types as legal/fallback as the default workflow.
+func TestClassifyTransition_CustomWorkflow(t *testing.T) {
+	sc := StateConfig{Active: "In Progress", ReadyForTest: "RFT", Closed: "Done"}
+	cases := []struct {
+		prev, curr string
+		want       GapAction
+	}{
+		{"In Progress", "RFT", GapWrite},
+		{"RFT", "Done", GapWrite},
+		{"In Progress", "Done", GapNeedsFallback}, // skipped RFT
+		{"Done", "In Progress", GapNeedsFallback}, // backward
+		{"In Progress", "In Progress", GapWrite},  // same state
+		{"in progress", "RFT", GapWrite},          // case-insensitive
+	}
+	for _, c := range cases {
+		if got := ClassifyTransition(c.prev, c.curr, sc); got != c.want {
+			t.Errorf("ClassifyTransition(%q, %q, custom) = %v, want %v", c.prev, c.curr, got, c.want)
+		}
 	}
 }
 

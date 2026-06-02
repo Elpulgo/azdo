@@ -160,6 +160,24 @@ func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *sty
 	return m
 }
 
+// stateConfig pulls the configured workflow state names out of the model's
+// config and produces a coremetrics.StateConfig. Falls back to defaults if
+// the config block hasn't been populated (test fixtures, no-config paths).
+func (m Model) stateConfig() coremetrics.StateConfig {
+	if m.config == nil {
+		return coremetrics.DefaultStates()
+	}
+	st := m.config.Metrics.States
+	if st.Active == "" || st.ReadyForTest == "" || st.Closed == "" {
+		return coremetrics.DefaultStates()
+	}
+	return coremetrics.StateConfig{
+		Active:       st.Active,
+		ReadyForTest: st.ReadyForTest,
+		Closed:       st.Closed,
+	}
+}
+
 // Init kicks off the initial live fetch and loads any persisted snapshot data
 // + sprint selection in parallel. If the user has opted into the one-shot
 // /updates backfill, that cmd is dispatched alongside (a marker file inside
@@ -167,7 +185,7 @@ func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *sty
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.fetch(), loadSnapshotsCmd()}
 	if m.config != nil && m.config.Metrics.RunOneShotBackfill {
-		cmds = append(cmds, runBackfillCmd(m.client, m.now()))
+		cmds = append(cmds, runBackfillCmd(m.client, m.now(), m.stateConfig()))
 	}
 	return tea.Batch(cmds...)
 }
@@ -194,7 +212,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					"%d of %d projects failed — partial data shown",
 					pe.Failed, pe.Total,
 				)
-				return m, saveSnapshotCmd(m.client, msg.items, m.now())
+				return m, saveSnapshotCmd(m.client, msg.items, m.now(), m.stateConfig())
 			}
 			m.allItems = nil
 			m.userRows = nil
@@ -205,7 +223,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.allItems = msg.items
 		m.statusMessage = ""
 		m.recompute()
-		return m, saveSnapshotCmd(m.client, msg.items, m.now())
+		return m, saveSnapshotCmd(m.client, msg.items, m.now(), m.stateConfig())
 
 	case snapshotSavedMsg:
 		switch {
@@ -421,9 +439,21 @@ func (m Model) fetch() tea.Cmd {
 	since := m.now().AddDate(0, 0, -intervalDays)
 	client := m.client
 	now := m.now
+	states := toMetricsStateNames(m.stateConfig())
 	return func() tea.Msg {
-		items, err := client.MetricsWorkItems(since)
+		items, err := client.MetricsWorkItems(since, states)
 		return metricsLoadedMsg{items: items, err: err, fetchedAt: now()}
+	}
+}
+
+// toMetricsStateNames converts the core StateConfig into the azdevops layer's
+// state-name struct. The two structs are intentionally separate so the API
+// client doesn't import the metrics package.
+func toMetricsStateNames(sc coremetrics.StateConfig) azdevops.MetricsStateNames {
+	return azdevops.MetricsStateNames{
+		Active:       sc.Active,
+		ReadyForTest: sc.ReadyForTest,
+		Closed:       sc.Closed,
 	}
 }
 
@@ -437,7 +467,7 @@ func (m *Model) recomputeTrends() {
 	}
 	var windows []coremetrics.SprintWindow
 	for _, tag := range m.selectedSprints {
-		w, ok := coremetrics.DeriveSprintWindow(m.snapshots, tag, m.now())
+		w, ok := coremetrics.DeriveSprintWindow(m.snapshots, tag, m.now(), m.stateConfig())
 		if !ok {
 			continue
 		}
@@ -448,6 +478,7 @@ func (m *Model) recomputeTrends() {
 		ActiveStaleDays: m.config.Metrics.ActiveStaleDays,
 		RFTStaleDays:    m.config.Metrics.RFTStaleDays,
 		WIPLimit:        m.config.Metrics.WIPLimit,
+		States:          m.stateConfig(),
 	}, m.now())
 }
 
@@ -479,6 +510,7 @@ func (m *Model) recompute() {
 		ActiveStaleDays: m.config.Metrics.ActiveStaleDays,
 		RFTStaleDays:    m.config.Metrics.RFTStaleDays,
 		WIPLimit:        m.config.Metrics.WIPLimit,
+		States:          m.stateConfig(),
 	})
 	m.userRows = rows
 	m.flags = flags
@@ -643,7 +675,7 @@ func (m Model) openFocused() (Model, tea.Cmd) {
 		}
 		user := m.userRows[m.userCursor].User
 		// Pick the focused user's worst stalled item; fall back to any in-flight.
-		item, ok := worstItemForUser(m.allItems, user, m.now(), m.config.Metrics)
+		item, ok := worstItemForUser(m.allItems, user, m.now(), m.config.Metrics, m.stateConfig())
 		if !ok {
 			m.statusMessage = "No openable item for " + user
 			return m, nil
@@ -673,7 +705,7 @@ func projectAPINameFor(items []azdevops.WorkItem, id int, fallback string) strin
 // worstItemForUser returns the worst-stalled (highest dwell) item belonging to
 // `user`. Prefers items past the configured thresholds; falls back to any
 // in-flight item.
-func worstItemForUser(items []azdevops.WorkItem, user string, now time.Time, mc config.MetricsConfig) (azdevops.WorkItem, bool) {
+func worstItemForUser(items []azdevops.WorkItem, user string, now time.Time, mc config.MetricsConfig, states coremetrics.StateConfig) (azdevops.WorkItem, bool) {
 	activeStale := time.Duration(mc.ActiveStaleDays) * 24 * time.Hour
 	rftStale := time.Duration(mc.RFTStaleDays) * 24 * time.Hour
 	var bestStale, bestInFlight azdevops.WorkItem
@@ -684,9 +716,9 @@ func worstItemForUser(items []azdevops.WorkItem, user string, now time.Time, mc 
 			continue
 		}
 		dwell := wi.TimeInCurrentState(now)
-		state := strings.ToLower(wi.Fields.State)
-		isInFlight := state == "active" || state == "ready for test"
-		if !isInFlight {
+		isActive := states.IsActive(wi.Fields.State)
+		isRFT := states.IsRFT(wi.Fields.State)
+		if !isActive && !isRFT {
 			continue
 		}
 		if !haveInFlight || dwell > bestInFlightDwell {
@@ -694,8 +726,7 @@ func worstItemForUser(items []azdevops.WorkItem, user string, now time.Time, mc 
 			bestInFlightDwell = dwell
 			haveInFlight = true
 		}
-		isStale := (state == "active" && dwell > activeStale) ||
-			(state == "ready for test" && dwell > rftStale)
+		isStale := (isActive && dwell > activeStale) || (isRFT && dwell > rftStale)
 		if isStale && (!haveStale || dwell > bestStaleDwell) {
 			bestStale = wi
 			bestStaleDwell = dwell
@@ -791,19 +822,21 @@ func (m Model) renderHeader() string {
 		if m.activeTag != "" {
 			parts = append(parts, "Tag: "+m.activeTag)
 		}
+		_, rftLbl, _ := m.stateLabels()
 		parts = append(parts,
 			fmt.Sprintf("Interval %dd", mc.IntervalDays),
 			fmt.Sprintf("Active-stale >%dd", mc.ActiveStaleDays),
-			fmt.Sprintf("RFT-stale >%dd", mc.RFTStaleDays),
+			fmt.Sprintf("%s-stale >%dd", titleCase(rftLbl), mc.RFTStaleDays),
 		)
 	}
 	parts = append(parts, "Updated "+m.lastUpdatedLabel())
 	if m.mode == viewLive {
+		_, rftLbl, _ := m.stateLabels()
 		switch m.flagFilter {
 		case flagFilterActiveStale:
 			parts = append(parts, "Filter: Active-stale")
 		case flagFilterRFTStale:
-			parts = append(parts, "Filter: RFT-stale")
+			parts = append(parts, "Filter: "+titleCase(rftLbl)+"-stale")
 		}
 	}
 	line := strings.Join(parts, " · ")
@@ -857,7 +890,7 @@ func (m Model) renderFlagsPane() string {
 		}
 		row := cursor +
 			padCol(fmt.Sprintf("#%d", f.ID), flagIDW) + " " +
-			padCol(shortenState(f.State), flagStateW) + " " +
+			padCol(m.shortenState(f.State), flagStateW) + " " +
 			padCol(fmtDwell(f.Dwell), flagDwellW) + " " +
 			padCol(f.User, flagUserW) + " " +
 			padCol(f.Project, flagProjectW) + " " +
@@ -892,13 +925,16 @@ func (m Model) renderUsersPane() string {
 		return title + "\n" + body
 	}
 
+	activeLbl, rftLbl, _ := m.stateLabels()
+	activeTitle := titleCase(activeLbl)
+	rftTitle := titleCase(rftLbl)
 	header := padCol("  ", userCursorW) +
 		padCol("User", userNameW) + " " +
 		padCol("In-flight", userInFlightW) + " " +
-		padCol("Active", userActiveW) + " " +
-		padCol("RFT", userRFTW) + " " +
-		padCol("Old-Active", userOldActiveW) + " " +
-		padCol("Old-RFT", userOldRFTW) + " " +
+		padCol(activeTitle, userActiveW) + " " +
+		padCol(rftTitle, userRFTW) + " " +
+		padCol("Old-"+activeTitle, userOldActiveW) + " " +
+		padCol("Old-"+rftTitle, userOldRFTW) + " " +
 		padCol("Closed-pts", userClosedPtsW) + " " +
 		padCol("⚠", userStalledW)
 	if m.styles != nil {
@@ -942,11 +978,20 @@ func (m Model) renderUsersPane() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// shortenState abbreviates the canonical state names for the flag rows.
-func shortenState(s string) string {
-	switch strings.ToLower(s) {
-	case "ready for test":
-		return "RFT"
+// shortenState abbreviates a state name for the flag rows so the
+// flagStateW column ("Active" / "RFT" sized) is enough to fit any
+// configured label. Uses the configured Active/RFT/Closed labels with
+// title-case applied.
+func (m Model) shortenState(s string) string {
+	sc := m.stateConfig()
+	activeLbl, rftLbl, closedLbl := m.stateLabels()
+	switch {
+	case sc.IsActive(s):
+		return titleCase(activeLbl)
+	case sc.IsRFT(s):
+		return titleCase(rftLbl)
+	case sc.IsClosed(s):
+		return titleCase(closedLbl)
 	default:
 		return s
 	}

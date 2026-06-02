@@ -363,10 +363,11 @@ func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {
 	return allItems, nil
 }
 
-// MetricsWorkItems fetches the org-wide metrics dataset (Active / Ready for Test
-// plus items closed on or after `since`) from all projects concurrently, tags
-// each with ProjectName, merges and sorts by ChangedDate descending.
-func (mc *MultiClient) MetricsWorkItems(since time.Time) ([]WorkItem, error) {
+// MetricsWorkItems fetches the org-wide metrics dataset (configured workflow
+// states plus items closed on or after `since`) from all projects
+// concurrently, tags each with ProjectName, merges and sorts by ChangedDate
+// descending.
+func (mc *MultiClient) MetricsWorkItems(since time.Time, states MetricsStateNames) ([]WorkItem, error) {
 	type result struct {
 		project string
 		items   []WorkItem
@@ -380,7 +381,7 @@ func (mc *MultiClient) MetricsWorkItems(since time.Time) ([]WorkItem, error) {
 		wg.Add(1)
 		go func(p string, c *Client) {
 			defer wg.Done()
-			items, err := c.MetricsWorkItems(since)
+			items, err := c.MetricsWorkItems(since, states)
 			ch <- result{p, items, err}
 		}(project, client)
 	}

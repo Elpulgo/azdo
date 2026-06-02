@@ -35,7 +35,7 @@ func TestClient_MetricsWorkItems_WIQLShape(t *testing.T) {
 	}
 
 	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-	_, err := client.MetricsWorkItems(since)
+	_, err := client.MetricsWorkItems(since, defaultMetricsStates())
 	if err != nil {
 		t.Fatalf("MetricsWorkItems() error = %v", err)
 	}
@@ -107,7 +107,7 @@ func TestClient_MetricsWorkItems_BatchesOver200IDs(t *testing.T) {
 		httpClient: http.DefaultClient,
 	}
 
-	items, err := client.MetricsWorkItems(time.Now().Add(-14 * 24 * time.Hour))
+	items, err := client.MetricsWorkItems(time.Now().Add(-14*24*time.Hour), defaultMetricsStates())
 	if err != nil {
 		t.Fatalf("MetricsWorkItems() error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestMultiClient_MetricsWorkItems_MergedAndTagged(t *testing.T) {
 		"beta":  betaServer,
 	})
 
-	items, err := mc.MetricsWorkItems(now.Add(-14 * 24 * time.Hour))
+	items, err := mc.MetricsWorkItems(now.Add(-14*24*time.Hour), defaultMetricsStates())
 	if err != nil {
 		t.Fatalf("MetricsWorkItems failed: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestMultiClient_MetricsWorkItems_PartialFailure(t *testing.T) {
 		"beta":  betaServer,
 	})
 
-	items, err := mc.MetricsWorkItems(now.Add(-14 * 24 * time.Hour))
+	items, err := mc.MetricsWorkItems(now.Add(-14*24*time.Hour), defaultMetricsStates())
 
 	// PartialError pattern: partial data + structured error
 	var pe *PartialError
@@ -212,7 +212,7 @@ func TestClient_MetricsWorkItems_NoResults(t *testing.T) {
 		httpClient: http.DefaultClient,
 	}
 
-	items, err := client.MetricsWorkItems(time.Now())
+	items, err := client.MetricsWorkItems(time.Now(), defaultMetricsStates())
 	if err != nil {
 		t.Fatalf("MetricsWorkItems() error = %v", err)
 	}
@@ -297,5 +297,58 @@ func TestClient_WorkItemUpdates_ParsesResponse(t *testing.T) {
 	}
 	if transitions[0].State != "Active" || transitions[1].State != "Ready for Test" {
 		t.Errorf("unexpected order: %v", transitions)
+	}
+}
+
+func defaultMetricsStates() MetricsStateNames {
+	return MetricsStateNames{Active: "Active", ReadyForTest: "Ready for Test", Closed: "Closed"}
+}
+
+func TestBuildMetricsWIQL_DefaultStates(t *testing.T) {
+	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	got, err := buildMetricsWIQL(since, MetricsStateNames{
+		Active: "Active", ReadyForTest: "Ready for Test", Closed: "Closed",
+	})
+	if err != nil {
+		t.Fatalf("buildMetricsWIQL: %v", err)
+	}
+	if !strings.Contains(got, "'Active','Ready for Test'") {
+		t.Errorf("WIQL missing default IN list: %s", got)
+	}
+	if !strings.Contains(got, "[System.State] = 'Closed'") {
+		t.Errorf("WIQL missing closed clause: %s", got)
+	}
+	if !strings.Contains(got, "'2026-05-01'") {
+		t.Errorf("WIQL missing since date: %s", got)
+	}
+}
+
+func TestBuildMetricsWIQL_CustomStates(t *testing.T) {
+	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	got, err := buildMetricsWIQL(since, MetricsStateNames{
+		Active: "In Progress", ReadyForTest: "RFT", Closed: "Done",
+	})
+	if err != nil {
+		t.Fatalf("buildMetricsWIQL: %v", err)
+	}
+	if !strings.Contains(got, "'In Progress','RFT'") {
+		t.Errorf("WIQL missing custom IN list: %s", got)
+	}
+	if !strings.Contains(got, "[System.State] = 'Done'") {
+		t.Errorf("WIQL missing custom closed clause: %s", got)
+	}
+}
+
+func TestBuildMetricsWIQL_RejectsEmptyName(t *testing.T) {
+	_, err := buildMetricsWIQL(time.Now(), MetricsStateNames{Active: "", ReadyForTest: "RFT", Closed: "Done"})
+	if err == nil {
+		t.Error("expected error for empty state name; got nil")
+	}
+}
+
+func TestBuildMetricsWIQL_RejectsSingleQuote(t *testing.T) {
+	_, err := buildMetricsWIQL(time.Now(), MetricsStateNames{Active: "Act'ive", ReadyForTest: "RFT", Closed: "Done"})
+	if err == nil {
+		t.Error("expected error for single quote in state name; got nil")
 	}
 }

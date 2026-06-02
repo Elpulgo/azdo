@@ -76,7 +76,7 @@ const gapFallbackConcurrency = 4
 // Pure-ish orchestration: all snapshot file I/O, all /updates fetches. Safe to
 // call as a tea.Cmd from the metrics view's Update; the goroutine returns the
 // message back into the bubbletea loop on completion.
-func saveSnapshotCmd(client *azdevops.MultiClient, items []azdevops.WorkItem, now time.Time) tea.Cmd {
+func saveSnapshotCmd(client *azdevops.MultiClient, items []azdevops.WorkItem, now time.Time, states coremetrics.StateConfig) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return snapshotSavedMsg{}
@@ -102,7 +102,7 @@ func saveSnapshotCmd(client *azdevops.MultiClient, items []azdevops.WorkItem, no
 		todaySnaps := coremetrics.BuildSnapshots(items, now)
 		latest := coremetrics.LatestPerItem(existing)
 
-		gapRows, skipped := runGapFallback(client, todaySnaps, latest, now)
+		gapRows, skipped := runGapFallback(client, todaySnaps, latest, now, states)
 
 		all := append(gapRows, todaySnaps...)
 		const retention = 90 * 24 * time.Hour
@@ -118,7 +118,7 @@ func saveSnapshotCmd(client *azdevops.MultiClient, items []azdevops.WorkItem, no
 // and synthesizes the missing intermediate daily rows. Returns the synthesized
 // rows plus a count of items the fallback couldn't recover (network blip,
 // missing project client, etc.).
-func runGapFallback(client *azdevops.MultiClient, todaySnaps []coremetrics.Snapshot, latest map[int]coremetrics.Snapshot, now time.Time) ([]coremetrics.Snapshot, int) {
+func runGapFallback(client *azdevops.MultiClient, todaySnaps []coremetrics.Snapshot, latest map[int]coremetrics.Snapshot, now time.Time, states coremetrics.StateConfig) ([]coremetrics.Snapshot, int) {
 	type req struct {
 		today coremetrics.Snapshot
 		prev  coremetrics.Snapshot
@@ -126,7 +126,7 @@ func runGapFallback(client *azdevops.MultiClient, todaySnaps []coremetrics.Snaps
 	var needs []req
 	for _, snap := range todaySnaps {
 		prev := latest[snap.ID]
-		if coremetrics.ClassifyTransition(prev.State, snap.State) == coremetrics.GapNeedsFallback {
+		if coremetrics.ClassifyTransition(prev.State, snap.State, states) == coremetrics.GapNeedsFallback {
 			needs = append(needs, req{today: snap, prev: prev})
 		}
 	}

@@ -39,6 +39,7 @@ func defaultThresholds() Thresholds {
 		ActiveStaleDays: 3,
 		RFTStaleDays:    2,
 		WIPLimit:        4,
+		States:          DefaultStates(),
 	}
 }
 
@@ -287,5 +288,61 @@ func TestAggregate_CaseInsensitiveStateMatching(t *testing.T) {
 	}
 	if rows[0].PointsClosed != 7 {
 		t.Errorf("PointsClosed = %v, want 7", rows[0].PointsClosed)
+	}
+}
+
+// TestAggregate_CustomStateNames exercises a team that uses "In Progress" /
+// "RFT" / "Done" instead of the default workflow.
+func TestAggregate_CustomStateNames(t *testing.T) {
+	items := []azdevops.WorkItem{
+		item(1, "In Progress", "Alice", 5, -1, 3), // active-stale (5d > 3d)
+		item(2, "RFT", "Alice", 1, -1, 2),
+		item(3, "Done", "Bob", 1, 1, 5),
+	}
+	th := Thresholds{
+		ActiveStaleDays: 3,
+		RFTStaleDays:    2,
+		WIPLimit:        4,
+		States:          StateConfig{Active: "In Progress", ReadyForTest: "RFT", Closed: "Done"},
+	}
+	rows, flags := Aggregate(items, interval, now, th)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	var alice, bob *UserMetrics
+	for i := range rows {
+		switch rows[i].User {
+		case "Alice":
+			alice = &rows[i]
+		case "Bob":
+			bob = &rows[i]
+		}
+	}
+	if alice == nil || bob == nil {
+		t.Fatalf("missing user row; got %+v", rows)
+	}
+	if alice.ActiveCount != 1 || alice.RFTCount != 1 || alice.InFlight != 2 {
+		t.Errorf("Alice counts wrong: %+v", alice)
+	}
+	if bob.PointsClosed != 5 {
+		t.Errorf("Bob points = %v, want 5", bob.PointsClosed)
+	}
+	if len(flags) != 1 || flags[0].Reason != reasonActiveStale {
+		t.Errorf("flags = %+v, want one active-stale", flags)
+	}
+}
+
+// TestAggregate_DualCasingRFT verifies the user's actual case: snapshot data
+// has both "Ready for test" and "Ready For Test" rows; case-insensitive
+// matching buckets them together as RFT.
+func TestAggregate_DualCasingRFT(t *testing.T) {
+	items := []azdevops.WorkItem{
+		item(1, "Ready For Test", "Alice", 1, -1, 2),
+		item(2, "Ready for test", "Alice", 1, -1, 3),
+		item(3, "READY FOR TEST", "Alice", 1, -1, 1),
+	}
+	rows, _ := Aggregate(items, interval, now, defaultThresholds())
+	if len(rows) != 1 || rows[0].RFTCount != 3 {
+		t.Errorf("RFTCount = %v (rows=%+v), want all 3 bucketed", rows, rows)
 	}
 }

@@ -2,8 +2,16 @@ package metrics
 
 import (
 	"sort"
-	"strings"
 	"time"
+)
+
+// Internal bucket keys used by TrendAggregate's accumulator maps. Decoupled
+// from the configured state names so the per-item-state tracking doesn't have
+// to deal with case folding inside the inner loop.
+const (
+	bucketActive = "active"
+	bucketRFT    = "rft"
+	bucketClosed = "closed"
 )
 
 // SprintWindow is the time range during which a sprint tag was active in the
@@ -42,8 +50,10 @@ type TrendCell struct {
 //     last day the sprint had items in flight). If every observation is
 //     Closed, fall back to the latest TS seen.
 //
-// ok=false if the tag is never seen in the snapshot.
-func DeriveSprintWindow(snaps []Snapshot, tag string, now time.Time) (SprintWindow, bool) {
+// `states` carries the configured Closed name so wrapped-sprint detection
+// works for teams that don't call the terminal state "Closed". ok=false if
+// the tag is never seen in the snapshot.
+func DeriveSprintWindow(snaps []Snapshot, tag string, now time.Time, states StateConfig) (SprintWindow, bool) {
 	var earliest, latestOpen, latestClosed, latestAny string
 	for _, s := range snaps {
 		if !hasTag(s, tag) {
@@ -55,7 +65,7 @@ func DeriveSprintWindow(snaps []Snapshot, tag string, now time.Time) (SprintWind
 		if latestAny == "" || s.TS > latestAny {
 			latestAny = s.TS
 		}
-		if strings.EqualFold(s.State, "Closed") {
+		if states.IsClosed(s.State) {
 			if latestClosed == "" || s.TS > latestClosed {
 				latestClosed = s.TS
 			}
@@ -131,7 +141,7 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 		return a
 	}
 
-	_ = th // thresholds applied at finalize, see stuck-count calc below
+	states := th.States
 
 	for _, s := range snaps {
 		// Skip unassigned rows — they're not a developer signal and would
@@ -143,6 +153,20 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 		if err != nil {
 			continue
 		}
+
+		// Map the snapshot's raw state into a bucket sentinel (or skip).
+		var bucket string
+		switch {
+		case states.IsActive(s.State):
+			bucket = bucketActive
+		case states.IsRFT(s.State):
+			bucket = bucketRFT
+		case states.IsClosed(s.State):
+			bucket = bucketClosed
+		default:
+			continue // not one of the three tracked buckets (e.g. New)
+		}
+
 		for wIdx, w := range windows {
 			if !hasTag(s, w.Tag) {
 				continue
@@ -153,33 +177,31 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 			users[s.AssignedTo] = true
 			a := getAcc(s.AssignedTo, wIdx)
 
-			state := strings.ToLower(s.State)
-
-			// Track observed days per (item, state) so we can compute stuck
-			// from observations alone (no reliance on StateSince).
-			if state == "active" || state == "ready for test" {
+			// Track observed days per (item, bucket) so stuck-count is computed
+			// from observations alone, no reliance on StateSince.
+			if bucket == bucketActive || bucket == bucketRFT {
 				if a.stateDays[s.ID] == nil {
 					a.stateDays[s.ID] = make(map[string]map[string]struct{})
 				}
-				if a.stateDays[s.ID][state] == nil {
-					a.stateDays[s.ID][state] = make(map[string]struct{})
+				if a.stateDays[s.ID][bucket] == nil {
+					a.stateDays[s.ID][bucket] = make(map[string]struct{})
 				}
-				a.stateDays[s.ID][state][s.TS] = struct{}{}
+				a.stateDays[s.ID][bucket][s.TS] = struct{}{}
 			}
 
-			switch state {
-			case "active", "ready for test":
+			switch bucket {
+			case bucketActive, bucketRFT:
 				if a.dailyWIP[s.TS] == nil {
 					a.dailyWIP[s.TS] = make(map[int]struct{})
 				}
 				a.dailyWIP[s.TS][s.ID] = struct{}{}
 
-				if state == "active" {
+				if bucket == bucketActive {
 					if cur, ok := a.closedItemFirst[s.ID]; !ok || d.Before(cur) {
 						a.closedItemFirst[s.ID] = d
 					}
 				}
-			case "closed":
+			case bucketClosed:
 				if cur, ok := a.closedItemDone[s.ID]; !ok || d.Before(cur) {
 					a.closedItemDone[s.ID] = d
 				}
@@ -247,14 +269,14 @@ func TrendAggregate(snaps []Snapshot, windows []SprintWindow, th Thresholds, now
 			// Stuck count: distinct items observed in the same in-flight
 			// state for MORE than the threshold's day count within this window.
 			stuckSet := make(map[int]struct{})
-			for id, byState := range a.stateDays {
+			for id, byBucket := range a.stateDays {
 				if th.ActiveStaleDays > 0 {
-					if days := byState["active"]; len(days) > th.ActiveStaleDays {
+					if days := byBucket[bucketActive]; len(days) > th.ActiveStaleDays {
 						stuckSet[id] = struct{}{}
 					}
 				}
 				if th.RFTStaleDays > 0 {
-					if days := byState["ready for test"]; len(days) > th.RFTStaleDays {
+					if days := byBucket[bucketRFT]; len(days) > th.RFTStaleDays {
 						stuckSet[id] = struct{}{}
 					}
 				}

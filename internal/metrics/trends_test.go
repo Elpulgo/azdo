@@ -30,7 +30,7 @@ func TestDeriveSprintWindow_StartEnd(t *testing.T) {
 	}
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-	w, ok := DeriveSprintWindow(snaps, "sprint-42", now)
+	w, ok := DeriveSprintWindow(snaps, "sprint-42", now, DefaultStates())
 	if !ok {
 		t.Fatal("expected window, got !ok")
 	}
@@ -51,7 +51,7 @@ func TestDeriveSprintWindow_OngoingExtendsToNow(t *testing.T) {
 		snap("2026-05-31", 1, "Active", "Alice", 3, "sprint-42"),
 	}
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	w, ok := DeriveSprintWindow(snaps, "sprint-42", now)
+	w, ok := DeriveSprintWindow(snaps, "sprint-42", now, DefaultStates())
 	if !ok {
 		t.Fatal("expected window, got !ok")
 	}
@@ -60,9 +60,29 @@ func TestDeriveSprintWindow_OngoingExtendsToNow(t *testing.T) {
 	}
 }
 
+// TestDeriveSprintWindow_RespectsConfiguredClosedName verifies a team that
+// uses "Done" instead of "Closed" gets the correct window-end derivation.
+func TestDeriveSprintWindow_RespectsConfiguredClosedName(t *testing.T) {
+	snaps := []Snapshot{
+		snap("2026-05-10", 1, "Active", "Alice", 3, "sprint-42"),
+		snap("2026-05-11", 1, "Active", "Alice", 3, "sprint-42"),
+		snap("2026-05-12", 1, "Done", "Alice", 3, "sprint-42"), // terminal under custom config
+	}
+	custom := StateConfig{Active: "Active", ReadyForTest: "RFT", Closed: "Done"}
+	w, ok := DeriveSprintWindow(snaps, "sprint-42", time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), custom)
+	if !ok {
+		t.Fatal("ok = false")
+	}
+	// Latest non-Closed observation is 2026-05-11; sprint should end there.
+	wantEnd := mustDate("2026-05-11")
+	if !w.End.Equal(wantEnd) {
+		t.Errorf("End = %v, want %v (latest non-Done observation)", w.End, wantEnd)
+	}
+}
+
 func TestDeriveSprintWindow_TagNeverSeen(t *testing.T) {
 	snaps := []Snapshot{snap("2026-05-10", 1, "Active", "Alice", 3, "sprint-42")}
-	if _, ok := DeriveSprintWindow(snaps, "sprint-99", time.Now()); ok {
+	if _, ok := DeriveSprintWindow(snaps, "sprint-99", time.Now(), DefaultStates()); ok {
 		t.Error("expected !ok for tag never seen")
 	}
 }
@@ -76,7 +96,7 @@ func TestTrendAggregate_PointsClosed(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-14")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4, States: DefaultStates()}, now)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
@@ -97,7 +117,7 @@ func TestTrendAggregate_SkipsUnassigned(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-13")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4, States: DefaultStates()}, now)
 
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1 (only Alice); got users: %v", len(rows), rowNames(rows))
@@ -135,7 +155,7 @@ func TestTrendAggregate_PointsClosed_NotDoubleCountedAcrossDays(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-15")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, RFTStaleDays: 2, WIPLimit: 4, States: DefaultStates()}, now)
 	if got, want := rows[0].Cells[0].Points, 13.0; got != want {
 		t.Errorf("Points = %v, want %v (5 + 8, not 5*5 + 8*2 = 41)", got, want)
 	}
@@ -157,7 +177,7 @@ func TestTrendAggregate_AvgWIPAcrossDays(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-12")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{WIPLimit: 4}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{WIPLimit: 4, States: DefaultStates()}, now)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
@@ -181,7 +201,7 @@ func TestTrendAggregate_StuckCount_DedupedPerItem(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-14")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, WIPLimit: 4}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{ActiveStaleDays: 3, WIPLimit: 4, States: DefaultStates()}, now)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
@@ -203,7 +223,7 @@ func TestTrendAggregate_CycleTime(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-14")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{States: DefaultStates()}, now)
 	if got, want := rows[0].Cells[0].CycleTime, 3*24*time.Hour; got != want {
 		t.Errorf("CycleTime = %v, want %v", got, want)
 	}
@@ -221,7 +241,7 @@ func TestTrendAggregate_OverloadedAnyDay(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-42", Start: mustDate("2026-05-10"), End: mustDate("2026-05-12")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{WIPLimit: 2}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{WIPLimit: 2, States: DefaultStates()}, now)
 	if !rows[0].Cells[0].OverloadedAnyDay {
 		t.Errorf("expected OverloadedAnyDay=true at peak 3 vs limit 2")
 	}
@@ -239,7 +259,7 @@ func TestTrendAggregate_MultiSprintMultiUser(t *testing.T) {
 		{Tag: "sprint-41", Start: mustDate("2026-05-11"), End: mustDate("2026-05-20")},
 	}
 
-	rows := TrendAggregate(snaps, windows, Thresholds{}, now)
+	rows := TrendAggregate(snaps, windows, Thresholds{States: DefaultStates()}, now)
 
 	// Should produce one row per user, with one cell per window.
 	byUser := make(map[string][]TrendCell)
@@ -272,7 +292,7 @@ func TestTrendAggregate_RowsSortedByName(t *testing.T) {
 	}
 	w := SprintWindow{Tag: "sprint-40", Start: mustDate("2026-05-01"), End: mustDate("2026-05-01")}
 
-	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{WIPLimit: 4}, now)
+	rows := TrendAggregate(snaps, []SprintWindow{w}, Thresholds{WIPLimit: 4, States: DefaultStates()}, now)
 	names := make([]string, len(rows))
 	for i, r := range rows {
 		names[i] = r.User

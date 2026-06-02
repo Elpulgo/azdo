@@ -117,7 +117,7 @@ func snapshotTemplate(wi azdevops.WorkItem) coremetrics.Snapshot {
 // fetches candidate items via MetricsWorkItems(now-90d), fans /updates fetches
 // out with bounded concurrency, appends the synthesized rows, and writes the
 // marker. Errors leave the marker untouched so the next launch retries.
-func runBackfillCmd(client *azdevops.MultiClient, now time.Time) tea.Cmd {
+func runBackfillCmd(client *azdevops.MultiClient, now time.Time, states coremetrics.StateConfig) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return backfillDoneMsg{}
@@ -135,7 +135,7 @@ func runBackfillCmd(client *azdevops.MultiClient, now time.Time) tea.Cmd {
 		}
 
 		since := now.AddDate(0, 0, -backfillWindowDays)
-		items, err := client.MetricsWorkItems(since)
+		items, err := client.MetricsWorkItems(since, toMetricsStateNames(states))
 		if err != nil {
 			return backfillDoneMsg{err: err}
 		}

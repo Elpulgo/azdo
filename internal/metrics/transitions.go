@@ -23,26 +23,28 @@ const (
 // directly, or whether the gap-fallback path has to fire /updates to recover
 // the missing intermediate states.
 //
-// Rules (mirror metrics-tab-spec.md, Step 7):
-//   - first observation (prev empty)                 → write
-//   - same state                                     → write
-//   - Active → Ready for Test                        → write (legal single-step)
-//   - Ready for Test → Closed                        → write (legal single-step)
-//   - Active → Closed                                → fallback (skipped RFT)
-//   - any backward transition (e.g. Closed → Active) → fallback
-//   - anything else                                  → fallback
-func ClassifyTransition(prev, curr string) GapAction {
+// Rules:
+//   - first observation (prev empty)              → write
+//   - same state                                  → write
+//   - legal single forward step in states.Order() → write
+//   - everything else (multi-step jump, backward,
+//     unknown state)                              → fallback
+//
+// `states` carries the configured workflow so teams with custom state names
+// (e.g. Active / RFT / Done) get the same gap-detection behavior.
+func ClassifyTransition(prev, curr string, states StateConfig) GapAction {
 	if prev == "" {
 		return GapWrite
 	}
-	p, c := strings.ToLower(prev), strings.ToLower(curr)
-	if p == c {
+	if strings.EqualFold(strings.TrimSpace(prev), strings.TrimSpace(curr)) {
 		return GapWrite
 	}
-	switch {
-	case p == "active" && c == "ready for test":
-		return GapWrite
-	case p == "ready for test" && c == "closed":
+	pi, pok := states.Index(prev)
+	ci, cok := states.Index(curr)
+	if !pok || !cok {
+		return GapNeedsFallback
+	}
+	if ci == pi+1 {
 		return GapWrite
 	}
 	return GapNeedsFallback

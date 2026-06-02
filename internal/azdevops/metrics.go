@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -30,23 +31,28 @@ type workItemUpdatesResponse struct {
 	Value []workItemUpdate `json:"value"`
 }
 
-// MetricsWorkItems fetches every in-flight item (Active / Ready for Test) for
-// the project plus items closed on or after `since`, with the metrics fields
-// populated. Unlike ListWorkItems this query is org-wide (no @Me filter) and
-// not capped at 50 — it powers the management/metrics view.
+// MetricsStateNames carries the configured state names used by the metrics
+// WIQL. Mirrors `internal/metrics.StateConfig` so this layer doesn't depend
+// on the metrics package. All three names are required.
+type MetricsStateNames struct {
+	Active       string
+	ReadyForTest string
+	Closed       string
+}
+
+// MetricsWorkItems fetches every in-flight item (Active / Ready for Test
+// equivalents per the configured workflow) for the project plus items closed
+// on or after `since`, with the metrics fields populated. Unlike ListWorkItems
+// this query is org-wide (no @Me filter) and not capped at 50 — it powers the
+// management/metrics view.
 //
 // The WIQL excludes the New state by construction: New items are backlog,
 // nobody is working them, and they would only add noise to the dashboard.
-func (c *Client) MetricsWorkItems(since time.Time) ([]WorkItem, error) {
-	sinceStr := since.Format("2006-01-02")
-	query := fmt.Sprintf(`SELECT [System.Id] FROM WorkItems
-WHERE [System.TeamProject] = @project
-  AND (
-        [System.State] IN ('Active','Ready for Test')
-     OR ([System.State] = 'Closed' AND [Microsoft.VSTS.Common.ClosedDate] >= '%s')
-  )
-ORDER BY [System.ChangedDate] DESC`, sinceStr)
-
+func (c *Client) MetricsWorkItems(since time.Time, states MetricsStateNames) ([]WorkItem, error) {
+	query, err := buildMetricsWIQL(since, states)
+	if err != nil {
+		return nil, err
+	}
 	ids, err := c.QueryWorkItemIDs(query, 2000)
 	if err != nil {
 		return nil, err
@@ -55,6 +61,29 @@ ORDER BY [System.ChangedDate] DESC`, sinceStr)
 		return []WorkItem{}, nil
 	}
 	return c.getWorkItemsBatched(ids)
+}
+
+// buildMetricsWIQL is the pure WIQL constructor. Single-quote rejection is
+// belt-and-braces — the config layer already refuses them — so we don't have
+// to worry about quote escaping in the IN-list.
+func buildMetricsWIQL(since time.Time, states MetricsStateNames) (string, error) {
+	for _, n := range []string{states.Active, states.ReadyForTest, states.Closed} {
+		if n == "" {
+			return "", fmt.Errorf("metrics state name is empty")
+		}
+		if strings.ContainsRune(n, '\'') {
+			return "", fmt.Errorf("metrics state name %q contains a single quote", n)
+		}
+	}
+	sinceStr := since.Format("2006-01-02")
+	return fmt.Sprintf(`SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project
+  AND (
+        [System.State] IN ('%s','%s')
+     OR ([System.State] = '%s' AND [Microsoft.VSTS.Common.ClosedDate] >= '%s')
+  )
+ORDER BY [System.ChangedDate] DESC`,
+		states.Active, states.ReadyForTest, states.Closed, sinceStr), nil
 }
 
 // WorkItemUpdates fetches the revision history for a single work item and

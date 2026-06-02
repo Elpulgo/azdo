@@ -841,6 +841,133 @@ theme: dark
 	}
 }
 
+func TestLoad_MetricsStates_DefaultsWhenAbsent(t *testing.T) {
+	tempDir := t.TempDir()
+	configFile := filepath.Join(tempDir, "config.yaml")
+	configContent := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+metrics:
+  enabled: true
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFrom(configFile)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Metrics.States.Active != "Active" {
+		t.Errorf("States.Active = %q, want %q", cfg.Metrics.States.Active, "Active")
+	}
+	if cfg.Metrics.States.ReadyForTest != "Ready for Test" {
+		t.Errorf("States.ReadyForTest = %q, want %q", cfg.Metrics.States.ReadyForTest, "Ready for Test")
+	}
+	if cfg.Metrics.States.Closed != "Closed" {
+		t.Errorf("States.Closed = %q, want %q", cfg.Metrics.States.Closed, "Closed")
+	}
+}
+
+func TestLoad_MetricsStates_CustomNames(t *testing.T) {
+	tempDir := t.TempDir()
+	configFile := filepath.Join(tempDir, "config.yaml")
+	configContent := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+metrics:
+  enabled: true
+  states:
+    active: In Progress
+    ready_for_test: RFT
+    closed: Done
+  state_labels:
+    ready_for_test: rft
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFrom(configFile)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Metrics.States.Active != "In Progress" {
+		t.Errorf("States.Active = %q", cfg.Metrics.States.Active)
+	}
+	if cfg.Metrics.States.ReadyForTest != "RFT" {
+		t.Errorf("States.ReadyForTest = %q", cfg.Metrics.States.ReadyForTest)
+	}
+	if cfg.Metrics.States.Closed != "Done" {
+		t.Errorf("States.Closed = %q", cfg.Metrics.States.Closed)
+	}
+	if cfg.Metrics.StateLabels.ReadyForTest != "rft" {
+		t.Errorf("StateLabels.ReadyForTest = %q", cfg.Metrics.StateLabels.ReadyForTest)
+	}
+}
+
+func TestConfig_Validate_RejectsEmptyStateName(t *testing.T) {
+	c := &Config{
+		Organization:    "org",
+		Projects:        []string{"p"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Metrics: MetricsConfig{
+			Enabled:         true,
+			IntervalDays:    14,
+			ActiveStaleDays: 3,
+			RFTStaleDays:    2,
+			WIPLimit:        4,
+			States:          MetricsStates{Active: "", ReadyForTest: "RFT", Closed: "Done"},
+		},
+	}
+	if err := c.Validate(); err == nil {
+		t.Error("Validate accepted empty state name; want error")
+	}
+}
+
+func TestConfig_Validate_RejectsSingleQuoteInStateName(t *testing.T) {
+	c := &Config{
+		Organization:    "org",
+		Projects:        []string{"p"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Metrics: MetricsConfig{
+			Enabled:         true,
+			IntervalDays:    14,
+			ActiveStaleDays: 3,
+			RFTStaleDays:    2,
+			WIPLimit:        4,
+			States:          MetricsStates{Active: "Active", ReadyForTest: "RF'T", Closed: "Done"},
+		},
+	}
+	if err := c.Validate(); err == nil {
+		t.Error("Validate accepted single-quote in state name; want error (WIQL injection guard)")
+	}
+}
+
+func TestConfig_Validate_RejectsDuplicateStateNames(t *testing.T) {
+	c := &Config{
+		Organization:    "org",
+		Projects:        []string{"p"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Metrics: MetricsConfig{
+			Enabled:         true,
+			IntervalDays:    14,
+			ActiveStaleDays: 3,
+			RFTStaleDays:    2,
+			WIPLimit:        4,
+			States:          MetricsStates{Active: "Active", ReadyForTest: "active", Closed: "Done"},
+		},
+	}
+	if err := c.Validate(); err == nil {
+		t.Error("Validate accepted duplicate state names (case-insensitive); want error")
+	}
+}
+
 func TestLoad_MetricsRunOneShotBackfill_Parsed(t *testing.T) {
 	tempDir := t.TempDir()
 	configFile := filepath.Join(tempDir, "config.yaml")

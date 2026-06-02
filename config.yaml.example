@@ -39,3 +39,12 @@ theme: dark
 #   run_one_shot_backfill: false # set true once to seed 90 days of history via /updates;
 #                                # creates a marker file so it never runs twice. Delete
 #                                # ~/.config/azdo-tui/.metrics-backfill-done to re-run.
+#   states:                      # configurable state names (case-insensitive matching)
+#     active: Active
+#     ready_for_test: Ready for Test
+#     closed: Closed
+#   state_labels:                # optional column-header overrides; auto-derived from
+#                                # state names when absent (e.g. "Ready for Test" → "rft")
+#     active: active
+#     ready_for_test: rft
+#     closed: closed

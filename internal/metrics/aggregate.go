@@ -6,7 +6,6 @@ package metrics
 
 import (
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -15,9 +14,10 @@ import (
 // Thresholds carries the configurable cut-offs that drive flagging
 // and the overloaded marker on the per-user table.
 type Thresholds struct {
-	ActiveStaleDays int // dwell in Active longer than this -> active-stale flag
-	RFTStaleDays    int // dwell in Ready for Test longer than this -> rft-stale flag
-	WIPLimit        int // strictly more in-flight items than this -> Overloaded
+	ActiveStaleDays int         // dwell in Active longer than this -> active-stale flag
+	RFTStaleDays    int         // dwell in Ready for Test longer than this -> rft-stale flag
+	WIPLimit        int         // strictly more in-flight items than this -> Overloaded
+	States          StateConfig // canonical state names; matched case-insensitively
 }
 
 // UserMetrics is one row of the per-developer table.
@@ -45,10 +45,6 @@ type ItemFlag struct {
 }
 
 const (
-	stateActive = "active"
-	stateRFT    = "ready for test"
-	stateClosed = "closed"
-
 	reasonActiveStale = "active-stale"
 	reasonRFTStale    = "rft-stale"
 )
@@ -70,6 +66,7 @@ func Aggregate(items []azdevops.WorkItem, intervalStart, now time.Time, th Thres
 
 	activeStale := time.Duration(th.ActiveStaleDays) * 24 * time.Hour
 	rftStale := time.Duration(th.RFTStaleDays) * 24 * time.Hour
+	states := th.States
 
 	var flags []ItemFlag
 
@@ -77,9 +74,10 @@ func Aggregate(items []azdevops.WorkItem, intervalStart, now time.Time, th Thres
 		wi := items[i]
 		user := wi.AssignedToName()
 		dwell := wi.TimeInCurrentState(now)
+		s := wi.Fields.State
 
-		switch strings.ToLower(wi.Fields.State) {
-		case stateActive:
+		switch {
+		case states.IsActive(s):
 			um := get(user)
 			um.InFlight++
 			um.ActiveCount++
@@ -98,7 +96,7 @@ func Aggregate(items []azdevops.WorkItem, intervalStart, now time.Time, th Thres
 					Reason:  reasonActiveStale,
 				})
 			}
-		case stateRFT:
+		case states.IsRFT(s):
 			um := get(user)
 			um.InFlight++
 			um.RFTCount++
@@ -117,8 +115,10 @@ func Aggregate(items []azdevops.WorkItem, intervalStart, now time.Time, th Thres
 					Reason:  reasonRFTStale,
 				})
 			}
-		case stateClosed:
-			if wi.IsCompletedSince(intervalStart) {
+		case states.IsClosed(s):
+			// Item is in the configured Closed state; count its points only if
+			// the close happened inside the interval window.
+			if !wi.Fields.ClosedDate.IsZero() && wi.Fields.ClosedDate.After(intervalStart) {
 				um := get(user)
 				um.PointsClosed += wi.EffectivePoints()
 			}
