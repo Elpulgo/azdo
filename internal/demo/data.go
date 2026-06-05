@@ -32,6 +32,7 @@ var now = time.Now()
 
 func hoursAgo(h int) time.Time   { return now.Add(-time.Duration(h) * time.Hour) }
 func minutesAgo(m int) time.Time { return now.Add(-time.Duration(m) * time.Minute) }
+func daysAgo(d int) time.Time    { return now.AddDate(0, 0, -d) }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -135,6 +136,7 @@ func mockWorkItems() []azdevops.WorkItem {
 			Fields: azdevops.WorkItemFields{
 				Title: "Login page crashes on mobile Safari", State: "Active", WorkItemType: "Bug",
 				AssignedTo: &team[0], Priority: 1, ChangedDate: hoursAgo(2),
+				StateChangeDate: daysAgo(6), StoryPoints: 3,
 				IterationPath: "Nexus Platform\\Sprint 24",
 				ReproSteps:    "<ol><li>Open login page on iOS Safari 17</li><li>Enter credentials</li><li>Tap Sign In</li><li>Page crashes with white screen</li></ol>",
 				Tags:          "mobile; critical; safari",
@@ -145,6 +147,7 @@ func mockWorkItems() []azdevops.WorkItem {
 			Fields: azdevops.WorkItemFields{
 				Title: "Implement user profile avatar upload", State: "Active", WorkItemType: "User Story",
 				AssignedTo: &team[1], Priority: 2, ChangedDate: hoursAgo(5),
+				StateChangeDate: hoursAgo(20), StoryPoints: 5,
 				IterationPath: "Nexus Platform\\Sprint 24",
 				Description:   "As a user, I want to upload a profile avatar so that other team members can identify me visually.\n\n## Acceptance Criteria\n- Support JPEG, PNG, WebP formats\n- Max file size: 5MB\n- Auto-crop to square\n- Generate thumbnails at 32px, 64px, 128px",
 				Tags:          "frontend; ux",
@@ -162,8 +165,9 @@ func mockWorkItems() []azdevops.WorkItem {
 		{
 			ID: 5004, Rev: 7,
 			Fields: azdevops.WorkItemFields{
-				Title: "API returns 500 when filtering by date range", State: "Resolved", WorkItemType: "Bug",
+				Title: "API returns 500 when filtering by date range", State: "Ready for Test", WorkItemType: "Bug",
 				AssignedTo: &team[3], Priority: 2, ChangedDate: hoursAgo(1),
+				StateChangeDate: daysAgo(4), StoryPoints: 3,
 				IterationPath: "Nexus Platform\\Sprint 24",
 				ReproSteps:    "<ol><li>Call GET /api/v1/events?from=2024-01-01&to=2024-12-31</li><li>Returns HTTP 500</li></ol><p>Cause: date parsing fails for timezone-aware timestamps.</p>",
 				Tags:          "api; backend",
@@ -184,6 +188,7 @@ func mockWorkItems() []azdevops.WorkItem {
 			Fields: azdevops.WorkItemFields{
 				Title: "Dashboard charts not rendering in Firefox", State: "Active", WorkItemType: "Bug",
 				AssignedTo: &team[5], Priority: 1, ChangedDate: hoursAgo(3),
+				StateChangeDate: daysAgo(8), StoryPoints: 8,
 				IterationPath: "Horizon App\\Sprint 12",
 				ReproSteps:    "<ol><li>Open dashboard in Firefox 121+</li><li>Charts show empty containers</li><li>Console shows: 'ResizeObserver loop completed with undelivered notifications'</li></ol>",
 				Tags:          "firefox; charts; critical",
@@ -194,6 +199,7 @@ func mockWorkItems() []azdevops.WorkItem {
 			Fields: azdevops.WorkItemFields{
 				Title: "Add keyboard navigation to data grid", State: "Active", WorkItemType: "User Story",
 				AssignedTo: &team[0], Priority: 2, ChangedDate: hoursAgo(6),
+				StateChangeDate: daysAgo(1), StoryPoints: 2,
 				IterationPath: "Horizon App\\Sprint 12",
 				Description:   "As a power user, I want to navigate the data grid using keyboard shortcuts for faster data entry.\n\n## Shortcuts\n- Arrow keys: move between cells\n- Enter: edit cell\n- Escape: cancel edit\n- Tab: move to next cell",
 				Tags:          "accessibility; ux",
@@ -202,8 +208,9 @@ func mockWorkItems() []azdevops.WorkItem {
 		{
 			ID: 6003, Rev: 1,
 			Fields: azdevops.WorkItemFields{
-				Title: "Write unit tests for notification service", State: "New", WorkItemType: "Task",
+				Title: "Write unit tests for notification service", State: "Ready for Test", WorkItemType: "Task",
 				AssignedTo: &team[4], Priority: 3, ChangedDate: hoursAgo(24),
+				StateChangeDate: hoursAgo(18), StoryPoints: 2,
 				IterationPath: "Horizon App\\Sprint 12",
 				Description:   "Add unit tests for the notification service. Target: 80% code coverage.",
 			},
@@ -213,6 +220,7 @@ func mockWorkItems() []azdevops.WorkItem {
 			Fields: azdevops.WorkItemFields{
 				Title: "Optimize bundle size by code splitting routes", State: "Active", WorkItemType: "Task",
 				AssignedTo: &team[3], Priority: 2, ChangedDate: hoursAgo(4),
+				StateChangeDate: daysAgo(5), StoryPoints: 5,
 				IterationPath: "Horizon App\\Sprint 12",
 				Description:   "Current bundle is 2.3MB. Split routes using dynamic imports to reduce initial load to under 500KB.",
 				Tags:          "performance",
@@ -233,6 +241,7 @@ func mockWorkItems() []azdevops.WorkItem {
 			Fields: azdevops.WorkItemFields{
 				Title: "Add OpenTelemetry tracing to API gateway", State: "Active", WorkItemType: "Task",
 				AssignedTo: &team[2], Priority: 2, ChangedDate: hoursAgo(10),
+				StateChangeDate: hoursAgo(30), StoryPoints: 3,
 				IterationPath: "Nexus Platform\\Sprint 24",
 				Description:   "Instrument the API gateway with OpenTelemetry for distributed tracing. Export to Jaeger.",
 				Tags:          "observability; infrastructure",
@@ -246,6 +255,39 @@ func mockWorkItems() []azdevops.WorkItem {
 				IterationPath: "Nexus Platform\\Sprint 24",
 				Description:   "Run a full dependency audit and address any critical or high severity CVEs.",
 				Tags:          "security",
+			},
+		},
+		{
+			ID: 5008, Rev: 9,
+			Fields: azdevops.WorkItemFields{
+				Title: "Add rate limiting to public API endpoints", State: "Closed", WorkItemType: "User Story",
+				AssignedTo: &team[0], Priority: 2, ChangedDate: daysAgo(3),
+				StateChangeDate: daysAgo(3), ClosedDate: daysAgo(3), StoryPoints: 5,
+				IterationPath: "Nexus Platform\\Sprint 24",
+				Description:   "Throttle public API endpoints to 100 requests/minute per API key to protect against abuse.",
+				Tags:          "api; security",
+			},
+		},
+		{
+			ID: 5009, Rev: 4,
+			Fields: azdevops.WorkItemFields{
+				Title: "Fix flaky timezone test in scheduler", State: "Closed", WorkItemType: "Bug",
+				AssignedTo: &team[1], Priority: 3, ChangedDate: daysAgo(10),
+				StateChangeDate: daysAgo(10), ClosedDate: daysAgo(10), StoryPoints: 3,
+				IterationPath: "Nexus Platform\\Sprint 24",
+				ReproSteps:    "<p>Scheduler test intermittently fails around DST boundaries due to a hardcoded UTC offset.</p>",
+				Tags:          "backend; flaky-test",
+			},
+		},
+		{
+			ID: 6006, Rev: 8,
+			Fields: azdevops.WorkItemFields{
+				Title: "Dark mode theme for settings page", State: "Closed", WorkItemType: "User Story",
+				AssignedTo: &team[5], Priority: 3, ChangedDate: daysAgo(6),
+				StateChangeDate: daysAgo(6), ClosedDate: daysAgo(6), StoryPoints: 8,
+				IterationPath: "Horizon App\\Sprint 12",
+				Description:   "Apply the design-system dark palette to the settings page and persist the user's preference.",
+				Tags:          "frontend; ux",
 			},
 		},
 	}

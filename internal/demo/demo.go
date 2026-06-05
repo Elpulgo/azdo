@@ -54,8 +54,21 @@ func Run(version, commit string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Redirect metrics persistence (snapshots, sprint selection, backfill
+	// marker) into the temp dir so seeding and live snapshotting never touch
+	// the user's real ~/.config/azdo-tui history.
+	if err := os.Setenv("AZDO_CONFIG_DIR", filepath.Join(tmpDir, "azdo-tui")); err != nil {
+		return fmt.Errorf("failed to set demo config dir: %w", err)
+	}
+
 	cfg := config.NewWithPath(demoOrg, projects, demoPollingInterval, "dracula", filepath.Join(tmpDir, "config.yaml"))
 	cfg.DisplayNames = displayNames
+	enableDemoMetrics(cfg)
+
+	// Seed synthetic sprint history so the metrics tab's Trends view has data.
+	if err := seedMetricsHistory(); err != nil {
+		return fmt.Errorf("failed to seed demo metrics: %w", err)
+	}
 
 	model := app.NewModel(client, cfg, version+" (demo)", commit)
 	p := tea.NewProgram(model, tea.WithAltScreen())

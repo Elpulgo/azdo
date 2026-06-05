@@ -22,14 +22,14 @@ import (
 var appendMu sync.Mutex
 
 // DefaultSnapshotPath returns the standard snapshot file location
-// (~/.config/azdo-tui/metrics.jsonl). The parent directory is not created;
-// the writer's caller is responsible for that.
+// (~/.config/azdo-tui/metrics.jsonl, or under AZDO_CONFIG_DIR when set). The
+// parent directory is not created; the writer's caller is responsible for that.
 func DefaultSnapshotPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := configDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".config", "azdo-tui", "metrics.jsonl"), nil
+	return filepath.Join(dir, "metrics.jsonl"), nil
 }
 
 // EnsureSnapshotDir creates the directory holding the snapshot file if it

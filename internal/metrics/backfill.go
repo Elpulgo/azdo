@@ -12,11 +12,11 @@ import (
 // the one-shot backfill has already been run; absence (with the config flag
 // on) means it should run on the next launch.
 func DefaultBackfillMarkerPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := configDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".config", "azdo-tui", ".metrics-backfill-done"), nil
+	return filepath.Join(dir, ".metrics-backfill-done"), nil
 }
 
 // BackfillAlreadyDone reports whether the marker file exists. A missing file

@@ -14,13 +14,13 @@ type Selection struct {
 }
 
 // DefaultSelectionPath is the standard location for the trend-view sprint
-// selection (sibling to the snapshot file).
+// selection (sibling to the snapshot file). Honors AZDO_CONFIG_DIR.
 func DefaultSelectionPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := configDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".config", "azdo-tui", "metrics-selection.json"), nil
+	return filepath.Join(dir, "metrics-selection.json"), nil
 }
 
 // LoadSelection reads the saved sprint tags. Missing file returns an empty
