@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/demo"
+	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
 	"github.com/Elpulgo/azdo/internal/ui/setupwizard"
@@ -196,9 +199,44 @@ func runTUI() error {
 		return fmt.Errorf("failed to create Azure DevOps client: %w", err)
 	}
 
+	// Load persisted state (last active tab, last-viewed PR/work item).
+	// A missing file is treated as a clean slate — not an error.
+	statePath, err := state.Path()
+	if err != nil {
+		return fmt.Errorf("resolve state path: %w", err)
+	}
+	stateStore, err := state.NewStore(statePath)
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
 	// Create and run the TUI application
 	model := app.NewModel(client, cfg, version, commit)
+	model.SetStateStore(stateStore)
+	model.ApplyState(stateStore.State())
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Forward OS termination signals to Bubble Tea so the program unwinds
+	// cleanly (alt-screen restored, state flushed) instead of being killed
+	// mid-write. SIGINT is also handled by the in-app 'q'/Ctrl+C binding;
+	// SIGTERM and SIGHUP are the ones that matter here.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		<-sigCh
+		p.Send(tea.QuitMsg{})
+	}()
+
+	// Best-effort flush on any exit path — normal quit, signal-driven
+	// quit, or a panic propagating up from the Tea program. A SIGKILL or
+	// power loss is unrecoverable; the debounced writes during the
+	// session bound the loss window.
+	defer func() {
+		signal.Stop(sigCh)
+		if flushErr := stateStore.Flush(); flushErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to persist state: %v\n", flushErr)
+		}
+	}()
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI application error: %w", err)

@@ -71,6 +71,10 @@ azdo/
 │   │   ├── config.go                   # YAML config loading (viper)
 │   │   └── keyring.go                 # PAT storage via system keyring
 │   │
+│   ├── state/
+│   │   ├── state.go                    # Persistent navigation state (active tab, last detail IDs)
+│   │   └── store.go                    # Debounced, atomic, thread-safe state writer
+│   │
 │   ├── polling/
 │   │   ├── poller.go                   # Background polling manager
 │   │   ├── errorhandler.go            # Error recovery & graceful degradation
@@ -240,11 +244,21 @@ Built-in themes include dark, light, dracula, catppuccin, and others.
 
 If neither is found, the setup wizard or PAT input modal guides the user through initial setup.
 
-### 8. CLI Action Dispatch
+### 8. Navigation State Persistence
+
+A lightweight `internal/state` package persists the last active tab and the most recently opened PR / work item detail to `$XDG_STATE_HOME/azdo-tui/state.yaml` (falling back to `~/.local/state/azdo-tui/state.yaml`). Pipeline detail is intentionally not persisted.
+
+- **`State`** — YAML-tagged struct (`ActiveTab`, `Tabs.PullRequests.LastDetailID`, `Tabs.WorkItems.LastDetailID`) with a `Version` field for forward-compatible schema changes.
+- **`Store`** — thread-safe wrapper around `State`. `Apply(mutate)` schedules a debounced write (default 500ms) so rapid tab switches coalesce into a single disk write. `Flush()` is synchronous and called on shutdown.
+- **Atomic writes** — `Store` writes to a temp file in the same directory, `fsync`s, then renames over the target, so a crash mid-write never leaves a half-written file.
+- **Restore on startup** — the root model calls `ApplyState` once at boot. Disabled or unknown tabs are ignored. For the PR / work item tabs, a one-shot `pendingDetailID` is consumed on the first populate after launch; if the persisted ID isn't found in the loaded data, the app stays on the list (graceful fallback) and the intent is cleared so polling refreshes can't hijack the user back into a stale detail.
+- **Shutdown flush** — `cmd/azdo-tui/main.go` forwards SIGINT / SIGTERM / SIGHUP to `tea.QuitMsg{}` and `Flush()`es in a `defer` so debounced writes land before exit. SIGKILL / power loss is unrecoverable; the debounce window bounds the loss.
+
+### 9. CLI Action Dispatch
 
 The entry point uses a simple action enum pattern (no framework). CLI args are parsed into an action (`Help`, `Version`, `Auth`, or default `RunTUI`), and a switch dispatches to the appropriate handler. The `Auth` action runs an interactive PAT setup flow; the default action boots the full TUI.
 
-### 9. View Navigation
+### 10. View Navigation
 
 Each tab implements a drill-down navigation pattern:
 

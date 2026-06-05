@@ -8,6 +8,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
@@ -81,6 +82,95 @@ type Model struct {
 	height           int
 	footerRows       int
 	err              error
+	stateStore       *state.Store // optional; nil when persistence is disabled
+}
+
+// SetStateStore attaches a state store to the model so navigation changes
+// (active tab, PR / work-item detail) get persisted between runs. Wired
+// up by cmd/azdo-tui; tests may omit it.
+func (m *Model) SetStateStore(s *state.Store) {
+	m.stateStore = s
+}
+
+// tabIDForTab maps the internal Tab iota to the on-disk TabID.
+func tabIDForTab(t Tab) state.TabID {
+	switch t {
+	case TabPullRequests:
+		return state.TabPullRequests
+	case TabWorkItems:
+		return state.TabWorkItems
+	case TabPipelines:
+		return state.TabPipelines
+	}
+	return ""
+}
+
+// tabFromID resolves a persisted TabID back to the internal Tab iota.
+// Unknown IDs return (0, false) so the caller can fall back gracefully.
+func tabFromID(id state.TabID) (Tab, bool) {
+	switch id {
+	case state.TabPullRequests:
+		return TabPullRequests, true
+	case state.TabWorkItems:
+		return TabWorkItems, true
+	case state.TabPipelines:
+		return TabPipelines, true
+	}
+	return 0, false
+}
+
+// ApplyState seeds the model from persisted state at startup: it sets the
+// active tab (when enabled and recognised) and queues per-tab pending
+// detail restores on the sub-models. Detail restores fire on the first
+// list populate; if the persisted ID isn't found the restore silently
+// no-ops — the user lands on the list, never in a broken state.
+func (m *Model) ApplyState(s state.State) {
+	if t, ok := tabFromID(s.ActiveTab); ok && m.isTabEnabled(t) {
+		m.activeTab = t
+	}
+	if id := s.Tabs.PullRequests.LastDetailID; id != 0 {
+		m.pullRequestsView = m.pullRequestsView.WithPendingDetailRestore(id)
+	}
+	if id := s.Tabs.WorkItems.LastDetailID; id != 0 {
+		m.workItemsView = m.workItemsView.WithPendingDetailRestore(id)
+	}
+}
+
+// recordActiveTab is a no-op when no store is attached.
+func (m Model) recordActiveTab() {
+	if m.stateStore == nil {
+		return
+	}
+	id := tabIDForTab(m.activeTab)
+	m.stateStore.Apply(func(s *state.State) {
+		s.Version = state.CurrentVersion
+		s.ActiveTab = id
+	})
+}
+
+// recordDetailState captures the currently open detail (if any) for the
+// active tab into the persistent state. Called after delegating to a
+// sub-model in Update, so the snapshot reflects the post-update view mode.
+// Only PR and Work Items tabs participate — Pipelines detail is not
+// restorable by design.
+func (m Model) recordDetailState() {
+	if m.stateStore == nil {
+		return
+	}
+	switch m.activeTab {
+	case TabPullRequests:
+		id := m.pullRequestsView.DetailItemID()
+		m.stateStore.Apply(func(s *state.State) {
+			s.Version = state.CurrentVersion
+			s.Tabs.PullRequests.LastDetailID = id
+		})
+	case TabWorkItems:
+		id := m.workItemsView.DetailItemID()
+		m.stateStore.Apply(func(s *state.State) {
+			s.Version = state.CurrentVersion
+			s.Tabs.WorkItems.LastDetailID = id
+		})
+	}
 }
 
 // isTabEnabled returns true if the given tab is in the enabledTabs list.
@@ -289,8 +379,18 @@ func (m Model) Init() tea.Cmd {
 	initCmds := []tea.Cmd{
 		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
 		m.poller.StartPolling(),      // Start polling timer
-		m.pullRequestsView.Init(),    // Load PR tab (default tab)
 		checkForUpdate(m.currentVersion),
+	}
+
+	// Initialize the active tab's view. After ApplyState, this may be a
+	// non-default tab restored from persisted state.
+	if cmd := m.initTabCmd(m.activeTab); cmd != nil {
+		initCmds = append(initCmds, cmd)
+	}
+	// PR is the canonical default; ensure its data is preloaded even when
+	// state restored a different tab so switching back is instant.
+	if m.activeTab != TabPullRequests {
+		initCmds = append(initCmds, m.pullRequestsView.Init())
 	}
 
 	return tea.Batch(initCmds...)
@@ -389,6 +489,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if target != m.activeTab {
 					m.activeTab = target
 					m.resizeActiveViewIfNeeded()
+					m.recordActiveTab()
 					return m, m.initTabCmd(target)
 				}
 			}
@@ -398,6 +499,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if prev != m.activeTab {
 				m.activeTab = prev
 				m.resizeActiveViewIfNeeded()
+				m.recordActiveTab()
 				return m, m.initTabCmd(prev)
 			}
 			return m, nil
@@ -406,6 +508,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if next != m.activeTab {
 				m.activeTab = next
 				m.resizeActiveViewIfNeeded()
+				m.recordActiveTab()
 				return m, m.initTabCmd(next)
 			}
 			return m, nil
@@ -581,6 +684,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// between list/detail mode, the footer height changes and we need to
 	// resize the active view to match.
 	m.resizeActiveViewIfNeeded()
+
+	// Persist any change to the currently open detail view (e.g. user
+	// pressed Enter on a row, or Esc to leave detail). No-op if the
+	// store isn't attached.
+	m.recordDetailState()
 
 	return m, tea.Batch(cmds...)
 }

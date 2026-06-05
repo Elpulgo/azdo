@@ -36,6 +36,12 @@ type Model struct {
 	allPRs         []azdevops.PullRequest
 	myPRs          []azdevops.PullRequest
 	asReviewerPRs  []azdevops.PullRequest
+
+	// pendingDetailID is the PR ID requested by startup state restore.
+	// Cleared on the first populate (whether or not the lookup succeeded)
+	// so subsequent polls cannot hijack the user back into detail view.
+	pendingDetailID       int
+	pendingRestoreHandled bool
 }
 
 // NewModel creates a new pull request list model with default styles
@@ -138,7 +144,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, fetchPullRequestsAsReviewerMulti(m.client)
 			}
 			m.list = m.list.HandleFetchResult(msg.prs, nil)
-			return m, nil
+			return m.withRestore(nil)
 		}
 		m.allPRs = msg.prs
 		if m.myPRsOnly {
@@ -148,44 +154,45 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, fetchPullRequestsAsReviewerMulti(m.client)
 		}
 		m.list = m.list.HandleFetchResult(msg.prs, msg.err)
-		return m, nil
+		return m.withRestore(nil)
 	case myPullRequestsMsg:
 		if msg.err != nil {
 			var partialErr *azdevops.PartialError
 			if errors.As(msg.err, &partialErr) {
 				m.myPRs = msg.prs
 				m.list = m.list.SetItems(msg.prs)
-				return m, nil
+				return m.withRestore(nil)
 			}
 			// On error, fall back to showing all items
 			m.myPRsOnly = false
 			m.myPRs = nil
 			m.list = m.list.SetItems(m.allPRs)
-			return m, nil
+			return m.withRestore(nil)
 		}
 		m.myPRs = msg.prs
 		m.list = m.list.SetItems(msg.prs)
-		return m, nil
+		return m.withRestore(nil)
 	case asReviewerPullRequestsMsg:
 		if msg.err != nil {
 			var partialErr *azdevops.PartialError
 			if errors.As(msg.err, &partialErr) {
 				m.asReviewerPRs = msg.prs
 				m.list = m.list.SetItems(msg.prs)
-				return m, nil
+				return m.withRestore(nil)
 			}
 			m.asReviewerOnly = false
 			m.asReviewerPRs = nil
 			m.list = m.list.SetItems(m.allPRs)
-			return m, nil
+			return m.withRestore(nil)
 		}
 		m.asReviewerPRs = msg.prs
 		m.list = m.list.SetItems(msg.prs)
-		return m, nil
+		return m.withRestore(nil)
 	case SetPRsMsg:
 		m.allPRs = msg.PRs
 		if !m.myPRsOnly && !m.asReviewerOnly {
 			m.list = m.list.SetItems(msg.PRs)
+			return m.withRestore(nil)
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -378,6 +385,68 @@ func (m Model) IsSearching() bool {
 // IsMyPRsActive returns true if the "my PRs" filter is active.
 func (m Model) IsMyPRsActive() bool {
 	return m.myPRsOnly
+}
+
+// DetailItemID returns the ID of the PR whose detail view is currently
+// open, or 0 when the user is on the list. Used by the state store to
+// persist the last-viewed PR across sessions.
+func (m Model) DetailItemID() int {
+	if m.viewMode != ViewDetail {
+		return 0
+	}
+	adapter, ok := m.list.Detail().(*detailAdapter)
+	if !ok || adapter == nil {
+		return 0
+	}
+	return adapter.model.GetPR().ID
+}
+
+// WithPendingDetailRestore queues a request to open the PR with this ID in
+// detail view as soon as the list is populated. The pending intent is
+// consumed by the first populate event — found or not — so polling
+// refreshes cannot re-trigger it.
+func (m Model) WithPendingDetailRestore(id int) Model {
+	m.pendingDetailID = id
+	m.pendingRestoreHandled = false
+	return m
+}
+
+// tryRestoreDetail attempts to open detail for the pending ID, if any.
+// Returns the (possibly updated) model and the detail's Init cmd. Always
+// marks the intent as handled on the first call.
+func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
+	if m.pendingRestoreHandled || m.pendingDetailID == 0 {
+		return m, nil
+	}
+	target := m.pendingDetailID
+	m.pendingDetailID = 0
+	m.pendingRestoreHandled = true
+
+	idx := m.list.FindIndex(func(pr azdevops.PullRequest) bool {
+		return pr.ID == target
+	})
+	if idx < 0 {
+		return m, nil
+	}
+	m.list.SetCursor(idx)
+	list, cmd := m.list.OpenSelectedDetail()
+	m.list = list
+	m.viewMode = ViewDetail
+	return m, cmd
+}
+
+// withRestore is a small adapter used at populate sites: it runs restore
+// (if any) and returns the combined command alongside any caller cmd.
+func (m Model) withRestore(prev tea.Cmd) (Model, tea.Cmd) {
+	m, restoreCmd := m.tryRestoreDetail()
+	switch {
+	case prev == nil:
+		return m, restoreCmd
+	case restoreCmd == nil:
+		return m, prev
+	default:
+		return m, tea.Batch(prev, restoreCmd)
+	}
 }
 
 // IsAsReviewerActive returns true if the "as reviewer" filter is active.
