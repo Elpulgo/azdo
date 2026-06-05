@@ -22,7 +22,30 @@ type Config struct {
 	PollingInterval int               `mapstructure:"polling_interval"`
 	Theme           string            `mapstructure:"theme"`
 	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
+	Metrics         MetricsConfig     `mapstructure:"metrics"`
 	configPath      string            // internal field to store config path for saving
+}
+
+// MetricsConfig holds opt-in settings for the metrics dashboard tab.
+// The tab is hidden entirely unless Enabled is true.
+type MetricsConfig struct {
+	Enabled            bool          `mapstructure:"enabled"`
+	IntervalDays       int           `mapstructure:"interval_days"`         // window for points-closed / velocity
+	ActiveStaleDays    int           `mapstructure:"active_stale_days"`     // dwell in Active above this flags the item
+	RFTStaleDays       int           `mapstructure:"rft_stale_days"`        // dwell in Ready for Test above this flags the item
+	WIPLimit           int           `mapstructure:"wip_limit"`             // in-flight strictly above this marks a user overloaded
+	RunOneShotBackfill bool          `mapstructure:"run_one_shot_backfill"` // PR 3: opt-in 90-day /updates seed
+	States             MetricsStates `mapstructure:"states"`                // PR 4: configurable state names
+	StateLabels        MetricsStates `mapstructure:"state_labels"`          // PR 4: column-header abbreviations (auto-derived when absent)
+}
+
+// MetricsStates holds the canonical name (or label override) for each of the
+// three workflow states the metrics tab buckets on. Empty values fall back to
+// defaults during config load.
+type MetricsStates struct {
+	Active       string `mapstructure:"active"`
+	ReadyForTest string `mapstructure:"ready_for_test"`
+	Closed       string `mapstructure:"closed"`
 }
 
 // validDisabledPanes lists the pane names that can be disabled.
@@ -103,6 +126,15 @@ func parseProjects(raw []interface{}) ([]string, map[string]string) {
 const (
 	DefaultPollingInterval = 60 // seconds
 	DefaultTheme           = "dark"
+
+	DefaultMetricsIntervalDays    = 14 // days
+	DefaultMetricsActiveStaleDays = 3
+	DefaultMetricsRFTStaleDays    = 2
+	DefaultMetricsWIPLimit        = 4
+
+	DefaultMetricsActiveState       = "Active"
+	DefaultMetricsReadyForTestState = "Ready for Test"
+	DefaultMetricsClosedState       = "Closed"
 )
 
 // GetPath returns the path to the config file
@@ -150,6 +182,15 @@ func LoadFrom(configPath string) (*Config, error) {
 	// Set defaults
 	v.SetDefault("polling_interval", DefaultPollingInterval)
 	v.SetDefault("theme", DefaultTheme)
+	v.SetDefault("metrics.enabled", false)
+	v.SetDefault("metrics.interval_days", DefaultMetricsIntervalDays)
+	v.SetDefault("metrics.active_stale_days", DefaultMetricsActiveStaleDays)
+	v.SetDefault("metrics.rft_stale_days", DefaultMetricsRFTStaleDays)
+	v.SetDefault("metrics.wip_limit", DefaultMetricsWIPLimit)
+	v.SetDefault("metrics.run_one_shot_backfill", false)
+	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
+	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
+	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -278,6 +319,55 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Metrics.Enabled {
+		if c.Metrics.IntervalDays <= 0 {
+			return fmt.Errorf("metrics.interval_days must be > 0, got %d", c.Metrics.IntervalDays)
+		}
+		if c.Metrics.ActiveStaleDays < 0 {
+			return fmt.Errorf("metrics.active_stale_days must be >= 0, got %d", c.Metrics.ActiveStaleDays)
+		}
+		if c.Metrics.RFTStaleDays < 0 {
+			return fmt.Errorf("metrics.rft_stale_days must be >= 0, got %d", c.Metrics.RFTStaleDays)
+		}
+		if c.Metrics.WIPLimit <= 0 {
+			return fmt.Errorf("metrics.wip_limit must be > 0, got %d", c.Metrics.WIPLimit)
+		}
+		if err := validateStateName("metrics.states.active", c.Metrics.States.Active); err != nil {
+			return err
+		}
+		if err := validateStateName("metrics.states.ready_for_test", c.Metrics.States.ReadyForTest); err != nil {
+			return err
+		}
+		if err := validateStateName("metrics.states.closed", c.Metrics.States.Closed); err != nil {
+			return err
+		}
+		names := []string{
+			strings.ToLower(strings.TrimSpace(c.Metrics.States.Active)),
+			strings.ToLower(strings.TrimSpace(c.Metrics.States.ReadyForTest)),
+			strings.ToLower(strings.TrimSpace(c.Metrics.States.Closed)),
+		}
+		for i := range names {
+			for j := i + 1; j < len(names); j++ {
+				if names[i] == names[j] {
+					return fmt.Errorf("metrics.states: duplicate state name %q — Active / Ready for Test / Closed must each be distinct", names[i])
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateStateName guards the configured names against empty values and
+// single quotes (which would break the WIQL `IN ('...','...')` literal).
+func validateStateName(key, name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return fmt.Errorf("%s must not be empty", key)
+	}
+	if strings.ContainsRune(trimmed, '\'') {
+		return fmt.Errorf("%s contains a single quote (%q) — not allowed (WIQL safety)", key, name)
+	}
 	return nil
 }
 

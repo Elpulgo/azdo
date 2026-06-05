@@ -402,3 +402,62 @@ func TestTagPickerEmptySelection(t *testing.T) {
 		t.Error("Expected no command when selecting with empty options")
 	}
 }
+
+func TestTagPicker_MultiSelect_SpaceTogglesAndEnterConfirms(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTagsMulti([]string{"sprint-40", "sprint-41", "sprint-42"}, nil)
+	picker.Show()
+
+	// Move down to "sprint-41" and toggle it on.
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyDown})
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	// Move down again to "sprint-42" and toggle it on.
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyDown})
+	picker, _ = picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	// Confirm.
+	_, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd from enter, got nil")
+	}
+	msg := cmd()
+	got, ok := msg.(TagsSelectedMsg)
+	if !ok {
+		t.Fatalf("expected TagsSelectedMsg, got %T", msg)
+	}
+	want := []string{"sprint-41", "sprint-42"}
+	if len(got.Tags) != len(want) {
+		t.Fatalf("got %d tags, want %d (got=%v)", len(got.Tags), len(want), got.Tags)
+	}
+	for i := range want {
+		if got.Tags[i] != want[i] {
+			t.Errorf("tag[%d] = %q, want %q", i, got.Tags[i], want[i])
+		}
+	}
+}
+
+func TestTagPicker_MultiSelect_HonorsInitialSelection(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTagsMulti([]string{"a", "b", "c"}, []string{"b"})
+	picker.Show()
+
+	_, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	msg := cmd().(TagsSelectedMsg)
+
+	if len(msg.Tags) != 1 || msg.Tags[0] != "b" {
+		t.Errorf("expected ['b'] preserved, got %v", msg.Tags)
+	}
+}
+
+func TestTagPicker_MultiSelect_DoesNotEmitSingleSelectMsg(t *testing.T) {
+	picker := newTestTagPicker()
+	picker.SetTagsMulti([]string{"a"}, nil)
+	picker.Show()
+
+	_, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	msg := cmd()
+	if _, isSingle := msg.(TagSelectedMsg); isSingle {
+		t.Error("multi-select picker emitted TagSelectedMsg; should emit TagsSelectedMsg")
+	}
+}

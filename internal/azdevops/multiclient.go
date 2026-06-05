@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // MultiClient wraps multiple project-scoped clients for concurrent fetching.
@@ -324,6 +325,63 @@ func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {
 		go func(p string, c *Client) {
 			defer wg.Done()
 			items, err := c.ListWorkItems(top)
+			ch <- result{p, items, err}
+		}(project, client)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	var allItems []WorkItem
+	var errs []error
+	for r := range ch {
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		for i := range r.items {
+			r.items[i].ProjectName = r.project
+			r.items[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
+		}
+		allItems = append(allItems, r.items...)
+	}
+
+	if len(errs) == len(mc.clients) {
+		return nil, fmt.Errorf("all projects failed: %v", errs)
+	}
+
+	sort.Slice(allItems, func(i, j int) bool {
+		return allItems[i].Fields.ChangedDate.After(allItems[j].Fields.ChangedDate)
+	})
+
+	if len(errs) > 0 {
+		return allItems, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
+
+	return allItems, nil
+}
+
+// MetricsWorkItems fetches the org-wide metrics dataset (configured workflow
+// states plus items closed on or after `since`) from all projects
+// concurrently, tags each with ProjectName, merges and sorts by ChangedDate
+// descending.
+func (mc *MultiClient) MetricsWorkItems(since time.Time, states MetricsStateNames) ([]WorkItem, error) {
+	type result struct {
+		project string
+		items   []WorkItem
+		err     error
+	}
+
+	var wg sync.WaitGroup
+	ch := make(chan result, len(mc.clients))
+
+	for project, client := range mc.clients {
+		wg.Add(1)
+		go func(p string, c *Client) {
+			defer wg.Done()
+			items, err := c.MetricsWorkItems(since, states)
 			ch <- result{p, items, err}
 		}(project, client)
 	}

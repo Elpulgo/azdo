@@ -43,6 +43,12 @@ type WorkItemFields struct {
 	Description   string    `json:"System.Description"`
 	ReproSteps    string    `json:"Microsoft.VSTS.TCM.ReproSteps"`
 	Tags          string    `json:"System.Tags"`
+
+	StoryPoints     float64   `json:"Microsoft.VSTS.Scheduling.StoryPoints"`
+	StateChangeDate time.Time `json:"Microsoft.VSTS.Common.StateChangeDate"`
+	ActivatedDate   time.Time `json:"Microsoft.VSTS.Common.ActivatedDate"`
+	ClosedDate      time.Time `json:"Microsoft.VSTS.Common.ClosedDate"`
+	CreatedDate     time.Time `json:"System.CreatedDate"`
 }
 
 // WorkItemReference represents a reference to a work item from WIQL queries
@@ -109,6 +115,28 @@ func (wi *WorkItem) TagList() []string {
 	return tags
 }
 
+// TimeInCurrentState reports how long the work item has been in its current state.
+// Returns 0 when StateChangeDate is unset.
+func (wi *WorkItem) TimeInCurrentState(now time.Time) time.Duration {
+	if wi.Fields.StateChangeDate.IsZero() {
+		return 0
+	}
+	return now.Sub(wi.Fields.StateChangeDate)
+}
+
+// EffectivePoints returns the work item's story-point estimate.
+func (wi *WorkItem) EffectivePoints() float64 {
+	return wi.Fields.StoryPoints
+}
+
+// IsCompletedSince reports whether the item is Closed and was closed strictly
+// after `start`. Items with a zero ClosedDate or a non-Closed state return false.
+func (wi *WorkItem) IsCompletedSince(start time.Time) bool {
+	return strings.EqualFold(wi.Fields.State, "Closed") &&
+		!wi.Fields.ClosedDate.IsZero() &&
+		wi.Fields.ClosedDate.After(start)
+}
+
 // AssignedToName returns the display name of the assigned user, or "-" if unassigned
 func (wi *WorkItem) AssignedToName() string {
 	if wi.Fields.AssignedTo == nil {
@@ -169,6 +197,11 @@ func (c *Client) GetWorkItems(ids []int) ([]WorkItem, error) {
 		"System.Description",
 		"Microsoft.VSTS.TCM.ReproSteps",
 		"System.Tags",
+		"Microsoft.VSTS.Scheduling.StoryPoints",
+		"Microsoft.VSTS.Common.StateChangeDate",
+		"Microsoft.VSTS.Common.ActivatedDate",
+		"Microsoft.VSTS.Common.ClosedDate",
+		"System.CreatedDate",
 	}, ",")
 
 	path := fmt.Sprintf("/wit/workitems?ids=%s&fields=%s&api-version=7.1", idsParam, fields)
