@@ -88,6 +88,125 @@ func TestRenderTrendsChart_EmptyAndSmallWindow(t *testing.T) {
 	}
 }
 
+func TestRenderTrendsChart_Bars(t *testing.T) {
+	// Grouped bars: every user is always shown (no focus/ghost), so the legend
+	// must name each user and the canvas must contain block runes (the bars).
+	m := chartModel(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	out := m.renderTrendsChart()
+	if !strings.ContainsRune(out, '█') {
+		t.Errorf("expected bar (block) runes in chart, got:\n%s", out)
+	}
+	for _, u := range []string{"alice", "bob"} {
+		if !strings.Contains(out, u) {
+			t.Errorf("legend missing user %q in:\n%s", u, out)
+		}
+	}
+	// Sprint legend is 1-based, not 0-based.
+	if !strings.Contains(out, "1 sprint-41") {
+		t.Errorf("expected 1-based sprint legend (\"1 sprint-41\") in:\n%s", out)
+	}
+	if strings.Contains(out, "0 sprint-41") {
+		t.Errorf("sprint legend should not be 0-based in:\n%s", out)
+	}
+}
+
+func TestMetricsGlossary_InBothViews(t *testing.T) {
+	m := chartModel(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	chart := m.renderTrendsChart()
+	m.mode = viewTrends
+	table := m.renderTrends()
+
+	for name, out := range map[string]string{"chart": chart, "table": table} {
+		if !strings.Contains(out, "Legend:") || !strings.Contains(out, "Cycle time") {
+			t.Errorf("%s view missing the metric glossary:\n%s", name, out)
+		}
+	}
+}
+
+func TestSetStyles_PreservesState(t *testing.T) {
+	m := chartModel(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.selectedSprints = []string{"sprint-41", "sprint-42", "sprint-43"}
+	m.sprintCursor = 2
+
+	snaps, sprints, rows := len(m.snapshots), len(m.sprintWindows), len(m.trendRows)
+	mode, cursor, sel := m.mode, m.sprintCursor, len(m.selectedSprints)
+
+	newStyles := styles.DefaultStyles()
+	m.SetStyles(newStyles)
+
+	if m.styles != newStyles {
+		t.Error("SetStyles did not swap the styles pointer")
+	}
+	if len(m.snapshots) != snaps || len(m.sprintWindows) != sprints || len(m.trendRows) != rows ||
+		m.mode != mode || m.sprintCursor != cursor || len(m.selectedSprints) != sel {
+		t.Errorf("SetStyles erased state: snaps %d→%d sprints %d→%d rows %d→%d mode %v→%v cursor %d→%d sel %d→%d",
+			snaps, len(m.snapshots), sprints, len(m.sprintWindows), rows, len(m.trendRows),
+			mode, m.mode, cursor, m.sprintCursor, sel, len(m.selectedSprints))
+	}
+	if out := m.View(); !strings.Contains(out, "sprint-41") {
+		t.Errorf("after SetStyles the metrics section is blank:\n%s", out)
+	}
+}
+
+func TestChartGeom_DiscreteAndMonotonic(t *testing.T) {
+	g := newChartGeom(60, 12, 3, 20)
+
+	// First sprint pins to the left plot edge, last to the right edge, and all
+	// columns are distinct.
+	if x := g.xFor(0); x != g.plotLeft {
+		t.Errorf("xFor(0) = %d, want plotLeft %d", x, g.plotLeft)
+	}
+	if x := g.xFor(2); x != g.plotRight {
+		t.Errorf("xFor(2) = %d, want plotRight %d", x, g.plotRight)
+	}
+	if g.xFor(0) == g.xFor(1) || g.xFor(1) == g.xFor(2) {
+		t.Errorf("sprint columns not distinct: %d %d %d", g.xFor(0), g.xFor(1), g.xFor(2))
+	}
+
+	// Y maps value 0 to the baseline and yMax to the top, monotonically.
+	if y := g.yFor(0); y != g.plotBottom {
+		t.Errorf("yFor(0) = %d, want plotBottom %d", y, g.plotBottom)
+	}
+	if y := g.yFor(20); y != g.plotTop {
+		t.Errorf("yFor(max) = %d, want plotTop %d", y, g.plotTop)
+	}
+	if !(g.yFor(20) < g.yFor(10) && g.yFor(10) < g.yFor(0)) {
+		t.Errorf("yFor not monotonic: %d %d %d", g.yFor(20), g.yFor(10), g.yFor(0))
+	}
+}
+
+func TestBarLayout_GroupedNonOverlapping(t *testing.T) {
+	// plotLeft..plotRight = 3..62 (width 60), 3 sprints, 2 users.
+	spans := barLayout(3, 62, 3, 2)
+	if len(spans) != 3 {
+		t.Fatalf("want 3 sprint groups, got %d", len(spans))
+	}
+	var prevX1 int = -1
+	for s, group := range spans {
+		if len(group) != 2 {
+			t.Fatalf("sprint %d: want 2 user bars, got %d", s, len(group))
+		}
+		for u, span := range group {
+			if span.x0 < 3 || span.x1 > 62 {
+				t.Errorf("sprint %d user %d span %v out of plot bounds [3,62]", s, u, span)
+			}
+			if span.x1 < span.x0 {
+				t.Errorf("sprint %d user %d inverted span %v", s, u, span)
+			}
+			// Bars are strictly left-to-right with no overlap across the whole chart.
+			if span.x0 <= prevX1 {
+				t.Errorf("sprint %d user %d span %v overlaps previous (x1=%d)", s, u, span, prevX1)
+			}
+			prevX1 = span.x1
+		}
+	}
+}
+
 func TestChartKeys_OnlyActInChartMode(t *testing.T) {
 	m := chartModel(false)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -115,25 +234,6 @@ func TestChartKeys_OnlyActInChartMode(t *testing.T) {
 	m, _ = m.Update(runeKeyMsg('.'))
 	if m.sprintCursor != 2 {
 		t.Errorf("sprintCursor = %d, want clamped to 2", m.sprintCursor)
-	}
-
-	// Focus user wraps.
-	if m.focusedUser != 0 {
-		t.Fatalf("initial focusedUser = %d", m.focusedUser)
-	}
-	m, _ = m.Update(runeKeyMsg('n'))
-	if m.focusedUser != 1 {
-		t.Errorf("after n, focusedUser = %d, want 1", m.focusedUser)
-	}
-	m, _ = m.Update(runeKeyMsg('n'))
-	if m.focusedUser != 0 {
-		t.Errorf("after wrap, focusedUser = %d, want 0", m.focusedUser)
-	}
-
-	// Team-only toggles.
-	m, _ = m.Update(runeKeyMsg('a'))
-	if !m.showTeamOnly {
-		t.Error("a should enable team-only")
 	}
 
 	// In Live mode, the same keys are no-ops.

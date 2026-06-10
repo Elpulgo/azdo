@@ -616,7 +616,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
 		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
-		m.metricsView = metrics.NewModelWithStyles(m.client, m.config, m.styles)
+		// Re-style the metrics view in place rather than reconstructing it —
+		// recreating would erase its loaded snapshots, sprint selection and
+		// fetched rows, blanking the section on theme change.
+		m.metricsView.SetStyles(m.styles)
 
 		// CRITICAL: Set window size for all views before they try to render
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
@@ -637,9 +640,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activeTab == TabWorkItems {
 			cmds = append(cmds, m.workItemsView.Init())
 		}
-		if m.activeTab == TabMetrics {
-			cmds = append(cmds, m.metricsView.Init())
-		}
+		// The metrics view is re-styled in place (SetStyles above), not
+		// recreated, so it must NOT be re-initialized here — re-running its
+		// async fetch/snapshot load would blank the already-loaded trends data
+		// on theme change. The normal tab-activation path re-inits it when
+		// needed.
 
 		return m, tea.Batch(cmds...)
 

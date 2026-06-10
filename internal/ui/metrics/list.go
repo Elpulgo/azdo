@@ -135,9 +135,7 @@ type Model struct {
 
 	// Trends chart state.
 	chartMetric  coremetrics.MetricKind
-	focusedUser  int  // index into trendRows for the highlighted line
-	sprintCursor int  // index into sprintWindows for the readout column
-	showTeamOnly bool // hide per-user lines, show only the team total
+	sprintCursor int // index into sprintWindows for the readout column
 
 	loading       bool
 	lastUpdated   time.Time
@@ -171,6 +169,24 @@ func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *sty
 		m.tagPicker = components.NewTagPicker(s)
 	}
 	return m
+}
+
+// SetStyles swaps the active styles in place, preserving all loaded data and
+// view state (snapshots, selected sprints, fetched rows, current mode). The app
+// calls this on theme change instead of reconstructing the model, which would
+// erase the metrics section. The tag picker is rebuilt with the new styles (its
+// tags/selection are repopulated from the model whenever it's shown).
+func (m *Model) SetStyles(s *styles.Styles) {
+	m.styles = s
+	if s != nil {
+		m.tagPicker = components.NewTagPicker(s)
+		if m.width > 0 && m.height > 0 {
+			m.tagPicker.SetSize(m.width, m.height)
+		}
+	}
+	if m.ready {
+		m.updateViewportContent()
+	}
 }
 
 // stateConfig pulls the configured workflow state names out of the model's
@@ -469,16 +485,6 @@ func (m *Model) handleChartKey(k string) {
 		if n := len(m.sprintWindows); n > 0 {
 			m.sprintCursor = clamp(m.sprintCursor-1, 0, n-1)
 		}
-	case "n":
-		if n := len(m.trendRows); n > 0 {
-			m.focusedUser = (m.focusedUser + 1) % n
-		}
-	case "p":
-		if n := len(m.trendRows); n > 0 {
-			m.focusedUser = (m.focusedUser - 1 + n) % n
-		}
-	case "a":
-		m.showTeamOnly = !m.showTeamOnly
 	}
 }
 
@@ -526,7 +532,6 @@ func (m *Model) recomputeTrends() {
 	if len(m.selectedSprints) == 0 {
 		m.sprintWindows = nil
 		m.trendRows = nil
-		m.focusedUser = 0
 		m.sprintCursor = 0
 		return
 	}
@@ -546,10 +551,7 @@ func (m *Model) recomputeTrends() {
 		States:          m.stateConfig(),
 	}, m.now())
 
-	// Keep chart cursors within the new bounds.
-	if m.focusedUser >= len(m.trendRows) {
-		m.focusedUser = 0
-	}
+	// Keep the chart cursor within the new bounds.
 	if m.sprintCursor >= len(m.sprintWindows) {
 		m.sprintCursor = 0
 	}

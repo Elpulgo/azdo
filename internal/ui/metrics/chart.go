@@ -2,19 +2,15 @@ package metrics
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
 	coremetrics "github.com/Elpulgo/azdo/internal/metrics"
 	"github.com/NimbleMarkets/ntcharts/canvas"
-	"github.com/NimbleMarkets/ntcharts/canvas/runes"
-	"github.com/NimbleMarkets/ntcharts/linechart/wavelinechart"
+	"github.com/NimbleMarkets/ntcharts/canvas/graph"
 	"github.com/charmbracelet/lipgloss"
 )
-
-// teamSeriesName is the dataset/label used for the aggregated team line. Chosen
-// so it can't collide with a real user name.
-const teamSeriesName = "Team total"
 
 // minChartWidth / minChartHeight are the smallest canvas we'll attempt to draw.
 // Below this the chart is illegible, so we fall back to a hint.
@@ -22,13 +18,36 @@ const (
 	minChartWidth  = 24
 	minChartHeight = 8
 	// chartChromeRows is the number of body lines around the chart canvas
-	// (header, blanks, sprint legend, readout, hints).
-	chartChromeRows = 7
+	// (header, blanks, sprint legend, colour key, readout, glossary, hints).
+	chartChromeRows = 11
 )
 
-// renderTrendsChart produces the Trends chart sub-view: a line chart with the
-// selected metric on Y and the chosen sprints on X, one line per user with the
-// focused user highlighted and the rest ghosted, plus a Team total line.
+// barPalette is the per-user colour cycle (Nord accents): cool, calm, muted
+// tones that stay distinguishable on a dark terminal without being harsh;
+// indices wrap for teams larger than the palette.
+var barPalette = []string{
+	"#88c0d0", // frost cyan
+	"#a3be8c", // green
+	"#ebcb8b", // yellow
+	"#bf616a", // red
+	"#b48ead", // purple
+	"#81a1c1", // blue
+	"#d08770", // orange
+	"#8fbcbb", // teal
+}
+
+// userColor returns the bar colour for the i-th user (wrapping the palette).
+func userColor(i int) lipgloss.Color {
+	return lipgloss.Color(barPalette[i%len(barPalette)])
+}
+
+// canvasPoint aliases the ntcharts canvas point so the rest of this file (and
+// its tests) don't need to reference the canvas package directly.
+type canvasPoint = canvas.Point
+
+// renderTrendsChart produces the Trends chart sub-view: a grouped bar chart with
+// the selected metric on Y and the chosen sprints on X. Each sprint is a cluster
+// of bars, one per user, each user a fixed colour, shown for every sprint.
 func (m Model) renderTrendsChart() string {
 	// Reuse the same preconditions as the table view.
 	if msg, ok := m.trendsPreamble(); !ok {
@@ -40,20 +59,7 @@ func (m Model) renderTrendsChart() string {
 
 	metric := m.chartMetric
 	series := coremetrics.BuildSeries(m.trendRows, metric)
-	team, hasTeam := computeTeamTotal(m.trendRows)
-	var teamSeries []coremetrics.SeriesPoint
-	if hasTeam {
-		teamSeries = coremetrics.BuildSeries([]coremetrics.TrendRow{team}, metric)[0].Points
-	}
-
-	// Y axis bound from the visible data (users + team).
-	maxVal := coremetrics.SeriesMax(series)
-	if hasTeam {
-		if tm := coremetrics.SeriesMax([]coremetrics.Series{{User: teamSeriesName, Points: teamSeries}}); tm > maxVal {
-			maxVal = tm
-		}
-	}
-	yMax := coremetrics.NiceCeil(maxVal)
+	yMax := coremetrics.NiceCeil(coremetrics.SeriesMax(series))
 
 	nSprints := len(m.sprintWindows)
 	w, h := m.chartCanvasSize()
@@ -61,89 +67,207 @@ func (m Model) renderTrendsChart() string {
 		return m.mutedOr("Window too small for the chart — widen the terminal or press v for the table.")
 	}
 
-	wlc := wavelinechart.New(w, h,
-		wavelinechart.WithXYRange(0, float64(nSprints-1), 0, yMax),
-	)
-	// Pin the ranges. wavelinechart defaults to auto-range, which would rescale
-	// the Y axis to the data and draw fractional, gutter-clipped tick labels.
-	wlc.AutoMinX, wlc.AutoMaxX, wlc.AutoMinY, wlc.AutoMaxY = false, false, false, false
-	wlc.SetXStep(1)
-	wlc.SetYStep(1)
-	// ntcharts derives each tick from the value at a pixel row, so labels are
-	// rounded to keep them integer-clean (or one decimal for sub-3 ranges) and
-	// a bounded, non-clipping width. Repeated values are auto-suppressed.
-	yPrec := 0
-	if yMax < 3 {
-		yPrec = 1
-	}
-	wlc.XLabelFormatter = func(_ int, v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
-	wlc.YLabelFormatter = func(_ int, v float64) string { return strconv.FormatFloat(v, 'f', yPrec, 64) }
-	if m.styles != nil {
-		axis := lipgloss.NewStyle().Foreground(m.styles.Theme.ForegroundMuted)
-		wlc.AxisStyle = axis
-		wlc.LabelStyle = axis
-	}
-	// Recompute the gutter/graph area now that ranges, steps and formatters are
-	// set, so the Y-label column is sized to our formatter's widest label.
-	wlc.UpdateGraphSizes()
-
-	// Draw order controls z-stacking (later overwrites earlier at a cell):
-	// ghosts first, team next, focused user last so it stays on top.
-	var ghostNames []string
-	focusName := m.focusedUserName()
-
-	if !m.showTeamOnly {
-		for _, s := range series {
-			if s.User == focusName {
-				continue
-			}
-			style := lipgloss.NewStyle()
-			if m.styles != nil {
-				style = style.Foreground(m.styles.Theme.ForegroundMuted)
-			}
-			wlc.SetDataSetStyles(s.User, runes.ThinLineStyle, style)
-			plotSeries(&wlc, s.User, s.Points)
-			ghostNames = append(ghostNames, s.User)
-		}
-	}
-
-	drawOrder := append([]string(nil), ghostNames...)
-
-	if hasTeam {
-		teamStyle := lipgloss.NewStyle().Bold(true)
-		if m.styles != nil {
-			teamStyle = teamStyle.Foreground(m.styles.Theme.Accent)
-		}
-		wlc.SetDataSetStyles(teamSeriesName, runes.ArcLineStyle, teamStyle)
-		plotSeries(&wlc, teamSeriesName, teamSeries)
-		drawOrder = append(drawOrder, teamSeriesName)
-	}
-
-	if !m.showTeamOnly && focusName != "" {
-		if fs, ok := seriesFor(series, focusName); ok {
-			focusStyle := lipgloss.NewStyle().Bold(true)
-			if m.styles != nil {
-				focusStyle = focusStyle.Foreground(m.styles.Theme.Primary)
-			}
-			wlc.SetDataSetStyles(focusName, runes.ArcLineStyle, focusStyle)
-			plotSeries(&wlc, focusName, fs.Points)
-			drawOrder = append(drawOrder, focusName)
-		}
-	}
-
-	wlc.DrawDataSets(drawOrder)
+	chart := m.renderBarCanvas(newChartGeom(w, h, nSprints, yMax), series)
 
 	var b strings.Builder
-	b.WriteString(m.chartHeader(metric, focusName))
+	b.WriteString(m.chartHeader(metric))
 	b.WriteString("\n\n")
-	b.WriteString(wlc.View())
+	b.WriteString(chart)
 	b.WriteString("\n")
 	b.WriteString(m.sprintLegend())
+	b.WriteString("\n")
+	b.WriteString(m.userLegend(series))
 	b.WriteString("\n\n")
-	b.WriteString(m.chartReadout(metric, focusName, teamSeries, hasTeam))
+	b.WriteString(m.chartReadout(metric, series))
 	b.WriteString("\n\n")
+	b.WriteString(m.metricsGlossary())
+	b.WriteString("\n")
 	b.WriteString(m.chartHints())
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// chartGeom maps data coordinates (sprint index, metric value) onto canvas cell
+// coordinates. (0,0) is the top-left of the canvas; Y increases downward.
+type chartGeom struct {
+	w, h       int
+	gutterW    int // columns reserved for right-aligned Y labels (0..gutterW-1)
+	axisX      int // column of the vertical Y axis bar
+	plotLeft   int // first plottable column (axisX+1)
+	plotRight  int // last plottable column (w-1)
+	plotTop    int // row for value == yMax
+	plotBottom int // row for value == 0 (also the X axis row)
+	n          int // number of sprints
+	yMax       float64
+}
+
+// newChartGeom computes the layout, sizing the Y-label gutter to the widest tick
+// label (top / mid / bottom).
+func newChartGeom(w, h, n int, yMax float64) chartGeom {
+	gutterW := 1
+	for _, v := range []float64{yMax, yMax / 2, 0} {
+		if l := len(fmtAxisVal(v)); l > gutterW {
+			gutterW = l
+		}
+	}
+	axisX := gutterW
+	return chartGeom{
+		w:          w,
+		h:          h,
+		gutterW:    gutterW,
+		axisX:      axisX,
+		plotLeft:   axisX + 1,
+		plotRight:  w - 1,
+		plotTop:    0,
+		plotBottom: h - 1,
+		n:          n,
+		yMax:       yMax,
+	}
+}
+
+// xFor maps a sprint index to a canvas column (the centre of its cluster).
+func (g chartGeom) xFor(i int) int {
+	if g.n <= 1 {
+		return (g.plotLeft + g.plotRight) / 2
+	}
+	span := g.plotRight - g.plotLeft
+	return g.plotLeft + int(math.Round(float64(i)/float64(g.n-1)*float64(span)))
+}
+
+// yFor maps a metric value to a canvas row (clamped to the plot area).
+func (g chartGeom) yFor(v float64) int {
+	rows := g.plotBottom - g.plotTop
+	if g.yMax <= 0 || rows <= 0 {
+		return g.plotBottom
+	}
+	frac := v / g.yMax
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	return g.plotBottom - int(math.Round(frac*float64(rows)))
+}
+
+// barSpan is the inclusive column range [x0,x1] occupied by one user's bar.
+type barSpan struct{ x0, x1 int }
+
+// barLayout lays out grouped bars: for each sprint, one bar per user, clustered
+// and centred within an evenly divided slot. Returns spans indexed [sprint][user].
+func barLayout(plotLeft, plotRight, nSprints, nUsers int) [][]barSpan {
+	if nSprints < 1 || nUsers < 1 {
+		return nil
+	}
+	plotW := plotRight - plotLeft + 1
+	slotW := plotW / nSprints
+	if slotW < 1 {
+		slotW = 1
+	}
+	inner := slotW - 2 // leave a one-column gutter on each side of a cluster
+	if inner < nUsers {
+		inner = nUsers
+	}
+	barW := inner / nUsers
+	if barW < 1 {
+		barW = 1
+	}
+	groupW := barW * nUsers
+
+	out := make([][]barSpan, nSprints)
+	for s := 0; s < nSprints; s++ {
+		slotStart := plotLeft + s*slotW
+		pad := (slotW - groupW) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		gx := slotStart + pad
+		group := make([]barSpan, nUsers)
+		for u := 0; u < nUsers; u++ {
+			x0 := gx + u*barW
+			group[u] = barSpan{x0: x0, x1: x0 + barW - 1}
+		}
+		out[s] = group
+	}
+	return out
+}
+
+// renderBarCanvas draws the axes, Y labels and grouped per-user bars onto a
+// fresh canvas and returns its rendered string.
+func (m Model) renderBarCanvas(g chartGeom, series []coremetrics.Series) string {
+	cv := canvas.New(g.w, g.h)
+	cv.Fill(canvas.NewCell(' '))
+
+	axisStyle := lipgloss.NewStyle()
+	if m.styles != nil {
+		axisStyle = axisStyle.Foreground(m.styles.Theme.ForegroundMuted)
+	}
+
+	// Axes first, so bars draw on top.
+	for y := g.plotTop; y <= g.plotBottom; y++ {
+		cv.SetRuneWithStyle(canvasPoint{X: g.axisX, Y: y}, '│', axisStyle)
+	}
+	for x := g.axisX; x <= g.plotRight; x++ {
+		cv.SetRuneWithStyle(canvasPoint{X: x, Y: g.plotBottom}, '─', axisStyle)
+	}
+	cv.SetRuneWithStyle(canvasPoint{X: g.axisX, Y: g.plotBottom}, '└', axisStyle)
+
+	m.drawYLabel(&cv, g, g.plotTop, g.yMax, axisStyle)
+	m.drawYLabel(&cv, g, (g.plotTop+g.plotBottom)/2, g.yMax/2, axisStyle)
+	m.drawYLabel(&cv, g, g.plotBottom, 0, axisStyle)
+
+	m.drawBars(&cv, g, series)
+	return cv.View()
+}
+
+// drawBars draws one block-rune column per user per sprint. Absent sprints and
+// real zeros produce no bar (their values are reported in the readout instead).
+func (m Model) drawBars(cv *canvas.Model, g chartGeom, series []coremetrics.Series) {
+	nUsers := len(series)
+	spans := barLayout(g.plotLeft, g.plotRight, g.n, nUsers)
+	rows := float64(g.plotBottom) // cell rows above the axis (0..plotBottom-1)
+
+	for s := 0; s < g.n; s++ {
+		for u := 0; u < nUsers; u++ {
+			if s >= len(series[u].Points) {
+				continue
+			}
+			p := series[u].Points[s]
+			if !p.Present {
+				continue
+			}
+			frac := 0.0
+			if g.yMax > 0 {
+				frac = p.Value / g.yMax
+			}
+			if frac < 0 {
+				frac = 0
+			}
+			if frac > 1 {
+				frac = 1
+			}
+			hCells := frac * rows
+			if hCells <= 0 {
+				continue
+			}
+			style := lipgloss.NewStyle().Foreground(userColor(u))
+			span := spans[s][u]
+			for x := span.x0; x <= span.x1 && x <= g.plotRight; x++ {
+				graph.DrawColumnBottomToTop(cv, canvasPoint{X: x, Y: g.plotBottom - 1}, hCells, style)
+			}
+		}
+	}
+}
+
+// drawYLabel right-aligns a tick value within the gutter at the given row.
+func (m Model) drawYLabel(cv *canvas.Model, g chartGeom, row int, v float64, style lipgloss.Style) {
+	if row < g.plotTop || row > g.plotBottom {
+		return
+	}
+	s := fmtAxisVal(v)
+	if len(s) > g.gutterW {
+		s = s[:g.gutterW]
+	}
+	cv.SetStringWithStyle(canvasPoint{X: g.gutterW - len(s), Y: row}, s, style)
 }
 
 // trendsPreamble mirrors the guard ladder used by the table view (insufficient
@@ -183,39 +307,29 @@ func (m Model) chartCanvasSize() (int, int) {
 	return w, h
 }
 
-// focusedUserName resolves the focused user index to a name, clamped.
-func (m Model) focusedUserName() string {
-	if len(m.trendRows) == 0 {
-		return ""
-	}
-	idx := m.focusedUser
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(m.trendRows) {
-		idx = len(m.trendRows) - 1
-	}
-	return m.trendRows[idx].User
-}
-
-func (m Model) chartHeader(metric coremetrics.MetricKind, focus string) string {
+func (m Model) chartHeader(metric coremetrics.MetricKind) string {
 	left := fmt.Sprintf("Trends · chart · %s", metric.Label())
-	if m.showTeamOnly {
-		left += " · team only"
-	} else if focus != "" {
-		left += " · focus: " + focus
-	}
 	if m.styles != nil {
 		return m.styles.Header.Render(left)
 	}
 	return left
 }
 
+// userLegend is the colour key mapping each user to their bar colour.
+func (m Model) userLegend(series []coremetrics.Series) string {
+	parts := make([]string, 0, len(series))
+	for i, s := range series {
+		swatch := lipgloss.NewStyle().Foreground(userColor(i)).Render("█")
+		parts = append(parts, swatch+" "+s.User)
+	}
+	return strings.Join(parts, "   ")
+}
+
 // sprintLegend maps each X index to its sprint tag and marks the cursor sprint.
 func (m Model) sprintLegend() string {
 	parts := make([]string, 0, len(m.sprintWindows))
 	for i, w := range m.sprintWindows {
-		label := fmt.Sprintf("%d %s", i, w.Tag)
+		label := fmt.Sprintf("%d %s", i+1, w.Tag)
 		if i == m.clampSprintCursor() {
 			label = "▸" + label + "◂"
 			if m.styles != nil {
@@ -229,32 +343,32 @@ func (m Model) sprintLegend() string {
 	return strings.Join(parts, "  ")
 }
 
-// chartReadout shows the exact value at the cursor sprint for the focused user
-// and the team — the precision the chart itself can't convey.
-func (m Model) chartReadout(metric coremetrics.MetricKind, focus string, teamPts []coremetrics.SeriesPoint, hasTeam bool) string {
+// chartReadout shows the exact value at the cursor sprint for every user — the
+// precision the bars themselves can't convey.
+func (m Model) chartReadout(metric coremetrics.MetricKind, series []coremetrics.Series) string {
 	idx := m.clampSprintCursor()
 	w := m.sprintWindows[idx]
-	rng := fmt.Sprintf("%s–%s", w.Start.Format("Jan 2"), w.End.Format("Jan 2"))
-	head := fmt.Sprintf("%s (%s)", w.Tag, rng)
+	head := fmt.Sprintf("%s (%s–%s)", w.Tag, w.Start.Format("Jan 2"), w.End.Format("Jan 2"))
+	if m.styles != nil {
+		head = m.styles.Value.Render(head)
+	}
 
 	parts := []string{head}
-	if focus != "" && !m.showTeamOnly {
-		if fs, ok := seriesFor(coremetrics.BuildSeries(m.trendRows, metric), focus); ok {
-			parts = append(parts, fmt.Sprintf("%s %s", focus, readoutVal(metric, fs.Points[idx])))
+	for i, s := range series {
+		if idx >= len(s.Points) {
+			continue
 		}
+		chunk := fmt.Sprintf("%s %s", s.User, readoutVal(metric, s.Points[idx]))
+		if m.styles != nil {
+			chunk = lipgloss.NewStyle().Foreground(userColor(i)).Render(chunk)
+		}
+		parts = append(parts, chunk)
 	}
-	if hasTeam && idx < len(teamPts) {
-		parts = append(parts, fmt.Sprintf("%s %s", teamSeriesName, readoutVal(metric, teamPts[idx])))
-	}
-	line := strings.Join(parts, "   ")
-	if m.styles != nil {
-		return m.styles.Value.Render(line)
-	}
-	return line
+	return strings.Join(parts, "   ")
 }
 
 func (m Model) chartHints() string {
-	hint := "h/l metric · ,/. sprint · n/p user · a team-only · v back to table"
+	hint := "h/l metric · ,/. sprint · v back to table"
 	if m.styles != nil {
 		return m.styles.Muted.Render(hint)
 	}
@@ -279,27 +393,6 @@ func (m Model) mutedOr(s string) string {
 		return m.styles.Muted.Render(s)
 	}
 	return s
-}
-
-// plotSeries plots only the present points of a series onto the named dataset.
-// Gaps (absent sprints / undefined cycle time) are skipped so they don't read
-// as a dip to zero.
-func plotSeries(wlc *wavelinechart.Model, name string, pts []coremetrics.SeriesPoint) {
-	for _, p := range pts {
-		if !p.Present {
-			continue
-		}
-		wlc.PlotDataSet(name, canvas.Float64Point{X: float64(p.SprintIndex), Y: p.Value})
-	}
-}
-
-func seriesFor(series []coremetrics.Series, user string) (coremetrics.Series, bool) {
-	for _, s := range series {
-		if s.User == user {
-			return s, true
-		}
-	}
-	return coremetrics.Series{}, false
 }
 
 // readoutVal formats a single point's value for the readout, marking gaps.

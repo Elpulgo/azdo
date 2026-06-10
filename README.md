@@ -218,6 +218,7 @@ theme: dark
 # disabled_panes: pipelines,workitems
 
 # Metrics dashboard (opt-in, management feature). Hidden unless enabled.
+# See "Metrics Configuration" below for the full reference.
 # metrics:
 #   enabled: false
 #   interval_days: 14            # window for the Live "closed pts" column
@@ -225,6 +226,14 @@ theme: dark
 #   rft_stale_days: 2            # dwell in Ready for Test above this flags the item
 #   wip_limit: 4                 # in-flight strictly above this marks a user overloaded
 #   run_one_shot_backfill: false # one-time /updates seed (see Features → Metrics)
+#   states:                      # your board's actual state names (case-insensitive)
+#     active: Active
+#     ready_for_test: Ready for Test
+#     closed: Closed
+#   state_labels:                # optional column-header overrides (auto-derived if omitted)
+#     active: active
+#     ready_for_test: rft
+#     closed: closed
 ```
 
 **Configuration Options:**
@@ -233,7 +242,7 @@ theme: dark
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
 - `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
-- `metrics`: Opt-in management dashboard. See [Features → Metrics Dashboard](#metrics-dashboard-opt-in) for what it does. Keys: `enabled` (off by default), `interval_days`, `active_stale_days`, `rft_stale_days`, `wip_limit`, `run_one_shot_backfill`. All optional.
+- `metrics`: Opt-in management dashboard. See [Metrics Configuration](#metrics-configuration) below for the full reference, and [Features → Metrics Dashboard](#metrics-dashboard-opt-in) for what it does.
 
 **Available Themes:**
 - `dark` - Dark theme with blue and cyan accents
@@ -244,6 +253,56 @@ theme: dark
 - `github` - GitHub Dark theme
 - `retro` - Matrix-inspired green phosphor on black
 - `monokai` - Classic Monokai color scheme
+
+### Metrics Configuration
+
+The metrics dashboard is **opt-in and hidden entirely** unless `metrics.enabled: true`. All keys live under the top-level `metrics:` block and are optional — the defaults below apply when a key is omitted. The validation rules only apply when `enabled` is `true`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `metrics.enabled` | bool | `false` | Master switch. The whole tab is hidden when `false`. |
+| `metrics.interval_days` | int | `14` | Look-back window (days) for points-closed / velocity. Must be `> 0`. |
+| `metrics.active_stale_days` | int | `3` | Dwell in Active longer than this flags the item as stuck. Must be `>= 0`. |
+| `metrics.rft_stale_days` | int | `2` | Dwell in Ready-for-Test longer than this flags the item as stuck. Must be `>= 0`. |
+| `metrics.wip_limit` | int | `4` | In-flight items *strictly above* this marks a user overloaded (⚠). Must be `> 0`. |
+| `metrics.run_one_shot_backfill` | bool | `false` | One-time 90-day `/updates` seed of history on next launch. A marker file prevents it re-running. |
+
+#### State names — `metrics.states`
+
+These map your board's **actual workflow-state strings** onto the three buckets the metrics engine tracks. Matching is **case-insensitive and whitespace-trimmed**, but each takes a **single name** (no comma-separated aliases). If your board doesn't literally use "Active" / "Ready for Test" / "Closed", set these or the metrics tab will bucket nothing.
+
+| Key | Default |
+|---|---|
+| `metrics.states.active` | `Active` |
+| `metrics.states.ready_for_test` | `Ready for Test` |
+| `metrics.states.closed` | `Closed` |
+
+Each name must be non-empty, **distinct** from the other two, and contain no single quote (`'`) — single quotes are rejected for WIQL-injection safety.
+
+#### Column labels — `metrics.state_labels` (optional)
+
+Display-only overrides for the metrics table column headers. When omitted, labels are **auto-derived** from the configured state name: multi-word names become lowercased initials (`Ready for Test` → `rft`, `In Progress` → `ip`), single-word names are lowercased as-is (`Done` → `done`).
+
+| Key | Falls back to |
+|---|---|
+| `metrics.state_labels.active` | derived from `states.active` |
+| `metrics.state_labels.ready_for_test` | derived from `states.ready_for_test` |
+| `metrics.state_labels.closed` | derived from `states.closed` |
+
+**Example — a board using "Doing" / "QA" / "Done":**
+
+```yaml
+metrics:
+  enabled: true
+  interval_days: 14
+  wip_limit: 4
+  states:
+    active: Doing
+    ready_for_test: QA
+    closed: Done
+  state_labels:
+    ready_for_test: QA   # override the auto-derived lowercase "qa" to keep the caps
+```
 
 ### Custom Themes
 
