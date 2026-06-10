@@ -80,7 +80,14 @@ type viewMode int
 const (
 	viewLive viewMode = iota
 	viewTrends
+	viewTrendsChart
 )
+
+// isTrendsLike reports whether the mode is one of the sprint-on-sprint views
+// (table or chart), both of which share the Trends data and several key guards.
+func (v viewMode) isTrendsLike() bool {
+	return v == viewTrends || v == viewTrendsChart
+}
 
 // flagFilter is the f-key cycle position.
 type flagFilter int
@@ -125,6 +132,12 @@ type Model struct {
 	sprintWindows    []coremetrics.SprintWindow
 	trendRows        []coremetrics.TrendRow
 	availableSprints []string
+
+	// Trends chart state.
+	chartMetric  coremetrics.MetricKind
+	focusedUser  int  // index into trendRows for the highlighted line
+	sprintCursor int  // index into sprintWindows for the readout column
+	showTeamOnly bool // hide per-user lines, show only the team total
 
 	loading       bool
 	lastUpdated   time.Time
@@ -278,7 +291,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.selectedSprints = coremetrics.FilterAvailable(m.selectedSprints, m.availableSprints)
 		}
 		m.recomputeTrends()
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			m.updateViewportContent()
 		}
 		return m, nil
@@ -287,7 +300,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.selectedSprints = append([]string(nil), msg.Tags...)
 		m.tagPicker.Hide()
 		m.recomputeTrends()
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			m.updateViewportContent()
 		}
 		return m, saveSelectionCmd(m.selectedSprints)
@@ -325,7 +338,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch keyMsg.Type {
 	case tea.KeyTab:
 		// Pane focus only matters in Live mode.
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			return m, nil
 		}
 		if m.focusedPane == paneFlags {
@@ -337,7 +350,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.scrollCursorIntoView()
 		return m, nil
 	case tea.KeyUp:
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			if m.ready {
 				m.viewport.LineUp(1)
 			}
@@ -348,7 +361,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.scrollCursorIntoView()
 		return m, nil
 	case tea.KeyDown:
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			if m.ready {
 				m.viewport.LineDown(1)
 			}
@@ -384,9 +397,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.statusMessage = ""
 		return m, tea.Batch(m.fetch(), loadSnapshotsCmd())
 	case "v":
-		if m.mode == viewLive {
+		// Cycle Live → Trends (table) → Trends (chart) → Live.
+		switch m.mode {
+		case viewLive:
 			m.mode = viewTrends
-		} else {
+		case viewTrends:
+			m.mode = viewTrendsChart
+		default:
 			m.mode = viewLive
 		}
 		m.updateViewportContent()
@@ -396,7 +413,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	case "f":
 		// Flag filter is Live-only.
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			return m, nil
 		}
 		m.flagFilter = (m.flagFilter + 1) % 3
@@ -408,7 +425,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.styles == nil {
 			return m, nil
 		}
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			m.tagPicker.SetTagsMulti(m.availableSprints, m.selectedSprints)
 		} else {
 			tags := collectUniqueTags(m.allItems)
@@ -418,13 +435,59 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	case "o":
 		// Open-in-browser is Live-only (no focused item in Trends).
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			return m, nil
 		}
 		return m.openFocused()
+	case "h", "l", ",", ".", "n", "p", "a":
+		// Chart-only navigation. The arrow/number keys are intercepted by the
+		// app shell for tab switching, so the chart uses letters/punctuation.
+		if m.mode != viewTrendsChart {
+			return m, nil
+		}
+		m.handleChartKey(keyMsg.String())
+		m.updateViewportContent()
+		return m, nil
 	}
 
 	return m, nil
+}
+
+// handleChartKey applies a chart-mode navigation key, mutating the chart cursor
+// state in place. Callers re-render afterwards.
+func (m *Model) handleChartKey(k string) {
+	switch k {
+	case "l":
+		m.chartMetric = nextMetric(m.chartMetric, 1)
+	case "h":
+		m.chartMetric = nextMetric(m.chartMetric, -1)
+	case ".":
+		if n := len(m.sprintWindows); n > 0 {
+			m.sprintCursor = clamp(m.sprintCursor+1, 0, n-1)
+		}
+	case ",":
+		if n := len(m.sprintWindows); n > 0 {
+			m.sprintCursor = clamp(m.sprintCursor-1, 0, n-1)
+		}
+	case "n":
+		if n := len(m.trendRows); n > 0 {
+			m.focusedUser = (m.focusedUser + 1) % n
+		}
+	case "p":
+		if n := len(m.trendRows); n > 0 {
+			m.focusedUser = (m.focusedUser - 1 + n) % n
+		}
+	case "a":
+		m.showTeamOnly = !m.showTeamOnly
+	}
+}
+
+// nextMetric advances the metric selection by delta, wrapping around the four
+// metrics.
+func nextMetric(cur coremetrics.MetricKind, delta int) coremetrics.MetricKind {
+	n := len(coremetrics.AllMetricKinds)
+	idx := (int(cur) + delta + n) % n
+	return coremetrics.AllMetricKinds[idx]
 }
 
 // fetch returns a tea.Cmd that performs the metrics fetch.
@@ -463,6 +526,8 @@ func (m *Model) recomputeTrends() {
 	if len(m.selectedSprints) == 0 {
 		m.sprintWindows = nil
 		m.trendRows = nil
+		m.focusedUser = 0
+		m.sprintCursor = 0
 		return
 	}
 	var windows []coremetrics.SprintWindow
@@ -480,6 +545,14 @@ func (m *Model) recomputeTrends() {
 		WIPLimit:        m.config.Metrics.WIPLimit,
 		States:          m.stateConfig(),
 	}, m.now())
+
+	// Keep chart cursors within the new bounds.
+	if m.focusedUser >= len(m.trendRows) {
+		m.focusedUser = 0
+	}
+	if m.sprintCursor >= len(m.sprintWindows) {
+		m.sprintCursor = 0
+	}
 }
 
 // collectUniqueTagsFromSnaps returns the sorted set of tags across the
@@ -553,9 +626,12 @@ func (m *Model) updateViewportContent() {
 		return
 	}
 	var body string
-	if m.mode == viewTrends {
+	switch m.mode {
+	case viewTrends:
 		body = m.renderTrends()
-	} else {
+	case viewTrendsChart:
+		body = m.renderTrendsChart()
+	default:
 		body = lipgloss.JoinVertical(lipgloss.Left, m.renderFlagsPane(), "", m.renderUsersPane())
 	}
 	m.viewport.SetContent(body)
@@ -793,8 +869,11 @@ func (m Model) View() string {
 	header := m.renderHeader()
 	if !m.ready {
 		// No window size yet — fall back to inline rendering.
-		if m.mode == viewTrends {
+		switch m.mode {
+		case viewTrends:
 			return header + "\n\n" + m.renderTrends()
+		case viewTrendsChart:
+			return header + "\n\n" + m.renderTrendsChart()
 		}
 		flagsPane := m.renderFlagsPane()
 		userPane := m.renderUsersPane()
@@ -815,7 +894,9 @@ func (m Model) renderLoading() string {
 func (m Model) renderHeader() string {
 	mc := m.config.Metrics
 	parts := []string{"Metrics"}
-	if m.mode == viewTrends {
+	if m.mode == viewTrendsChart {
+		parts = append(parts, "Trends (chart)")
+	} else if m.mode == viewTrends {
 		parts = append(parts, "Trends")
 	} else {
 		parts = append(parts, "Live")

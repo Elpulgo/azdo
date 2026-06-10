@@ -375,8 +375,8 @@ func TestModel_Viewport_CursorAutoScrolls(t *testing.T) {
 	}
 }
 
-// TestModel_VToggle_SwitchesMode ensures pressing 'v' flips the metrics tab
-// between Live and Trends views.
+// TestModel_VToggle_SwitchesMode ensures pressing 'v' cycles the metrics tab
+// through Live → Trends (table) → Trends (chart) → Live.
 func TestModel_VToggle_SwitchesMode(t *testing.T) {
 	m := makeModel()
 	if m.mode != viewLive {
@@ -387,8 +387,12 @@ func TestModel_VToggle_SwitchesMode(t *testing.T) {
 		t.Errorf("after 1st v = %v, want viewTrends", m.mode)
 	}
 	m, _ = m.Update(runeKeyMsg('v'))
+	if m.mode != viewTrendsChart {
+		t.Errorf("after 2nd v = %v, want viewTrendsChart", m.mode)
+	}
+	m, _ = m.Update(runeKeyMsg('v'))
 	if m.mode != viewLive {
-		t.Errorf("after 2nd v = %v, want viewLive", m.mode)
+		t.Errorf("after 3rd v = %v, want viewLive", m.mode)
 	}
 }
 
