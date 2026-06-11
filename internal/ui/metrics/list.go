@@ -32,10 +32,10 @@ var openURL = browser.Open
 // content's natural width.
 const (
 	// Flags-pane columns
-	flagCursorW  = 2  // "  " or "> "
-	flagIDW      = 8  // "#1234567"
-	flagStateW   = 7  // "Active" / "RFT"
-	flagDwellW   = 6  // "12d"
+	flagCursorW  = 2 // "  " or "> "
+	flagIDW      = 8 // "#1234567"
+	flagStateW   = 7 // "Active" / "RFT"
+	flagDwellW   = 6 // "12d"
 	flagUserW    = 14
 	flagProjectW = 18
 	flagTitleW   = 50
@@ -112,13 +112,13 @@ type openURLResultMsg struct {
 
 // Model is the metrics dashboard model.
 type Model struct {
-	client      *azdevops.MultiClient
-	config      *config.Config
-	styles      *styles.Styles
+	client *azdevops.MultiClient
+	config *config.Config
+	styles *styles.Styles
 
-	allItems    []azdevops.WorkItem
-	userRows    []coremetrics.UserMetrics
-	flags       []coremetrics.ItemFlag
+	allItems []azdevops.WorkItem
+	userRows []coremetrics.UserMetrics
+	flags    []coremetrics.ItemFlag
 
 	activeTag   string
 	flagFilter  flagFilter
@@ -136,6 +136,7 @@ type Model struct {
 	// Trends chart state.
 	chartMetric  coremetrics.MetricKind
 	sprintCursor int // index into sprintWindows for the readout column
+	focusedUser  int // index into trendRows to highlight; -1 = no focus (all bars coloured)
 
 	loading       bool
 	lastUpdated   time.Time
@@ -160,10 +161,11 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 // nil styles to skip the picker creation (used by tests).
 func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *styles.Styles) Model {
 	m := Model{
-		client: client,
-		config: cfg,
-		styles: s,
-		now:    time.Now,
+		client:      client,
+		config:      cfg,
+		styles:      s,
+		now:         time.Now,
+		focusedUser: -1, // no user highlighted until the user presses f
 	}
 	if s != nil {
 		m.tagPicker = components.NewTagPicker(s)
@@ -428,7 +430,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "f":
-		// Flag filter is Live-only.
+		// In the Trends chart, f cycles the highlighted user. In Live it cycles
+		// the flag filter. (The Trends table has neither, so it's a no-op there.)
+		if m.mode == viewTrendsChart {
+			m.handleChartKey("f")
+			m.updateViewportContent()
+			return m, nil
+		}
 		if m.mode.isTrendsLike() {
 			return m, nil
 		}
@@ -484,6 +492,14 @@ func (m *Model) handleChartKey(k string) {
 	case ",":
 		if n := len(m.sprintWindows); n > 0 {
 			m.sprintCursor = clamp(m.sprintCursor-1, 0, n-1)
+		}
+	case "f":
+		// Cycle the highlighted user: all → 0 → 1 → … → N-1 → all.
+		if n := len(m.trendRows); n > 0 {
+			m.focusedUser++
+			if m.focusedUser >= n {
+				m.focusedUser = -1
+			}
 		}
 	}
 }

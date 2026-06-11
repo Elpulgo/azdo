@@ -41,6 +41,29 @@ func userColor(i int) lipgloss.Color {
 	return lipgloss.Color(barPalette[i%len(barPalette)])
 }
 
+// focusedIndex returns the highlighted user's index, or -1 when no user is
+// focused or the stored index is stale (out of range for nUsers).
+func (m Model) focusedIndex(nUsers int) int {
+	if m.focusedUser < 0 || m.focusedUser >= nUsers {
+		return -1
+	}
+	return m.focusedUser
+}
+
+// userStyle returns the bar/label style for user u given the current focus:
+// the focused user (or every user when nothing is focused) keeps its colour;
+// the rest are dimmed so a single trend stands out.
+func (m Model) userStyle(u, focused int) lipgloss.Style {
+	if focused >= 0 && u != focused {
+		s := lipgloss.NewStyle()
+		if m.styles != nil {
+			s = s.Foreground(m.styles.Theme.ForegroundMuted)
+		}
+		return s
+	}
+	return lipgloss.NewStyle().Foreground(userColor(u))
+}
+
 // canvasPoint aliases the ntcharts canvas point so the rest of this file (and
 // its tests) don't need to reference the canvas package directly.
 type canvasPoint = canvas.Point
@@ -225,6 +248,7 @@ func (m Model) drawBars(cv *canvas.Model, g chartGeom, series []coremetrics.Seri
 	nUsers := len(series)
 	spans := barLayout(g.plotLeft, g.plotRight, g.n, nUsers)
 	rows := float64(g.plotBottom) // cell rows above the axis (0..plotBottom-1)
+	focused := m.focusedIndex(nUsers)
 
 	for s := 0; s < g.n; s++ {
 		for u := 0; u < nUsers; u++ {
@@ -249,7 +273,7 @@ func (m Model) drawBars(cv *canvas.Model, g chartGeom, series []coremetrics.Seri
 			if hCells <= 0 {
 				continue
 			}
-			style := lipgloss.NewStyle().Foreground(userColor(u))
+			style := m.userStyle(u, focused)
 			span := spans[s][u]
 			for x := span.x0; x <= span.x1 && x <= g.plotRight; x++ {
 				graph.DrawColumnBottomToTop(cv, canvasPoint{X: x, Y: g.plotBottom - 1}, hCells, style)
@@ -315,12 +339,25 @@ func (m Model) chartHeader(metric coremetrics.MetricKind) string {
 	return left
 }
 
-// userLegend is the colour key mapping each user to their bar colour.
+// userLegend is the colour key mapping each user to their bar colour. When a
+// user is focused, that entry is marked with ▸ and the rest are dimmed so the
+// highlighted trend is easy to pick out.
 func (m Model) userLegend(series []coremetrics.Series) string {
+	focused := m.focusedIndex(len(series))
 	parts := make([]string, 0, len(series))
 	for i, s := range series {
-		swatch := lipgloss.NewStyle().Foreground(userColor(i)).Render("█")
-		parts = append(parts, swatch+" "+s.User)
+		swatch := m.userStyle(i, focused).Render("█")
+		entry := swatch + " " + s.User
+		switch {
+		case i == focused:
+			entry = "▸" + entry
+			if m.styles != nil {
+				entry = m.styles.Selected.Render(entry)
+			}
+		case focused >= 0 && m.styles != nil:
+			entry = m.styles.Muted.Render(entry)
+		}
+		parts = append(parts, entry)
 	}
 	return strings.Join(parts, "   ")
 }
@@ -353,6 +390,7 @@ func (m Model) chartReadout(metric coremetrics.MetricKind, series []coremetrics.
 		head = m.styles.Value.Render(head)
 	}
 
+	focused := m.focusedIndex(len(series))
 	parts := []string{head}
 	for i, s := range series {
 		if idx >= len(s.Points) {
@@ -360,7 +398,7 @@ func (m Model) chartReadout(metric coremetrics.MetricKind, series []coremetrics.
 		}
 		chunk := fmt.Sprintf("%s %s", s.User, readoutVal(metric, s.Points[idx]))
 		if m.styles != nil {
-			chunk = lipgloss.NewStyle().Foreground(userColor(i)).Render(chunk)
+			chunk = m.userStyle(i, focused).Render(chunk)
 		}
 		parts = append(parts, chunk)
 	}
@@ -368,7 +406,7 @@ func (m Model) chartReadout(metric coremetrics.MetricKind, series []coremetrics.
 }
 
 func (m Model) chartHints() string {
-	hint := "h/l metric · ,/. sprint · v back to table"
+	hint := "h/l metric · ,/. sprint · f focus user · v back to table"
 	if m.styles != nil {
 		return m.styles.Muted.Render(hint)
 	}

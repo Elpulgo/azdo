@@ -112,6 +112,66 @@ func TestRenderTrendsChart_Bars(t *testing.T) {
 	}
 }
 
+func TestChartFocus_CycleKey(t *testing.T) {
+	m := chartModel(false)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	if m.focusedUser != -1 {
+		t.Fatalf("initial focusedUser = %d, want -1 (no focus)", m.focusedUser)
+	}
+
+	// Two users (alice, bob): pressing f walks all → 0 → 1 → all.
+	m, _ = m.Update(runeKeyMsg('f'))
+	if m.focusedUser != 0 {
+		t.Errorf("after 1st f, focusedUser = %d, want 0", m.focusedUser)
+	}
+	m, _ = m.Update(runeKeyMsg('f'))
+	if m.focusedUser != 1 {
+		t.Errorf("after 2nd f, focusedUser = %d, want 1", m.focusedUser)
+	}
+	m, _ = m.Update(runeKeyMsg('f'))
+	if m.focusedUser != -1 {
+		t.Errorf("after 3rd f, focusedUser = %d, want -1 (wrap back to all)", m.focusedUser)
+	}
+
+	// The focus key is a no-op outside chart mode.
+	live := makeModel()
+	live.mode = viewLive
+	live, _ = live.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	live, _ = live.Update(runeKeyMsg('f'))
+	if live.focusedUser != -1 {
+		t.Error("focus key must not act in Live mode")
+	}
+}
+
+func TestUserLegend_MarksFocusedUser(t *testing.T) {
+	m := chartModel(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	series := coremetrics.BuildSeries(m.trendRows, m.chartMetric)
+
+	// No focus → no marker, every user shown plainly.
+	if strings.Contains(m.userLegend(series), "▸") {
+		t.Errorf("unfocused legend should not contain a focus marker:\n%s", m.userLegend(series))
+	}
+
+	// Focus bob (index 1): the marker must appear, and sit on bob (after alice).
+	m.focusedUser = 1
+	leg := m.userLegend(series)
+	if !strings.Contains(leg, "▸") {
+		t.Fatalf("focused legend missing marker:\n%s", leg)
+	}
+	if strings.Index(leg, "▸") < strings.Index(leg, "alice") {
+		t.Errorf("focus marker should sit on bob (after alice), got:\n%s", leg)
+	}
+}
+
+func TestChartHints_IncludeFocus(t *testing.T) {
+	m := chartModel(true)
+	if !strings.Contains(m.chartHints(), "focus") {
+		t.Errorf("chart hints should mention the focus key, got: %q", m.chartHints())
+	}
+}
+
 func TestMetricsGlossary_InBothViews(t *testing.T) {
 	m := chartModel(true)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
