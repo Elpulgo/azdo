@@ -100,7 +100,9 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 			}
 			d := NewDetailModelWithStyles(projectClient, item, st)
 			d.SetSize(w, h)
-			return &detailAdapter{d}, nil
+			// d.Init() kicks off the comment fetch so the Discussion section
+			// populates as soon as the detail view opens.
+			return &detailAdapter{d}, d.Init()
 		},
 		HasContextBar: func(mode listview.ViewMode) bool {
 			return mode == listview.ViewDetail
@@ -251,13 +253,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// When in detail view, intercept esc to check for modals first
 	if m.GetViewMode() == ViewDetail {
 		if kmsg, ok := msg.(tea.KeyMsg); ok && kmsg.String() == "esc" {
-			// If the detail view has a modal open (e.g. state picker),
-			// route esc directly to the detail model to close the modal,
-			// bypassing the listview which would close the entire detail view
+			// If the detail view has a modal/form open (state picker or comment
+			// form), route esc directly to the detail model to close it, bypassing
+			// the listview which would otherwise close the entire detail view.
 			if adapter, ok := m.list.Detail().(*detailAdapter); ok {
-				if adapter.model.statePicker.IsVisible() {
-					adapter.model, _ = adapter.model.Update(msg)
-					return m, nil
+				if adapter.model.statePicker.IsVisible() || adapter.model.commentForm.IsVisible() {
+					var cmd tea.Cmd
+					adapter.model, cmd = adapter.model.Update(msg)
+					return m, cmd
 				}
 			}
 		}
@@ -306,6 +309,19 @@ func (m Model) IsSearching() bool {
 // IsMyItemsActive returns true if the "my items" filter is active.
 func (m Model) IsMyItemsActive() bool {
 	return m.myItemsOnly
+}
+
+// IsCommentFormVisible reports whether the work item detail view currently has
+// its comment form open. Used by the app to suppress global shortcuts so
+// keystrokes reach the form's textarea.
+func (m Model) IsCommentFormVisible() bool {
+	if m.GetViewMode() != ViewDetail {
+		return false
+	}
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		return adapter.model.commentForm.IsVisible()
+	}
+	return false
 }
 
 // DetailItemID returns the ID of the work item whose detail view is

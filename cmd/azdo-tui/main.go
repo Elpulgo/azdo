@@ -81,7 +81,7 @@ Configuration:
 Required PAT permissions:
   Build        (Read)         - pipelines, build logs
   Code         (Read & Write) - pull requests, voting, comments
-  Work Items   (Read & Write) - queries, state changes
+  Work Items   (Read & Write) - queries, comments, state changes
 
 Keyboard shortcuts (in TUI):
   Navigation:
@@ -103,6 +103,7 @@ Keyboard shortcuts (in TUI):
     r            Refresh data
     v            Vote on PR (detail view)
     s            Change work item state (detail view)
+    c            Add comment (work item detail)
     o            Open in browser (PR / work item detail)
     t            Select theme
     ?            Toggle help overlay

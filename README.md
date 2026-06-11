@@ -100,6 +100,8 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 ### Work Items
 - List view of work items with status and type information
 - Detailed view showing work item details
+- View the Discussion (comments) below the description, newest first
+- Add comments from the detail view (`c` key, multi-line form)
 - Change work item state directly from the detail view (dynamically fetches available states)
 - Filter to show only your assigned items
 - Filter by tag (`T` key)
@@ -379,7 +381,7 @@ You can also set the `AZDO_PAT` environment variable as a fallback if your syste
 |-------|--------|----------|
 | **Build** | Read | Pipeline runs, build timelines, and logs |
 | **Code** | Read & Write | List PRs, view threads/iterations/diffs, vote on PRs, add comments, and update thread status |
-| **Work Items** | Read & Write | Query and view work items, fetch available states, and change work item state |
+| **Work Items** | Read & Write | Query and view work items, read/add comments, fetch available states, and change work item state |
 
 To create a PAT:
 1. Go to Azure DevOps → User Settings → Personal Access Tokens
@@ -430,6 +432,7 @@ To create a PAT:
 | Key | Action |
 |-----|--------|
 | `w` | Change work item state |
+| `c` | Add a comment (opens form; `Ctrl+S` to send, `Esc` to cancel) |
 | `o` | Open work item in browser |
 
 ### Log Viewer

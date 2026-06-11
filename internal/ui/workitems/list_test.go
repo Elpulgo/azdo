@@ -1076,3 +1076,57 @@ func TestUpdate_WorkItemsMsg_CriticalErrorNotShownInline(t *testing.T) {
 		t.Error("Critical error should not be displayed inline in the list view")
 	}
 }
+
+func openDetailWithItem(t *testing.T) Model {
+	t.Helper()
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.list = m.list.SetItems([]azdevops.WorkItem{
+		{ID: 123, Fields: azdevops.WorkItemFields{Title: "Fix bug", State: "Active", WorkItemType: "Bug"}},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.GetViewMode() != ViewDetail {
+		t.Fatalf("expected ViewDetail, got %v", m.GetViewMode())
+	}
+	return m
+}
+
+func TestModel_IsCommentFormVisible(t *testing.T) {
+	m := openDetailWithItem(t)
+
+	if m.IsCommentFormVisible() {
+		t.Error("comment form should not be visible initially")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+
+	if !m.IsCommentFormVisible() {
+		t.Error("expected IsCommentFormVisible() to be true after pressing 'c'")
+	}
+}
+
+func TestModel_IsCommentFormVisible_FalseInListView(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if m.IsCommentFormVisible() {
+		t.Error("comment form must not be visible in list view")
+	}
+}
+
+func TestModel_EscWithCommentFormOpenStaysInDetail(t *testing.T) {
+	m := openDetailWithItem(t)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if !m.IsCommentFormVisible() {
+		t.Fatal("form should be open")
+	}
+
+	// Esc should close the form but remain in the detail view, not exit to the list.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.GetViewMode() != ViewDetail {
+		t.Errorf("expected to stay in ViewDetail after closing form with Esc, got %v", m.GetViewMode())
+	}
+	if m.IsCommentFormVisible() {
+		t.Error("expected comment form to be closed after Esc")
+	}
+}
