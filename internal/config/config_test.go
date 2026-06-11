@@ -769,6 +769,78 @@ disabled_panes: pipelines,workitems
 	}
 }
 
+func TestSave_PreservesMetricsSection(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// A config with a fully-populated metrics section plus an unmanaged
+	// top-level key. Save() must round-trip ALL of this, not just the handful
+	// of keys it explicitly manages — otherwise changing the theme silently
+	// wipes the user's metrics configuration from disk.
+	configContent := `organization: test-org
+projects:
+  - test-project
+polling_interval: 60
+theme: dark
+metrics:
+  enabled: true
+  interval_days: 21
+  wip_limit: 4
+  run_one_shot_backfill: true
+  states:
+    active: Doing
+    ready_for_test: QA
+    closed: Done
+some_future_key: keep-me
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	// Simulate a theme change — the exact action that triggered the bug.
+	if err := cfg.UpdateTheme("nord"); err != nil {
+		t.Fatalf("UpdateTheme() failed: %v", err)
+	}
+
+	reloaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() after save failed: %v", err)
+	}
+
+	if reloaded.Theme != "nord" {
+		t.Errorf("Theme = %q, want nord", reloaded.Theme)
+	}
+	if !reloaded.Metrics.Enabled {
+		t.Error("metrics.enabled was lost on save")
+	}
+	if reloaded.Metrics.IntervalDays != 21 {
+		t.Errorf("metrics.interval_days = %d, want 21 (lost on save)", reloaded.Metrics.IntervalDays)
+	}
+	if reloaded.Metrics.WIPLimit != 4 {
+		t.Errorf("metrics.wip_limit = %d, want 4 (lost on save)", reloaded.Metrics.WIPLimit)
+	}
+	if !reloaded.Metrics.RunOneShotBackfill {
+		t.Error("metrics.run_one_shot_backfill was lost on save")
+	}
+	if reloaded.Metrics.States.Active != "Doing" || reloaded.Metrics.States.ReadyForTest != "QA" || reloaded.Metrics.States.Closed != "Done" {
+		t.Errorf("metrics.states was lost on save: %+v", reloaded.Metrics.States)
+	}
+
+	// Unmanaged keys must survive too (read the raw file).
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read raw config: %v", err)
+	}
+	if !strings.Contains(string(raw), "some_future_key") {
+		t.Errorf("unmanaged key was dropped on save; file:\n%s", raw)
+	}
+}
+
 func TestNewWithPath_CreatesValidConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")

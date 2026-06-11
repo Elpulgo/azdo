@@ -32,10 +32,10 @@ var openURL = browser.Open
 // content's natural width.
 const (
 	// Flags-pane columns
-	flagCursorW  = 2  // "  " or "> "
-	flagIDW      = 8  // "#1234567"
-	flagStateW   = 7  // "Active" / "RFT"
-	flagDwellW   = 6  // "12d"
+	flagCursorW  = 2 // "  " or "> "
+	flagIDW      = 8 // "#1234567"
+	flagStateW   = 7 // "Active" / "RFT"
+	flagDwellW   = 6 // "12d"
 	flagUserW    = 14
 	flagProjectW = 18
 	flagTitleW   = 50
@@ -80,7 +80,14 @@ type viewMode int
 const (
 	viewLive viewMode = iota
 	viewTrends
+	viewTrendsChart
 )
+
+// isTrendsLike reports whether the mode is one of the sprint-on-sprint views
+// (table or chart), both of which share the Trends data and several key guards.
+func (v viewMode) isTrendsLike() bool {
+	return v == viewTrends || v == viewTrendsChart
+}
 
 // flagFilter is the f-key cycle position.
 type flagFilter int
@@ -105,13 +112,13 @@ type openURLResultMsg struct {
 
 // Model is the metrics dashboard model.
 type Model struct {
-	client      *azdevops.MultiClient
-	config      *config.Config
-	styles      *styles.Styles
+	client *azdevops.MultiClient
+	config *config.Config
+	styles *styles.Styles
 
-	allItems    []azdevops.WorkItem
-	userRows    []coremetrics.UserMetrics
-	flags       []coremetrics.ItemFlag
+	allItems []azdevops.WorkItem
+	userRows []coremetrics.UserMetrics
+	flags    []coremetrics.ItemFlag
 
 	activeTag   string
 	flagFilter  flagFilter
@@ -125,6 +132,11 @@ type Model struct {
 	sprintWindows    []coremetrics.SprintWindow
 	trendRows        []coremetrics.TrendRow
 	availableSprints []string
+
+	// Trends chart state.
+	chartMetric  coremetrics.MetricKind
+	sprintCursor int // index into sprintWindows for the readout column
+	focusedUser  int // index into trendRows to highlight; -1 = no focus (all bars coloured)
 
 	loading       bool
 	lastUpdated   time.Time
@@ -149,15 +161,34 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config) Model {
 // nil styles to skip the picker creation (used by tests).
 func NewModelWithStyles(client *azdevops.MultiClient, cfg *config.Config, s *styles.Styles) Model {
 	m := Model{
-		client: client,
-		config: cfg,
-		styles: s,
-		now:    time.Now,
+		client:      client,
+		config:      cfg,
+		styles:      s,
+		now:         time.Now,
+		focusedUser: -1, // no user highlighted until the user presses f
 	}
 	if s != nil {
 		m.tagPicker = components.NewTagPicker(s)
 	}
 	return m
+}
+
+// SetStyles swaps the active styles in place, preserving all loaded data and
+// view state (snapshots, selected sprints, fetched rows, current mode). The app
+// calls this on theme change instead of reconstructing the model, which would
+// erase the metrics section. The tag picker is rebuilt with the new styles (its
+// tags/selection are repopulated from the model whenever it's shown).
+func (m *Model) SetStyles(s *styles.Styles) {
+	m.styles = s
+	if s != nil {
+		m.tagPicker = components.NewTagPicker(s)
+		if m.width > 0 && m.height > 0 {
+			m.tagPicker.SetSize(m.width, m.height)
+		}
+	}
+	if m.ready {
+		m.updateViewportContent()
+	}
 }
 
 // stateConfig pulls the configured workflow state names out of the model's
@@ -278,7 +309,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.selectedSprints = coremetrics.FilterAvailable(m.selectedSprints, m.availableSprints)
 		}
 		m.recomputeTrends()
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			m.updateViewportContent()
 		}
 		return m, nil
@@ -287,7 +318,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.selectedSprints = append([]string(nil), msg.Tags...)
 		m.tagPicker.Hide()
 		m.recomputeTrends()
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			m.updateViewportContent()
 		}
 		return m, saveSelectionCmd(m.selectedSprints)
@@ -325,7 +356,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch keyMsg.Type {
 	case tea.KeyTab:
 		// Pane focus only matters in Live mode.
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			return m, nil
 		}
 		if m.focusedPane == paneFlags {
@@ -337,7 +368,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.scrollCursorIntoView()
 		return m, nil
 	case tea.KeyUp:
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			if m.ready {
 				m.viewport.LineUp(1)
 			}
@@ -348,7 +379,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.scrollCursorIntoView()
 		return m, nil
 	case tea.KeyDown:
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			if m.ready {
 				m.viewport.LineDown(1)
 			}
@@ -384,9 +415,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.statusMessage = ""
 		return m, tea.Batch(m.fetch(), loadSnapshotsCmd())
 	case "v":
-		if m.mode == viewLive {
+		// Cycle Live → Trends (table) → Trends (chart) → Live.
+		switch m.mode {
+		case viewLive:
 			m.mode = viewTrends
-		} else {
+		case viewTrends:
+			m.mode = viewTrendsChart
+		default:
 			m.mode = viewLive
 		}
 		m.updateViewportContent()
@@ -395,8 +430,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "f":
-		// Flag filter is Live-only.
-		if m.mode == viewTrends {
+		// In the Trends chart, f cycles the highlighted user. In Live it cycles
+		// the flag filter. (The Trends table has neither, so it's a no-op there.)
+		if m.mode == viewTrendsChart {
+			m.handleChartKey("f")
+			m.updateViewportContent()
+			return m, nil
+		}
+		if m.mode.isTrendsLike() {
 			return m, nil
 		}
 		m.flagFilter = (m.flagFilter + 1) % 3
@@ -408,7 +449,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.styles == nil {
 			return m, nil
 		}
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			m.tagPicker.SetTagsMulti(m.availableSprints, m.selectedSprints)
 		} else {
 			tags := collectUniqueTags(m.allItems)
@@ -418,13 +459,57 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	case "o":
 		// Open-in-browser is Live-only (no focused item in Trends).
-		if m.mode == viewTrends {
+		if m.mode.isTrendsLike() {
 			return m, nil
 		}
 		return m.openFocused()
+	case "h", "l", ",", ".", "n", "p", "a":
+		// Chart-only navigation. The arrow/number keys are intercepted by the
+		// app shell for tab switching, so the chart uses letters/punctuation.
+		if m.mode != viewTrendsChart {
+			return m, nil
+		}
+		m.handleChartKey(keyMsg.String())
+		m.updateViewportContent()
+		return m, nil
 	}
 
 	return m, nil
+}
+
+// handleChartKey applies a chart-mode navigation key, mutating the chart cursor
+// state in place. Callers re-render afterwards.
+func (m *Model) handleChartKey(k string) {
+	switch k {
+	case "l":
+		m.chartMetric = nextMetric(m.chartMetric, 1)
+	case "h":
+		m.chartMetric = nextMetric(m.chartMetric, -1)
+	case ".":
+		if n := len(m.sprintWindows); n > 0 {
+			m.sprintCursor = clamp(m.sprintCursor+1, 0, n-1)
+		}
+	case ",":
+		if n := len(m.sprintWindows); n > 0 {
+			m.sprintCursor = clamp(m.sprintCursor-1, 0, n-1)
+		}
+	case "f":
+		// Cycle the highlighted user: all → 0 → 1 → … → N-1 → all.
+		if n := len(m.trendRows); n > 0 {
+			m.focusedUser++
+			if m.focusedUser >= n {
+				m.focusedUser = -1
+			}
+		}
+	}
+}
+
+// nextMetric advances the metric selection by delta, wrapping around the four
+// metrics.
+func nextMetric(cur coremetrics.MetricKind, delta int) coremetrics.MetricKind {
+	n := len(coremetrics.AllMetricKinds)
+	idx := (int(cur) + delta + n) % n
+	return coremetrics.AllMetricKinds[idx]
 }
 
 // fetch returns a tea.Cmd that performs the metrics fetch.
@@ -463,6 +548,7 @@ func (m *Model) recomputeTrends() {
 	if len(m.selectedSprints) == 0 {
 		m.sprintWindows = nil
 		m.trendRows = nil
+		m.sprintCursor = 0
 		return
 	}
 	var windows []coremetrics.SprintWindow
@@ -480,6 +566,11 @@ func (m *Model) recomputeTrends() {
 		WIPLimit:        m.config.Metrics.WIPLimit,
 		States:          m.stateConfig(),
 	}, m.now())
+
+	// Keep the chart cursor within the new bounds.
+	if m.sprintCursor >= len(m.sprintWindows) {
+		m.sprintCursor = 0
+	}
 }
 
 // collectUniqueTagsFromSnaps returns the sorted set of tags across the
@@ -553,9 +644,12 @@ func (m *Model) updateViewportContent() {
 		return
 	}
 	var body string
-	if m.mode == viewTrends {
+	switch m.mode {
+	case viewTrends:
 		body = m.renderTrends()
-	} else {
+	case viewTrendsChart:
+		body = m.renderTrendsChart()
+	default:
 		body = lipgloss.JoinVertical(lipgloss.Left, m.renderFlagsPane(), "", m.renderUsersPane())
 	}
 	m.viewport.SetContent(body)
@@ -793,8 +887,11 @@ func (m Model) View() string {
 	header := m.renderHeader()
 	if !m.ready {
 		// No window size yet — fall back to inline rendering.
-		if m.mode == viewTrends {
+		switch m.mode {
+		case viewTrends:
 			return header + "\n\n" + m.renderTrends()
+		case viewTrendsChart:
+			return header + "\n\n" + m.renderTrendsChart()
 		}
 		flagsPane := m.renderFlagsPane()
 		userPane := m.renderUsersPane()
@@ -815,7 +912,9 @@ func (m Model) renderLoading() string {
 func (m Model) renderHeader() string {
 	mc := m.config.Metrics
 	parts := []string{"Metrics"}
-	if m.mode == viewTrends {
+	if m.mode == viewTrendsChart {
+		parts = append(parts, "Trends (chart)")
+	} else if m.mode == viewTrends {
 		parts = append(parts, "Trends")
 	} else {
 		parts = append(parts, "Live")

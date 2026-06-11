@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1007,6 +1008,70 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	// Connected state shows icon only (●), not the word "connected"
 	if !strings.Contains(view, "●") {
 		t.Error("Status bar should show connected icon ● after theme switch")
+	}
+}
+
+// collectMsgTypes runs a command tree (descending into tea.Batch) and returns
+// the reflect type name of every leaf message it emits. Each leaf is run under
+// a recover guard so a command that panics on a nil client (offline test) is
+// skipped rather than failing the collection.
+func collectMsgTypes(cmd tea.Cmd) []string {
+	var out []string
+	var run func(c tea.Cmd)
+	run = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		var msg tea.Msg
+		func() {
+			defer func() { _ = recover() }()
+			msg = c()
+		}()
+		if msg == nil {
+			return
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, cc := range batch {
+				run(cc)
+			}
+			return
+		}
+		out = append(out, reflect.TypeOf(msg).String())
+	}
+	run(cmd)
+	return out
+}
+
+// TestModel_ThemeSwitch_DoesNotRefetchMetrics guards the theme-change bug: when
+// the metrics tab is active, switching theme must re-style the metrics view in
+// place (SetStyles) WITHOUT re-initializing it. A re-init re-runs the async
+// fetch/snapshot load, whose completion message blanks the loaded trends data
+// — the symptom the user reported ("changed theme and the config was blown
+// away again"). We detect the regression by asserting the theme handler emits
+// no metrics.* command for the active metrics tab.
+func TestModel_ThemeSwitch_DoesNotRefetchMetrics(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	// Pretend the user is on the metrics tab when they change theme.
+	m.activeTab = TabMetrics
+
+	updated, cmd := m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	for _, ty := range collectMsgTypes(cmd) {
+		if strings.HasPrefix(ty, "metrics.") {
+			t.Errorf("theme switch re-fetched metrics (emitted %s); the view should be"+
+				" re-styled in place via SetStyles, not re-initialized", ty)
+		}
 	}
 }
 

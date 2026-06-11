@@ -402,6 +402,17 @@ func (c *Config) Save() error {
 	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
 
+	// Round-trip any existing file first so keys we don't explicitly manage
+	// here — the entire metrics section, navigation state, future additions —
+	// are preserved. Without this, every Save (e.g. a theme change) rewrites
+	// the file from scratch and silently deletes the user's metrics config.
+	// A missing file is fine: we fall through and create one.
+	if _, statErr := os.Stat(configPath); statErr == nil {
+		if readErr := v.ReadInConfig(); readErr != nil {
+			return fmt.Errorf("failed to read existing config before save: %w", readErr)
+		}
+	}
+
 	// Set all config values
 	v.Set("organization", c.Organization)
 

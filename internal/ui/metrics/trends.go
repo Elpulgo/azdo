@@ -63,6 +63,8 @@ func (m Model) renderTrends() string {
 		subhead = m.styles.Muted.Render(subhead)
 	}
 	b.WriteString(subhead)
+	b.WriteString("\n")
+	b.WriteString(m.metricsGlossary())
 	b.WriteString("\n\n")
 
 	gap := strings.Repeat(" ", trendCellGap)
@@ -236,6 +238,20 @@ func computeTeamTotal(rows []coremetrics.TrendRow) (coremetrics.TrendRow, bool) 
 		}
 	}
 	return coremetrics.TrendRow{User: "Team total", Cells: cells}, true
+}
+
+// metricsGlossary explains the metric abbreviations used across both Trends
+// views (table and chart) so pts/wip/stuck/cy are self-describing.
+func (m Model) metricsGlossary() string {
+	parts := make([]string, 0, len(coremetrics.AllMetricKinds))
+	for _, k := range coremetrics.AllMetricKinds {
+		parts = append(parts, fmt.Sprintf("%s = %s", k.Short(), k.Label()))
+	}
+	line := "Legend: " + strings.Join(parts, " · ")
+	if m.styles != nil {
+		return m.styles.Muted.Render(line)
+	}
+	return line
 }
 
 func distinctSnapshotDays(snaps []coremetrics.Snapshot) int {
