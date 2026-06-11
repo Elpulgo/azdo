@@ -7,9 +7,219 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+func sampleComments() []azdevops.WorkItemComment {
+	return []azdevops.WorkItemComment{
+		{
+			ID:          45,
+			Text:        "Newest discussion point",
+			CreatedBy:   azdevops.Identity{DisplayName: "Jane Doe"},
+			CreatedDate: time.Date(2026, 5, 2, 10, 30, 0, 0, time.UTC),
+		},
+		{
+			ID:          44,
+			Text:        "An earlier remark",
+			CreatedBy:   azdevops.Identity{DisplayName: "John Roe"},
+			CreatedDate: time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC),
+		},
+	}
+}
+
+func TestDetailModel_CommentsLoadedRendersInViewport(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T", Description: "desc"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, _ = m.Update(commentsLoadedMsg{comments: sampleComments()})
+
+	view := m.View()
+	for _, want := range []string{"Discussion", "Jane Doe", "Newest discussion point", "John Roe", "An earlier remark", "2026-05-02 10:30"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("Expected comments view to contain %q", want)
+		}
+	}
+}
+
+func TestDetailModel_CommentsRenderedNewestFirst(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(120, 60)
+
+	m, _ = m.Update(commentsLoadedMsg{comments: sampleComments()})
+
+	view := m.View()
+	newestIdx := strings.Index(view, "Newest discussion point")
+	olderIdx := strings.Index(view, "An earlier remark")
+	if newestIdx == -1 || olderIdx == -1 {
+		t.Fatal("Expected both comments in view")
+	}
+	if newestIdx >= olderIdx {
+		t.Errorf("Expected newest comment (pos %d) before older comment (pos %d)", newestIdx, olderIdx)
+	}
+}
+
+func TestDetailModel_NoCommentsShowsHint(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, _ = m.Update(commentsLoadedMsg{comments: nil})
+
+	if !strings.Contains(m.View(), "No comments") {
+		t.Error("Expected 'No comments' hint when there are no comments")
+	}
+}
+
+func TestDetailModel_CommentsLoadErrorShowsMessage(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, _ = m.Update(commentsLoadedMsg{err: fmt.Errorf("network down")})
+
+	if !strings.Contains(m.View(), "Could not load comments") {
+		t.Error("Expected an error message in the discussion section when comments fail to load")
+	}
+}
+
+func TestDetailModel_CKeyOpensCommentForm(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	if m.commentForm.IsVisible() {
+		t.Fatal("comment form should start hidden")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+
+	if !m.commentForm.IsVisible() {
+		t.Error("Expected comment form to be visible after pressing 'c'")
+	}
+}
+
+func TestDetailModel_CommentFormCancelHides(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if !m.commentForm.IsVisible() {
+		t.Fatal("form should be open before cancel")
+	}
+
+	// Esc routes into the form, which hides itself and emits CommentFormCancelledMsg.
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.commentForm.IsVisible() {
+		t.Error("Expected comment form to be hidden after Esc")
+	}
+	if cmd == nil {
+		t.Fatal("Expected a cancel command from Esc")
+	}
+	// Dispatching the cancel message must not error or re-open the form.
+	m, _ = m.Update(cmd())
+	if m.commentForm.IsVisible() {
+		t.Error("Form should remain hidden after cancel message is handled")
+	}
+}
+
+// openAndSubmitComment drives the realistic flow: open the form with 'c', type
+// text, press Ctrl+S (which hides the form and emits CommentSubmittedMsg), then
+// dispatch that message back into the model. Returns the model and the post cmd.
+func openAndSubmitComment(t *testing.T, m *DetailModel, text string) (*DetailModel, tea.Cmd) {
+	t.Helper()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("Expected a command from Ctrl+S submit")
+	}
+	submitted, ok := cmd().(components.CommentSubmittedMsg)
+	if !ok {
+		t.Fatalf("Expected Ctrl+S to emit CommentSubmittedMsg, got %T", cmd())
+	}
+	return m.Update(submitted)
+}
+
+func TestDetailModel_CommentSubmitTriggersPost(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, cmd := openAndSubmitComment(t, m, "my new comment")
+
+	if !m.posting {
+		t.Error("Expected posting to be true after submitting a comment")
+	}
+	if cmd == nil {
+		t.Error("Expected a command to post the comment")
+	}
+	if m.commentForm.IsVisible() {
+		t.Error("Expected comment form to be hidden while posting")
+	}
+}
+
+func TestDetailModel_CommentPostErrorKeepsDraft(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, _ = openAndSubmitComment(t, m, "draft text")
+	m, _ = m.Update(commentPostedMsg{err: fmt.Errorf("denied")})
+
+	if m.posting {
+		t.Error("Expected posting to be false after error")
+	}
+	if !strings.Contains(strings.ToLower(m.GetStatusMessage()), "error") &&
+		!strings.Contains(strings.ToLower(m.GetStatusMessage()), "fail") {
+		t.Errorf("Expected error status message, got %q", m.GetStatusMessage())
+	}
+	if !m.commentForm.IsVisible() {
+		t.Error("Expected comment form to reappear after a failed send so the draft isn't lost")
+	}
+	if m.commentForm.Value() != "draft text" {
+		t.Errorf("Expected draft preserved, got %q", m.commentForm.Value())
+	}
+}
+
+func TestDetailModel_CommentPostSuccessRefetches(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	m := NewDetailModel(nil, wi)
+	m.SetSize(100, 40)
+
+	m, _ = openAndSubmitComment(t, m, "shipped")
+	m, cmd := m.Update(commentPostedMsg{comment: &azdevops.WorkItemComment{ID: 9, Text: "shipped"}})
+
+	if m.posting {
+		t.Error("Expected posting to be false after success")
+	}
+	if cmd == nil {
+		t.Error("Expected a refetch command after a successful post")
+	}
+	if m.GetStatusMessage() == "" {
+		t.Error("Expected a status message after a successful post")
+	}
+}
+
+func TestDetailModel_GetContextItemsIncludesComment(t *testing.T) {
+	wi := azdevops.WorkItem{ID: 1}
+	m := NewDetailModel(nil, wi)
+
+	found := false
+	for _, item := range m.GetContextItems() {
+		if item.Key == "c" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected context items to include 'c' for adding a comment")
+	}
+}
 
 func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	// The height passed to SetSize is already the content area (after app-level

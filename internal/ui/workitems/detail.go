@@ -35,6 +35,18 @@ type statesLoadedMsg struct {
 	err    error
 }
 
+// commentsLoadedMsg is sent when work item comments have been fetched
+type commentsLoadedMsg struct {
+	comments []azdevops.WorkItemComment
+	err      error
+}
+
+// commentPostedMsg is sent when a new comment has been posted
+type commentPostedMsg struct {
+	comment *azdevops.WorkItemComment
+	err     error
+}
+
 // DetailModel represents the work item detail view
 type DetailModel struct {
 	client        *azdevops.Client
@@ -48,6 +60,13 @@ type DetailModel struct {
 	loading       bool
 	spinner       *components.LoadingIndicator
 	statusMessage string
+
+	comments        []azdevops.WorkItemComment
+	commentsLoading bool
+	commentsErr     error
+	commentForm     components.CommentForm
+	posting         bool   // a comment POST is in flight
+	pendingComment  string // draft text retained across an in-flight post
 }
 
 // NewDetailModel creates a new work item detail model with default styles
@@ -64,12 +83,18 @@ func NewDetailModelWithStyles(client *azdevops.Client, wi azdevops.WorkItem, s *
 		styles:      s,
 		statePicker: components.NewStatePicker(s),
 		spinner:     spinner,
+		commentForm: components.NewCommentForm(s),
 	}
 }
 
-// Init initializes the detail model
+// Init initializes the detail model, kicking off the comment fetch so the
+// Discussion section is populated as soon as the detail view opens.
 func (m *DetailModel) Init() tea.Cmd {
-	return nil
+	m.commentsLoading = true
+	if m.ready {
+		m.updateViewportContent()
+	}
+	return m.fetchComments()
 }
 
 // Update handles messages for the detail view
@@ -81,7 +106,58 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Route input to the comment form while it is open. The form hides itself
+	// synchronously on submit/cancel, so the resulting CommentSubmittedMsg /
+	// CommentFormCancelledMsg fall through to the handlers below instead of
+	// being re-captured here.
+	if m.commentForm.IsVisible() {
+		var cmd tea.Cmd
+		m.commentForm, cmd = m.commentForm.Update(msg)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
+
+	case components.CommentSubmittedMsg:
+		m.pendingComment = msg.Text
+		m.posting = true
+		m.spinner.SetVisible(true)
+		m.spinner.SetMessage("Posting comment...")
+		// The form hid itself on submit; reclaim the viewport space.
+		m.resizeViewport()
+		return m, tea.Batch(m.postComment(msg.Text), m.spinner.Tick())
+
+	case components.CommentFormCancelledMsg:
+		m.pendingComment = ""
+		m.resizeViewport()
+		return m, nil
+
+	case commentsLoadedMsg:
+		m.commentsLoading = false
+		m.commentsErr = msg.err
+		m.comments = msg.comments
+		m.updateViewportContent()
+		return m, nil
+
+	case commentPostedMsg:
+		m.posting = false
+		m.spinner.SetVisible(false)
+		if msg.err != nil {
+			m.statusMessage = fmt.Sprintf("Error posting comment: %v", msg.err)
+			// Restore the draft so the user doesn't lose their text.
+			m.commentForm.Reset()
+			m.commentForm.SetValue(m.pendingComment)
+			m.commentForm.SetWidth(m.width)
+			m.commentForm.Show()
+			m.resizeViewport()
+			return m, m.commentForm.Focus()
+		}
+		m.pendingComment = ""
+		m.statusMessage = "Comment added"
+		// Re-fetch so the new comment appears in the correct (newest-first) position.
+		m.commentsLoading = true
+		m.updateViewportContent()
+		return m, m.fetchComments()
 	case components.StateSelectedMsg:
 		m.loading = true
 		m.spinner.SetVisible(true)
@@ -141,6 +217,16 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			return m, tea.Batch(m.fetchStates(), m.spinner.Tick())
 		case "o":
 			return m, m.openInBrowser()
+		case "c":
+			// Don't allow opening a new form while a post is in flight.
+			if m.posting {
+				return m, nil
+			}
+			m.commentForm.Reset()
+			m.commentForm.SetWidth(m.width)
+			m.commentForm.Show()
+			m.resizeViewport()
+			return m, m.commentForm.Focus()
 		case "up", "k":
 			m.viewport.LineUp(1)
 		case "down", "j":
@@ -181,6 +267,32 @@ func (m *DetailModel) fetchStates() tea.Cmd {
 		}
 		states, err := m.client.GetWorkItemTypeStates(m.workItem.Fields.WorkItemType)
 		return statesLoadedMsg{states: states, err: err}
+	}
+}
+
+// fetchComments fetches the work item's discussion comments (newest first).
+func (m *DetailModel) fetchComments() tea.Cmd {
+	id := m.workItem.ID
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return commentsLoadedMsg{err: fmt.Errorf("no client available")}
+		}
+		comments, err := client.GetWorkItemComments(id)
+		return commentsLoadedMsg{comments: comments, err: err}
+	}
+}
+
+// postComment sends a new comment to the API.
+func (m *DetailModel) postComment(text string) tea.Cmd {
+	id := m.workItem.ID
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return commentPostedMsg{err: fmt.Errorf("no client available")}
+		}
+		comment, err := client.AddWorkItemComment(id, text)
+		return commentPostedMsg{comment: comment, err: err}
 	}
 }
 
@@ -230,6 +342,12 @@ func (m *DetailModel) View() string {
 	// Scrollable viewport content
 	if m.ready {
 		sb.WriteString(m.viewport.View())
+	}
+
+	// Inline comment form, rendered below the viewport when open
+	if m.commentForm.IsVisible() {
+		sb.WriteString("\n")
+		sb.WriteString(m.commentForm.View())
 	}
 
 	contentStyle := lipgloss.NewStyle().
@@ -299,37 +417,97 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString("\n")
 	}
 
+	// Discussion (comments), newest first
+	m.writeDiscussion(&sb)
+
 	m.viewport.SetContent(sb.String())
+}
+
+// writeDiscussion appends the Discussion section (comments) to the viewport content.
+func (m *DetailModel) writeDiscussion(sb *strings.Builder) {
+	sb.WriteString("\n")
+	sb.WriteString(m.styles.Label.Render(fmt.Sprintf("Discussion (%d)", len(m.comments))))
+	sb.WriteString("\n\n")
+
+	switch {
+	case m.commentsLoading:
+		sb.WriteString(m.styles.Muted.Render("Loading comments..."))
+		sb.WriteString("\n")
+		return
+	case m.commentsErr != nil:
+		sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("Could not load comments: %v", m.commentsErr)))
+		sb.WriteString("\n")
+		return
+	case len(m.comments) == 0:
+		sb.WriteString(m.styles.Muted.Render("No comments yet. Press c to add one."))
+		sb.WriteString("\n")
+		return
+	}
+
+	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.styles.Theme.Secondary))
+	bodyStyle := m.styles.Value.Width(m.width)
+	for _, c := range m.comments {
+		author := c.CreatedBy.DisplayName
+		if author == "" {
+			author = "Unknown"
+		}
+		header := author
+		if !c.CreatedDate.IsZero() {
+			header = fmt.Sprintf("%s  ·  %s", author, c.CreatedDate.Format("2006-01-02 15:04"))
+		}
+		sb.WriteString(metaStyle.Render(header))
+		sb.WriteString("\n")
+		sb.WriteString(bodyStyle.Render(stripHTMLTags(c.Text)))
+		sb.WriteString("\n\n")
+	}
 }
 
 // SetSize sets the size of the detail view
 func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-
-	// Account for header lines rendered in View(): title (1) + type/state (1) + separator (1) = 3
-	headerLines := 3
-	viewportHeight := height - headerLines
-	if viewportHeight < 1 {
-		viewportHeight = 1
-	}
+	m.commentForm.SetWidth(width)
 
 	if !m.ready {
-		m.viewport = viewport.New(width, viewportHeight)
+		m.viewport = viewport.New(width, 1)
 		m.ready = true
-	} else {
-		m.viewport.Width = width
-		m.viewport.Height = viewportHeight
 	}
 
-	// Update viewport content
+	m.resizeViewport()
 	m.updateViewportContent()
+}
+
+// reservedLines returns the number of non-viewport rows the detail view renders:
+// the fixed header (title + type/state + separator = 3), plus the inline comment
+// form (a blank spacer + the form itself) when it is open.
+func (m *DetailModel) reservedLines() int {
+	lines := 3
+	if m.commentForm.IsVisible() {
+		lines += 1 + m.commentForm.Height()
+	}
+	return lines
+}
+
+// resizeViewport recomputes the viewport dimensions from the current size and
+// reserved lines. Call this whenever the comment form is shown or hidden so the
+// scrollable area shrinks/grows to make room for the form.
+func (m *DetailModel) resizeViewport() {
+	if !m.ready {
+		return
+	}
+	h := m.height - m.reservedLines()
+	if h < 1 {
+		h = 1
+	}
+	m.viewport.Width = m.width
+	m.viewport.Height = h
 }
 
 // GetContextItems returns context items for the detail view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "w", Description: "Change state"},
+		{Key: "c", Description: "comment"},
 		{Key: "o", Description: "open in browser"},
 		{Key: "↑↓", Description: "scroll"},
 		{Key: "esc", Description: "back"},
