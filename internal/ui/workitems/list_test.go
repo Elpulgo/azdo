@@ -491,6 +491,81 @@ func TestMyItems_ToggleIgnoredInDetailView(t *testing.T) {
 	}
 }
 
+func TestMyItems_EscTogglesOff(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Toggle my items on
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if !m.IsMyItemsActive() {
+		t.Fatal("myItemsOnly should be true after pressing m")
+	}
+	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+	}})
+
+	// esc should toggle it back off and restore all items
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.IsMyItemsActive() {
+		t.Error("esc should turn off myItemsOnly")
+	}
+	if len(m.list.Items()) != 2 {
+		t.Errorf("after esc, expected 2 items restored, got %d", len(m.list.Items()))
+	}
+}
+
+func TestMyItems_EscDoesNotTurnOn(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// With no filter active, esc must NOT switch from all items to my items
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.IsMyItemsActive() {
+		t.Error("esc should not turn on myItemsOnly")
+	}
+	if len(m.list.Items()) != 2 {
+		t.Errorf("expected 2 items to remain, got %d", len(m.list.Items()))
+	}
+}
+
+func TestMyItems_EscInSearchExitsSearchNotFilter(t *testing.T) {
+	m := NewModel(nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+	}
+	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
+
+	// Turn on my items, then enter search
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !m.IsSearching() {
+		t.Fatal("should be in search mode")
+	}
+
+	// First esc exits search but must leave the my items filter intact
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.IsSearching() {
+		t.Error("esc should exit search mode")
+	}
+	if !m.IsMyItemsActive() {
+		t.Error("esc that exits search must not also turn off myItemsOnly")
+	}
+}
+
 func TestMyItems_PollingWhileFilterActive_DoesNotChangeVisible(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

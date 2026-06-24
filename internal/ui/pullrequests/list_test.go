@@ -818,6 +818,98 @@ func TestModel_AsReviewerToggle_NotInDetailView(t *testing.T) {
 	}
 }
 
+func TestModel_MyPRs_EscTogglesOff(t *testing.T) {
+	model := NewModel(nil)
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	// Toggle my PRs on
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if !model.IsMyPRsActive() {
+		t.Fatal("my PRs filter should be on after pressing 'm'")
+	}
+
+	// esc should toggle it back off and restore all items
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.IsMyPRsActive() {
+		t.Error("esc should turn off my PRs filter")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("after esc, expected 2 PRs restored, got %d", len(model.list.Items()))
+	}
+}
+
+func TestModel_AsReviewer_EscTogglesOff(t *testing.T) {
+	model := NewModel(nil)
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	// Toggle as-reviewer on
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if !model.IsAsReviewerActive() {
+		t.Fatal("as-reviewer filter should be on after pressing 'A'")
+	}
+
+	// esc should toggle it back off and restore all items
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.IsAsReviewerActive() {
+		t.Error("esc should turn off as-reviewer filter")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("after esc, expected 2 PRs restored, got %d", len(model.list.Items()))
+	}
+}
+
+func TestModel_Esc_DoesNotTurnOnMyPRs(t *testing.T) {
+	model := NewModel(nil)
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
+	}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+
+	// With no filter active, esc must NOT switch from all PRs to my PRs
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.IsMyPRsActive() {
+		t.Error("esc should not turn on my PRs filter")
+	}
+	if model.IsAsReviewerActive() {
+		t.Error("esc should not turn on as-reviewer filter")
+	}
+	if len(model.list.Items()) != 2 {
+		t.Errorf("expected 2 PRs to remain, got %d", len(model.list.Items()))
+	}
+}
+
+func TestModel_Esc_InSearchMode_ExitsSearchNotFilter(t *testing.T) {
+	model := NewModel(nil)
+	prs := []azdevops.PullRequest{{ID: 1, Title: "PR 1"}}
+	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
+	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Turn on my PRs, then enter search
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !model.IsSearching() {
+		t.Fatal("should be in search mode")
+	}
+
+	// First esc exits search but must leave the my PRs filter intact
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.IsSearching() {
+		t.Error("esc should exit search mode")
+	}
+	if !model.IsMyPRsActive() {
+		t.Error("esc that exits search must not also turn off my PRs filter")
+	}
+}
+
 func TestModel_AsReviewerMsg_SetsItems(t *testing.T) {
 	model := NewModel(nil)
 
