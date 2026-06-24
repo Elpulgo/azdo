@@ -219,6 +219,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.list = m.list.SetItems(m.allPRs)
 			return m, nil
 		}
+		// esc clears an active "my PRs" / "as-reviewer" filter, mirroring how
+		// esc exits search. It only ever turns a filter OFF — never on — so the
+		// full list is restored. When searching, esc is left to exit search first.
+		if msg.String() == "esc" && !m.list.IsSearching() && m.viewMode == ViewList {
+			if m.myPRsOnly {
+				m.myPRsOnly = false
+				m.myPRs = nil
+				m.list = m.list.SetItems(m.allPRs)
+				return m, nil
+			}
+			if m.asReviewerOnly {
+				m.asReviewerOnly = false
+				m.asReviewerPRs = nil
+				m.list = m.list.SetItems(m.allPRs)
+				return m, nil
+			}
+		}
 	}
 
 	// Route by view mode

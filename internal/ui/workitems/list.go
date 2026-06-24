@@ -217,6 +217,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
 				return m, nil
 			}
+			// esc clears an active "my items" filter, mirroring how esc exits
+			// search. It only ever turns the filter OFF — never on. When
+			// searching, esc is left to exit search first.
+			if msg.String() == "esc" && !m.list.IsSearching() && m.GetViewMode() == ViewList && m.myItemsOnly {
+				m.myItemsOnly = false
+				m.myItems = nil
+				m.list = m.list.SetItems(m.applyAllFilters(m.allItems))
+				return m, nil
+			}
 			if msg.String() == "s" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
 				states := collectUniqueStates(m.allItems)
 				options := make([]components.ListPickerOption, len(states))
