@@ -14,13 +14,18 @@ const (
 )
 
 // Identity stamps every neutral entity with its origin.
-// Kind identifies the backend, Scope is the project name, and ID is the
-// backend's string representation of the entity's numeric or UUID identifier.
-// All three fields must be non-zero on any entity returned through the interface.
+// Kind identifies the backend, Scope is the project API name (ProjectName from
+// the wire layer), ScopeDisplay is the human-readable project display name
+// (ProjectDisplayName from the wire layer), and ID is the backend's string
+// representation of the entity's numeric or UUID identifier.
+// All fields except ScopeDisplay must be non-zero on any entity returned
+// through the interface. ScopeDisplay falls back to Scope at the adapter
+// boundary when no display name is configured.
 type Identity struct {
-	Kind  Kind
-	Scope string // project name (ProjectName from the wire layer)
-	ID    string // wire ID converted to string
+	Kind         Kind
+	Scope        string // project API name (ProjectName from the wire layer)
+	ScopeDisplay string // human-readable project display name (ProjectDisplayName)
+	ID           string // wire ID converted to string
 }
 
 // WorkItem is the neutral representation of an Azure DevOps work item (or its

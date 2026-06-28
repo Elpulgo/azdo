@@ -15,12 +15,13 @@ func TestKindAzureConstant(t *testing.T) {
 	}
 }
 
-// TestIdentityFields verifies that Identity carries Kind, Scope, and ID.
+// TestIdentityFields verifies that Identity carries Kind, Scope, ScopeDisplay, and ID.
 func TestIdentityFields(t *testing.T) {
 	id := provider.Identity{
-		Kind:  provider.KindAzure,
-		Scope: "my-project",
-		ID:    "42",
+		Kind:         provider.KindAzure,
+		Scope:        "my-project",
+		ScopeDisplay: "My Project",
+		ID:           "42",
 	}
 	if id.Kind != provider.KindAzure {
 		t.Errorf("expected Kind=%v, got %v", provider.KindAzure, id.Kind)
@@ -28,8 +29,37 @@ func TestIdentityFields(t *testing.T) {
 	if id.Scope != "my-project" {
 		t.Errorf("expected Scope=%q, got %q", "my-project", id.Scope)
 	}
+	if id.ScopeDisplay != "My Project" {
+		t.Errorf("expected ScopeDisplay=%q, got %q", "My Project", id.ScopeDisplay)
+	}
 	if id.ID != "42" {
 		t.Errorf("expected ID=%q, got %q", "42", id.ID)
+	}
+}
+
+// TestIdentityScopeDisplay verifies that ScopeDisplay is distinct from Scope,
+// mirroring the wire-layer distinction between ProjectName and ProjectDisplayName.
+// List views render and filter on both fields (pullrequests/list.go:593,624-625
+// and workitems/list.go:515,556-557), so both must be carried in Identity.
+func TestIdentityScopeDisplay(t *testing.T) {
+	id := provider.Identity{
+		Kind:         provider.KindAzure,
+		Scope:        "my-api-name",
+		ScopeDisplay: "My Friendly Name",
+		ID:           "1",
+	}
+	if id.Scope == id.ScopeDisplay {
+		t.Error("Scope and ScopeDisplay should be independently settable and differ when project has a display name")
+	}
+	// ScopeDisplay may fall back to Scope when no display name is configured;
+	// that defaulting happens at the adapter boundary, not here.
+	emptyDisplay := provider.Identity{
+		Kind:  provider.KindAzure,
+		Scope: "proj",
+		ID:    "2",
+	}
+	if emptyDisplay.ScopeDisplay != "" {
+		t.Errorf("zero-value ScopeDisplay should be empty string, got %q", emptyDisplay.ScopeDisplay)
 	}
 }
 

@@ -70,6 +70,11 @@ running the full suite plus a manual smoke of all three tabs.
 
 - ✅ Resolved: `Thread` now carries `Line int` (maps from wire `RightFileStart.Line`), so the adapter can reconstruct inline diff placement that `diff.MapThreadsToLines` needs. Covered by `TestThreadLineField`.
 
+## Review feedback: 2. Define the Provider interface
+
+- 🔴 **Project scoping missing on entity methods.** `MultiClient` is keyed by project name (`clients map[string]*Client`); views resolve the right sub-client with `client.ClientFor(item.ProjectName)` before calling entity ops. The flat interface passes only `repositoryID`/`prID`/`buildID` — never a scope — so the task-5 adapter cannot route to the correct sub-client. Fix: add a `scope string` (project name) parameter to every entity method that needs to dispatch per-project (e.g. `GetPRThreads(scope, repositoryID, prID string)`), or expose a `ClientFor`-style `For(scope string) Provider` method. Settle this now — it changes the interface shape and all view migrations (tasks 7-9) depend on it.
+- 🔴 **`Identity.ScopeDisplay` missing.** List views render and filter on both `ProjectName` and `ProjectDisplayName` (pullrequests/list.go:593,624-625, workitems/list.go:515,556-557). `Identity.Scope` carries only the project name; there is no display-name field. Add `ScopeDisplay string` to `Identity`, populated at the adapter boundary.
+
 ## Unknowns
 
 - Right shape for `WebURL` — a single `WebURL(ref any)` vs per-entity methods (`PRWebURL`, `WorkItemWebURL`).
