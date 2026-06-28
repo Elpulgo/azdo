@@ -50,7 +50,7 @@ running the full suite plus a manual smoke of all three tabs.
 | 3 | Build `CompositeProvider` here? | No, defer to Phase 4 | Keep this phase a pure, shippable refactor |
 | 4 | Move display helpers (StateIcon, etc.)? | No, leave in place for now | Display-metadata cleanup is Phase 1 — keep scope tight |
 | 5 | Does metrics move to the interface? | No — keep it on a nullable concrete `*azdevops.MultiClient` | Its calls (`MetricsWorkItems`, `WorkItemUpdates`, `GetOrg`) are Azure- and metrics-only; `nil` client already hides the tab, matching "metrics is Azure-only" |
-| 6 | Right shape for `WebURL`? | Per-entity methods: `WorkItemURL(id int)`, `PRURL(repositoryID string, prID int)`, `PipelineURL(id int)` | Avoids type-unsafe `any` parameter; each entity has different identifying fields; empty string return signals "cannot construct URL" |
+| 6 | Right shape for `WebURL`? | Per-entity methods with `scope string` first param: `WorkItemURL(scope string, id int)`, `PRURL(scope, repositoryID string, prID int)`, `PipelineURL(scope string, id int)` | Avoids type-unsafe `any` parameter; each entity has different identifying fields; `scope` routes to the correct per-project sub-client so multi-project configs produce correct URLs; empty string return signals "cannot construct URL" |
 
 ## Tasks
 
@@ -58,13 +58,17 @@ running the full suite plus a manual smoke of all three tabs.
 - [x] 2. Define the `Provider` interface (PR, work-item, pipeline, log surface + `Kind()` and `WebURL()`) covering every method the views call today. (validated: both review must-fixes resolved — `scope string` added to per-project entity methods, `ScopeDisplay` added to `Identity`; build + provider tests green)
 - [x] 3. Add a compile-time conformance test asserting the azdevops adapter satisfies `provider.Provider` (fails until task 5). (validated: `internal/azdevops/adapter_conformance_test.go` gated by `//go:build adapter`; normal build/vet clean, `go test/vet -tags adapter` yields the expected `undefined: azdevops.Adapter`)
 - [x] 4. Write mapping tests (wire struct → neutral type) for each domain type; assert as an invariant that every mapped entity has non-zero `Kind`, `Scope`, and `ID`. (blocked by: 1)
-- [x] 5. Implement the azdevops adapter: map wire→neutral, delegate to `MultiClient`, satisfy `Provider`. (blocked by: 2,4)
+- [x] 5. Implement the azdevops adapter: map wire→neutral, delegate to `MultiClient`, satisfy `Provider`. (blocked by: 2,4) (validated: URL methods take `scope string` first param and use `ClientFor(scope)` to build project-specific URLs; build/vet/tests green)
 - [ ] 6. Re-type `app.Model.client` and `app.NewModel` to `provider.Provider`, keeping a separate nullable `*azdevops.MultiClient` field for the metrics view; `main.go` passes both. (blocked by: 5)
 - [ ] 7. Migrate the `pullrequests` view and its `NewModelWithStyles` to consume neutral types (list, detail, diff, threads/votes). (blocked by: 6)
 - [ ] 8. Migrate the `workitems` view and its `NewModelWithStyles` to consume neutral types (list, detail, state/tag pickers, comments). (blocked by: 6)
 - [ ] 9. Migrate the `pipelines` view and its `NewModelWithStyles` to consume neutral types (list, timeline detail, log viewer). (blocked by: 6)
 - [ ] 10. Wire `main.go` to build the azdevops adapter and pass it as `provider.Provider`. (blocked by: 7,8,9)
 - [ ] 11. Run `go test ./...`, `go vet ./...`, and a manual smoke of all three tabs; confirm no behavior change. (blocked by: 10)
+
+## Review feedback: 5. Implement the azdevops adapter
+
+- 🔴 **URL methods silently break multi-project configurations.** `WorkItemURL`, `PRURL`, and `PipelineURL` return `""` whenever the multi-client holds more than one project, because they have no `scope` param to know which project's URL to build. The views today build URLs from the *selected item's own project* (e.g. `workitems/detail.go:252` uses `m.client.GetProject()` on the item's per-project client). Once views migrate to the adapter, these links become empty strings in any multi-project setup — a user-visible regression. Fix: add `scope string` as the first parameter to all three URL methods in `provider.Provider` (updating Decision 6 in the spec) and implement them in the adapter using `ClientFor(scope)` to build the project-specific URL.
 
 ## Review feedback: 1. Create internal/provider with neutral domain types
 

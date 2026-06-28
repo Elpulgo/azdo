@@ -413,52 +413,46 @@ func (a *Adapter) GetBuildLogContent(scope string, buildID, logID int) (string, 
 // --- Web URL helpers (Decision 6) ---
 
 // WorkItemURL returns the browser URL for the given work item ID.
-// For a single-project adapter the project is known; for multi-project setups
-// the project cannot be inferred from the ID alone and an empty string is returned.
-func (a *Adapter) WorkItemURL(id int) string {
+// scope is the project name used to route to the correct sub-client.
+// Returns "" when the client is nil or scope does not match a known project.
+func (a *Adapter) WorkItemURL(scope string, id int) string {
 	if a.mc == nil {
 		return ""
 	}
-	org := a.mc.GetOrg()
-	projects := a.mc.Projects()
-	if len(projects) != 1 {
-		// Multi-project: cannot determine which project owns this ID.
+	c := a.mc.ClientFor(scope)
+	if c == nil {
 		return ""
 	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d", org, projects[0], id)
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d",
+		c.GetOrg(), c.GetProject(), id)
 }
 
 // PRURL returns the browser URL for the given pull request in the given repository.
-// For a single-project adapter the project is known; for multi-project setups
-// the project cannot be inferred from the repository ID alone and an empty string
-// is returned.
-func (a *Adapter) PRURL(repositoryID string, prID int) string {
+// scope is the project name used to route to the correct sub-client.
+// Returns "" when the client is nil or scope does not match a known project.
+func (a *Adapter) PRURL(scope, repositoryID string, prID int) string {
 	if a.mc == nil {
 		return ""
 	}
-	org := a.mc.GetOrg()
-	projects := a.mc.Projects()
-	if len(projects) != 1 {
-		// Multi-project: cannot determine which project owns this repository.
+	c := a.mc.ClientFor(scope)
+	if c == nil {
 		return ""
 	}
 	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
-		org, projects[0], repositoryID, prID)
+		c.GetOrg(), c.GetProject(), repositoryID, prID)
 }
 
 // PipelineURL returns the browser URL for the given pipeline build ID.
-// For a single-project adapter the org and project are known; for multi-project
-// setups the project cannot be inferred from the build ID alone and an empty
-// string is returned.
-func (a *Adapter) PipelineURL(id int) string {
+// scope is the project name used to route to the correct sub-client.
+// Returns "" when the client is nil or scope does not match a known project.
+func (a *Adapter) PipelineURL(scope string, id int) string {
 	if a.mc == nil {
 		return ""
 	}
-	org := a.mc.GetOrg()
-	projects := a.mc.Projects()
-	if len(projects) != 1 {
+	c := a.mc.ClientFor(scope)
+	if c == nil {
 		return ""
 	}
 	return fmt.Sprintf("https://dev.azure.com/%s/%s/_build/results?buildId=%d",
-		org, projects[0], id)
+		c.GetOrg(), c.GetProject(), id)
 }

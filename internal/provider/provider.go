@@ -111,14 +111,17 @@ type Provider interface {
 	// URL cannot be constructed (e.g. missing org or project).
 
 	// WorkItemURL returns the browser URL for the given work item ID.
-	WorkItemURL(id int) string
+	// scope is the project name used to route to the correct sub-client.
+	WorkItemURL(scope string, id int) string
 
 	// PRURL returns the browser URL for the given pull request in the given
 	// repository.
-	PRURL(repositoryID string, prID int) string
+	// scope is the project name used to route to the correct sub-client.
+	PRURL(scope, repositoryID string, prID int) string
 
 	// PipelineURL returns the browser URL for the given pipeline build.
-	PipelineURL(id int) string
+	// scope is the project name used to route to the correct sub-client.
+	PipelineURL(scope string, id int) string
 
 	// --- Multi-project helpers ---
 
