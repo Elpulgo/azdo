@@ -147,3 +147,39 @@ type BuildLog struct {
 	LastChangedOn *time.Time
 	URL           string
 }
+
+// Iteration is the neutral representation of a single PR iteration (push).
+// Each push to the source branch creates a new iteration; the adapter uses
+// the latest iteration ID when fetching changed files.
+type Iteration struct {
+	ID          int
+	Description string
+}
+
+// IterationChange is the neutral representation of a single file changed in a
+// PR iteration. OriginalPath is non-empty for renamed files.
+type IterationChange struct {
+	ChangeID      int
+	Path          string // the new (or only) file path
+	GitObjectType string // "blob" for files, "tree" for folders
+	ChangeType    string // "add", "edit", "delete", "rename"
+	OriginalPath  string // non-empty on renames
+}
+
+// WorkItemTypeState is the neutral representation of a state that is valid for
+// a given work item type (e.g. "Active", "Resolved", "Closed").
+type WorkItemTypeState struct {
+	Name     string
+	Color    string
+	Category string
+}
+
+// WorkItemComment is the neutral representation of a comment in a work item's
+// Discussion section.
+type WorkItemComment struct {
+	Identity    Identity
+	ID          int
+	Text        string
+	AuthorName  string
+	CreatedDate time.Time
+}

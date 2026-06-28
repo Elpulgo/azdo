@@ -50,11 +50,12 @@ running the full suite plus a manual smoke of all three tabs.
 | 3 | Build `CompositeProvider` here? | No, defer to Phase 4 | Keep this phase a pure, shippable refactor |
 | 4 | Move display helpers (StateIcon, etc.)? | No, leave in place for now | Display-metadata cleanup is Phase 1 — keep scope tight |
 | 5 | Does metrics move to the interface? | No — keep it on a nullable concrete `*azdevops.MultiClient` | Its calls (`MetricsWorkItems`, `WorkItemUpdates`, `GetOrg`) are Azure- and metrics-only; `nil` client already hides the tab, matching "metrics is Azure-only" |
+| 6 | Right shape for `WebURL`? | Per-entity methods: `WorkItemURL(id int)`, `PRURL(repositoryID string, prID int)`, `PipelineURL(id int)` | Avoids type-unsafe `any` parameter; each entity has different identifying fields; empty string return signals "cannot construct URL" |
 
 ## Tasks
 
 - [x] 1. Create `internal/provider` with neutral domain types (WorkItem, PullRequest, PipelineRun, Thread, Comment, Timeline, BuildLog, Identity) carrying `Kind`/`Scope`/`ID`; no JSON tags. Map `Kind` = constant `ProviderAzure`, `Scope` from the existing `ProjectName`/`ProjectDisplayName`, `ID` from the wire ID.
-- [ ] 2. Define the `Provider` interface (PR, work-item, pipeline, log surface + `Kind()` and `WebURL()`) covering every method the views call today.
+- [x] 2. Define the `Provider` interface (PR, work-item, pipeline, log surface + `Kind()` and `WebURL()`) covering every method the views call today.
 - [ ] 3. Add a compile-time conformance test asserting the azdevops adapter satisfies `provider.Provider` (fails until task 5).
 - [ ] 4. Write mapping tests (wire struct → neutral type) for each domain type; assert as an invariant that every mapped entity has non-zero `Kind`, `Scope`, and `ID`. (blocked by: 1)
 - [ ] 5. Implement the azdevops adapter: map wire→neutral, delegate to `MultiClient`, satisfy `Provider`. (blocked by: 2,4)
@@ -67,7 +68,7 @@ running the full suite plus a manual smoke of all three tabs.
 
 ## Review feedback: 1. Create internal/provider with neutral domain types
 
-- 🔴 `Thread` is missing a line-position field. `internal/diff/diff.go:MapThreadsToLines` reads `thread.ThreadContext.RightFileStart.Line` to place inline comments on the correct diff line. The neutral `Thread` only has `FilePath string` — no line number — so the adapter cannot reconstruct inline placement, which would be a user-visible behavior change. Add a field (e.g. `Line int`) mapped from the wire `RightFileStart.Line`.
+- ✅ Resolved: `Thread` now carries `Line int` (maps from wire `RightFileStart.Line`), so the adapter can reconstruct inline diff placement that `diff.MapThreadsToLines` needs. Covered by `TestThreadLineField`.
 
 ## Unknowns
 
