@@ -390,6 +390,102 @@ func TestMapWorkItemComment(t *testing.T) {
 	}
 }
 
+// --- Iteration ---
+
+func TestMapIteration(t *testing.T) {
+	wire := azdevops.Iteration{
+		ID:          3,
+		Description: "Push 3",
+	}
+
+	got := azdevops.MapIteration(wire)
+
+	if got.ID != wire.ID {
+		t.Errorf("expected ID %d, got %d", wire.ID, got.ID)
+	}
+	if got.Description != wire.Description {
+		t.Errorf("expected Description %q, got %q", wire.Description, got.Description)
+	}
+}
+
+// --- IterationChange ---
+
+func TestMapIterationChange(t *testing.T) {
+	wire := azdevops.IterationChange{
+		ChangeID: 5,
+		Item: azdevops.ChangeItem{
+			Path:          "/src/foo.go",
+			GitObjectType: "blob",
+		},
+		ChangeType:   "edit",
+		OriginalPath: "",
+	}
+
+	got := azdevops.MapIterationChange(wire)
+
+	if got.ChangeID != wire.ChangeID {
+		t.Errorf("expected ChangeID %d, got %d", wire.ChangeID, got.ChangeID)
+	}
+	if got.Path != wire.Item.Path {
+		t.Errorf("expected Path %q, got %q", wire.Item.Path, got.Path)
+	}
+	if got.GitObjectType != wire.Item.GitObjectType {
+		t.Errorf("expected GitObjectType %q, got %q", wire.Item.GitObjectType, got.GitObjectType)
+	}
+	if got.ChangeType != wire.ChangeType {
+		t.Errorf("expected ChangeType %q, got %q", wire.ChangeType, got.ChangeType)
+	}
+	if got.OriginalPath != wire.OriginalPath {
+		t.Errorf("expected OriginalPath %q, got %q", wire.OriginalPath, got.OriginalPath)
+	}
+}
+
+func TestMapIterationChange_Rename(t *testing.T) {
+	wire := azdevops.IterationChange{
+		ChangeID: 7,
+		Item: azdevops.ChangeItem{
+			Path:          "/src/bar.go",
+			GitObjectType: "blob",
+		},
+		ChangeType:   "rename",
+		OriginalPath: "/src/foo.go",
+	}
+
+	got := azdevops.MapIterationChange(wire)
+
+	if got.ChangeType != "rename" {
+		t.Errorf("expected ChangeType %q, got %q", "rename", got.ChangeType)
+	}
+	if got.OriginalPath != wire.OriginalPath {
+		t.Errorf("expected OriginalPath %q, got %q", wire.OriginalPath, got.OriginalPath)
+	}
+	if got.Path != wire.Item.Path {
+		t.Errorf("expected Path %q, got %q", wire.Item.Path, got.Path)
+	}
+}
+
+// --- WorkItemTypeState ---
+
+func TestMapWorkItemTypeState(t *testing.T) {
+	wire := azdevops.WorkItemTypeState{
+		Name:     "Active",
+		Color:    "00b2ff",
+		Category: "InProgress",
+	}
+
+	got := azdevops.MapWorkItemTypeState(wire)
+
+	if got.Name != wire.Name {
+		t.Errorf("expected Name %q, got %q", wire.Name, got.Name)
+	}
+	if got.Color != wire.Color {
+		t.Errorf("expected Color %q, got %q", wire.Color, got.Color)
+	}
+	if got.Category != wire.Category {
+		t.Errorf("expected Category %q, got %q", wire.Category, got.Category)
+	}
+}
+
 // --- TestIdentityInvariant (table-driven) ---
 
 // mappedEntity is a helper that extracts an Identity from any mapped neutral type.

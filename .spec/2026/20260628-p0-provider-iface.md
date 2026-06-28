@@ -70,6 +70,10 @@ running the full suite plus a manual smoke of all three tabs.
 
 - ✅ Resolved: `Thread` now carries `Line int` (maps from wire `RightFileStart.Line`), so the adapter can reconstruct inline diff placement that `diff.MapThreadsToLines` needs. Covered by `TestThreadLineField`.
 
+## Review feedback: 4. Write mapping tests
+
+- 🔴 **Missing mappers for Iteration, IterationChange, and WorkItemTypeState.** All three neutral types are returned by the `Provider` interface (`GetPRIterations`, `GetPRIterationChanges`, `GetWorkItemTypeStates`) and consumed by the views (`diffview.go`, `detail.go`, `statepicker`). No `MapIteration`, `MapIterationChange`, or `MapWorkItemTypeState` functions were added to `mapping.go`, so task 5's adapter has nothing to call for these three types. Add the mapping functions and tests for each.
+
 ## Review feedback: 2. Define the Provider interface
 
 - 🔴 **Project scoping missing on entity methods.** `MultiClient` is keyed by project name (`clients map[string]*Client`); views resolve the right sub-client with `client.ClientFor(item.ProjectName)` before calling entity ops. The flat interface passes only `repositoryID`/`prID`/`buildID` — never a scope — so the task-5 adapter cannot route to the correct sub-client. Fix: add a `scope string` (project name) parameter to every entity method that needs to dispatch per-project (e.g. `GetPRThreads(scope, repositoryID, prID string)`), or expose a `ClientFor`-style `For(scope string) Provider` method. Settle this now — it changes the interface shape and all view migrations (tasks 7-9) depend on it.

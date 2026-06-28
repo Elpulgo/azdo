@@ -215,6 +215,37 @@ func MapBuildLog(b BuildLog, scope, scopeDisplay string) provider.BuildLog {
 	}
 }
 
+// MapIteration maps an azdevops wire Iteration to a provider.Iteration.
+// Iterations are sub-entities of a PR (one per push) and carry no Identity.
+func MapIteration(it Iteration) provider.Iteration {
+	return provider.Iteration{
+		ID:          it.ID,
+		Description: it.Description,
+	}
+}
+
+// MapIterationChange maps an azdevops wire IterationChange to a provider.IterationChange.
+// IterationChanges are sub-entities of a PR iteration and carry no Identity.
+func MapIterationChange(ic IterationChange) provider.IterationChange {
+	return provider.IterationChange{
+		ChangeID:      ic.ChangeID,
+		Path:          ic.Item.Path,
+		GitObjectType: ic.Item.GitObjectType,
+		ChangeType:    ic.ChangeType,
+		OriginalPath:  ic.OriginalPath,
+	}
+}
+
+// MapWorkItemTypeState maps an azdevops wire WorkItemTypeState to a provider.WorkItemTypeState.
+// WorkItemTypeStates are metadata sub-entities and carry no Identity.
+func MapWorkItemTypeState(s WorkItemTypeState) provider.WorkItemTypeState {
+	return provider.WorkItemTypeState{
+		Name:     s.Name,
+		Color:    s.Color,
+		Category: s.Category,
+	}
+}
+
 // MapWorkItemComment maps an azdevops wire WorkItemComment to a provider.WorkItemComment.
 func MapWorkItemComment(c WorkItemComment, scope, scopeDisplay string) provider.WorkItemComment {
 	return provider.WorkItemComment{
