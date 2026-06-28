@@ -117,8 +117,8 @@ func TestModel_CapturesWorkItemDetailOnEnterAndEsc(t *testing.T) {
 	m = updated.(Model)
 
 	// Seed work items.
-	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
-		{ID: 4242, Fields: azdevops.WorkItemFields{Title: "T", WorkItemType: "Task", State: "Active"}},
+	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: []provider.WorkItem{
+		{Identity: provider.Identity{ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
 	}})
 	m = updated.(Model)
 
@@ -220,8 +220,8 @@ func TestApplyState_RestoresWIDetailOnFirstPopulate(t *testing.T) {
 		Tabs:      state.TabsState{WorkItems: state.TabMemory{LastDetailID: 4242}},
 	})
 
-	updated, _ := m.Update(workitems.SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
-		{ID: 4242, Fields: azdevops.WorkItemFields{Title: "T", WorkItemType: "Task", State: "Active"}},
+	updated, _ := m.Update(workitems.SetWorkItemsMsg{WorkItems: []provider.WorkItem{
+		{Identity: provider.Identity{ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
 	}})
 	m = updated.(Model)
 

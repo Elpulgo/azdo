@@ -7,30 +7,49 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-func sampleComments() []azdevops.WorkItemComment {
-	return []azdevops.WorkItemComment{
+// newTestProvider creates a provider.Provider backed by a real azdevops adapter
+// for tests that need URL construction.
+func newTestProvider(org, project string) provider.Provider {
+	mc, _ := azdevops.NewMultiClient(org, []string{project}, "fake-pat", nil)
+	return azdevops.NewAdapter(mc)
+}
+
+// newTestWI is a convenience helper for constructing a provider.WorkItem in tests.
+func newTestWI(id int, title, state, workItemType string) provider.WorkItem {
+	return provider.WorkItem{
+		Identity:     provider.Identity{ID: fmt.Sprintf("%d", id), Scope: "testproject"},
+		Title:        title,
+		State:        state,
+		WorkItemType: workItemType,
+	}
+}
+
+func sampleComments() []provider.WorkItemComment {
+	return []provider.WorkItemComment{
 		{
 			ID:          45,
 			Text:        "Newest discussion point",
-			CreatedBy:   azdevops.Identity{DisplayName: "Jane Doe"},
+			AuthorName:  "Jane Doe",
 			CreatedDate: time.Date(2026, 5, 2, 10, 30, 0, 0, time.UTC),
 		},
 		{
 			ID:          44,
 			Text:        "An earlier remark",
-			CreatedBy:   azdevops.Identity{DisplayName: "John Roe"},
+			AuthorName:  "John Roe",
 			CreatedDate: time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC),
 		},
 	}
 }
 
 func TestDetailModel_CommentsLoadedRendersInViewport(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T", Description: "desc"}}
+	wi := newTestWI(1, "T", "", "")
+	wi.Description = "desc"
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -45,7 +64,7 @@ func TestDetailModel_CommentsLoadedRendersInViewport(t *testing.T) {
 }
 
 func TestDetailModel_CommentsRenderedNewestFirst(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(120, 60)
 
@@ -63,7 +82,7 @@ func TestDetailModel_CommentsRenderedNewestFirst(t *testing.T) {
 }
 
 func TestDetailModel_NoCommentsShowsHint(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -75,7 +94,7 @@ func TestDetailModel_NoCommentsShowsHint(t *testing.T) {
 }
 
 func TestDetailModel_CommentsLoadErrorShowsMessage(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -87,7 +106,7 @@ func TestDetailModel_CommentsLoadErrorShowsMessage(t *testing.T) {
 }
 
 func TestDetailModel_CKeyOpensCommentForm(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -103,7 +122,7 @@ func TestDetailModel_CKeyOpensCommentForm(t *testing.T) {
 }
 
 func TestDetailModel_CommentFormCancelHides(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -146,7 +165,7 @@ func openAndSubmitComment(t *testing.T, m *DetailModel, text string) (*DetailMod
 }
 
 func TestDetailModel_CommentSubmitTriggersPost(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -164,7 +183,7 @@ func TestDetailModel_CommentSubmitTriggersPost(t *testing.T) {
 }
 
 func TestDetailModel_CommentPostErrorKeepsDraft(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
@@ -187,12 +206,13 @@ func TestDetailModel_CommentPostErrorKeepsDraft(t *testing.T) {
 }
 
 func TestDetailModel_CommentPostSuccessRefetches(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1, Fields: azdevops.WorkItemFields{Title: "T"}}
+	wi := newTestWI(1, "T", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(100, 40)
 
 	m, _ = openAndSubmitComment(t, m, "shipped")
-	m, cmd := m.Update(commentPostedMsg{comment: &azdevops.WorkItemComment{ID: 9, Text: "shipped"}})
+	posted := &provider.WorkItemComment{ID: 9, Text: "shipped"}
+	m, cmd := m.Update(commentPostedMsg{comment: posted})
 
 	if m.posting {
 		t.Error("Expected posting to be false after success")
@@ -206,7 +226,7 @@ func TestDetailModel_CommentPostSuccessRefetches(t *testing.T) {
 }
 
 func TestDetailModel_GetContextItemsIncludesComment(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1}
+	wi := newTestWI(1, "", "", "")
 	m := NewDetailModel(nil, wi)
 
 	found := false
@@ -225,15 +245,13 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	// The height passed to SetSize is already the content area (after app-level
 	// borders and footer are subtracted). The work item detail view should only
 	// subtract its own header lines (title + type/state + separator = 3 lines).
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "Active",
-			WorkItemType: "Bug",
-			Priority:     1,
-			Description:  strings.Repeat("Long description text. ", 50),
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "123"},
+		Title:        "Test item",
+		State:        "Active",
+		WorkItemType: "Bug",
+		Priority:     1,
+		Description:  strings.Repeat("Long description text. ", 50),
 	}
 	model := NewDetailModel(nil, wi)
 
@@ -251,14 +269,12 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 }
 
 func TestDetailView_ShowsTitle(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 456,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Important bug fix",
-			State:        "Active",
-			WorkItemType: "Bug",
-			Priority:     1,
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "456"},
+		Title:        "Important bug fix",
+		State:        "Active",
+		WorkItemType: "Bug",
+		Priority:     1,
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -281,15 +297,13 @@ func TestDetailView_ShowsTitle(t *testing.T) {
 }
 
 func TestDetailView_BugShowsReproSteps(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 100,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Login crash",
-			State:        "Active",
-			WorkItemType: "Bug",
-			Priority:     1,
-			ReproSteps:   "1. Open app\n2. Click login\n3. App crashes",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "100"},
+		Title:        "Login crash",
+		State:        "Active",
+		WorkItemType: "Bug",
+		Priority:     1,
+		ReproSteps:   "1. Open app\n2. Click login\n3. App crashes",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -306,15 +320,13 @@ func TestDetailView_BugShowsReproSteps(t *testing.T) {
 }
 
 func TestDetailView_BugWithoutReproStepsFallsBackToDescription(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 101,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Minor issue",
-			State:        "New",
-			WorkItemType: "Bug",
-			Priority:     3,
-			Description:  "This is a bug description fallback",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "101"},
+		Title:        "Minor issue",
+		State:        "New",
+		WorkItemType: "Bug",
+		Priority:     3,
+		Description:  "This is a bug description fallback",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -328,15 +340,13 @@ func TestDetailView_BugWithoutReproStepsFallsBackToDescription(t *testing.T) {
 }
 
 func TestDetailView_TaskShowsDescription(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 102,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Implement feature",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Description:  "Task description content here",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "102"},
+		Title:        "Implement feature",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Description:  "Task description content here",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -350,13 +360,11 @@ func TestDetailView_TaskShowsDescription(t *testing.T) {
 }
 
 func TestDetailView_NoTypeIconInTitle(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 789,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "New",
-			WorkItemType: "Bug",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "789"},
+		Title:        "Test item",
+		State:        "New",
+		WorkItemType: "Bug",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -374,12 +382,10 @@ func TestDetailView_NoTypeIconInTitle(t *testing.T) {
 }
 
 func TestDetailView_Scrolling(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 789,
-		Fields: azdevops.WorkItemFields{
-			Title:       "Long description item",
-			Description: strings.Repeat("This is a long description. ", 100),
-		},
+	wi := provider.WorkItem{
+		Identity:    provider.Identity{ID: "789"},
+		Title:       "Long description item",
+		Description: strings.Repeat("This is a long description. ", 100),
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -395,11 +401,9 @@ func TestDetailView_Scrolling(t *testing.T) {
 }
 
 func TestGetScrollPercent(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title: "Test",
-		},
+	wi := provider.WorkItem{
+		Identity: provider.Identity{ID: "123"},
+		Title:    "Test",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -488,13 +492,11 @@ func TestBuildWorkItemURL(t *testing.T) {
 }
 
 func TestDetailModel_SKeyStartsLoading(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "Active",
-			WorkItemType: "Bug",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "123"},
+		Title:        "Test item",
+		State:        "Active",
+		WorkItemType: "Bug",
 	}
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
@@ -511,20 +513,18 @@ func TestDetailModel_SKeyStartsLoading(t *testing.T) {
 }
 
 func TestDetailModel_StatesLoadedOpensStatePicker(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "Active",
-			WorkItemType: "Bug",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "123"},
+		Title:        "Test item",
+		State:        "Active",
+		WorkItemType: "Bug",
 	}
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
 
 	// Simulate states being loaded
 	m, _ = m.Update(statesLoadedMsg{
-		states: []azdevops.WorkItemTypeState{
+		states: []provider.WorkItemTypeState{
 			{Name: "New", Color: "b2b2b2", Category: "Proposed"},
 			{Name: "Active", Color: "007acc", Category: "InProgress"},
 			{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
@@ -538,13 +538,11 @@ func TestDetailModel_StatesLoadedOpensStatePicker(t *testing.T) {
 }
 
 func TestDetailModel_StateUpdateSuccess(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "Active",
-			WorkItemType: "Bug",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "123"},
+		Title:        "Test item",
+		State:        "Active",
+		WorkItemType: "Bug",
 	}
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
@@ -552,8 +550,8 @@ func TestDetailModel_StateUpdateSuccess(t *testing.T) {
 	// Simulate successful state update
 	m, _ = m.Update(stateUpdateResultMsg{newState: "Resolved"})
 
-	if m.workItem.Fields.State != "Resolved" {
-		t.Errorf("Expected state 'Resolved', got %q", m.workItem.Fields.State)
+	if m.workItem.State != "Resolved" {
+		t.Errorf("Expected state 'Resolved', got %q", m.workItem.State)
 	}
 	if m.statusMessage == "" {
 		t.Error("Expected status message after state update")
@@ -561,13 +559,11 @@ func TestDetailModel_StateUpdateSuccess(t *testing.T) {
 }
 
 func TestDetailModel_StateUpdateError(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "Active",
-			WorkItemType: "Bug",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "123"},
+		Title:        "Test item",
+		State:        "Active",
+		WorkItemType: "Bug",
 	}
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
@@ -575,8 +571,8 @@ func TestDetailModel_StateUpdateError(t *testing.T) {
 	// Simulate failed state update
 	m, _ = m.Update(stateUpdateResultMsg{err: fmt.Errorf("access denied")})
 
-	if m.workItem.Fields.State != "Active" {
-		t.Errorf("Expected state to remain 'Active' after error, got %q", m.workItem.Fields.State)
+	if m.workItem.State != "Active" {
+		t.Errorf("Expected state to remain 'Active' after error, got %q", m.workItem.State)
 	}
 	if !strings.Contains(m.statusMessage, "Error") {
 		t.Error("Expected error in status message")
@@ -584,13 +580,11 @@ func TestDetailModel_StateUpdateError(t *testing.T) {
 }
 
 func TestDetailModel_StatePickerRoutesInput(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 123,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test item",
-			State:        "Active",
-			WorkItemType: "Bug",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "123"},
+		Title:        "Test item",
+		State:        "Active",
+		WorkItemType: "Bug",
 	}
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
@@ -610,18 +604,16 @@ func TestDetailModel_StatePickerRoutesInput(t *testing.T) {
 }
 
 func TestDetailView_LinkBeforeDescription(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 200,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Test ordering",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Description:  "This is the description text",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "200", Scope: "myproject"},
+		Title:        "Test ordering",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Description:  "This is the description text",
 	}
 
-	client, _ := azdevops.NewClient("myorg", "myproject", "fake-pat")
+	client := newTestProvider("myorg", "myproject")
 	m := NewDetailModel(client, wi)
 	m.SetSize(100, 40)
 
@@ -642,15 +634,13 @@ func TestDetailView_LinkBeforeDescription(t *testing.T) {
 }
 
 func TestDetailView_ShowsTags(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 300,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Tagged work item",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Tags:         "Sprint 5; Frontend; Critical",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "300"},
+		Title:        "Tagged work item",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Tags:         "Sprint 5; Frontend; Critical",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -673,14 +663,12 @@ func TestDetailView_ShowsTags(t *testing.T) {
 }
 
 func TestDetailView_NoTagsSectionWhenEmpty(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 301,
-		Fields: azdevops.WorkItemFields{
-			Title:        "No tags item",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "301"},
+		Title:        "No tags item",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -697,16 +685,14 @@ func TestDetailView_NoTagsSectionWhenEmpty(t *testing.T) {
 }
 
 func TestDetailView_TagsAppearBeforeDescription(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 302,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Ordering test",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Tags:         "Backend",
-			Description:  "Some description text",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "302"},
+		Title:        "Ordering test",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Tags:         "Backend",
+		Description:  "Some description text",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -729,7 +715,7 @@ func TestDetailView_TagsAppearBeforeDescription(t *testing.T) {
 }
 
 func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 123}
+	wi := newTestWI(123, "", "", "")
 	m := NewDetailModel(nil, wi)
 
 	items := m.GetContextItems()
@@ -748,16 +734,14 @@ func TestDetailModel_GetContextItemsIncludesStateChange(t *testing.T) {
 func TestDetailView_ShowsLastChangedTimestamp(t *testing.T) {
 	changedAt := time.Date(2026, 3, 1, 14, 30, 0, 0, time.UTC)
 
-	wi := azdevops.WorkItem{
-		ID: 500,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Timestamped item",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			ChangedDate:  changedAt,
-			Description:  "Some description",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "500"},
+		Title:        "Timestamped item",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		ChangedDate:  changedAt,
+		Description:  "Some description",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -777,16 +761,14 @@ func TestDetailView_ShowsLastChangedTimestamp(t *testing.T) {
 func TestDetailView_TimestampAppearsBeforeDescription(t *testing.T) {
 	changedAt := time.Date(2026, 2, 15, 9, 0, 0, 0, time.UTC)
 
-	wi := azdevops.WorkItem{
-		ID: 501,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Ordering check",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			ChangedDate:  changedAt,
-			Description:  "Description content here",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "501"},
+		Title:        "Ordering check",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		ChangedDate:  changedAt,
+		Description:  "Description content here",
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -809,15 +791,13 @@ func TestDetailView_TimestampAppearsBeforeDescription(t *testing.T) {
 }
 
 func TestDetailView_ZeroChangedDateIsHidden(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 502,
-		Fields: azdevops.WorkItemFields{
-			Title:        "No timestamp item",
-			State:        "New",
-			WorkItemType: "Task",
-			Priority:     3,
-			// ChangedDate is zero value
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "502"},
+		Title:        "No timestamp item",
+		State:        "New",
+		WorkItemType: "Task",
+		Priority:     3,
+		// ChangedDate is zero value
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -835,15 +815,13 @@ func TestDetailView_LongDescriptionWrapsWithinViewWidth(t *testing.T) {
 	// This is a realistic scenario: Azure DevOps descriptions often come as
 	// a single run of HTML text that, once stripped, becomes one huge line.
 	longLine := strings.Repeat("word ", 80) // ~400 chars, well over 80-col terminal
-	wi := azdevops.WorkItem{
-		ID: 700,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Overflow test",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Description:  longLine,
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "700"},
+		Title:        "Overflow test",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Description:  longLine,
 	}
 
 	viewWidth := 80
@@ -866,15 +844,13 @@ func TestDetailView_LongHTMLDescriptionWrapsWithinViewWidth(t *testing.T) {
 	// Realistic Azure DevOps content: HTML paragraphs that become long lines
 	// after stripping tags.
 	htmlDesc := "<p>" + strings.Repeat("This is a detailed description of the work item that explains the requirements in full. ", 10) + "</p>"
-	wi := azdevops.WorkItem{
-		ID: 701,
-		Fields: azdevops.WorkItemFields{
-			Title:        "HTML overflow test",
-			State:        "New",
-			WorkItemType: "Bug",
-			Priority:     1,
-			ReproSteps:   htmlDesc,
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "701"},
+		Title:        "HTML overflow test",
+		State:        "New",
+		WorkItemType: "Bug",
+		Priority:     1,
+		ReproSteps:   htmlDesc,
 	}
 
 	viewWidth := 60
@@ -897,15 +873,13 @@ func TestDetailView_WrappedDescriptionPreservesContent(t *testing.T) {
 	// When we wrap a long description, the text should still be fully present
 	// in the output — just broken across multiple lines, not truncated.
 	description := "The quick brown fox jumps over the lazy dog and then continues running across the field until reaching the distant forest"
-	wi := azdevops.WorkItem{
-		ID: 702,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Content preservation test",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Description:  description,
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "702"},
+		Title:        "Content preservation test",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Description:  description,
 	}
 
 	// Narrow width forces wrapping
@@ -926,15 +900,13 @@ func TestDetailView_DescriptionRespectsResizedWidth(t *testing.T) {
 	// When the terminal is resized, the description wrapping should adapt
 	// to the new width.
 	longLine := strings.Repeat("alpha beta gamma delta ", 20)
-	wi := azdevops.WorkItem{
-		ID: 703,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Resize test",
-			State:        "Active",
-			WorkItemType: "Task",
-			Priority:     2,
-			Description:  longLine,
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "703"},
+		Title:        "Resize test",
+		State:        "Active",
+		WorkItemType: "Task",
+		Priority:     2,
+		Description:  longLine,
 	}
 
 	m := NewDetailModel(nil, wi)
@@ -966,7 +938,7 @@ func truncateForTest(s string, max int) string {
 }
 
 func TestDetailModel_GetContextItemsIncludesOpenInBrowser(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1}
+	wi := newTestWI(1, "", "", "")
 	m := NewDetailModel(nil, wi)
 
 	items := m.GetContextItems()
@@ -992,11 +964,13 @@ func TestDetailModel_OKeyOpensBrowser(t *testing.T) {
 		return nil
 	}
 
-	wi := azdevops.WorkItem{
-		ID:     999,
-		Fields: azdevops.WorkItemFields{Title: "Test", State: "Active", WorkItemType: "Bug"},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "999", Scope: "myproject"},
+		Title:        "Test",
+		State:        "Active",
+		WorkItemType: "Bug",
 	}
-	client, _ := azdevops.NewClient("myorg", "myproject", "fake-pat")
+	client := newTestProvider("myorg", "myproject")
 	m := NewDetailModel(client, wi)
 	m.SetSize(80, 30)
 
@@ -1024,7 +998,7 @@ func TestDetailModel_OKeyNoClientSetsStatusMessage(t *testing.T) {
 		return nil
 	}
 
-	wi := azdevops.WorkItem{ID: 1}
+	wi := newTestWI(1, "", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
 
@@ -1038,7 +1012,7 @@ func TestDetailModel_OKeyNoClientSetsStatusMessage(t *testing.T) {
 }
 
 func TestDetailModel_OpenURLResultSuccessSetsStatusMessage(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1}
+	wi := newTestWI(1, "", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
 
@@ -1050,7 +1024,7 @@ func TestDetailModel_OpenURLResultSuccessSetsStatusMessage(t *testing.T) {
 }
 
 func TestDetailModel_OpenURLResultErrorSetsStatusMessage(t *testing.T) {
-	wi := azdevops.WorkItem{ID: 1}
+	wi := newTestWI(1, "", "", "")
 	m := NewDetailModel(nil, wi)
 	m.SetSize(80, 30)
 

@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	"github.com/Elpulgo/azdo/internal/version"
@@ -692,9 +693,9 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate work items arriving
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task", WorkItemType: "Task", State: "Active"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Other task", WorkItemType: "Task", State: "Active"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "My task", WorkItemType: "Task", State: "Active"},
+		{Identity: provider.Identity{ID: "2"}, Title: "Other task", WorkItemType: "Task", State: "Active"},
 	}
 	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: items})
 	m = updated.(Model)
@@ -1382,8 +1383,8 @@ func openTagPickerOnWorkItemsTab(t *testing.T) Model {
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "A", Tags: "Spring"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "A", Tags: "Spring"},
 	}
 	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: items})
 	m = updated.(Model)
