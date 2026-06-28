@@ -93,6 +93,7 @@ type Thread struct {
 	LastUpdatedDate time.Time
 	Status          string
 	FilePath        string // non-empty when this is a code comment
+	Line            int    // new-file line number from RightFileStart.Line; 0 for general comments
 	Comments        []Comment
 	IsDeleted       bool
 }

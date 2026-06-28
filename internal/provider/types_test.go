@@ -73,6 +73,27 @@ func TestThreadHasIdentity(t *testing.T) {
 	}
 }
 
+// TestThreadLineField verifies that Thread carries a Line field for inline diff placement.
+// This field maps from the wire RightFileStart.Line so the adapter can reconstruct
+// which diff line an inline comment belongs to.
+func TestThreadLineField(t *testing.T) {
+	th := provider.Thread{
+		Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "5"},
+		FilePath: "internal/foo.go",
+		Line:     42,
+	}
+	if th.Line != 42 {
+		t.Errorf("Thread.Line expected 42, got %d", th.Line)
+	}
+	// A general (non-inline) thread should have Line == 0.
+	general := provider.Thread{
+		Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "6"},
+	}
+	if general.Line != 0 {
+		t.Errorf("Thread.Line for a general thread expected 0, got %d", general.Line)
+	}
+}
+
 // TestCommentHasIdentity verifies that Comment carries an Identity.
 func TestCommentHasIdentity(t *testing.T) {
 	c := provider.Comment{

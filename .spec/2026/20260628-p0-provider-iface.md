@@ -65,6 +65,10 @@ running the full suite plus a manual smoke of all three tabs.
 - [ ] 10. Wire `main.go` to build the azdevops adapter and pass it as `provider.Provider`. (blocked by: 7,8,9)
 - [ ] 11. Run `go test ./...`, `go vet ./...`, and a manual smoke of all three tabs; confirm no behavior change. (blocked by: 10)
 
+## Review feedback: 1. Create internal/provider with neutral domain types
+
+- 🔴 `Thread` is missing a line-position field. `internal/diff/diff.go:MapThreadsToLines` reads `thread.ThreadContext.RightFileStart.Line` to place inline comments on the correct diff line. The neutral `Thread` only has `FilePath string` — no line number — so the adapter cannot reconstruct inline placement, which would be a user-visible behavior change. Add a field (e.g. `Line int`) mapped from the wire `RightFileStart.Line`.
+
 ## Unknowns
 
 - Right shape for `WebURL` — a single `WebURL(ref any)` vs per-entity methods (`PRWebURL`, `WorkItemWebURL`).
