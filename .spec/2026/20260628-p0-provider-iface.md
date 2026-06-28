@@ -58,7 +58,7 @@ running the full suite plus a manual smoke of all three tabs.
 - [x] 2. Define the `Provider` interface (PR, work-item, pipeline, log surface + `Kind()` and `WebURL()`) covering every method the views call today. (validated: both review must-fixes resolved — `scope string` added to per-project entity methods, `ScopeDisplay` added to `Identity`; build + provider tests green)
 - [x] 3. Add a compile-time conformance test asserting the azdevops adapter satisfies `provider.Provider` (fails until task 5). (validated: `internal/azdevops/adapter_conformance_test.go` gated by `//go:build adapter`; normal build/vet clean, `go test/vet -tags adapter` yields the expected `undefined: azdevops.Adapter`)
 - [x] 4. Write mapping tests (wire struct → neutral type) for each domain type; assert as an invariant that every mapped entity has non-zero `Kind`, `Scope`, and `ID`. (blocked by: 1)
-- [ ] 5. Implement the azdevops adapter: map wire→neutral, delegate to `MultiClient`, satisfy `Provider`. (blocked by: 2,4)
+- [x] 5. Implement the azdevops adapter: map wire→neutral, delegate to `MultiClient`, satisfy `Provider`. (blocked by: 2,4)
 - [ ] 6. Re-type `app.Model.client` and `app.NewModel` to `provider.Provider`, keeping a separate nullable `*azdevops.MultiClient` field for the metrics view; `main.go` passes both. (blocked by: 5)
 - [ ] 7. Migrate the `pullrequests` view and its `NewModelWithStyles` to consume neutral types (list, detail, diff, threads/votes). (blocked by: 6)
 - [ ] 8. Migrate the `workitems` view and its `NewModelWithStyles` to consume neutral types (list, detail, state/tag pickers, comments). (blocked by: 6)
