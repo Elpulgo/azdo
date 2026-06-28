@@ -212,8 +212,8 @@ func runTUI() error {
 	}
 
 	// Create and run the TUI application.
-	// Pass nil provider for now — task 10 will build the adapter and pass it here.
-	model := app.NewModel(nil, client, cfg, version, commit)
+	adapter := azdevops.NewAdapter(client)
+	model := app.NewModel(adapter, client, cfg, version, commit)
 	model.SetStateStore(stateStore)
 	model.ApplyState(stateStore.State())
 	p := tea.NewProgram(model, tea.WithAltScreen())
