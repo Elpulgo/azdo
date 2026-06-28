@@ -211,8 +211,9 @@ func runTUI() error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Create and run the TUI application
-	model := app.NewModel(client, cfg, version, commit)
+	// Create and run the TUI application.
+	// Pass nil provider for now — task 10 will build the adapter and pass it here.
+	model := app.NewModel(nil, client, cfg, version, commit)
 	model.SetStateStore(stateStore)
 	model.ApplyState(stateStore.State())
 	p := tea.NewProgram(model, tea.WithAltScreen())

@@ -8,6 +8,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/metrics"
@@ -63,7 +64,17 @@ type updateCheckMsg struct {
 
 // Model is the root application model for the TUI
 type Model struct {
-	client           *azdevops.MultiClient
+	// client is the backend-neutral provider used by the three main views
+	// (pull requests, work items, pipelines). Stored now; views migrate to
+	// consume it in tasks 7-9.
+	client provider.Provider
+
+	// metricsClient is the concrete Azure DevOps client kept for the metrics
+	// view, which calls Azure-only methods not covered by provider.Provider
+	// (Decision 5). Nullable: nil when metrics is disabled or the concrete
+	// client was not supplied.
+	metricsClient *azdevops.MultiClient
+
 	config           *config.Config
 	styles           *styles.Styles
 	activeTab        Tab
@@ -261,8 +272,17 @@ func formatVersionInfo(version, commit string) string {
 	return version
 }
 
-// NewModel creates a new application model with the given Azure DevOps client, config, version, and commit hash.
-func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion string, commitHash string) Model {
+// NewModel creates a new application model.
+//
+// p is the backend-neutral provider used by the three main views. It is stored
+// on Model.client for future use by tasks 7-9. Pass nil to disable provider-
+// backed features (e.g. in tests that don't exercise view fetching).
+//
+// mc is the concrete Azure DevOps multi-client. It is passed directly to the
+// view initializers (which still accept *azdevops.MultiClient until tasks 7-9
+// migrate them) and stored on Model.metricsClient for the metrics view, which
+// requires Azure-specific methods not covered by provider.Provider (Decision 5).
+func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config, currentVersion string, commitHash string) Model {
 	// Create error handler early to capture initialization errors
 	errorHandler := polling.NewErrorHandler()
 
@@ -373,7 +393,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	if interval <= 0 {
 		interval = polling.DefaultInterval
 	}
-	poller := polling.NewPoller(client, interval)
+	poller := polling.NewPoller(mc, interval)
 
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
@@ -388,16 +408,20 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	enabledTabs := buildEnabledTabs(cfg)
 
 	return Model{
-		client:           client,
+		client:           p,
+		metricsClient:    mc,
 		config:           cfg,
 		styles:           appStyles,
 		activeTab:        TabPullRequests,
 		enabledTabs:      enabledTabs,
 		logo:             logo,
-		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
-		pullRequestsView: pullrequests.NewModelWithStyles(client, appStyles),
-		workItemsView:    workitems.NewModelWithStyles(client, appStyles),
-		metricsView:      metrics.NewModelWithStyles(client, cfg, appStyles),
+		// Views still accept *azdevops.MultiClient until tasks 7-9 migrate them.
+		// Pass mc (the concrete client) here; the provider.Provider in m.client
+		// is stored for those future migrations.
+		pipelinesView:    pipelines.NewModelWithStyles(mc, appStyles),
+		pullRequestsView: pullrequests.NewModelWithStyles(mc, appStyles),
+		workItemsView:    workitems.NewModelWithStyles(mc, appStyles),
+		metricsView:      metrics.NewModelWithStyles(mc, cfg, appStyles),
 		statusBar:        statusBar,
 		helpModal:        helpModal,
 		errorModal:       errorModal,
@@ -612,10 +636,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		availableThemes := styles.ListAvailableThemes()
 		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
 
-		// Recreate views with new styles
-		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
-		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
-		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
+		// Recreate views with new styles.
+		// Views still accept *azdevops.MultiClient until tasks 7-9 migrate them;
+		// pass metricsClient (the concrete client) here.
+		m.pipelinesView = pipelines.NewModelWithStyles(m.metricsClient, m.styles)
+		m.pullRequestsView = pullrequests.NewModelWithStyles(m.metricsClient, m.styles)
+		m.workItemsView = workitems.NewModelWithStyles(m.metricsClient, m.styles)
 		// Re-style the metrics view in place rather than reconstructing it —
 		// recreating would erase its loaded snapshots, sprint selection and
 		// fetched rows, blanking the section on theme change.

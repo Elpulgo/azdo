@@ -29,7 +29,7 @@ func newTestModelWithStore(t *testing.T) (Model, *state.Store) {
 	}
 	store.SetDebounce(5 * time.Millisecond)
 
-	m := NewModel(client, cfg, "dev", "")
+	m := NewModel(nil, client, cfg, "dev", "")
 	m.SetStateStore(store)
 	m.width = 100
 	m.height = 30
@@ -160,7 +160,7 @@ func TestApplyState_IgnoresDisabledTab(t *testing.T) {
 		DisabledPanes:   []string{"workitems"},
 	}
 	var client *azdevops.MultiClient
-	m := NewModel(client, cfg, "dev", "")
+	m := NewModel(nil, client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -251,7 +251,7 @@ func TestModel_NoStoreDoesNotPanic(t *testing.T) {
 		Theme:           "dark",
 	}
 	var client *azdevops.MultiClient
-	m := NewModel(client, cfg, "dev", "")
+	m := NewModel(nil, client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 

@@ -70,7 +70,8 @@ func Run(version, commit string) error {
 		return fmt.Errorf("failed to seed demo metrics: %w", err)
 	}
 
-	model := app.NewModel(client, cfg, version+" (demo)", commit)
+	// Pass nil provider for now — task 10 will wire the adapter here.
+	model := app.NewModel(nil, client, cfg, version+" (demo)", commit)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
