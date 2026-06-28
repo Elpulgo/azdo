@@ -415,11 +415,10 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		activeTab:        TabPullRequests,
 		enabledTabs:      enabledTabs,
 		logo:             logo,
-		// Views still accept *azdevops.MultiClient until tasks 7-9 migrate them.
-		// Pass mc (the concrete client) here; the provider.Provider in m.client
-		// is stored for those future migrations.
+		// pullRequestsView now consumes provider.Provider (task 7).
+		// Pipelines and workitems still accept *azdevops.MultiClient (tasks 8-9 pending).
 		pipelinesView:    pipelines.NewModelWithStyles(mc, appStyles),
-		pullRequestsView: pullrequests.NewModelWithStyles(mc, appStyles),
+		pullRequestsView: pullrequests.NewModelWithStyles(p, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(mc, appStyles),
 		metricsView:      metrics.NewModelWithStyles(mc, cfg, appStyles),
 		statusBar:        statusBar,
@@ -637,10 +636,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
 
 		// Recreate views with new styles.
-		// Views still accept *azdevops.MultiClient until tasks 7-9 migrate them;
-		// pass metricsClient (the concrete client) here.
+		// pullRequestsView uses provider.Provider (task 7); pipelines/workitems
+		// still use *azdevops.MultiClient (tasks 8-9 pending).
 		m.pipelinesView = pipelines.NewModelWithStyles(m.metricsClient, m.styles)
-		m.pullRequestsView = pullrequests.NewModelWithStyles(m.metricsClient, m.styles)
+		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
 		m.workItemsView = workitems.NewModelWithStyles(m.metricsClient, m.styles)
 		// Re-style the metrics view in place rather than reconstructing it —
 		// recreating would erase its loaded snapshots, sprint selection and

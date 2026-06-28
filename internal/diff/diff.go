@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 )
 
 // LineType represents the type of a diff line
@@ -269,4 +270,99 @@ func MapThreadsToLines(threads []azdevops.Thread, filePath string) map[int][]azd
 		result[line] = append(result[line], thread)
 	}
 	return result
+}
+
+// --- provider.Thread variants ---
+// The following functions mirror the azdevops.Thread helpers above but operate
+// on the neutral provider.Thread type. They are used by the PR views after the
+// migration to provider.Provider (task 7).
+
+// CountCommentsPerFileP counts the total number of comments per file path
+// across all provider threads. General comment threads (FilePath == "") are excluded.
+func CountCommentsPerFileP(threads []provider.Thread) map[string]int {
+	result := make(map[string]int)
+	for _, thread := range threads {
+		if thread.FilePath == "" {
+			continue
+		}
+		result[thread.FilePath] += len(thread.Comments)
+	}
+	return result
+}
+
+// FilterGeneralThreadsP returns only provider threads without a file context
+// (i.e. FilePath == ""), which are general PR comment threads.
+func FilterGeneralThreadsP(threads []provider.Thread) []provider.Thread {
+	var result []provider.Thread
+	for _, thread := range threads {
+		if thread.FilePath == "" {
+			result = append(result, thread)
+		}
+	}
+	return result
+}
+
+// MapThreadsToLinesP maps provider threads to line numbers for a specific file.
+// Returns a map from new-file line number to provider threads at that line.
+func MapThreadsToLinesP(threads []provider.Thread, filePath string) map[int][]provider.Thread {
+	result := make(map[int][]provider.Thread)
+	for _, thread := range threads {
+		if thread.FilePath != filePath {
+			continue
+		}
+		if thread.Line == 0 {
+			continue
+		}
+		result[thread.Line] = append(result[thread.Line], thread)
+	}
+	return result
+}
+
+// FilterSystemThreadsP filters out system-generated provider threads
+// (e.g. Microsoft.VisualStudio service comments, vote notifications, policy updates).
+func FilterSystemThreadsP(threads []provider.Thread) []provider.Thread {
+	filtered := make([]provider.Thread, 0, len(threads))
+	for _, thread := range threads {
+		if !isSystemThreadP(thread) {
+			filtered = append(filtered, thread)
+		}
+	}
+	return filtered
+}
+
+// isVotedCommentP checks whether a comment content is a vote notification
+// (e.g. "John Doe voted 10", "Jane Smith voted -5").
+// Duplicated from azdevops.isVotedComment to avoid a cross-package dependency.
+func isVotedCommentP(content string) bool {
+	idx := strings.Index(content, "voted")
+	if idx == -1 {
+		return false
+	}
+	after := strings.TrimSpace(content[idx+5:])
+	if len(after) == 0 {
+		return false
+	}
+	if after[0] == '-' && len(after) > 1 {
+		after = after[1:]
+	}
+	return len(after) > 0 && after[0] >= '0' && after[0] <= '9'
+}
+
+func isSystemThreadP(thread provider.Thread) bool {
+	for _, comment := range thread.Comments {
+		if strings.HasPrefix(comment.AuthorName, "Microsoft.VisualStudio") {
+			return true
+		}
+		content := strings.TrimSpace(comment.Content)
+		if strings.HasPrefix(content, "Microsoft.VisualStudio") {
+			return true
+		}
+		if strings.Contains(content, "Policy status has been updated") {
+			return true
+		}
+		if isVotedCommentP(content) {
+			return true
+		}
+	}
+	return false
 }

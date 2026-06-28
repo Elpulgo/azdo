@@ -2,10 +2,11 @@ package pullrequests
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/diff"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -57,22 +58,22 @@ type diffLine struct {
 
 // DiffModel is the diff viewer component
 type DiffModel struct {
-	client  *azdevops.Client
-	pr      azdevops.PullRequest
-	threads []azdevops.Thread
+	client  provider.Provider
+	pr      provider.PullRequest
+	threads []provider.Thread
 
 	// General comments (threads without file context)
-	generalThreads         []azdevops.Thread
+	generalThreads         []provider.Thread
 	viewingGeneralComments bool
 
 	// File list state
-	changedFiles []azdevops.IterationChange
+	changedFiles []provider.IterationChange
 	fileIndex    int
 
 	// File diff state
-	currentFile *azdevops.IterationChange
+	currentFile *provider.IterationChange
 	currentDiff *diff.FileDiff
-	fileThreads map[int][]azdevops.Thread // newLineNum -> threads
+	fileThreads map[int][]provider.Thread // newLineNum -> threads
 
 	// Flattened rendering
 	diffLines    []diffLine
@@ -96,7 +97,7 @@ type DiffModel struct {
 }
 
 // NewDiffModel creates a new diff viewer model
-func NewDiffModel(client *azdevops.Client, pr azdevops.PullRequest, threads []azdevops.Thread, s *styles.Styles) *DiffModel {
+func NewDiffModel(client provider.Provider, pr provider.PullRequest, threads []provider.Thread, s *styles.Styles) *DiffModel {
 	sp := components.NewLoadingIndicator(s)
 	sp.SetMessage("Loading changed files...")
 
@@ -108,7 +109,7 @@ func NewDiffModel(client *azdevops.Client, pr azdevops.PullRequest, threads []az
 		client:         client,
 		pr:             pr,
 		threads:        threads,
-		generalThreads: diff.FilterGeneralThreads(threads),
+		generalThreads: diff.FilterGeneralThreadsP(threads),
 		viewMode:       DiffFileList,
 		spinner:        sp,
 		styles:         s,
@@ -136,7 +137,7 @@ func (m *DiffModel) InitGeneralComments() tea.Cmd {
 }
 
 // InitWithFile initializes the diff model and immediately opens a specific file's diff
-func (m *DiffModel) InitWithFile(file azdevops.IterationChange) tea.Cmd {
+func (m *DiffModel) InitWithFile(file provider.IterationChange) tea.Cmd {
 	m.currentFile = &file
 	m.loading = true
 	m.spinner.SetMessage("Loading diff...")
@@ -204,12 +205,12 @@ func (m *DiffModel) Update(msg tea.Msg) (*DiffModel, tea.Cmd) {
 	case threadsRefreshMsg:
 		if msg.err == nil {
 			m.threads = msg.threads
-			m.generalThreads = diff.FilterGeneralThreads(msg.threads)
+			m.generalThreads = diff.FilterGeneralThreadsP(msg.threads)
 			if m.viewMode == DiffFileView && m.viewingGeneralComments {
 				m.buildGeneralCommentLines()
 				m.updateDiffViewport()
 			} else if m.viewMode == DiffFileView && m.currentFile != nil {
-				m.fileThreads = diff.MapThreadsToLines(m.threads, m.currentFile.Item.Path)
+				m.fileThreads = diff.MapThreadsToLinesP(m.threads, m.currentFile.Path)
 				m.buildDiffLines()
 				m.updateDiffViewport()
 			}
@@ -401,7 +402,7 @@ func (m *DiffModel) updateInput(msg tea.KeyMsg) (*DiffModel, tea.Cmd) {
 				if lineNum == 0 {
 					lineNum = line.OldNum
 				}
-				return m, m.createCodeComment(m.currentFile.Item.Path, lineNum, content)
+				return m, m.createCodeComment(m.currentFile.Path, lineNum, content)
 			}
 		case InputReply:
 			if m.replyThreadID > 0 {
@@ -461,7 +462,7 @@ func (m *DiffModel) viewFileDiff() string {
 		sb.WriteString(m.styles.DiffHeader.Render(" General comments "))
 		sb.WriteString("\n")
 	} else if m.currentFile != nil {
-		sb.WriteString(m.styles.DiffHeader.Render(fmt.Sprintf(" %s ", m.currentFile.Item.Path)))
+		sb.WriteString(m.styles.DiffHeader.Render(fmt.Sprintf(" %s ", m.currentFile.Path)))
 		sb.WriteString("\n")
 	}
 
@@ -572,9 +573,9 @@ func (m *DiffModel) updateFileListViewport() {
 	for i, change := range m.changedFiles {
 		sb.WriteString("\n")
 		icon, style := changeTypeDisplay(change.ChangeType, m.styles)
-		line := fmt.Sprintf("  %s %s", icon, change.Item.Path)
+		line := fmt.Sprintf("  %s %s", icon, change.Path)
 		if change.ChangeType == "rename" && change.OriginalPath != "" {
-			line = fmt.Sprintf("  %s %s -> %s", icon, change.OriginalPath, change.Item.Path)
+			line = fmt.Sprintf("  %s %s -> %s", icon, change.OriginalPath, change.Path)
 		}
 		if i+1 == m.fileIndex { // +1 for the general comments entry
 			sb.WriteString(m.styles.Selected.Render(line))
@@ -645,12 +646,13 @@ func (m *DiffModel) buildDiffLines() {
 			}
 			if threads, ok := m.fileThreads[lineNum]; ok && line.Type != diff.Removed {
 				for _, thread := range threads {
+					threadID := parseThreadID(thread.Identity.ID)
 					for ci, comment := range thread.Comments {
 						timestamp := comment.PublishedDate.Format("2006-01-02 15:04")
 						m.diffLines = append(m.diffLines, diffLine{
 							Type:         diffLineComment,
-							Content:      fmt.Sprintf("@[%s] (%s): %s", comment.Author.DisplayName, timestamp, comment.Content),
-							ThreadID:     thread.ID,
+							Content:      fmt.Sprintf("@[%s] (%s): %s", comment.AuthorName, timestamp, comment.Content),
+							ThreadID:     threadID,
 							CommentIdx:   ci,
 							ThreadStatus: thread.Status,
 						})
@@ -692,12 +694,13 @@ func (m *DiffModel) buildGeneralCommentLines() {
 			})
 		}
 
+		threadID := parseThreadID(thread.Identity.ID)
 		for ci, comment := range thread.Comments {
 			timestamp := comment.PublishedDate.Format("2006-01-02 15:04")
 			m.diffLines = append(m.diffLines, diffLine{
 				Type:         diffLineComment,
-				Content:      fmt.Sprintf("@[%s] (%s): %s", comment.Author.DisplayName, timestamp, comment.Content),
-				ThreadID:     thread.ID,
+				Content:      fmt.Sprintf("@[%s] (%s): %s", comment.AuthorName, timestamp, comment.Content),
+				ThreadID:     threadID,
 				CommentIdx:   ci,
 				ThreadStatus: thread.Status,
 			})
@@ -864,13 +867,13 @@ func (m *DiffModel) jumpToNextComment(direction int) {
 }
 
 // filterFileChanges removes folder/tree entries and entries with empty paths
-func filterFileChanges(changes []azdevops.IterationChange) []azdevops.IterationChange {
-	filtered := make([]azdevops.IterationChange, 0, len(changes))
+func filterFileChanges(changes []provider.IterationChange) []provider.IterationChange {
+	filtered := make([]provider.IterationChange, 0, len(changes))
 	for _, c := range changes {
-		if c.Item.Path == "" || c.Item.Path == "/" {
+		if c.Path == "" || c.Path == "/" {
 			continue
 		}
-		if c.Item.GitObjectType == "tree" {
+		if c.GitObjectType == "tree" {
 			continue
 		}
 		filtered = append(filtered, c)
@@ -878,16 +881,26 @@ func filterFileChanges(changes []azdevops.IterationChange) []azdevops.IterationC
 	return filtered
 }
 
+// parseThreadID converts a string thread identity ID to an int.
+// Returns 0 if the ID cannot be parsed.
+func parseThreadID(id string) int {
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // --- Messages ---
 
 type changedFilesMsg struct {
-	changes []azdevops.IterationChange
+	changes []provider.IterationChange
 	err     error
 }
 
 type fileDiffMsg struct {
 	diff        *diff.FileDiff
-	fileThreads map[int][]azdevops.Thread
+	fileThreads map[int][]provider.Thread
 	err         error
 }
 
@@ -897,7 +910,7 @@ type commentResultMsg struct {
 }
 
 type threadsRefreshMsg struct {
-	threads []azdevops.Thread
+	threads []provider.Thread
 	err     error
 }
 
@@ -914,7 +927,7 @@ func (m *DiffModel) fetchChangedFiles() tea.Cmd {
 		}
 
 		// Get iterations
-		iterations, err := m.client.GetPRIterations(m.pr.Repository.ID, m.pr.ID)
+		iterations, err := m.client.GetPRIterations(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr))
 		if err != nil {
 			return changedFilesMsg{err: err}
 		}
@@ -924,7 +937,7 @@ func (m *DiffModel) fetchChangedFiles() tea.Cmd {
 
 		// Get changes from the latest iteration compared to base
 		latestID := iterations[len(iterations)-1].ID
-		changes, err := m.client.GetPRIterationChanges(m.pr.Repository.ID, m.pr.ID, latestID)
+		changes, err := m.client.GetPRIterationChanges(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), latestID)
 		if err != nil {
 			return changedFilesMsg{err: err}
 		}
@@ -934,14 +947,16 @@ func (m *DiffModel) fetchChangedFiles() tea.Cmd {
 }
 
 // fetchFileDiff loads file content at both branches and computes the diff
-func (m *DiffModel) fetchFileDiff(change azdevops.IterationChange) tea.Cmd {
+func (m *DiffModel) fetchFileDiff(change provider.IterationChange) tea.Cmd {
 	return func() tea.Msg {
 		if m.client == nil {
 			return fileDiffMsg{err: fmt.Errorf("no client available")}
 		}
 
-		targetBranch := m.pr.TargetBranchShortName()
-		sourceBranch := m.pr.SourceBranchShortName()
+		scope := m.pr.Identity.Scope
+		repoID := m.pr.RepositoryID
+		targetBranch := branchShortName(m.pr.TargetRefName)
+		sourceBranch := branchShortName(m.pr.SourceRefName)
 
 		var oldContent, newContent string
 		var err error
@@ -949,13 +964,13 @@ func (m *DiffModel) fetchFileDiff(change azdevops.IterationChange) tea.Cmd {
 		switch change.ChangeType {
 		case "add":
 			// New file: no old content
-			newContent, err = m.client.GetFileContent(m.pr.Repository.ID, change.Item.Path, sourceBranch)
+			newContent, err = m.client.GetFileContent(scope, repoID, change.Path, sourceBranch)
 			if err != nil {
 				return fileDiffMsg{err: err}
 			}
 		case "delete":
 			// Deleted file: no new content
-			oldContent, err = m.client.GetFileContent(m.pr.Repository.ID, change.Item.Path, targetBranch)
+			oldContent, err = m.client.GetFileContent(scope, repoID, change.Path, targetBranch)
 			if err != nil {
 				return fileDiffMsg{err: err}
 			}
@@ -963,22 +978,22 @@ func (m *DiffModel) fetchFileDiff(change azdevops.IterationChange) tea.Cmd {
 			// Renamed: old path on target, new path on source
 			oldPath := change.OriginalPath
 			if oldPath == "" {
-				oldPath = change.Item.Path
+				oldPath = change.Path
 			}
-			oldContent, err = m.client.GetFileContent(m.pr.Repository.ID, oldPath, targetBranch)
+			oldContent, err = m.client.GetFileContent(scope, repoID, oldPath, targetBranch)
 			if err != nil {
 				return fileDiffMsg{err: err}
 			}
-			newContent, err = m.client.GetFileContent(m.pr.Repository.ID, change.Item.Path, sourceBranch)
+			newContent, err = m.client.GetFileContent(scope, repoID, change.Path, sourceBranch)
 			if err != nil {
 				return fileDiffMsg{err: err}
 			}
 		default: // "edit"
-			oldContent, err = m.client.GetFileContent(m.pr.Repository.ID, change.Item.Path, targetBranch)
+			oldContent, err = m.client.GetFileContent(scope, repoID, change.Path, targetBranch)
 			if err != nil {
 				return fileDiffMsg{err: err}
 			}
-			newContent, err = m.client.GetFileContent(m.pr.Repository.ID, change.Item.Path, sourceBranch)
+			newContent, err = m.client.GetFileContent(scope, repoID, change.Path, sourceBranch)
 			if err != nil {
 				return fileDiffMsg{err: err}
 			}
@@ -986,13 +1001,13 @@ func (m *DiffModel) fetchFileDiff(change azdevops.IterationChange) tea.Cmd {
 
 		hunks := diff.ComputeDiff(oldContent, newContent, 5)
 		fileDiff := &diff.FileDiff{
-			Path:       change.Item.Path,
+			Path:       change.Path,
 			ChangeType: change.ChangeType,
 			OldPath:    change.OriginalPath,
 			Hunks:      hunks,
 		}
 
-		fileThreads := diff.MapThreadsToLines(m.threads, change.Item.Path)
+		fileThreads := diff.MapThreadsToLinesP(m.threads, change.Path)
 
 		return fileDiffMsg{diff: fileDiff, fileThreads: fileThreads}
 	}
@@ -1004,7 +1019,7 @@ func (m *DiffModel) createCodeComment(filePath string, line int, content string)
 		if m.client == nil {
 			return commentResultMsg{err: fmt.Errorf("no client available")}
 		}
-		_, err := m.client.AddPRCodeComment(m.pr.Repository.ID, m.pr.ID, filePath, line, content)
+		_, err := m.client.AddPRCodeComment(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), filePath, line, content)
 		if err != nil {
 			return commentResultMsg{err: err}
 		}
@@ -1018,7 +1033,7 @@ func (m *DiffModel) createGeneralComment(content string) tea.Cmd {
 		if m.client == nil {
 			return commentResultMsg{err: fmt.Errorf("no client available")}
 		}
-		_, err := m.client.AddPRComment(m.pr.Repository.ID, m.pr.ID, content)
+		_, err := m.client.AddPRComment(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), content)
 		if err != nil {
 			return commentResultMsg{err: err}
 		}
@@ -1032,7 +1047,7 @@ func (m *DiffModel) replyToThread(threadID int, content string) tea.Cmd {
 		if m.client == nil {
 			return commentResultMsg{err: fmt.Errorf("no client available")}
 		}
-		_, err := m.client.ReplyToThread(m.pr.Repository.ID, m.pr.ID, threadID, content)
+		_, err := m.client.ReplyToThread(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), threadID, content)
 		if err != nil {
 			return commentResultMsg{err: err}
 		}
@@ -1046,7 +1061,7 @@ func (m *DiffModel) resolveThread(threadID int) tea.Cmd {
 		if m.client == nil {
 			return commentResultMsg{err: fmt.Errorf("no client available")}
 		}
-		err := m.client.UpdateThreadStatus(m.pr.Repository.ID, m.pr.ID, threadID, "fixed")
+		err := m.client.UpdateThreadStatus(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), threadID, "fixed")
 		if err != nil {
 			return commentResultMsg{err: err}
 		}
@@ -1060,10 +1075,10 @@ func (m *DiffModel) refreshThreads() tea.Cmd {
 		if m.client == nil {
 			return threadsRefreshMsg{err: fmt.Errorf("no client available")}
 		}
-		threads, err := m.client.GetPRThreads(m.pr.Repository.ID, m.pr.ID)
+		threads, err := m.client.GetPRThreads(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr))
 		if err != nil {
 			return threadsRefreshMsg{err: err}
 		}
-		return threadsRefreshMsg{threads: azdevops.FilterSystemThreads(threads)}
+		return threadsRefreshMsg{threads: diff.FilterSystemThreadsP(threads)}
 	}
 }
