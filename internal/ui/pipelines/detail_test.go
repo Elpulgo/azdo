@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -15,21 +15,21 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	// The height passed to SetSize is already the content area (after app-level
 	// borders and footer are subtracted). The detail view should only subtract
 	// its own header lines (title + separator = 2 lines).
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1", DefinitionName: "Build"}
 	model := NewDetailModel(nil, run)
 
 	height := 30
 	model.SetSize(80, height)
 
 	// Create enough items to fill the viewport
-	records := make([]azdevops.TimelineRecord, 50)
+	records := make([]provider.TimelineRecord, 50)
 	for i := range records {
-		records[i] = azdevops.TimelineRecord{
-			ID: fmt.Sprintf("task-%d", i), ParentID: nil,
+		records[i] = provider.TimelineRecord{
+			ID: fmt.Sprintf("task-%d", i), ParentID: "",
 			Type: "Task", Name: fmt.Sprintf("Task %d", i), Order: i,
 		}
 	}
-	model.SetTimeline(&azdevops.Timeline{ID: "test", Records: records})
+	model.SetTimeline(&provider.Timeline{Identity: provider.Identity{ID: "test", Scope: "proj"}, Records: records})
 
 	view := model.View()
 	lines := strings.Split(view, "\n")
@@ -158,19 +158,19 @@ func TestDetailRecordIcon(t *testing.T) {
 func TestVisualDepthIndentation(t *testing.T) {
 	// Indentation is based on visual depth (2 spaces per level)
 	// not record type, so root-level Jobs get no indentation
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
 			// Root-level Job (like Azure DevOps "Finalize build")
-			{ID: "finalize", ParentID: nil, Type: "Job", Name: "Finalize build", Order: 2},
+			{ID: "finalize", ParentID: "", Type: "Job", Name: "Finalize build", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -207,13 +207,12 @@ func TestVisualDepthIndentation(t *testing.T) {
 
 func TestBuildTimelineTree(t *testing.T) {
 	// Create a sample timeline with nested structure
-	timeline := &azdevops.Timeline{
-		ID:       "test-timeline",
-		ChangeID: 1,
-		Records: []azdevops.TimelineRecord{
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test-timeline", Scope: "proj"},
+		Records: []provider.TimelineRecord{
 			{
 				ID:       "stage-1",
-				ParentID: nil,
+				ParentID: "",
 				Type:     "Stage",
 				Name:     "Build",
 				State:    "completed",
@@ -222,7 +221,7 @@ func TestBuildTimelineTree(t *testing.T) {
 			},
 			{
 				ID:       "job-1",
-				ParentID: strPtr("stage-1"),
+				ParentID: "stage-1",
 				Type:     "Job",
 				Name:     "Build Job",
 				State:    "completed",
@@ -231,7 +230,7 @@ func TestBuildTimelineTree(t *testing.T) {
 			},
 			{
 				ID:       "task-1",
-				ParentID: strPtr("job-1"),
+				ParentID: "job-1",
 				Type:     "Task",
 				Name:     "npm install",
 				State:    "completed",
@@ -240,7 +239,7 @@ func TestBuildTimelineTree(t *testing.T) {
 			},
 			{
 				ID:       "task-2",
-				ParentID: strPtr("job-1"),
+				ParentID: "job-1",
 				Type:     "Task",
 				Name:     "npm build",
 				State:    "completed",
@@ -249,7 +248,7 @@ func TestBuildTimelineTree(t *testing.T) {
 			},
 			{
 				ID:       "stage-2",
-				ParentID: nil,
+				ParentID: "",
 				Type:     "Stage",
 				Name:     "Test",
 				State:    "inProgress",
@@ -288,13 +287,13 @@ func TestBuildTimelineTree(t *testing.T) {
 }
 
 func TestFlattenTree(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Test", Order: 2},
 		},
 	}
 
@@ -386,15 +385,15 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestDetailModel_SelectedItem(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1, Log: &azdevops.LogReference{ID: 5}},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1, LogID: 5},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -417,30 +416,30 @@ func TestDetailModel_SelectedItem(t *testing.T) {
 	if selected == nil {
 		t.Fatal("SelectedItem() returned nil")
 	}
-	if selected.Record.Log == nil {
+	if selected.Record.LogID == 0 {
 		t.Error("Selected item should have a Log reference")
 	}
-	if selected.Record.Log.ID != 5 {
-		t.Errorf("Selected log ID = %d, want 5", selected.Record.Log.ID)
+	if selected.Record.LogID != 5 {
+		t.Errorf("Selected log ID = %d, want 5", selected.Record.LogID)
 	}
 }
 
 func TestDetailModel_ViewportScrolling(t *testing.T) {
 	// Create a timeline with many items to test scrolling
-	records := make([]azdevops.TimelineRecord, 50)
+	records := make([]provider.TimelineRecord, 50)
 	for i := 0; i < 50; i++ {
-		records[i] = azdevops.TimelineRecord{
+		records[i] = provider.TimelineRecord{
 			ID:       fmt.Sprintf("task-%d", i),
-			ParentID: nil,
+			ParentID: "",
 			Type:     "Task",
 			Name:     fmt.Sprintf("Task %d", i),
 			Order:    i,
 		}
 	}
 
-	timeline := &azdevops.Timeline{ID: "test", Records: records}
+	timeline := &provider.Timeline{Identity: provider.Identity{ID: "test", Scope: "proj"}, Records: records}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 20) // Set a small height to trigger scrolling
 	model.SetTimeline(timeline)
@@ -475,20 +474,20 @@ func TestDetailModel_ViewportScrolling(t *testing.T) {
 
 func TestDetailModel_PageUpDown(t *testing.T) {
 	// Create a timeline with many items
-	records := make([]azdevops.TimelineRecord, 50)
+	records := make([]provider.TimelineRecord, 50)
 	for i := 0; i < 50; i++ {
-		records[i] = azdevops.TimelineRecord{
+		records[i] = provider.TimelineRecord{
 			ID:       fmt.Sprintf("task-%d", i),
-			ParentID: nil,
+			ParentID: "",
 			Type:     "Task",
 			Name:     fmt.Sprintf("Task %d", i),
 			Order:    i,
 		}
 	}
 
-	timeline := &azdevops.Timeline{ID: "test", Records: records}
+	timeline := &provider.Timeline{Identity: provider.Identity{ID: "test", Scope: "proj"}, Records: records}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 20) // viewport height = 20 - 2 (header) = 18
 	model.SetTimeline(timeline)
@@ -516,21 +515,21 @@ func TestDetailModel_PageUpDown(t *testing.T) {
 
 func TestDetailModel_StatusMessage(t *testing.T) {
 	// Create timeline with items that have and don't have logs
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build Stage", Order: 1},
-			{ID: "task-1", ParentID: strPtr("stage-1"), Type: "Task", Name: "npm install", Order: 1, Log: &azdevops.LogReference{ID: 5}},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build Stage", Order: 1},
+			{ID: "task-1", ParentID: "stage-1", Type: "Task", Name: "npm install", Order: 1, LogID: 5},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 20)
 	model.SetTimeline(timeline)
 
 	// Initially selected item (stage) has no log - status message should indicate this
-	if model.SelectedItem().Record.Log != nil {
+	if model.SelectedItem().Record.LogID != 0 {
 		t.Error("First item (stage) should not have a log")
 	}
 
@@ -543,7 +542,7 @@ func TestDetailModel_StatusMessage(t *testing.T) {
 	// Expand stage and move to task with log
 	model.ToggleExpand()
 	model.MoveDown()
-	if model.SelectedItem().Record.Log == nil {
+	if model.SelectedItem().Record.LogID == 0 {
 		t.Error("Second item (task) should have a log")
 	}
 
@@ -555,15 +554,15 @@ func TestDetailModel_StatusMessage(t *testing.T) {
 }
 
 func TestDetailModel_CanViewLogs(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build Stage", Order: 1},
-			{ID: "task-1", ParentID: strPtr("stage-1"), Type: "Task", Name: "npm install", Order: 1, Log: &azdevops.LogReference{ID: 5}},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build Stage", Order: 1},
+			{ID: "task-1", ParentID: "stage-1", Type: "Task", Name: "npm install", Order: 1, LogID: 5},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -581,7 +580,7 @@ func TestDetailModel_CanViewLogs(t *testing.T) {
 }
 
 func TestDetailModel_GetContextItems(t *testing.T) {
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 
 	items := model.GetContextItems()
@@ -605,20 +604,20 @@ func TestDetailModel_GetContextItems(t *testing.T) {
 }
 
 func TestDetailModel_GetScrollPercent(t *testing.T) {
-	records := make([]azdevops.TimelineRecord, 50)
+	records := make([]provider.TimelineRecord, 50)
 	for i := 0; i < 50; i++ {
-		records[i] = azdevops.TimelineRecord{
+		records[i] = provider.TimelineRecord{
 			ID:       fmt.Sprintf("task-%d", i),
-			ParentID: nil,
+			ParentID: "",
 			Type:     "Task",
 			Name:     fmt.Sprintf("Task %d", i),
 			Order:    i,
 		}
 	}
 
-	timeline := &azdevops.Timeline{ID: "test", Records: records}
+	timeline := &provider.Timeline{Identity: provider.Identity{ID: "test", Scope: "proj"}, Records: records}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 20)
 	model.SetTimeline(timeline)
@@ -656,7 +655,7 @@ func TestDetailModel_GetScrollPercent(t *testing.T) {
 
 func TestTimelineNode_HasChildren(t *testing.T) {
 	node := &TimelineNode{
-		Record:   azdevops.TimelineRecord{ID: "stage-1", Type: "Stage", Name: "Build"},
+		Record:   provider.TimelineRecord{ID: "stage-1", Type: "Stage", Name: "Build"},
 		Children: []*TimelineNode{},
 	}
 
@@ -665,7 +664,7 @@ func TestTimelineNode_HasChildren(t *testing.T) {
 	}
 
 	node.Children = []*TimelineNode{
-		{Record: azdevops.TimelineRecord{ID: "job-1", Type: "Job", Name: "Build Job"}},
+		{Record: provider.TimelineRecord{ID: "job-1", Type: "Job", Name: "Build Job"}},
 	}
 
 	if !node.HasChildren() {
@@ -674,17 +673,17 @@ func TestTimelineNode_HasChildren(t *testing.T) {
 }
 
 func TestDetailModel_NodesStartCollapsed(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Test", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -702,18 +701,18 @@ func TestDetailModel_NodesStartCollapsed(t *testing.T) {
 }
 
 func TestDetailModel_ToggleExpand(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
-			{ID: "task-2", ParentID: strPtr("job-1"), Type: "Task", Name: "npm build", Order: 2},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
+			{ID: "task-2", ParentID: "job-1", Type: "Task", Name: "npm build", Order: 2},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Test", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -764,17 +763,17 @@ func TestDetailModel_ToggleExpand(t *testing.T) {
 }
 
 func TestDetailModel_ToggleExpandPreservesSelection(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Test", Order: 2},
-			{ID: "job-2", ParentID: strPtr("stage-2"), Type: "Job", Name: "Test Job", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Test", Order: 2},
+			{ID: "job-2", ParentID: "stage-2", Type: "Job", Name: "Test Job", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -796,15 +795,15 @@ func TestDetailModel_ToggleExpandPreservesSelection(t *testing.T) {
 }
 
 func TestDetailModel_ToggleDoesNothingOnLeafNode(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "task-1", ParentID: strPtr("stage-1"), Type: "Task", Name: "npm install", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "task-1", ParentID: "stage-1", Type: "Task", Name: "npm install", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -824,15 +823,15 @@ func TestDetailModel_ToggleDoesNothingOnLeafNode(t *testing.T) {
 }
 
 func TestDetailModel_RenderShowsExpandIndicator(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", State: "completed", Result: "succeeded", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", State: "completed", Result: "succeeded", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", State: "completed", Result: "succeeded", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", State: "completed", Result: "succeeded", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModelWithStyles(nil, run, styles.DefaultStyles())
 	model.SetTimeline(timeline)
 
@@ -851,16 +850,16 @@ func TestDetailModel_RenderShowsExpandIndicator(t *testing.T) {
 }
 
 func TestDetailModel_CollapseAdjustsSelectionIfBeyondBounds(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -889,23 +888,23 @@ func TestFlattenTreeRespectsExpanded(t *testing.T) {
 	// Build a tree manually with Expanded flags
 	tree := []*TimelineNode{
 		{
-			Record:   azdevops.TimelineRecord{ID: "s1", Type: "Stage", Name: "Build"},
+			Record:   provider.TimelineRecord{ID: "s1", Type: "Stage", Name: "Build"},
 			Expanded: true,
 			Children: []*TimelineNode{
 				{
-					Record:   azdevops.TimelineRecord{ID: "j1", Type: "Job", Name: "Build Job"},
+					Record:   provider.TimelineRecord{ID: "j1", Type: "Job", Name: "Build Job"},
 					Expanded: false,
 					Children: []*TimelineNode{
-						{Record: azdevops.TimelineRecord{ID: "t1", Type: "Task", Name: "npm install"}},
+						{Record: provider.TimelineRecord{ID: "t1", Type: "Task", Name: "npm install"}},
 					},
 				},
 			},
 		},
 		{
-			Record:   azdevops.TimelineRecord{ID: "s2", Type: "Stage", Name: "Test"},
+			Record:   provider.TimelineRecord{ID: "s2", Type: "Stage", Name: "Test"},
 			Expanded: false,
 			Children: []*TimelineNode{
-				{Record: azdevops.TimelineRecord{ID: "j2", Type: "Job", Name: "Test Job"}},
+				{Record: provider.TimelineRecord{ID: "j2", Type: "Job", Name: "Test Job"}},
 			},
 		},
 	}
@@ -928,19 +927,18 @@ func TestFlattenTreeRespectsExpanded(t *testing.T) {
 func TestDisplayFiltersPhaseAndCheckpoint(t *testing.T) {
 	// Azure DevOps timelines include Phase and Checkpoint intermediary records.
 	// These should be hidden in the UI but their children shown as if direct.
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "checkpoint-1", ParentID: strPtr("stage-1"), Type: "Checkpoint", Name: "Checkpoint", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 1", Order: 2},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1,
-				Log: &azdevops.LogReference{ID: 5}},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "checkpoint-1", ParentID: "stage-1", Type: "Checkpoint", Name: "Checkpoint", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase 1", Order: 2},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Build Job", Order: 1, LogID: 5},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -980,17 +978,16 @@ func TestDisplayFiltersPhaseAndCheckpoint(t *testing.T) {
 func TestDisplayJobWithLogNoTasksIsLeaf(t *testing.T) {
 	// When a Job (under a Phase) has a log but no tasks, it should be a leaf node
 	// (no ▶ icon, Enter opens log)
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 1", Order: 1},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1,
-				Log: &azdevops.LogReference{ID: 5}},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase 1", Order: 1},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Build Job", Order: 1, LogID: 5},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -1012,7 +1009,7 @@ func TestDisplayJobWithLogNoTasksIsLeaf(t *testing.T) {
 	if job.HasChildren() {
 		t.Error("Job with no tasks should not have visible children")
 	}
-	if job.Record.Log == nil {
+	if job.Record.LogID == 0 {
 		t.Error("Job should have a log")
 	}
 }
@@ -1020,25 +1017,24 @@ func TestDisplayJobWithLogNoTasksIsLeaf(t *testing.T) {
 func TestDisplayMultipleJobsUnderPhase(t *testing.T) {
 	// All jobs under a stage (through Phases) should be hidden when collapsed
 	// and shown when expanded — no job should leak out as a root
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 1},
-			{ID: "checkpoint-1", ParentID: strPtr("stage-1"), Type: "Checkpoint", Name: "Approval", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 1", Order: 2},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Job A", Order: 1},
-			{ID: "phase-2", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 2", Order: 3},
-			{ID: "job-2", ParentID: strPtr("phase-2"), Type: "Job", Name: "Job B", Order: 1},
-			{ID: "phase-3", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 3", Order: 4},
-			{ID: "job-3", ParentID: strPtr("phase-3"), Type: "Job", Name: "Job C", Order: 1},
-			{ID: "phase-4", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase 4", Order: 5},
-			{ID: "job-4", ParentID: strPtr("phase-4"), Type: "Job", Name: "Job D", Order: 1,
-				Log: &azdevops.LogReference{ID: 10}},
-			{ID: "task-1", ParentID: strPtr("job-4"), Type: "Task", Name: "Deploy task", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Deploy", Order: 1},
+			{ID: "checkpoint-1", ParentID: "stage-1", Type: "Checkpoint", Name: "Approval", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase 1", Order: 2},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Job A", Order: 1},
+			{ID: "phase-2", ParentID: "stage-1", Type: "Phase", Name: "Phase 2", Order: 3},
+			{ID: "job-2", ParentID: "phase-2", Type: "Job", Name: "Job B", Order: 1},
+			{ID: "phase-3", ParentID: "stage-1", Type: "Phase", Name: "Phase 3", Order: 4},
+			{ID: "job-3", ParentID: "phase-3", Type: "Job", Name: "Job C", Order: 1},
+			{ID: "phase-4", ParentID: "stage-1", Type: "Phase", Name: "Phase 4", Order: 5},
+			{ID: "job-4", ParentID: "phase-4", Type: "Job", Name: "Job D", Order: 1, LogID: 10},
+			{ID: "task-1", ParentID: "job-4", Type: "Task", Name: "Deploy task", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "20240206.1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "20240206.1"}
 	model := NewDetailModel(nil, run)
 	model.SetTimeline(timeline)
 
@@ -1067,16 +1063,16 @@ func TestDisplayMultipleJobsUnderPhase(t *testing.T) {
 // --- Search/Filter Tests ---
 
 func TestDetailModel_SearchFiltersItems(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
-			{ID: "stage-3", ParentID: nil, Type: "Stage", Name: "Test Build", Order: 3},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Deploy", Order: 2},
+			{ID: "stage-3", ParentID: "", Type: "Stage", Name: "Test Build", Order: 3},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1101,15 +1097,15 @@ func TestDetailModel_SearchFiltersItems(t *testing.T) {
 }
 
 func TestDetailModel_SearchExitRestoresItems(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Deploy", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1133,15 +1129,15 @@ func TestDetailModel_SearchExitRestoresItems(t *testing.T) {
 }
 
 func TestDetailModel_SearchIsCaseInsensitive(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "DEPLOY", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "DEPLOY", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1159,19 +1155,19 @@ func TestDetailModel_SearchIsCaseInsensitive(t *testing.T) {
 
 func TestDetailModel_SearchFindsCollapsedChildren(t *testing.T) {
 	// Bug: search should find items inside collapsed nodes, not just visible ones
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "task-1", ParentID: strPtr("job-1"), Type: "Task", Name: "npm install", Order: 1},
-			{ID: "task-2", ParentID: strPtr("job-1"), Type: "Task", Name: "npm test", Order: 2},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "task-1", ParentID: "job-1", Type: "Task", Name: "npm install", Order: 1},
+			{ID: "task-2", ParentID: "job-1", Type: "Task", Name: "npm test", Order: 2},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Deploy", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1196,17 +1192,17 @@ func TestDetailModel_SearchFindsCollapsedChildren(t *testing.T) {
 
 func TestDetailModel_SearchEnterToggleExpandDuringSearch(t *testing.T) {
 	// Bug: pressing enter during search should still toggle expand/collapse
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Deploy", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1244,17 +1240,17 @@ func TestDetailModel_SearchEnterToggleExpandDuringSearch(t *testing.T) {
 func TestDetailModel_SearchExitRestoresAllTreeItems(t *testing.T) {
 	// After searching (which searches all tree nodes), exiting search should
 	// restore the flat items from the tree (respecting expand/collapse state)
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "phase-1", ParentID: strPtr("stage-1"), Type: "Phase", Name: "Phase", Order: 1},
-			{ID: "job-1", ParentID: strPtr("phase-1"), Type: "Job", Name: "Build Job", Order: 1},
-			{ID: "stage-2", ParentID: nil, Type: "Stage", Name: "Deploy", Order: 2},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "phase-1", ParentID: "stage-1", Type: "Phase", Name: "Phase", Order: 1},
+			{ID: "job-1", ParentID: "phase-1", Type: "Job", Name: "Build Job", Order: 1},
+			{ID: "stage-2", ParentID: "", Type: "Stage", Name: "Deploy", Order: 2},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1"}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1278,14 +1274,14 @@ func TestDetailModel_SearchExitRestoresAllTreeItems(t *testing.T) {
 // --- Key handling via Update() ---
 
 func TestDetailModel_RefreshKey_SetsLoadingAndReturnsCmd(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1", DefinitionName: "Build"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1306,14 +1302,14 @@ func TestDetailModel_RefreshKey_SetsLoadingAndReturnsCmd(t *testing.T) {
 }
 
 func TestDetailModel_RefreshKey_IgnoredDuringSearch(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1", DefinitionName: "Build"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1334,14 +1330,14 @@ func TestDetailModel_RefreshKey_IgnoredDuringSearch(t *testing.T) {
 }
 
 func TestDetailModel_SearchKey_EntersSearchMode(t *testing.T) {
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
 		},
 	}
 
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1", DefinitionName: "Build"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	model.SetTimeline(timeline)
@@ -1363,7 +1359,7 @@ func TestDetailModel_SearchKey_EntersSearchMode(t *testing.T) {
 
 func TestDetailModel_SearchKey_IgnoredWhenEmpty(t *testing.T) {
 	// 'f' should not enter search if there are no items
-	run := azdevops.PipelineRun{ID: 123, BuildNumber: "1", Definition: azdevops.PipelineDefinition{Name: "Build"}}
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "123", Scope: "proj"}, BuildNumber: "1", DefinitionName: "Build"}
 	model := NewDetailModel(nil, run)
 	model.SetSize(80, 30)
 	// No timeline set — flatItems is empty
@@ -1376,10 +1372,6 @@ func TestDetailModel_SearchKey_IgnoredWhenEmpty(t *testing.T) {
 }
 
 // Helper functions
-
-func strPtr(s string) *string {
-	return &s
-}
 
 func timePtr(t time.Time) *time.Time {
 	return &t

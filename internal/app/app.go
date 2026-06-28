@@ -415,9 +415,8 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		activeTab:        TabPullRequests,
 		enabledTabs:      enabledTabs,
 		logo:             logo,
-		// pullRequestsView and workItemsView now consume provider.Provider (tasks 7-8).
-		// Pipelines still accepts *azdevops.MultiClient (task 9 pending).
-		pipelinesView:    pipelines.NewModelWithStyles(mc, appStyles),
+		// pullRequestsView, workItemsView, and pipelinesView all consume provider.Provider (tasks 7-9).
+		pipelinesView:    pipelines.NewModelWithStyles(p, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(p, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(p, appStyles),
 		metricsView:      metrics.NewModelWithStyles(mc, cfg, appStyles),
@@ -636,9 +635,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
 
 		// Recreate views with new styles.
-		// pullRequestsView and workItemsView use provider.Provider (tasks 7-8).
-		// pipelines still uses *azdevops.MultiClient (task 9 pending).
-		m.pipelinesView = pipelines.NewModelWithStyles(m.metricsClient, m.styles)
+		// pullRequestsView, workItemsView, and pipelinesView all use provider.Provider (tasks 7-9).
+		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
 		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
 		// Re-style the metrics view in place rather than reconstructing it —
@@ -733,9 +731,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Update pipelines view with the runs
+		// Update pipelines view with the runs, mapping wire types to neutral types.
 		if runs != nil {
-			pipelineMsg := pipelines.SetRunsMsg{Runs: runs}
+			providerRuns := make([]provider.PipelineRun, len(runs))
+			for i, r := range runs {
+				providerRuns[i] = azdevops.MapPipelineRun(r, r.ProjectName, r.ProjectDisplayName)
+			}
+			pipelineMsg := pipelines.SetRunsMsg{Runs: providerRuns}
 			var cmd tea.Cmd
 			m.pipelinesView, cmd = m.pipelinesView.Update(pipelineMsg)
 			cmds = append(cmds, cmd)

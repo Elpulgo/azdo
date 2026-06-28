@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -18,7 +18,7 @@ import (
 
 // TimelineNode represents a node in the timeline tree with its children
 type TimelineNode struct {
-	Record      azdevops.TimelineRecord
+	Record      provider.TimelineRecord
 	Children    []*TimelineNode
 	VisualDepth int // depth in the displayed tree (skips filtered types)
 	Expanded    bool
@@ -46,9 +46,9 @@ func hasVisibleChildren(nodes []*TimelineNode) bool {
 
 // DetailModel represents the pipeline detail view showing timeline
 type DetailModel struct {
-	client        *azdevops.Client
-	run           azdevops.PipelineRun
-	timeline      *azdevops.Timeline
+	client        provider.Provider
+	run           provider.PipelineRun
+	timeline      *provider.Timeline
 	tree          []*TimelineNode
 	flatItems     []*TimelineNode
 	allFlatItems  []*TimelineNode // unfiltered items, set when searching
@@ -67,14 +67,14 @@ type DetailModel struct {
 }
 
 // NewDetailModel creates a new detail model for a pipeline run with default styles
-func NewDetailModel(client *azdevops.Client, run azdevops.PipelineRun) *DetailModel {
+func NewDetailModel(client provider.Provider, run provider.PipelineRun) *DetailModel {
 	return NewDetailModelWithStyles(client, run, styles.DefaultStyles())
 }
 
 // NewDetailModelWithStyles creates a new detail model with custom styles
-func NewDetailModelWithStyles(client *azdevops.Client, run azdevops.PipelineRun, s *styles.Styles) *DetailModel {
+func NewDetailModelWithStyles(client provider.Provider, run provider.PipelineRun, s *styles.Styles) *DetailModel {
 	spinner := components.NewLoadingIndicator(s)
-	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
+	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.DefinitionName, run.BuildNumber))
 
 	ti := textinput.New()
 	ti.Prompt = "/ "
@@ -98,7 +98,7 @@ func (m *DetailModel) Init() tea.Cmd {
 }
 
 // SetTimeline sets the timeline data (useful for testing)
-func (m *DetailModel) SetTimeline(timeline *azdevops.Timeline) {
+func (m *DetailModel) SetTimeline(timeline *provider.Timeline) {
 	m.timeline = timeline
 	m.tree = buildTimelineTree(timeline)
 	m.flatItems = flattenTree(m.tree)
@@ -228,7 +228,7 @@ func (m *DetailModel) View() string {
 	var sb strings.Builder
 
 	// Header
-	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("%s #%s", m.run.Definition.Name, m.run.BuildNumber)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("%s #%s", m.run.DefinitionName, m.run.BuildNumber)))
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", min(m.width-2, 60)))
 	sb.WriteString("\n")
@@ -275,7 +275,7 @@ func (m *DetailModel) renderRecord(node *TimelineNode, selected bool) string {
 	}
 
 	// Add log indicator if available
-	if node.Record.Log != nil {
+	if node.Record.LogID != 0 {
 		line = fmt.Sprintf("%s 📄", line)
 	}
 
@@ -410,7 +410,7 @@ func (m *DetailModel) ensureSelectedVisible() {
 // CanViewLogs returns true if the selected item has logs that can be viewed
 func (m *DetailModel) CanViewLogs() bool {
 	selected := m.SelectedItem()
-	return selected != nil && selected.Record.Log != nil
+	return selected != nil && selected.Record.LogID != 0
 }
 
 // GetStatusMessage returns a status message based on the selected item
@@ -420,14 +420,14 @@ func (m *DetailModel) GetStatusMessage() string {
 		return ""
 	}
 
-	if selected.Record.Log == nil {
+	if selected.Record.LogID == 0 {
 		return fmt.Sprintf("%s has no logs", selected.Record.Type)
 	}
 	return ""
 }
 
 // GetRun returns the pipeline run
-func (m *DetailModel) GetRun() azdevops.PipelineRun {
+func (m *DetailModel) GetRun() provider.PipelineRun {
 	return m.run
 }
 
@@ -567,13 +567,16 @@ func (m *DetailModel) applySearchFilter() {
 // Messages
 
 type timelineMsg struct {
-	timeline *azdevops.Timeline
+	timeline *provider.Timeline
 	err      error
 }
 
 func (m *DetailModel) fetchTimeline() tea.Cmd {
 	return func() tea.Msg {
-		timeline, err := m.client.GetBuildTimeline(m.run.ID)
+		if m.client == nil {
+			return timelineMsg{timeline: nil, err: nil}
+		}
+		timeline, err := m.client.GetBuildTimeline(m.run.Identity.Scope, parseBuildID(m.run.Identity.ID))
 		return timelineMsg{timeline: timeline, err: err}
 	}
 }
@@ -640,7 +643,7 @@ func isFilteredRecordType(recordType string) bool {
 }
 
 // buildTimelineTree builds a tree structure from flat timeline records
-func buildTimelineTree(timeline *azdevops.Timeline) []*TimelineNode {
+func buildTimelineTree(timeline *provider.Timeline) []*TimelineNode {
 	if timeline == nil || len(timeline.Records) == 0 {
 		return nil
 	}
@@ -658,10 +661,10 @@ func buildTimelineTree(timeline *azdevops.Timeline) []*TimelineNode {
 	// Build the tree by linking parents and children
 	var roots []*TimelineNode
 	for _, node := range nodeMap {
-		if node.Record.ParentID == nil {
+		if node.Record.ParentID == "" {
 			roots = append(roots, node)
 		} else {
-			parentNode, ok := nodeMap[*node.Record.ParentID]
+			parentNode, ok := nodeMap[node.Record.ParentID]
 			if ok {
 				parentNode.Children = append(parentNode.Children, node)
 			} else {
