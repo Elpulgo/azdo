@@ -295,6 +295,39 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	}
 }
 
+func TestModel_HelpModal_ReflectsTermOverride(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Terms:           map[string]string{"work_items": "Tasks"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	// Open the help modal.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// The help dialog's Tabs line must honor the term override, not the
+	// hard-coded default label.
+	if !strings.Contains(view, "Tasks") {
+		t.Error("help modal Tabs line should show the overridden term 'Tasks'")
+	}
+	if strings.Contains(view, "Work Items") {
+		t.Error("help modal Tabs line should not show the default 'Work Items' once overridden")
+	}
+}
+
 func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",

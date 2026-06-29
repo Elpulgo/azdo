@@ -334,16 +334,19 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		helpModal.RemoveBindingsByDescription("pipelines")
 	}
 
-	// Update tab description in help modal based on enabled tabs
-	enabledTabNames := []string{"PR"}
+	// Update tab description in help modal based on enabled tabs.
+	// Labels resolve through TermFor (same lowercase keys as renderTabBar) so a
+	// configured term override shows up in the help dialog too, not just the tab
+	// bar. The fallbacks are the help line's abbreviated defaults ("PR").
+	enabledTabNames := []string{cfg.TermFor("pull_requests", "PR")}
 	if cfg.IsPaneEnabled("workitems") {
-		enabledTabNames = append(enabledTabNames, "Work Items")
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("work_items", "Work Items"))
 	}
 	if cfg.IsPaneEnabled("pipelines") {
-		enabledTabNames = append(enabledTabNames, "Pipelines")
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("pipelines", "Pipelines"))
 	}
 	if cfg.Metrics.Enabled {
-		enabledTabNames = append(enabledTabNames, "Metrics")
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("metrics", "Metrics"))
 	}
 	// Rebuild the tabs help line whenever the set differs from the default
 	// "1/2/3 — PR / Work Items / Pipelines" (e.g. a pane disabled, metrics
