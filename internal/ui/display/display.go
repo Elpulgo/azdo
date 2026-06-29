@@ -186,10 +186,10 @@ func VoteStyle(v provider.VoteKind, s *styles.Styles) lipgloss.Style {
 // Mirrors statusIconWithStyles in internal/ui/pipelines/list.go and
 // recordIconWithStyles in internal/ui/pipelines/detail.go.
 //
-// RunStatusUnknown returns "?" as a safe fallback. The original list view
-// rendered fmt.Sprintf("%s/%s", status, result) for unrecognised pairs;
-// that raw string is not representable in the enum — callers that need the
-// raw-fallback behaviour must handle RunStatusUnknown themselves.
+// RunStatusUnknown returns "○" to reproduce the detail view's default/unknown
+// case (detail.go:586-607 renders Muted "○" for skipped/abandoned/unrecognised
+// values). The adapter maps skipped/abandoned/unrecognised wire values to
+// RunStatusUnknown, so returning "○" here preserves the existing behavior.
 func RunStatusGlyph(r provider.RunStatus) string {
 	switch r {
 	case provider.RunStatusRunning:
@@ -210,11 +210,8 @@ func RunStatusGlyph(r provider.RunStatus) string {
 		return "○"
 	case provider.RunStatusSucceededWithIssues:
 		return "◐"
-	default: // RunStatusUnknown
-		// "?" is a safe, visible fallback. The list view previously rendered
-		// the raw "status/result" string here; Task 7 must handle Unknown
-		// separately if that raw text is needed.
-		return "?"
+	default: // RunStatusUnknown — skipped/abandoned/unrecognised → Muted "○"
+		return "○"
 	}
 }
 

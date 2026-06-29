@@ -5,6 +5,8 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/display"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ─── StateCategory ───────────────────────────────────────────────────────────
@@ -141,8 +143,8 @@ func TestRunStatusGlyph(t *testing.T) {
 		status   provider.RunStatus
 		expected string
 	}{
-		// RunStatusUnknown → safe fallback "?" (raw "status/result" not representable)
-		{"Unknown", provider.RunStatusUnknown, "?"},
+		// RunStatusUnknown → "○" matching the detail view's default/unknown case
+		{"Unknown", provider.RunStatusUnknown, "○"},
 		{"Running", provider.RunStatusRunning, "●"},
 		{"Queued", provider.RunStatusQueued, "○"},
 		{"Canceling", provider.RunStatusCanceling, "⊘"},
@@ -187,6 +189,114 @@ func TestRunStatusLabel(t *testing.T) {
 			got := display.RunStatusLabel(tc.status)
 			if got != tc.expected {
 				t.Errorf("RunStatusLabel(%v) = %q, want %q", tc.status, got, tc.expected)
+			}
+		})
+	}
+}
+
+// ─── Style function tests ─────────────────────────────────────────────────────
+
+func TestStateStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name   string
+		cat    provider.StateCategory
+		wantFg lipgloss.Color
+	}{
+		{"Unknown", provider.StateCategoryUnknown, th.ForegroundMuted},
+		{"New", provider.StateCategoryNew, th.ForegroundMuted},
+		{"Active", provider.StateCategoryActive, th.Info},
+		{"Resolved", provider.StateCategoryResolved, th.Warning},
+		{"ReadyForTest", provider.StateCategoryReadyForTest, th.Secondary},
+		{"ClosedDone", provider.StateCategoryClosedDone, th.Success},
+		{"Removed", provider.StateCategoryRemoved, th.Error},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.StateStyle(tc.cat, s).GetForeground()
+			if got != tc.wantFg {
+				t.Errorf("StateStyle(%v) foreground = %v, want %v", tc.cat, got, tc.wantFg)
+			}
+		})
+	}
+}
+
+func TestItemTypeStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name     string
+		itemType provider.ItemType
+		wantFg   lipgloss.Color
+	}{
+		{"Unknown", provider.ItemTypeUnknown, th.ForegroundMuted},
+		{"Bug", provider.ItemTypeBug, th.Error},
+		{"Task", provider.ItemTypeTask, th.Info},
+		{"UserStory", provider.ItemTypeUserStory, th.Success},
+		{"Feature", provider.ItemTypeFeature, th.Accent},
+		{"Epic", provider.ItemTypeEpic, th.Warning},
+		{"Issue", provider.ItemTypeIssue, th.Error},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.ItemTypeStyle(tc.itemType, s).GetForeground()
+			if got != tc.wantFg {
+				t.Errorf("ItemTypeStyle(%v) foreground = %v, want %v", tc.itemType, got, tc.wantFg)
+			}
+		})
+	}
+}
+
+func TestVoteStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name   string
+		vote   provider.VoteKind
+		wantFg lipgloss.Color
+	}{
+		{"NoVote", provider.VoteKindNoVote, th.ForegroundMuted},
+		{"Approved", provider.VoteKindApproved, th.Success},
+		{"ApprovedWithSuggestions", provider.VoteKindApprovedWithSuggestions, th.Warning},
+		{"WaitingForAuthor", provider.VoteKindWaitingForAuthor, th.Warning},
+		{"Rejected", provider.VoteKindRejected, th.Error},
+		{"OutOfRange", provider.VoteKind(99), th.ForegroundMuted},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.VoteStyle(tc.vote, s).GetForeground()
+			if got != tc.wantFg {
+				t.Errorf("VoteStyle(%v) foreground = %v, want %v", tc.vote, got, tc.wantFg)
+			}
+		})
+	}
+}
+
+func TestRunStatusStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name   string
+		status provider.RunStatus
+		wantFg lipgloss.Color
+	}{
+		{"Unknown", provider.RunStatusUnknown, th.ForegroundMuted},
+		{"Running", provider.RunStatusRunning, th.Info},
+		{"Queued", provider.RunStatusQueued, th.Info},
+		{"Canceling", provider.RunStatusCanceling, th.Warning},
+		{"Succeeded", provider.RunStatusSucceeded, th.Success},
+		{"Failed", provider.RunStatusFailed, th.Error},
+		{"Canceled", provider.RunStatusCanceled, th.ForegroundMuted},
+		{"PartiallySucceeded", provider.RunStatusPartiallySucceeded, th.Warning},
+		{"Pending", provider.RunStatusPending, th.ForegroundMuted},
+		{"SucceededWithIssues", provider.RunStatusSucceededWithIssues, th.Warning},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.RunStatusStyle(tc.status, s).GetForeground()
+			if got != tc.wantFg {
+				t.Errorf("RunStatusStyle(%v) foreground = %v, want %v", tc.status, got, tc.wantFg)
 			}
 		})
 	}
