@@ -24,6 +24,8 @@ func MapWorkItem(w WorkItem, scope, scopeDisplay string) provider.WorkItem {
 		Title:           w.Fields.Title,
 		State:           w.Fields.State,
 		WorkItemType:    w.Fields.WorkItemType,
+		StateCategory:   MapStateCategory(w.Fields.State),
+		ItemKind:        MapItemType(w.Fields.WorkItemType),
 		AssignedToName:  assignedTo,
 		Priority:        w.Fields.Priority,
 		ChangedDate:     w.Fields.ChangedDate,
@@ -48,6 +50,7 @@ func MapPullRequest(pr PullRequest, scope, scopeDisplay string) provider.PullReq
 			ID:          r.ID,
 			DisplayName: r.DisplayName,
 			Vote:        r.Vote,
+			Kind:        MapVoteKind(r.Vote),
 		}
 	}
 	return provider.PullRequest{
@@ -60,6 +63,7 @@ func MapPullRequest(pr PullRequest, scope, scopeDisplay string) provider.PullReq
 		Title:          pr.Title,
 		Description:    pr.Description,
 		Status:         pr.Status,
+		StatusCategory: MapStateCategory(pr.Status),
 		CreationDate:   pr.CreationDate,
 		SourceRefName:  pr.SourceRefName,
 		TargetRefName:  pr.TargetRefName,
@@ -84,6 +88,7 @@ func MapPipelineRun(p PipelineRun, scope, scopeDisplay string) provider.Pipeline
 		BuildNumber:    p.BuildNumber,
 		Status:         p.Status,
 		Result:         p.Result,
+		RunStatus:      MapRunStatus(p.Status, p.Result),
 		SourceBranch:   p.SourceBranch,
 		SourceVersion:  p.SourceVersion,
 		QueueTime:      p.QueueTime,

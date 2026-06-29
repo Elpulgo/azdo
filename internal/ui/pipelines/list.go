@@ -2,7 +2,6 @@ package pipelines
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -364,7 +364,7 @@ func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
 		rows[i] = table.Row{
-			statusIconWithStyles(run.Status, run.Result, s),
+			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
 			branchShortName(run.SourceBranch),
 			run.BuildNumber,
@@ -375,29 +375,19 @@ func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
 	return rows
 }
 
-// statusIconWithStyles returns a colored status icon using the provided styles
-func statusIconWithStyles(status, result string, s *styles.Styles) string {
-	statusLower := strings.ToLower(status)
-	resultLower := strings.ToLower(result)
-
-	switch {
-	case statusLower == "inprogress":
-		return s.Info.Render("● Running")
-	case statusLower == "notstarted":
-		return s.Info.Render("○ Queued")
-	case statusLower == "canceling":
-		return s.Warning.Render("⊘ Cancel")
-	case resultLower == "succeeded":
-		return s.Success.Render("✓ Success")
-	case resultLower == "failed":
-		return s.Error.Render("✗ Failed")
-	case resultLower == "canceled":
-		return s.Muted.Render("○ Cancel")
-	case resultLower == "partiallysucceeded":
-		return s.Warning.Render("◐ Partial")
-	default:
-		return s.Muted.Render(fmt.Sprintf("%s/%s", status, result))
+// statusIconWithStyles returns a colored status icon using the provided styles.
+// It uses the neutral RunStatus enum and the display map so theming is
+// centralised in internal/ui/display.
+func statusIconWithStyles(runStatus provider.RunStatus, s *styles.Styles) string {
+	glyph := display.RunStatusGlyph(runStatus)
+	label := display.RunStatusLabel(runStatus)
+	style := display.RunStatusStyle(runStatus, s)
+	if label == "" {
+		// RunStatusUnknown (and detail-only statuses) have no list label;
+		// render just the glyph to avoid showing an empty string.
+		return style.Render(glyph)
 	}
+	return style.Render(glyph + " " + label)
 }
 
 // runsToRowsMulti converts pipeline runs to table rows with a Project column.
@@ -406,7 +396,7 @@ func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row
 	for i, run := range items {
 		rows[i] = table.Row{
 			run.Identity.ScopeDisplay,
-			statusIconWithStyles(run.Status, run.Result, s),
+			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
 			branchShortName(run.SourceBranch),
 			run.BuildNumber,
@@ -457,26 +447,8 @@ func getPipelineStatuses() []pipelineStatus {
 	}
 }
 
-func getStatusKey(status, result string) string {
-	statusLower := strings.ToLower(status)
-	resultLower := strings.ToLower(result)
-
-	switch {
-	case statusLower == "inprogress":
-		return "Running"
-	case statusLower == "notstarted":
-		return "Queued"
-	case resultLower == "succeeded":
-		return "Success"
-	case resultLower == "failed":
-		return "Failed"
-	case resultLower == "canceled":
-		return "Cancel"
-	case resultLower == "partiallysucceeded":
-		return "Partial"
-	default:
-		return ""
-	}
+func getStatusKey(runStatus provider.RunStatus) string {
+	return display.RunStatusLabel(runStatus)
 }
 
 func (m Model) applyStatusFilter(runs []provider.PipelineRun) []provider.PipelineRun {
@@ -485,7 +457,7 @@ func (m Model) applyStatusFilter(runs []provider.PipelineRun) []provider.Pipelin
 	}
 	var filtered []provider.PipelineRun
 	for _, run := range runs {
-		if getStatusKey(run.Status, run.Result) == m.activeStatus {
+		if getStatusKey(run.RunStatus) == m.activeStatus {
 			filtered = append(filtered, run)
 		}
 	}
