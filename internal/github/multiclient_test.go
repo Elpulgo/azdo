@@ -10,6 +10,37 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// stubServer returns an httptest server that responds with the given status and
+// body, registered for cleanup via t.Cleanup.
+func stubServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		if body != "" {
+			w.Write([]byte(body))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newTwoRepoMultiClient builds a MultiClient over owner1/repo1 and owner2/repo2,
+// each pointed at the matching stub server.
+func newTwoRepoMultiClient(t *testing.T, srv1, srv2 *httptest.Server) *MultiClient {
+	t.Helper()
+	mc, err := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
+	if err != nil {
+		t.Fatalf("NewMultiClient: %v", err)
+	}
+	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
+	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	return mc
+}
+
+// ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
 
@@ -134,24 +165,10 @@ const issueFixture2 = `[{
 }]`
 
 func TestMultiClient_ListWorkItems_MergesAndSortsByDate(t *testing.T) {
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(issueFixture1))
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(issueFixture2))
-	}))
-	defer srv2.Close()
-
-	mc, err := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	if err != nil {
-		t.Fatalf("NewMultiClient: %v", err)
-	}
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusOK, issueFixture1),
+		stubServer(t, http.StatusOK, issueFixture2),
+	)
 
 	items, err := mc.ListWorkItems(10, provider.ListOpts{})
 	if err != nil {
@@ -170,21 +187,10 @@ func TestMultiClient_ListWorkItems_MergesAndSortsByDate(t *testing.T) {
 }
 
 func TestMultiClient_ListWorkItems_IdentityScope(t *testing.T) {
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(issueFixture1))
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(issueFixture2))
-	}))
-	defer srv2.Close()
-
-	mc, _ := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusOK, issueFixture1),
+		stubServer(t, http.StatusOK, issueFixture2),
+	)
 
 	items, err := mc.ListWorkItems(10, provider.ListOpts{})
 	if err != nil {
@@ -215,20 +221,10 @@ func TestMultiClient_ListWorkItems_IdentityScope(t *testing.T) {
 
 func TestMultiClient_ListWorkItems_PartialFailure(t *testing.T) {
 	// Server 1 returns 500; server 2 returns one healthy issue.
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(issueFixture2))
-	}))
-	defer srv2.Close()
-
-	mc, _ := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusInternalServerError, ""),
+		stubServer(t, http.StatusOK, issueFixture2),
+	)
 
 	items, err := mc.ListWorkItems(10, provider.ListOpts{})
 	if err == nil {
@@ -251,19 +247,10 @@ func TestMultiClient_ListWorkItems_PartialFailure(t *testing.T) {
 }
 
 func TestMultiClient_ListWorkItems_AllFail(t *testing.T) {
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv2.Close()
-
-	mc, _ := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusInternalServerError, ""),
+		stubServer(t, http.StatusInternalServerError, ""),
+	)
 
 	items, err := mc.ListWorkItems(10, provider.ListOpts{})
 	if err == nil {
@@ -310,21 +297,10 @@ const runFixture2 = `{"total_count":1,"workflow_runs":[{
 }]}`
 
 func TestMultiClient_ListPipelineRuns_MergesAndSortsByQueueTime(t *testing.T) {
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(runFixture1))
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(runFixture2))
-	}))
-	defer srv2.Close()
-
-	mc, _ := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusOK, runFixture1),
+		stubServer(t, http.StatusOK, runFixture2),
+	)
 
 	runs, err := mc.ListPipelineRuns(10, provider.ListOpts{})
 	if err != nil {
@@ -343,20 +319,10 @@ func TestMultiClient_ListPipelineRuns_MergesAndSortsByQueueTime(t *testing.T) {
 }
 
 func TestMultiClient_ListPipelineRuns_PartialFailure(t *testing.T) {
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(runFixture2))
-	}))
-	defer srv2.Close()
-
-	mc, _ := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusInternalServerError, ""),
+		stubServer(t, http.StatusOK, runFixture2),
+	)
 
 	runs, err := mc.ListPipelineRuns(10, provider.ListOpts{})
 	if err == nil {
@@ -409,21 +375,10 @@ const prFixture2 = `[{
 }]`
 
 func TestMultiClient_ListPullRequests_MergesAndSortsByCreationDate(t *testing.T) {
-	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(prFixture1))
-	}))
-	defer srv1.Close()
-
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(prFixture2))
-	}))
-	defer srv2.Close()
-
-	mc, _ := NewMultiClient([]string{"owner1/repo1", "owner2/repo2"}, "tok", DefaultLabelConvention(), nil)
-	mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
+	mc := newTwoRepoMultiClient(t,
+		stubServer(t, http.StatusOK, prFixture1),
+		stubServer(t, http.StatusOK, prFixture2),
+	)
 
 	prs, err := mc.ListPullRequests(10, provider.ListOpts{})
 	if err != nil {

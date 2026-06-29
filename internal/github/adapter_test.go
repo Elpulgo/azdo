@@ -10,33 +10,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Helper: build a MultiClient with two repos pointed at httptest servers.
-// ---------------------------------------------------------------------------
-
-func twoRepoMC(t *testing.T, srv1, srv2 *httptest.Server) *MultiClient {
-	t.Helper()
-	mc, err := NewMultiClient(
-		[]string{"owner1/repo1", "owner2/repo2"},
-		"tok",
-		DefaultLabelConvention(),
-		map[string]string{
-			"owner1/repo1": "Repo One",
-			"owner2/repo2": "Repo Two",
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewMultiClient: %v", err)
-	}
-	if srv1 != nil {
-		mc.ClientFor("owner1/repo1").SetBaseURL(srv1.URL)
-	}
-	if srv2 != nil {
-		mc.ClientFor("owner2/repo2").SetBaseURL(srv2.URL)
-	}
-	return mc
-}
-
-// ---------------------------------------------------------------------------
 // Kind / IsMultiProject
 // ---------------------------------------------------------------------------
 
