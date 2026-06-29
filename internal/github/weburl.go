@@ -38,9 +38,9 @@ func (c *Client) PRURL(prID int) string {
 //
 // threadID is the root review-comment database id (stamped as thread Identity.ID
 // by MapReviewThreads). The #discussion_r fragment is how github.com anchors to
-// review comments. Returns "" when prID <= 0 or threadID == 0.
+// review comments. Returns "" when prID <= 0 or threadID <= 0.
 func (c *Client) PRThreadWebURL(prID int, threadID int) string {
-	if prID <= 0 || threadID == 0 {
+	if prID <= 0 || threadID <= 0 {
 		return ""
 	}
 	return fmt.Sprintf("%s/%s/%s/pull/%d#discussion_r%d", defaultWebBaseURL, c.owner, c.repo, prID, threadID)

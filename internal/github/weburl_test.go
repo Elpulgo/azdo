@@ -97,6 +97,12 @@ func TestClient_PRThreadWebURL_Shapes(t *testing.T) {
 			want:     "",
 		},
 		{
+			name:     "negative threadID returns empty",
+			prID:     7,
+			threadID: -1,
+			want:     "",
+		},
+		{
 			name:     "zero prID returns empty",
 			prID:     0,
 			threadID: 123456,
