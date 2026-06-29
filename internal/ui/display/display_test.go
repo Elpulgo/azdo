@@ -205,6 +205,7 @@ func TestKindGlyph(t *testing.T) {
 		// Zero/unknown Kind returns a neutral fallback; no constant exists for it yet.
 		{"Zero", provider.Kind(0), "?"},
 		{"Azure", provider.KindAzure, "⬡"},
+		{"GitHub", provider.KindGitHub, "⑂"},
 		// Sentinel: out-of-range value falls through to default
 		{"OutOfRange", provider.Kind(99), "?"},
 	}
@@ -227,6 +228,7 @@ func TestKindLabel(t *testing.T) {
 		// Zero/unknown Kind returns "" (caller decides how to handle unknown origin).
 		{"Zero", provider.Kind(0), ""},
 		{"Azure", provider.KindAzure, "Azure"},
+		{"GitHub", provider.KindGitHub, "GitHub"},
 		// Sentinel: out-of-range value falls through to default
 		{"OutOfRange", provider.Kind(99), ""},
 	}
@@ -252,6 +254,7 @@ func TestKindStyle(t *testing.T) {
 		// reads as secondary metadata rather than a status indicator.
 		{"Zero", provider.Kind(0), th.ForegroundMuted},
 		{"Azure", provider.KindAzure, th.ForegroundMuted},
+		{"GitHub", provider.KindGitHub, th.ForegroundMuted},
 		// Sentinel: out-of-range value also returns Muted
 		{"OutOfRange", provider.Kind(99), th.ForegroundMuted},
 	}

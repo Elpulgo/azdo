@@ -11,6 +11,8 @@ type Kind int
 const (
 	// KindAzure identifies entities originating from Azure DevOps.
 	KindAzure Kind = iota + 1
+	// KindGitHub identifies entities originating from GitHub.
+	KindGitHub
 )
 
 // Identity stamps every neutral entity with its origin.
