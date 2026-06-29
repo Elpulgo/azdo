@@ -136,6 +136,22 @@ func KindGlyph(k provider.Kind) string {
 	}
 }
 
+// MixedKinds reports whether the given kinds span more than one distinct
+// provider Kind. Returns false for an empty slice and for a slice where all
+// elements share the same Kind.
+func MixedKinds(kinds []provider.Kind) bool {
+	if len(kinds) == 0 {
+		return false
+	}
+	first := kinds[0]
+	for _, k := range kinds[1:] {
+		if k != first {
+			return true
+		}
+	}
+	return false
+}
+
 // KindLabel returns the human-readable provider name for a backend Kind.
 // Returns "" for the zero/unknown Kind so callers can apply their own fallback.
 //

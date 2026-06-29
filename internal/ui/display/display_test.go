@@ -240,6 +240,35 @@ func TestKindLabel(t *testing.T) {
 	}
 }
 
+// ─── MixedKinds ──────────────────────────────────────────────────────────────
+
+func TestMixedKinds(t *testing.T) {
+	tests := []struct {
+		name     string
+		kinds    []provider.Kind
+		expected bool
+	}{
+		// empty → false
+		{"Empty", []provider.Kind{}, false},
+		// single element, single kind → false
+		{"SingleKind_OneElement", []provider.Kind{provider.KindAzure}, false},
+		// multiple elements, all same kind → false
+		{"SingleKind_MultipleElements", []provider.Kind{provider.KindAzure, provider.KindAzure, provider.KindAzure}, false},
+		// two distinct kinds → true
+		{"TwoDistinctKinds", []provider.Kind{provider.KindAzure, provider.Kind(2)}, true},
+		// more than two distinct kinds → true
+		{"ThreeDistinctKinds", []provider.Kind{provider.KindAzure, provider.Kind(2), provider.Kind(3)}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.MixedKinds(tc.kinds)
+			if got != tc.expected {
+				t.Errorf("MixedKinds(%v) = %v, want %v", tc.kinds, got, tc.expected)
+			}
+		})
+	}
+}
+
 // ─── Style function tests ─────────────────────────────────────────────────────
 
 func TestStateStyle(t *testing.T) {
