@@ -32,8 +32,8 @@ func MapStateCategory(state, stateReason string) provider.StateCategory {
 		}
 		return provider.StateCategoryClosedDone
 	default:
-		// Unknown or future states (e.g. "reopened") default to Active — the safe
-		// fallback that does not hide items from the user.
+		// Unknown or future state values default to Active — the safe fallback
+		// that does not hide items from the user.
 		return provider.StateCategoryActive
 	}
 }

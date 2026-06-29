@@ -17,12 +17,20 @@ type Label struct {
 	Description string `json:"description"`
 }
 
+// Milestone represents a GitHub milestone wire type embedded in issue payloads.
+// Number is the milestone number; Title is the human-readable name.
+type Milestone struct {
+	Title  string `json:"title"`
+	Number int    `json:"number"`
+}
+
 // Issue represents a GitHub REST issue wire type
 // (GET /repos/{owner}/{repo}/issues/{number}).
 // StateReason is null when the issue is open or when the API omits it (legacy
 // issues); use a pointer so the mapper can distinguish null from empty string.
 // Assignee is null when no one is assigned.
 // ClosedAt is null while the issue is open.
+// Milestone is null when no milestone is assigned.
 type Issue struct {
 	Number      int        `json:"number"`
 	Title       string     `json:"title"`
@@ -32,6 +40,7 @@ type Issue struct {
 	User        User       `json:"user"`
 	Assignee    *User      `json:"assignee"`
 	Labels      []Label    `json:"labels"`
+	Milestone   *Milestone `json:"milestone"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ClosedAt    *time.Time `json:"closed_at"`
@@ -46,20 +55,23 @@ type PullRequestBranch struct {
 // PullRequest represents a GitHub REST pull request wire type
 // (GET /repos/{owner}/{repo}/pulls/{number}).
 // ClosedAt and MergedAt are null while the PR is open.
+// RequestedReviewers lists reviewers who have been requested but have not yet
+// submitted a review; the reviews endpoint only returns those who already acted.
 type PullRequest struct {
-	Number    int               `json:"number"`
-	Title     string            `json:"title"`
-	Body      string            `json:"body"`
-	State     string            `json:"state"`
-	Draft     bool              `json:"draft"`
-	User      User              `json:"user"`
-	Head      PullRequestBranch `json:"head"`
-	Base      PullRequestBranch `json:"base"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
-	ClosedAt  *time.Time        `json:"closed_at"`
-	MergedAt  *time.Time        `json:"merged_at"`
-	HTMLURL   string            `json:"html_url"`
+	Number             int               `json:"number"`
+	Title              string            `json:"title"`
+	Body               string            `json:"body"`
+	State              string            `json:"state"`
+	Draft              bool              `json:"draft"`
+	User               User              `json:"user"`
+	RequestedReviewers []User            `json:"requested_reviewers"`
+	Head               PullRequestBranch `json:"head"`
+	Base               PullRequestBranch `json:"base"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
+	ClosedAt           *time.Time        `json:"closed_at"`
+	MergedAt           *time.Time        `json:"merged_at"`
+	HTMLURL            string            `json:"html_url"`
 }
 
 // Review represents a GitHub REST pull request review wire type
@@ -76,31 +88,40 @@ type Review struct {
 // ReviewComment represents a GitHub REST pull request review comment wire type
 // (GET /repos/{owner}/{repo}/pulls/{pull_number}/comments).
 // InReplyToID is null for the first (root) comment in a thread.
-// Line is null for some legacy comments not anchored to a specific line.
+// Line is null for some legacy comments not anchored to a specific line;
+// OriginalLine carries the anchor position when Line is null (outdated diff).
+// HTMLURL is the permalink to the comment on github.com.
 type ReviewComment struct {
-	ID          int64      `json:"id"`
-	InReplyToID *int64     `json:"in_reply_to_id"`
-	Path        string     `json:"path"`
-	Line        *int       `json:"line"`
-	Body        string     `json:"body"`
-	User        User       `json:"user"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID           int64      `json:"id"`
+	InReplyToID  *int64     `json:"in_reply_to_id"`
+	Path         string     `json:"path"`
+	Line         *int       `json:"line"`
+	OriginalLine *int       `json:"original_line"`
+	Body         string     `json:"body"`
+	User         User       `json:"user"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	HTMLURL      string     `json:"html_url"`
 }
 
 // WorkflowRun represents a GitHub Actions workflow run wire type
 // (GET /repos/{owner}/{repo}/actions/runs/{run_id}).
 // Conclusion is null while the run has not yet completed.
+// RunStartedAt is null until the run leaves the queue; prefer it over CreatedAt
+// (queue time) as the pipeline start time.
+// HeadSHA is the commit SHA that triggered the run.
 type WorkflowRun struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	Status     string     `json:"status"`
-	Conclusion *string    `json:"conclusion"`
-	RunNumber  int        `json:"run_number"`
-	HeadBranch string     `json:"head_branch"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	HTMLURL    string     `json:"html_url"`
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Status       string     `json:"status"`
+	Conclusion   *string    `json:"conclusion"`
+	RunNumber    int        `json:"run_number"`
+	HeadBranch   string     `json:"head_branch"`
+	HeadSHA      string     `json:"head_sha"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	RunStartedAt *time.Time `json:"run_started_at"`
+	HTMLURL      string     `json:"html_url"`
 }
 
 // Job represents a GitHub Actions workflow job wire type

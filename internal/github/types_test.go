@@ -9,7 +9,7 @@ import (
 )
 
 // TestIssue_JSONRoundTrip verifies that the Issue wire type unmarshals key
-// fields correctly, including the nullable assignee and state_reason.
+// fields correctly, including the nullable assignee, state_reason, and milestone.
 func TestIssue_JSONRoundTrip(t *testing.T) {
 	const raw = `{
 		"number": 42,
@@ -20,6 +20,7 @@ func TestIssue_JSONRoundTrip(t *testing.T) {
 		"user": {"login": "octocat", "id": 1},
 		"assignee": null,
 		"labels": [{"id": 10, "name": "bug", "color": "d73a4a", "description": "Something isn't working"}],
+		"milestone": null,
 		"created_at": "2026-01-01T10:00:00Z",
 		"updated_at": "2026-01-02T11:00:00Z",
 		"closed_at": "2026-01-02T12:00:00Z",
@@ -52,11 +53,44 @@ func TestIssue_JSONRoundTrip(t *testing.T) {
 	if issue.User.Login != "octocat" {
 		t.Errorf("User.Login = %q, want %q", issue.User.Login, "octocat")
 	}
+	if issue.Milestone != nil {
+		t.Errorf("Milestone = %v, want nil (JSON null)", issue.Milestone)
+	}
 	if issue.ClosedAt == nil {
 		t.Errorf("ClosedAt = nil, want non-nil")
 	}
 	if issue.HTMLURL != "https://github.com/owner/repo/issues/42" {
 		t.Errorf("HTMLURL = %q", issue.HTMLURL)
+	}
+}
+
+// TestIssue_WithMilestone verifies that a non-null milestone decodes correctly.
+func TestIssue_WithMilestone(t *testing.T) {
+	const raw = `{
+		"number": 5,
+		"title": "Milestone issue",
+		"state": "open",
+		"state_reason": null,
+		"user": {"login": "dev", "id": 2},
+		"labels": [],
+		"milestone": {"title": "v1.0", "number": 3},
+		"created_at": "2026-06-01T00:00:00Z",
+		"updated_at": "2026-06-01T00:00:00Z",
+		"html_url": "https://github.com/owner/repo/issues/5"
+	}`
+
+	var issue github.Issue
+	if err := json.Unmarshal([]byte(raw), &issue); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if issue.Milestone == nil {
+		t.Fatal("Milestone = nil, want non-nil")
+	}
+	if issue.Milestone.Title != "v1.0" {
+		t.Errorf("Milestone.Title = %q, want %q", issue.Milestone.Title, "v1.0")
+	}
+	if issue.Milestone.Number != 3 {
+		t.Errorf("Milestone.Number = %d, want 3", issue.Milestone.Number)
 	}
 }
 
@@ -76,7 +110,8 @@ func TestIssue_NullStateReason(t *testing.T) {
 	}
 }
 
-// TestPullRequest_JSONRoundTrip verifies nullable MergedAt and ClosedAt.
+// TestPullRequest_JSONRoundTrip verifies nullable MergedAt and ClosedAt, and
+// that RequestedReviewers decodes correctly.
 func TestPullRequest_JSONRoundTrip(t *testing.T) {
 	const raw = `{
 		"number": 7,
@@ -85,6 +120,7 @@ func TestPullRequest_JSONRoundTrip(t *testing.T) {
 		"state": "open",
 		"draft": false,
 		"user": {"login": "dev", "id": 5},
+		"requested_reviewers": [{"login": "reviewer1", "id": 9}],
 		"head": {"ref": "feature-branch"},
 		"base": {"ref": "main"},
 		"created_at": "2026-02-01T00:00:00Z",
@@ -116,10 +152,19 @@ func TestPullRequest_JSONRoundTrip(t *testing.T) {
 	if pr.Draft {
 		t.Error("Draft = true, want false")
 	}
+	if len(pr.RequestedReviewers) != 1 {
+		t.Fatalf("len(RequestedReviewers) = %d, want 1", len(pr.RequestedReviewers))
+	}
+	if pr.RequestedReviewers[0].Login != "reviewer1" {
+		t.Errorf("RequestedReviewers[0].Login = %q, want %q", pr.RequestedReviewers[0].Login, "reviewer1")
+	}
+	if pr.RequestedReviewers[0].ID != 9 {
+		t.Errorf("RequestedReviewers[0].ID = %d, want 9", pr.RequestedReviewers[0].ID)
+	}
 }
 
-// TestWorkflowRun_NullConclusion verifies that conclusion decodes to nil while
-// a run is in progress.
+// TestWorkflowRun_NullConclusion verifies that conclusion and run_started_at
+// decode to nil while a run is in progress.
 func TestWorkflowRun_NullConclusion(t *testing.T) {
 	const raw = `{
 		"id": 12345,
@@ -128,8 +173,10 @@ func TestWorkflowRun_NullConclusion(t *testing.T) {
 		"conclusion": null,
 		"run_number": 10,
 		"head_branch": "main",
+		"head_sha": "abc123def456",
 		"created_at": "2026-03-01T00:00:00Z",
 		"updated_at": "2026-03-01T00:01:00Z",
+		"run_started_at": null,
 		"html_url": "https://github.com/owner/repo/actions/runs/12345"
 	}`
 
@@ -152,9 +199,16 @@ func TestWorkflowRun_NullConclusion(t *testing.T) {
 	if run.HeadBranch != "main" {
 		t.Errorf("HeadBranch = %q, want %q", run.HeadBranch, "main")
 	}
+	if run.HeadSHA != "abc123def456" {
+		t.Errorf("HeadSHA = %q, want %q", run.HeadSHA, "abc123def456")
+	}
+	if run.RunStartedAt != nil {
+		t.Errorf("RunStartedAt = %v, want nil", run.RunStartedAt)
+	}
 }
 
-// TestWorkflowRun_Completed verifies that a non-null conclusion parses correctly.
+// TestWorkflowRun_Completed verifies that a non-null conclusion, run_started_at,
+// and head_sha parse correctly.
 func TestWorkflowRun_Completed(t *testing.T) {
 	const raw = `{
 		"id": 9,
@@ -163,8 +217,10 @@ func TestWorkflowRun_Completed(t *testing.T) {
 		"conclusion": "success",
 		"run_number": 9,
 		"head_branch": "main",
+		"head_sha": "deadbeef1234",
 		"created_at": "2026-03-02T00:00:00Z",
 		"updated_at": "2026-03-02T00:05:00Z",
+		"run_started_at": "2026-03-02T00:00:05Z",
 		"html_url": "https://github.com/owner/repo/actions/runs/9"
 	}`
 
@@ -177,6 +233,16 @@ func TestWorkflowRun_Completed(t *testing.T) {
 	}
 	if *run.Conclusion != "success" {
 		t.Errorf("*Conclusion = %q, want %q", *run.Conclusion, "success")
+	}
+	if run.HeadSHA != "deadbeef1234" {
+		t.Errorf("HeadSHA = %q, want %q", run.HeadSHA, "deadbeef1234")
+	}
+	if run.RunStartedAt == nil {
+		t.Fatal("RunStartedAt = nil, want non-nil for completed run")
+	}
+	wantStart := time.Date(2026, 3, 2, 0, 0, 5, 0, time.UTC)
+	if !run.RunStartedAt.Equal(wantStart) {
+		t.Errorf("RunStartedAt = %v, want %v", run.RunStartedAt, wantStart)
 	}
 }
 
@@ -265,17 +331,20 @@ func TestReview_JSONRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReviewComment_JSONRoundTrip verifies nullable InReplyToID and Line.
+// TestReviewComment_JSONRoundTrip verifies nullable InReplyToID and Line, plus
+// the new OriginalLine (null here) and HTMLURL fields.
 func TestReviewComment_JSONRoundTrip(t *testing.T) {
 	const raw = `{
 		"id": 200,
 		"in_reply_to_id": null,
 		"path": "internal/foo/bar.go",
 		"line": 42,
+		"original_line": null,
 		"body": "Nit: rename this.",
 		"user": {"login": "nit-picker", "id": 7},
 		"created_at": "2026-05-01T08:00:00Z",
-		"updated_at": "2026-05-01T08:30:00Z"
+		"updated_at": "2026-05-01T08:30:00Z",
+		"html_url": "https://github.com/owner/repo/pull/7#discussion_r200"
 	}`
 
 	var rc github.ReviewComment
@@ -294,8 +363,48 @@ func TestReviewComment_JSONRoundTrip(t *testing.T) {
 	if rc.Line == nil || *rc.Line != 42 {
 		t.Errorf("Line = %v, want *42", rc.Line)
 	}
+	if rc.OriginalLine != nil {
+		t.Errorf("OriginalLine = %v, want nil (JSON null)", rc.OriginalLine)
+	}
 	if rc.Body != "Nit: rename this." {
 		t.Errorf("Body = %q", rc.Body)
+	}
+	if rc.HTMLURL != "https://github.com/owner/repo/pull/7#discussion_r200" {
+		t.Errorf("HTMLURL = %q", rc.HTMLURL)
+	}
+}
+
+// TestReviewComment_OriginalLine verifies that a legacy comment with null line
+// but non-null original_line decodes the anchor correctly.
+func TestReviewComment_OriginalLine(t *testing.T) {
+	const raw = `{
+		"id": 202,
+		"in_reply_to_id": null,
+		"path": "internal/foo/bar.go",
+		"line": null,
+		"original_line": 17,
+		"body": "Outdated comment.",
+		"user": {"login": "reviewer", "id": 3},
+		"created_at": "2026-05-02T10:00:00Z",
+		"updated_at": "2026-05-02T10:00:00Z",
+		"html_url": "https://github.com/owner/repo/pull/7#discussion_r202"
+	}`
+
+	var rc github.ReviewComment
+	if err := json.Unmarshal([]byte(raw), &rc); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if rc.Line != nil {
+		t.Errorf("Line = %v, want nil for legacy comment", rc.Line)
+	}
+	if rc.OriginalLine == nil {
+		t.Fatal("OriginalLine = nil, want non-nil")
+	}
+	if *rc.OriginalLine != 17 {
+		t.Errorf("*OriginalLine = %d, want 17", *rc.OriginalLine)
+	}
+	if rc.HTMLURL != "https://github.com/owner/repo/pull/7#discussion_r202" {
+		t.Errorf("HTMLURL = %q", rc.HTMLURL)
 	}
 }
 
@@ -309,7 +418,8 @@ func TestReviewComment_WithReplyID(t *testing.T) {
 		"body": "Agreed.",
 		"user": {"login": "author", "id": 1},
 		"created_at": "2026-05-01T09:00:00Z",
-		"updated_at": "2026-05-01T09:00:00Z"
+		"updated_at": "2026-05-01T09:00:00Z",
+		"html_url": "https://github.com/owner/repo/pull/7#discussion_r201"
 	}`
 
 	var rc github.ReviewComment
