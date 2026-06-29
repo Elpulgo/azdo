@@ -219,6 +219,15 @@ theme: dark
 # Valid values: pipelines, workitems
 # disabled_panes: pipelines,workitems
 
+# Tab labels (optional). Override the name shown for any tab, in both the tab
+# bar and the help dialog. Keys are lowercase snake_case; unset tabs keep their
+# defaults.
+# terms:
+#   pull_requests: PRs
+#   work_items: Tasks
+#   pipelines: Builds
+#   metrics: Dashboard
+
 # Metrics dashboard (opt-in, management feature). Hidden unless enabled.
 # See "Metrics Configuration" below for the full reference.
 # metrics:
@@ -244,6 +253,7 @@ theme: dark
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
 - `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
+- `terms`: Map of tab label overrides (optional). Keys are lowercase snake_case (`pull_requests`, `work_items`, `pipelines`, `metrics`); the value replaces the tab's name in both the tab bar and the help dialog. Unset tabs keep their default labels.
 - `metrics`: Opt-in management dashboard. See [Metrics Configuration](#metrics-configuration) below for the full reference, and [Features → Metrics Dashboard](#metrics-dashboard-opt-in) for what it does.
 
 **Available Themes:**

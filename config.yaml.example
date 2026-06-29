@@ -26,6 +26,16 @@ polling_interval: 60
 # Example: If you have ~/.config/azdo-tui/themes/mytheme.json, use: theme: mytheme
 theme: dark
 
+# Tab labels (optional). Override the name shown for any tab — in both the tab
+# bar and the help dialog. Keys are lowercase snake_case and must match exactly
+# (config keys are lowercased on load). Unset tabs keep their default labels.
+#
+# terms:
+#   pull_requests: PRs
+#   work_items: Tasks
+#   pipelines: Builds
+#   metrics: Dashboard
+
 # Metrics tab (opt-in, management dashboard). Disabled unless enabled: true.
 # When enabled a fourth tab surfaces per-user WIP, stuck-item flags, and
 # points-closed over the configured interval.
