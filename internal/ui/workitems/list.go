@@ -603,7 +603,7 @@ func fetchMyWorkItems(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return myWorkItemsMsg{workItems: nil, err: nil}
 		}
-		workItems, err := client.ListMyWorkItems(50, provider.ListOpts{})
+		workItems, err := client.ListMyWorkItems(50, provider.ListOpts{Mine: true})
 		return myWorkItemsMsg{workItems: workItems, err: err}
 	}
 }

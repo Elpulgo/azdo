@@ -21,12 +21,6 @@ func BuildWIQLFilters(opts provider.ListOpts) string {
 	}
 
 	if len(opts.States) > 0 {
-		var stateLiterals []string
-		for _, cat := range opts.States {
-			for _, s := range StateCategoryToWIQLStates(cat) {
-				stateLiterals = append(stateLiterals, fmt.Sprintf("'%s'", s))
-			}
-		}
 		// ReadyForTest uses a CONTAINS pattern instead of exact match.
 		hasReady := false
 		for _, cat := range opts.States {
@@ -60,7 +54,6 @@ func BuildWIQLFilters(opts provider.ListOpts) string {
 			))
 		default:
 			// No ReadyForTest: plain IN clause
-			_ = stateLiterals // already built above; use exactLiterals here
 			parts = append(parts, fmt.Sprintf(
 				"  AND [System.State] IN (%s)",
 				strings.Join(exactLiterals, ", "),
@@ -69,7 +62,9 @@ func BuildWIQLFilters(opts provider.ListOpts) string {
 	}
 
 	if opts.Search != "" {
-		parts = append(parts, fmt.Sprintf("  AND [System.Title] CONTAINS '%s'", opts.Search))
+		// Escape single quotes to prevent WIQL injection: ' → ''
+		escaped := strings.ReplaceAll(opts.Search, "'", "''")
+		parts = append(parts, fmt.Sprintf("  AND [System.Title] CONTAINS '%s'", escaped))
 	}
 
 	return strings.Join(parts, "\n")

@@ -102,6 +102,19 @@ func TestBuildWIQLFilters(t *testing.T) {
 				"auth",
 			},
 		},
+		{
+			name: "Search with single-quote is escaped to prevent WIQL injection",
+			opts: provider.ListOpts{Search: "O'Brien's bug"},
+			wantContains: []string{
+				"[System.Title]",
+				// Single quotes must be doubled: O'Brien's → O''Brien''s
+				"O''Brien''s",
+			},
+			wantNotContains: []string{
+				// The raw unescaped form must not appear in the output
+				"O'Brien's",
+			},
+		},
 	}
 
 	for _, tt := range tests {

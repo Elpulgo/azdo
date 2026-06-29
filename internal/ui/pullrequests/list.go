@@ -671,7 +671,7 @@ func fetchMyPullRequestsMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return myPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListMyPullRequests(25, provider.ListOpts{})
+		prs, err := client.ListMyPullRequests(25, provider.ListOpts{Mine: true})
 		return myPullRequestsMsg{prs: prs, err: err}
 	}
 }
