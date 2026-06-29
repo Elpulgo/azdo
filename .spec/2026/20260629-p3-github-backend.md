@@ -83,6 +83,23 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [ ] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)
 - [ ] 12. `github.MultiClient` fan-out across repos (goroutine/merge/sort/`PartialError`) + `Adapter` satisfying `provider.Provider`; `//go:build adapter` conformance test mirroring `azdevops`; `CGO_ENABLED=0 go test/vet ./...` green; integration tests written, run manually. (blocked by: 8,9,10,11)
 
+## Review feedback: Task 4
+
+- **RESOLVED (hardening, follow-up commit).** Reviewer raised one 🔴 (latent) + one
+  live 🟡; both fixed in the parser:
+  - **Empty-prefix footgun (🔴):** `Parse` now guards `prefix != ""` before matching, so a
+    zero-value `LabelConvention` (a Phase-4 config that leaves a prefix blank) routes every
+    label to `Tags` instead of greedily consuming the first two. Pinned by
+    `TestLabelConventionEmptyPrefixMatchesNothing` + per-prefix variant.
+  - **Silent drop of recognised-but-unparseable labels (🟡, live under defaults):**
+    `priority:high`, `type:chore`, bare `type:` etc. now fall through to `Tags` instead of
+    vanishing. Rule is now uniform: **a prefixed label is consumed only if it yields a usable
+    value** (recognised type, or priority 1–4); otherwise it stays a visible tag and a later
+    well-formed label with the same prefix can still win. `mapItemType` returns `(type, ok)`;
+    priority match gated on `!= 0`.
+  - 🟢 notes (ASCII slice-offset on non-ASCII custom prefixes; leading-whitespace label names)
+    logged as Phase-4 considerations — not reachable with ASCII defaults.
+
 ## Unknowns
 
 - Resolving a thread needs the PR's GraphQL `reviewThread` node IDs; how to match

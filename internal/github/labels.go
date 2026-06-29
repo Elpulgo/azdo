@@ -36,10 +36,11 @@ func DefaultLabelConvention() LabelConvention {
 
 // Parse inspects a slice of GitHub labels and derives:
 //
-//   - itemType: the provider.ItemType for the first label matching TypePrefix
-//     (case-insensitive). Unrecognised type values and the absence of any
-//     type: label both default to provider.ItemTypeIssue — a GitHub issue is
-//     natively an issue when the convention is not applied.
+//   - itemType: the provider.ItemType for the first label whose value matches
+//     TypePrefix (case-insensitive) AND maps to a known type. Unrecognised type
+//     values and the absence of any type: label both default to
+//     provider.ItemTypeIssue — a GitHub issue is natively an issue when the
+//     convention is not applied.
 //
 //   - priority: the numeric priority from the first label matching
 //     PriorityPrefix (case-insensitive). Accepts both the "p1"–"p4" form and
@@ -50,8 +51,14 @@ func DefaultLabelConvention() LabelConvention {
 //     original order. The "; " separator matches the separator consumed by the
 //     work-item view's tagList / applyTagFilter functions.
 //
-// When multiple labels share the same prefix the first match wins; subsequent
-// labels with that prefix are treated as unmatched and become tags.
+// A label that matches a prefix is consumed (removed from tags) only when it
+// yields a usable value — a recognised type, or a priority in 1–4. A prefixed
+// label whose value does NOT map (e.g. "priority:high", "type:chore") is kept
+// visible as a tag rather than silently dropped, and does not satisfy the
+// match — a later well-formed label with the same prefix can still win.
+//
+// An empty prefix never matches: a zero-value LabelConvention routes every
+// label to tags rather than greedily consuming the first ones.
 func (c LabelConvention) Parse(labels []Label) (itemType provider.ItemType, priority int, tags string) {
 	typePfx := strings.ToLower(c.TypePrefix)
 	priPfx := strings.ToLower(c.PriorityPrefix)
@@ -64,17 +71,27 @@ func (c LabelConvention) Parse(labels []Label) (itemType provider.ItemType, prio
 	for _, lbl := range labels {
 		lower := strings.ToLower(lbl.Name)
 
-		if !typeMatched && strings.HasPrefix(lower, typePfx) {
+		if !typeMatched && typePfx != "" && strings.HasPrefix(lower, typePfx) {
 			value := strings.TrimSpace(lbl.Name[len(c.TypePrefix):])
-			itemType = mapItemType(strings.ToLower(value))
-			typeMatched = true
+			if mapped, ok := mapItemType(strings.ToLower(value)); ok {
+				itemType = mapped
+				typeMatched = true
+				continue
+			}
+			// Recognised prefix, unrecognised value: surface it as a tag.
+			tagParts = append(tagParts, lbl.Name)
 			continue
 		}
 
-		if !priMatched && strings.HasPrefix(lower, priPfx) {
+		if !priMatched && priPfx != "" && strings.HasPrefix(lower, priPfx) {
 			value := strings.TrimSpace(lbl.Name[len(c.PriorityPrefix):])
-			priority = parsePriority(strings.ToLower(value))
-			priMatched = true
+			if p := parsePriority(strings.ToLower(value)); p != 0 {
+				priority = p
+				priMatched = true
+				continue
+			}
+			// Recognised prefix, unparseable/out-of-range value: keep as a tag.
+			tagParts = append(tagParts, lbl.Name)
 			continue
 		}
 
@@ -93,24 +110,26 @@ func (c LabelConvention) Parse(labels []Label) (itemType provider.ItemType, prio
 }
 
 // mapItemType converts a lower-cased label value (after stripping the type:
-// prefix) to a provider.ItemType. Unrecognised values return ItemTypeIssue.
-func mapItemType(value string) provider.ItemType {
+// prefix) to a provider.ItemType. The bool reports whether the value was a
+// recognised type; an unrecognised value returns (ItemTypeIssue, false) so the
+// caller can keep the original label as a tag instead of dropping it.
+func mapItemType(value string) (provider.ItemType, bool) {
 	switch value {
 	case "bug":
-		return provider.ItemTypeBug
+		return provider.ItemTypeBug, true
 	case "task":
-		return provider.ItemTypeTask
+		return provider.ItemTypeTask, true
 	case "story", "user story", "userstory":
-		return provider.ItemTypeUserStory
+		return provider.ItemTypeUserStory, true
 	case "feature":
-		return provider.ItemTypeFeature
+		return provider.ItemTypeFeature, true
 	case "epic":
-		return provider.ItemTypeEpic
+		return provider.ItemTypeEpic, true
 	case "issue":
-		return provider.ItemTypeIssue
+		return provider.ItemTypeIssue, true
 	default:
-		// Unrecognised type: value → fall back to the GitHub native default.
-		return provider.ItemTypeIssue
+		// Unrecognised type: value → not a match; caller keeps it as a tag.
+		return provider.ItemTypeIssue, false
 	}
 }
 

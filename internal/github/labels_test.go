@@ -98,11 +98,11 @@ func TestLabelConventionParse(t *testing.T) {
 			wantTags:     "",
 		},
 		{
-			name:         "unrecognised type value → ItemTypeIssue",
+			name:         "unrecognised type value → ItemTypeIssue, kept as tag",
 			labels:       labels("type:unknown-future-kind"),
 			wantType:     provider.ItemTypeIssue,
 			wantPriority: 0,
-			wantTags:     "",
+			wantTags:     "type:unknown-future-kind",
 		},
 
 		// ── case-insensitivity ────────────────────────────────────────────────
@@ -192,32 +192,32 @@ func TestLabelConventionParse(t *testing.T) {
 
 		// ── garbage / out-of-range priority → 0 ──────────────────────────────
 		{
-			name:         "priority:p0 → 0 (out of range)",
+			name:         "priority:p0 → 0 (out of range), kept as tag",
 			labels:       labels("priority:p0"),
 			wantType:     provider.ItemTypeIssue,
 			wantPriority: 0,
-			wantTags:     "",
+			wantTags:     "priority:p0",
 		},
 		{
-			name:         "priority:p5 → 0 (out of range)",
+			name:         "priority:p5 → 0 (out of range), kept as tag",
 			labels:       labels("priority:p5"),
 			wantType:     provider.ItemTypeIssue,
 			wantPriority: 0,
-			wantTags:     "",
+			wantTags:     "priority:p5",
 		},
 		{
-			name:         "priority:high → 0 (garbage)",
+			name:         "priority:high → 0 (garbage), kept as tag",
 			labels:       labels("priority:high"),
 			wantType:     provider.ItemTypeIssue,
 			wantPriority: 0,
-			wantTags:     "",
+			wantTags:     "priority:high",
 		},
 		{
-			name:         "priority:0 → 0 (out of range)",
+			name:         "priority:0 → 0 (out of range), kept as tag",
 			labels:       labels("priority:0"),
 			wantType:     provider.ItemTypeIssue,
 			wantPriority: 0,
-			wantTags:     "",
+			wantTags:     "priority:0",
 		},
 
 		// ── unmatched labels → tags, order preserved ──────────────────────────
@@ -236,6 +236,38 @@ func TestLabelConventionParse(t *testing.T) {
 			wantType:     provider.ItemTypeBug,
 			wantPriority: 2,
 			wantTags:     "backend; needs-review",
+		},
+
+		// ── recognised prefix, bad value → kept as tag; later valid one wins ──
+		{
+			name:         "type:chore (unrecognised) then type:bug → bug wins, chore tagged",
+			labels:       labels("type:chore", "type:bug"),
+			wantType:     provider.ItemTypeBug,
+			wantPriority: 0,
+			wantTags:     "type:chore",
+		},
+		{
+			name:         "priority:high (garbage) then priority:p2 → 2, high tagged",
+			labels:       labels("priority:high", "priority:p2"),
+			wantType:     provider.ItemTypeIssue,
+			wantPriority: 2,
+			wantTags:     "priority:high",
+		},
+
+		// ── bare prefix (empty value) → no panic, kept as tag ─────────────────
+		{
+			name:         "bare type: → ItemTypeIssue, kept as tag",
+			labels:       labels("type:"),
+			wantType:     provider.ItemTypeIssue,
+			wantPriority: 0,
+			wantTags:     "type:",
+		},
+		{
+			name:         "bare priority: → 0, kept as tag",
+			labels:       labels("priority:"),
+			wantType:     provider.ItemTypeIssue,
+			wantPriority: 0,
+			wantTags:     "priority:",
 		},
 
 		// ── first-match-wins on duplicates ────────────────────────────────────
@@ -306,6 +338,47 @@ func TestLabelConventionInjectablePrefixes(t *testing.T) {
 	}
 	if gotTags != "backlog" {
 		t.Errorf("tags: got %q, want %q", gotTags, "backlog")
+	}
+}
+
+// TestLabelConventionEmptyPrefixMatchesNothing verifies that a zero-value
+// LabelConvention (empty prefixes — e.g. a Phase 4 config that leaves a prefix
+// blank) does NOT greedily consume the first labels as type/priority. Every
+// label must route to tags, and type/priority stay at their unset defaults.
+func TestLabelConventionEmptyPrefixMatchesNothing(t *testing.T) {
+	var zero LabelConvention // TypePrefix == "" && PriorityPrefix == ""
+
+	lbls := labels("type:bug", "priority:p1", "backend")
+	gotType, gotPri, gotTags := zero.Parse(lbls)
+
+	if gotType != provider.ItemTypeIssue {
+		t.Errorf("itemType: got %v, want ItemTypeIssue (no prefix should match)", gotType)
+	}
+	if gotPri != 0 {
+		t.Errorf("priority: got %d, want 0 (no prefix should match)", gotPri)
+	}
+	if gotTags != "type:bug; priority:p1; backend" {
+		t.Errorf("tags: got %q, want all labels routed to tags", gotTags)
+	}
+}
+
+// TestLabelConventionEmptyTypePrefixOnly verifies the guard is per-prefix: a
+// blank TypePrefix routes type-like labels to tags while a present
+// PriorityPrefix still resolves.
+func TestLabelConventionEmptyTypePrefixOnly(t *testing.T) {
+	c := LabelConvention{TypePrefix: "", PriorityPrefix: "priority:"}
+
+	lbls := labels("type:bug", "priority:p3")
+	gotType, gotPri, gotTags := c.Parse(lbls)
+
+	if gotType != provider.ItemTypeIssue {
+		t.Errorf("itemType: got %v, want ItemTypeIssue (blank TypePrefix)", gotType)
+	}
+	if gotPri != 3 {
+		t.Errorf("priority: got %d, want 3", gotPri)
+	}
+	if gotTags != "type:bug" {
+		t.Errorf("tags: got %q, want %q", gotTags, "type:bug")
 	}
 }
 
