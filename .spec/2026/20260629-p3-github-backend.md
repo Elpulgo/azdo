@@ -80,7 +80,7 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [x] 8. Work-item `Client` methods: `ListWorkItems`/`ListMyWorkItems` (`/issues` + `/search/issues` for mine), `GetWorkItemTypeStates`→open/closed, `UpdateWorkItemState` (PATCH state+reason), comments get/add. (blocked by: 5)
 - [x] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
 - [x] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
-- [ ] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)
+- [x] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)
 - [ ] 12. `github.MultiClient` fan-out across repos (goroutine/merge/sort/`PartialError`) + `Adapter` satisfying `provider.Provider`; `//go:build adapter` conformance test mirroring `azdevops`; `CGO_ENABLED=0 go test/vet ./...` green; integration tests written, run manually. (blocked by: 8,9,10,11)
 
 ## Review feedback: Task 4
@@ -174,6 +174,32 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
   and is excluded from the default run.
 - Test result (worktree-local cache/tmp, CGO off):
   - `go test -count=1 ./internal/github/...` → `ok ... 0.038s`
+  - `go vet ./internal/github/...` → clean; `gofmt -l internal/github/` → no output.
+
+## Validation: Task 10
+
+- **COMPLETE** (commit `8880198`). All three per-repo pipeline `Client` methods
+  exist in `internal/github/pipelines.go` with the required no-scope shape,
+  returning wire types except the log string:
+  - `ListPipelineRuns(top int, opts provider.ListOpts) ([]WorkflowRun, error)` —
+    GET `/actions/runs`, unwraps the `workflow_runs` envelope
+    (`workflowRunsResponse`), caps `top` at 100, maps a single mapped
+    `opts.Statuses` entry to the `?status=` query via `mapRunStatusParam`
+    (multi/empty/unmappable → unfiltered).
+  - `GetBuildTimeline(runID int) (WorkflowRun, []Job, error)` — two sequential
+    GETs (run, then `/jobs` → `JobsResponse`), returns the wire pair for the
+    adapter to map; zero values on error.
+  - `GetBuildLogContent(runID int, logID int) (string, error)` — per-job
+    plaintext log at `/actions/jobs/{logID}/logs`; `logID == 0` errors
+    immediately without any HTTP request (Decision #6, per-job plaintext log).
+- Unit tests in `pipelines_test.go` cover all three methods plus
+  `mapRunStatusParam` (13 `Test*` funcs), including envelope unwrap, top cap,
+  status mapping, two-GET timeline, log-by-job-ID, and the `logID==0`-no-request
+  case.
+- Integration test `pipelines_integration_test.go` carries `//go:build integration`
+  and is excluded from the default run.
+- Test result (worktree-local cache/tmp, CGO off):
+  - `go test -count=1 ./internal/github/...` → `ok ... 0.043s`
   - `go vet ./internal/github/...` → clean; `gofmt -l internal/github/` → no output.
 
 ## Unknowns
