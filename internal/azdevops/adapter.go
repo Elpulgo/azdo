@@ -442,6 +442,25 @@ func (a *Adapter) PRURL(scope, repositoryID string, prID int) string {
 		c.GetOrg(), c.GetProject(), repositoryID, prID)
 }
 
+// PRThreadWebURL returns the browser URL for a specific comment thread in the
+// given pull request. The URL includes ?discussionId=threadID so the browser
+// anchors directly to that thread. Returns "" when the client is nil, scope
+// does not match a known project, or threadID is zero.
+func (a *Adapter) PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string {
+	if a.mc == nil {
+		return ""
+	}
+	if threadID == 0 {
+		return ""
+	}
+	c := a.mc.ClientFor(scope)
+	if c == nil {
+		return ""
+	}
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
+		c.GetOrg(), c.GetProject(), repositoryID, prID, threadID)
+}
+
 // PipelineURL returns the browser URL for the given pipeline build ID.
 // scope is the project name used to route to the correct sub-client.
 // Returns "" when the client is nil or scope does not match a known project.

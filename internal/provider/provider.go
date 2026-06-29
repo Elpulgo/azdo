@@ -119,6 +119,13 @@ type Provider interface {
 	// scope is the project name used to route to the correct sub-client.
 	PRURL(scope, repositoryID string, prID int) string
 
+	// PRThreadWebURL returns the browser URL for a specific comment thread in
+	// the given pull request. The URL includes ?discussionId=threadID so the
+	// browser anchors directly to that thread. Returns "" when the URL cannot
+	// be constructed or when threadID is zero.
+	// scope is the project name used to route to the correct sub-client.
+	PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string
+
 	// PipelineURL returns the browser URL for the given pipeline build.
 	// scope is the project name used to route to the correct sub-client.
 	PipelineURL(scope string, id int) string

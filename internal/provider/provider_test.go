@@ -76,9 +76,10 @@ func (s stubProvider) GetBuildLogContent(scope string, buildID, logID int) (stri
 
 // --- Web URL helpers ---
 
-func (s stubProvider) WorkItemURL(scope string, id int) string             { return "" }
-func (s stubProvider) PRURL(scope, repositoryID string, prID int) string   { return "" }
-func (s stubProvider) PipelineURL(scope string, id int) string             { return "" }
+func (s stubProvider) WorkItemURL(scope string, id int) string                                { return "" }
+func (s stubProvider) PRURL(scope, repositoryID string, prID int) string                      { return "" }
+func (s stubProvider) PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string { return "" }
+func (s stubProvider) PipelineURL(scope string, id int) string                                { return "" }
 
 // --- Multi-project ---
 

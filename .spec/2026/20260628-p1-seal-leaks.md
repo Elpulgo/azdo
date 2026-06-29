@@ -1,7 +1,7 @@
 # Phase 1 — Seal the Azure Leaks
 
 **Ticket:** N/A
-**Branch:** refact/p1-seal-leaks
+**Branch:** feature/gh-phase-1
 **Author:** Oscar Larsson
 **Created:** 2026-06-28
 
@@ -54,7 +54,7 @@ state, status, search) and the adapter owns the WIQL/`@Me` translation.
 
 ## Tasks
 
-- [ ] 1. Add per-entity `WebURL` methods to `Provider` + azdevops adapter (build from identity + org); table-test the exact URL shapes against today's output.
+- [x] 1. Add per-entity `WebURL` methods to `Provider` + azdevops adapter (build from identity + org); table-test the exact URL shapes against today's output. (validated: `PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string` added to `provider.Provider` and `azdevops.Adapter`; table tests in `adapter_url_test.go` cover all three URL shapes — WorkItemURL, PRURL, PRThreadWebURL — plus nil-client and unknown-scope edge cases; `go vet ./...` and `go vet -tags adapter ./internal/azdevops/...` clean; `go test ./...` — all real packages pass, only the 5 pre-existing sandbox TMPDIR-cleanup failures remain)
 - [ ] 2. Replace the inline builders in `pullrequests/detail.go` and `workitems/detail.go` with provider `WebURL` calls. (blocked by: 1)
 - [ ] 3. Define neutral semantic enums (`StateCategory`, `ItemType`, `VoteKind`, `RunStatus`) in `internal/provider`; map azdevops wire → enum in the adapter; test each mapping. `Priority` stays an optional value, not an enum. (blocked by: 1)
 - [ ] 4. Add one shared `enum → glyph+color+label` display map (in `ui/styles` or a `ui` helper) reproducing today's glyphs/colors exactly; unit-test it. (blocked by: 3)
