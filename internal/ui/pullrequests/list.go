@@ -525,13 +525,14 @@ func statusIconWithStyles(statusCat provider.StateCategory, isDraft bool, s *sty
 
 	switch statusCat {
 	case provider.StateCategoryActive:
-		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat) + " Active")
+		// PR active uses filled circle, not the work-item half-circle glyph.
+		return s.Info.Render("● Active")
 	case provider.StateCategoryClosedDone:
 		// PR "completed" renders as "Merged", not "Closed".
 		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat) + " Merged")
 	case provider.StateCategoryRemoved:
-		// PR "abandoned" renders as "Closed".
-		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat) + " Closed")
+		// PR "abandoned" renders as "○ Closed" with Muted style, not the work-item ✗/Error.
+		return s.Muted.Render("○ Closed")
 	default:
 		// Unknown/custom: the raw status string is unavailable at this point
 		// so fall back to the glyph-only rendering from the display map.

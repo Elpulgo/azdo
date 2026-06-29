@@ -32,7 +32,7 @@ func TestStatusIcon(t *testing.T) {
 			name:         "active PR shows Active",
 			statusCat:    provider.StateCategoryActive,
 			isDraft:      false,
-			wantContains: "Active",
+			wantContains: "● Active",
 		},
 		{
 			name:         "draft PR shows Draft",
@@ -50,7 +50,7 @@ func TestStatusIcon(t *testing.T) {
 			name:         "abandoned PR shows Closed",
 			statusCat:    provider.StateCategoryRemoved,
 			isDraft:      false,
-			wantContains: "Closed",
+			wantContains: "○ Closed",
 		},
 		{
 			name:         "unknown status category shows glyph",
