@@ -71,7 +71,15 @@ scopes slice rendered as a joined, truncated list.
 - [x] 4. Add `Terms map[string]string` to config: parse it, add `TermFor(key, fallback string) string`, and round-trip it in `Save()`; test parse + fallback + persistence.
 - [x] 5. Route `Terms` into `app`; make `renderTabBar` resolve each tab label via `TermFor` with the current strings as defaults (no `Kind()` branch); test that defaults render unchanged and an override replaces the label. (blocked by: 4)
 - [x] 6. Replace the status bar's single `project` with active **scopes**: add `SetScopes([]string)`, render them joined+truncated, and update the app init + theme-change call sites; test single-scope, multi-scope, and truncation. (blocked by: none)
-- [ ] 7. Verify: grep `internal/app` confirms no tab label is branched on `Kind()`; `CGO_ENABLED=0 go test ./...` and `go vet ./...` clean; manual smoke of all three tabs (glyph absent, labels/status-bar correct). (blocked by: 3,5,6)
+- [x] 7. Verify: grep `internal/app` confirms no tab label is branched on `Kind()`; `CGO_ENABLED=0 go test ./...` and `go vet ./...` clean; manual smoke of all three tabs (glyph absent, labels/status-bar correct). (blocked by: 3,5,6)
+
+## Verification: Task 7
+
+- **`grep -rn "Kind()" internal/app/`** → no matches. No tab label (or anything else in `internal/app`) branches on provider `Kind()` (ADR decision 3 honored).
+- **No `KindGitHub` constant** added — the only `KindGitHub` hits are forward-looking comments in `display.go` and "without adding any KindGitHub constant" notes in the three view tests. Phase 3 stays out of scope.
+- **`CGO_ENABLED=0 go vet ./...`** → exit 0, clean.
+- **`CGO_ENABLED=0 go test ./...`** → all 23 packages `ok`, zero failures (`cmd/azdo-tui` has no test files). The old sandbox TMPDIR-cleanup failures are gone with the worktree-local `GOCACHE`/`TMPDIR` pattern.
+- **Manual smoke** of all three tabs (glyph absent for Azure-only, tab labels default unless overridden, status bar shows joined scopes) is **deferred to the user before merge** — the TUI needs a live terminal + real Azure backend the sandbox can't provide (same as Phase 1 Task 10).
 
 ## Validation: Task 3
 
