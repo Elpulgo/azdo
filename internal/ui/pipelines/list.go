@@ -359,11 +359,20 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// runsToRows converts pipeline runs to table rows
+// runsToRows converts pipeline runs to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
 func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, run := range items {
+		kinds[i] = run.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
-		rows[i] = table.Row{
+		cells := table.Row{
 			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
 			branchShortName(run.SourceBranch),
@@ -371,6 +380,10 @@ func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
 			runTimestamp(run.QueueTime),
 			runDuration(run.StartTime, run.FinishTime),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(run.Identity.Kind, s).Render(display.KindGlyph(run.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
@@ -391,10 +404,19 @@ func statusIconWithStyles(runStatus provider.RunStatus, s *styles.Styles) string
 }
 
 // runsToRowsMulti converts pipeline runs to table rows with a Project column.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [status] [pipeline] …
 func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, run := range items {
+		kinds[i] = run.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
-		rows[i] = table.Row{
+		cells := table.Row{
 			run.Identity.ScopeDisplay,
 			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
@@ -403,6 +425,10 @@ func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row
 			runTimestamp(run.QueueTime),
 			runDuration(run.StartTime, run.FinishTime),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(run.Identity.Kind, s).Render(display.KindGlyph(run.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }

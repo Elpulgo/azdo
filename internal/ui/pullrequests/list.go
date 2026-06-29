@@ -497,12 +497,21 @@ func branchShortName(ref string) string {
 	return strings.TrimPrefix(ref, "refs/heads/")
 }
 
-// prsToRows converts pull requests to table rows
+// prsToRows converts pull requests to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
 func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, pr := range items {
+		kinds[i] = pr.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
-		rows[i] = table.Row{
+		cells := table.Row{
 			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
@@ -510,6 +519,10 @@ func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
 			pr.RepositoryName,
 			voteIconWithStyles(pr.Reviewers, s),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(pr.Identity.Kind, s).Render(display.KindGlyph(pr.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
@@ -588,11 +601,20 @@ func voteIconWithStyles(reviewers []provider.Reviewer, s *styles.Styles) string 
 }
 
 // prsToRowsMulti converts pull requests to table rows with a Project column.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [status] [title] …
 func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, pr := range items {
+		kinds[i] = pr.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
-		rows[i] = table.Row{
+		cells := table.Row{
 			pr.Identity.ScopeDisplay,
 			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
@@ -601,6 +623,10 @@ func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row 
 			pr.RepositoryName,
 			voteIconWithStyles(pr.Reviewers, s),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(pr.Identity.Kind, s).Render(display.KindGlyph(pr.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }

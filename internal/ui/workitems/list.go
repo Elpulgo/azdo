@@ -489,15 +489,24 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// workItemsToRows converts work items to table rows
+// workItemsToRows converts work items to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
 func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, wi := range items {
+		kinds[i] = wi.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
 		assignedTo := wi.AssignedToName
 		if assignedTo == "" {
 			assignedTo = "-"
 		}
-		rows[i] = table.Row{
+		cells := table.Row{
 			typeIconWithStyles(wi.ItemKind, s),
 			wi.Identity.ID,
 			wi.Title,
@@ -505,19 +514,32 @@ func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
 			priorityTextWithStyles(wi.Priority, s),
 			assignedTo,
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(wi.Identity.Kind, s).Render(display.KindGlyph(wi.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
 
 // workItemsToRowsMulti converts work items to table rows with a Project column.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [type] [id] [title] …
 func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, wi := range items {
+		kinds[i] = wi.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
 		assignedTo := wi.AssignedToName
 		if assignedTo == "" {
 			assignedTo = "-"
 		}
-		rows[i] = table.Row{
+		cells := table.Row{
 			wi.Identity.ScopeDisplay,
 			typeIconWithStyles(wi.ItemKind, s),
 			wi.Identity.ID,
@@ -526,6 +548,10 @@ func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.R
 			priorityTextWithStyles(wi.Priority, s),
 			assignedTo,
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(wi.Identity.Kind, s).Render(display.KindGlyph(wi.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }

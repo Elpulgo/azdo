@@ -240,6 +240,31 @@ func TestKindLabel(t *testing.T) {
 	}
 }
 
+func TestKindStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name   string
+		kind   provider.Kind
+		wantFg lipgloss.Color
+	}{
+		// All kinds (including zero/unknown and KindAzure) use Muted so the glyph
+		// reads as secondary metadata rather than a status indicator.
+		{"Zero", provider.Kind(0), th.ForegroundMuted},
+		{"Azure", provider.KindAzure, th.ForegroundMuted},
+		// Sentinel: out-of-range value also returns Muted
+		{"OutOfRange", provider.Kind(99), th.ForegroundMuted},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.KindStyle(tc.kind, s).GetForeground()
+			if got != tc.wantFg {
+				t.Errorf("KindStyle(%v) foreground = %v, want %v", tc.kind, got, tc.wantFg)
+			}
+		})
+	}
+}
+
 // ─── MixedKinds ──────────────────────────────────────────────────────────────
 
 func TestMixedKinds(t *testing.T) {

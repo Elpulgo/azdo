@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -545,5 +546,171 @@ func TestFilterPipelineRunMulti_MatchesProjectName(t *testing.T) {
 	}
 	if filterPipelineRunMulti(run, "beta") {
 		t.Error("filterPipelineRunMulti should not match 'beta'")
+	}
+}
+
+// ─── Mixed-kind glyph column tests ───────────────────────────────────────────
+// These tests use a synthetic provider.Kind(2) to simulate a second backend
+// (e.g. a future GitHub provider) without adding any KindGitHub constant.
+// In production, all items are KindAzure so the glyph column never appears.
+
+// TestRunsToRows_MixedKinds_GlyphColumnFirst verifies that when items span more
+// than one distinct Kind, runsToRows prepends a glyph cell at position 0.
+// Convention #6: assert the full glyph token AND the KindStyle foreground.
+func TestRunsToRows_MixedKinds_GlyphColumnFirst(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	runs := []provider.PipelineRun{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			DefinitionName: "CI",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.1",
+			RunStatus:      provider.RunStatusSucceeded,
+		},
+		{
+			Identity:       provider.Identity{Kind: provider.Kind(2), Scope: "proj", ID: "2"},
+			DefinitionName: "CD",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.2",
+			RunStatus:      provider.RunStatusFailed,
+		},
+	}
+
+	rows := runsToRows(runs, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Mixed kinds: 6 normal + 1 leading glyph = 7 cells per row.
+	const wantCells = 7
+	if len(rows[0]) != wantCells {
+		t.Fatalf("Mixed-kind row[0] has %d cells, want %d (glyph + 6 normal)", len(rows[0]), wantCells)
+	}
+	if len(rows[1]) != wantCells {
+		t.Fatalf("Mixed-kind row[1] has %d cells, want %d", len(rows[1]), wantCells)
+	}
+
+	// Row 0 (KindAzure): glyph cell must contain the Azure glyph "⬡".
+	wantGlyph0 := display.KindGlyph(provider.KindAzure)
+	if !strings.Contains(rows[0][0], wantGlyph0) {
+		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph0)
+	}
+
+	// Row 1 (Kind(2)): glyph cell must contain the unknown-kind fallback "?".
+	wantGlyph1 := display.KindGlyph(provider.Kind(2))
+	if !strings.Contains(rows[1][0], wantGlyph1) {
+		t.Errorf("Row 1 glyph cell = %q, want to contain %q", rows[1][0], wantGlyph1)
+	}
+
+	// Style assertion: KindStyle(KindAzure) must use the Muted foreground.
+	wantFg := s.Theme.ForegroundMuted
+	gotFg := display.KindStyle(provider.KindAzure, s).GetForeground()
+	if gotFg != wantFg {
+		t.Errorf("KindStyle(KindAzure) foreground = %v, want %v (Muted)", gotFg, wantFg)
+	}
+}
+
+// TestRunsToRows_AzureOnly_NoGlyphColumn verifies that Azure-only items produce
+// the standard 6-cell layout without a leading glyph cell (unchanged behavior).
+func TestRunsToRows_AzureOnly_NoGlyphColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	runs := []provider.PipelineRun{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			DefinitionName: "CI",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.1",
+			RunStatus:      provider.RunStatusSucceeded,
+		},
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "2"},
+			DefinitionName: "CD",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.2",
+			RunStatus:      provider.RunStatusFailed,
+		},
+	}
+
+	rows := runsToRows(runs, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Azure-only: must produce exactly 6 cells (no glyph column prepended).
+	const wantCells = 6
+	if len(rows[0]) != wantCells {
+		t.Errorf("Azure-only row[0] has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
+	}
+}
+
+// TestRunsToRowsMulti_MixedKinds_GlyphColumnFirst verifies the multi-project
+// variant: [glyph] [project] [status] [pipeline] … (8 cells) when mixed.
+func TestRunsToRowsMulti_MixedKinds_GlyphColumnFirst(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	runs := []provider.PipelineRun{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
+			DefinitionName: "CI",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.1",
+			RunStatus:      provider.RunStatusSucceeded,
+		},
+		{
+			Identity:       provider.Identity{Kind: provider.Kind(2), Scope: "beta", ScopeDisplay: "Beta", ID: "2"},
+			DefinitionName: "CD",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.2",
+			RunStatus:      provider.RunStatusFailed,
+		},
+	}
+
+	rows := runsToRowsMulti(runs, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Mixed + multi: 7 normal (project + 6) + 1 glyph = 8 cells.
+	const wantCells = 8
+	if len(rows[0]) != wantCells {
+		t.Fatalf("Mixed-kind multi row[0] has %d cells, want %d", len(rows[0]), wantCells)
+	}
+
+	// Glyph is at position 0; project is at position 1.
+	wantGlyph := display.KindGlyph(provider.KindAzure)
+	if !strings.Contains(rows[0][0], wantGlyph) {
+		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph)
+	}
+	if rows[0][1] != "Alpha" {
+		t.Errorf("Row 0 project cell = %q, want %q", rows[0][1], "Alpha")
+	}
+}
+
+// TestRunsToRowsMulti_AzureOnly_NoGlyphColumn verifies the multi-project
+// variant produces the standard 7-cell layout when all items are KindAzure.
+func TestRunsToRowsMulti_AzureOnly_NoGlyphColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	runs := []provider.PipelineRun{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
+			DefinitionName: "CI",
+			SourceBranch:   "refs/heads/main",
+			BuildNumber:    "20240101.1",
+			RunStatus:      provider.RunStatusSucceeded,
+		},
+	}
+
+	rows := runsToRowsMulti(runs, s)
+
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+	// Azure-only multi: must be exactly 7 cells (project + 6 normal, no glyph).
+	const wantCells = 7
+	if len(rows[0]) != wantCells {
+		t.Errorf("Azure-only multi row has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
 	}
 }

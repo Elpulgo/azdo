@@ -152,6 +152,21 @@ func MixedKinds(kinds []provider.Kind) bool {
 	return false
 }
 
+// KindStyle returns the lipgloss style for a provider-kind glyph cell.
+// All kinds — including KindAzure — use a muted/neutral style so the glyph
+// reads as secondary metadata rather than a status indicator.
+//
+// Phase 3 note: when KindGitHub is added, it can keep the same Muted style
+// or be given a distinct colour (e.g. Info) to differentiate origins visually.
+func KindStyle(k provider.Kind, s *styles.Styles) lipgloss.Style {
+	switch k {
+	case provider.KindAzure:
+		return s.Muted
+	default: // KindUnknown (zero) and future/unrecognised values
+		return s.Muted
+	}
+}
+
 // KindLabel returns the human-readable provider name for a backend Kind.
 // Returns "" for the zero/unknown Kind so callers can apply their own fallback.
 //

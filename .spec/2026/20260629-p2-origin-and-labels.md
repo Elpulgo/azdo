@@ -67,7 +67,7 @@ scopes slice rendered as a joined, truncated list.
 
 - [x] 1. Add `KindGlyph(Kind)` and `KindLabel(Kind)` to `internal/ui/display` (Azure mark for `KindAzure`, placeholder for a future `KindGitHub`); table-test both.
 - [x] 2. Add a `mixedKinds(items)` helper (true iff >1 distinct `Identity.Kind`); unit-test single-kind→false, multi-kind→true, empty→false. (blocked by: 1)
-- [ ] 3. Wire a leading glyph column into the PR/work-item/pipeline row builders, shown only when `mixedKinds` is true; test with synthetic multi-kind rows that the glyph column appears, and is absent for Azure-only rows. (blocked by: 2)
+- [x] 3. Wire a leading glyph column into the PR/work-item/pipeline row builders, shown only when `mixedKinds` is true; test with synthetic multi-kind rows that the glyph column appears, and is absent for Azure-only rows. (blocked by: 2)
 - [ ] 4. Add `Terms map[string]string` to config: parse it, add `TermFor(key, fallback string) string`, and round-trip it in `Save()`; test parse + fallback + persistence.
 - [ ] 5. Route `Terms` into `app`; make `renderTabBar` resolve each tab label via `TermFor` with the current strings as defaults (no `Kind()` branch); test that defaults render unchanged and an override replaces the label. (blocked by: 4)
 - [ ] 6. Replace the status bar's single `project` with active **scopes**: add `SetScopes([]string)`, render them joined+truncated, and update the app init + theme-change call sites; test single-scope, multi-scope, and truncation. (blocked by: none)
