@@ -591,7 +591,7 @@ func fetchWorkItems(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return workItemsMsg{workItems: nil, err: nil}
 		}
-		workItems, err := client.ListWorkItems(50)
+		workItems, err := client.ListWorkItems(50, provider.ListOpts{})
 		return workItemsMsg{workItems: workItems, err: err}
 	}
 }
@@ -603,7 +603,7 @@ func fetchMyWorkItems(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return myWorkItemsMsg{workItems: nil, err: nil}
 		}
-		workItems, err := client.ListMyWorkItems(50)
+		workItems, err := client.ListMyWorkItems(50, provider.ListOpts{})
 		return myWorkItemsMsg{workItems: workItems, err: err}
 	}
 }

@@ -16,9 +16,13 @@ func (s stubProvider) Kind() provider.Kind { return 0 }
 
 // --- Pull-request surface ---
 
-func (s stubProvider) ListPullRequests(top int) ([]provider.PullRequest, error) { return nil, nil }
-func (s stubProvider) ListMyPullRequests(top int) ([]provider.PullRequest, error) { return nil, nil }
-func (s stubProvider) ListPullRequestsAsReviewer(top int) ([]provider.PullRequest, error) {
+func (s stubProvider) ListPullRequests(top int, opts provider.ListOpts) ([]provider.PullRequest, error) {
+	return nil, nil
+}
+func (s stubProvider) ListMyPullRequests(top int, opts provider.ListOpts) ([]provider.PullRequest, error) {
+	return nil, nil
+}
+func (s stubProvider) ListPullRequestsAsReviewer(top int, opts provider.ListOpts) ([]provider.PullRequest, error) {
 	return nil, nil
 }
 func (s stubProvider) GetPRThreads(scope, repositoryID string, pullRequestID int) ([]provider.Thread, error) {
@@ -51,8 +55,12 @@ func (s stubProvider) UpdateThreadStatus(scope, repositoryID string, pullRequest
 
 // --- Work-item surface ---
 
-func (s stubProvider) ListWorkItems(top int) ([]provider.WorkItem, error) { return nil, nil }
-func (s stubProvider) ListMyWorkItems(top int) ([]provider.WorkItem, error) { return nil, nil }
+func (s stubProvider) ListWorkItems(top int, opts provider.ListOpts) ([]provider.WorkItem, error) {
+	return nil, nil
+}
+func (s stubProvider) ListMyWorkItems(top int, opts provider.ListOpts) ([]provider.WorkItem, error) {
+	return nil, nil
+}
 func (s stubProvider) GetWorkItemTypeStates(scope, workItemType string) ([]provider.WorkItemTypeState, error) {
 	return nil, nil
 }
@@ -66,7 +74,9 @@ func (s stubProvider) AddWorkItemComment(scope string, id int, text string) (*pr
 
 // --- Pipeline surface ---
 
-func (s stubProvider) ListPipelineRuns(top int) ([]provider.PipelineRun, error) { return nil, nil }
+func (s stubProvider) ListPipelineRuns(top int, opts provider.ListOpts) ([]provider.PipelineRun, error) {
+	return nil, nil
+}
 func (s stubProvider) GetBuildTimeline(scope string, buildID int) (*provider.Timeline, error) {
 	return nil, nil
 }

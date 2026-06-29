@@ -530,7 +530,7 @@ func fetchPipelineRuns(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return pipelineRunsMsg{runs: nil, err: nil}
 		}
-		runs, err := client.ListPipelineRuns(30)
+		runs, err := client.ListPipelineRuns(30, provider.ListOpts{})
 		return pipelineRunsMsg{runs: runs, err: err}
 	}
 }

@@ -61,7 +61,7 @@ state, status, search) and the adapter owns the WIQL/`@Me` translation.
 - [ ] 5. Migrate the `workitems` view: swap the type/state string switches for enum + display map; make the priority column render `-` when unset (no priority). (blocked by: 4)
 - [ ] 6. Migrate the `pullrequests` view: swap the PR-status + reviewer-vote string switches for enum + display map. (blocked by: 4)
 - [ ] 7. Migrate the `pipelines` view: swap the status/result string switch for enum + display map. (blocked by: 4)
-- [ ] 8. Define `ListOpts` (mine, states, status, search, top); thread it through the provider list methods; adapter builds WIQL/`@Me`/state filters from it; test the translation. (blocked by: 3)
+- [x] 8. Define `ListOpts` (mine, states, status, search, top); thread it through the provider list methods; adapter builds WIQL/`@Me`/state filters from it; test the translation. (blocked by: 3)
 - [ ] 9. Update the view filter call sites (my items / as reviewer / state picker / status picker / search) to pass `ListOpts`. (blocked by: 8)
 - [ ] 10. Grep `internal/ui` (minus `metrics`) for `dev.azure.com`, `System.`, WIQL, and vote ints to confirm none remain; run `go test ./...`, `go vet ./...`, and a manual smoke of all three tabs. (blocked by: 2,5,6,7,9)
 

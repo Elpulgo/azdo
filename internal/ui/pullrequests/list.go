@@ -660,7 +660,7 @@ func fetchPullRequestsMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return pullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListPullRequests(25)
+		prs, err := client.ListPullRequests(25, provider.ListOpts{})
 		return pullRequestsMsg{prs: prs, err: err}
 	}
 }
@@ -671,7 +671,7 @@ func fetchMyPullRequestsMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return myPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListMyPullRequests(25)
+		prs, err := client.ListMyPullRequests(25, provider.ListOpts{})
 		return myPullRequestsMsg{prs: prs, err: err}
 	}
 }
@@ -682,7 +682,7 @@ func fetchPullRequestsAsReviewerMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return asReviewerPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListPullRequestsAsReviewer(25)
+		prs, err := client.ListPullRequestsAsReviewer(25, provider.ListOpts{})
 		return asReviewerPullRequestsMsg{prs: prs, err: err}
 	}
 }
