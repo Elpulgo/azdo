@@ -8,6 +8,7 @@
 package github
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -202,4 +203,43 @@ func newAPIError(statusCode int, header http.Header, body []byte) *APIError {
 // the do path uses newAPIError so it can detect rate limiting from headers.
 func apiError(statusCode int) *APIError {
 	return newAPIError(statusCode, http.Header{}, nil)
+}
+
+// doJSON sends a method+path request with an optional JSON-marshalled body and
+// decodes the JSON response into dst. Pass dst=nil to discard the response body.
+//
+// payload is marshalled with encoding/json and sent as Content-Type:
+// application/json. Authentication headers are identical to those set by
+// newRequest (Bearer token, Accept, X-GitHub-Api-Version). A non-2xx response
+// is converted to *APIError via the same newAPIError path as do(). Use this
+// for POST and PATCH; keep get/getJSON for read-only requests.
+func (c *Client) doJSON(method, path string, payload any, dst any) error {
+	var bodyReader io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("github: marshal request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(encoded)
+	}
+
+	req, err := c.newRequest(method, path, bodyReader)
+	if err != nil {
+		return err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	raw, err := c.do(req)
+	if err != nil {
+		return err
+	}
+
+	if dst != nil {
+		if err := json.Unmarshal(raw, dst); err != nil {
+			return fmt.Errorf("github: decode response: %w", err)
+		}
+	}
+	return nil
 }

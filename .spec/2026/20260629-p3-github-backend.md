@@ -77,7 +77,7 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [x] 5. Issue→`WorkItem` and issue-comment→`WorkItemComment` mappers, stamping `(KindGitHub, owner/repo, number)`; inline-JSON fixture tests asserting the identity invariant + fields. (blocked by: 4)
 - [x] 6. PR→`PullRequest` (reviewers from reviews→votes), review-comments→`Thread`/`Comment`, files→`IterationChange` mappers; fixture tests. (blocked by: 3)
 - [x] 7. Actions run→`PipelineRun` and jobs/steps→`Timeline` mappers; fixture tests. (blocked by: 3)
-- [ ] 8. Work-item `Client` methods: `ListWorkItems`/`ListMyWorkItems` (`/issues` + `/search/issues` for mine), `GetWorkItemTypeStates`→open/closed, `UpdateWorkItemState` (PATCH state+reason), comments get/add. (blocked by: 5)
+- [x] 8. Work-item `Client` methods: `ListWorkItems`/`ListMyWorkItems` (`/issues` + `/search/issues` for mine), `GetWorkItemTypeStates`→open/closed, `UpdateWorkItemState` (PATCH state+reason), comments get/add. (blocked by: 5)
 - [ ] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
 - [ ] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
 - [ ] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)

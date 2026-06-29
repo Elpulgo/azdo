@@ -1,6 +1,9 @@
 package github
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // User represents a GitHub user in wire responses. It appears as the author,
 // assignee, or reviewer in issue, PR, review, and comment payloads.
@@ -31,20 +34,30 @@ type Milestone struct {
 // Assignee is null when no one is assigned.
 // ClosedAt is null while the issue is open.
 // Milestone is null when no milestone is assigned.
+//
+// PullRequest is non-nil when this "issue" is actually a pull request. The
+// GET /repos/{owner}/{repo}/issues endpoint returns both issues and PRs mixed
+// together — every PR is also an "issue" in GitHub's data model. Callers that
+// want only real issues MUST skip any entry where PullRequest is non-nil.
+// The field is decoded as a raw JSON value so that the presence/absence of the
+// "pull_request" key is detectable without importing the full PR wire type.
 type Issue struct {
-	Number      int        `json:"number"`
-	Title       string     `json:"title"`
-	Body        string     `json:"body"`
-	State       string     `json:"state"`
-	StateReason *string    `json:"state_reason"`
-	User        User       `json:"user"`
-	Assignee    *User      `json:"assignee"`
-	Labels      []Label    `json:"labels"`
-	Milestone   *Milestone `json:"milestone"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	ClosedAt    *time.Time `json:"closed_at"`
-	HTMLURL     string     `json:"html_url"`
+	Number      int              `json:"number"`
+	Title       string           `json:"title"`
+	Body        string           `json:"body"`
+	State       string           `json:"state"`
+	StateReason *string          `json:"state_reason"`
+	User        User             `json:"user"`
+	Assignee    *User            `json:"assignee"`
+	Labels      []Label          `json:"labels"`
+	Milestone   *Milestone       `json:"milestone"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+	ClosedAt    *time.Time       `json:"closed_at"`
+	HTMLURL     string           `json:"html_url"`
+	// PullRequest is non-nil when this object is a pull request masquerading as
+	// an issue. Filter out any Issue where PullRequest != nil.
+	PullRequest *json.RawMessage `json:"pull_request"`
 }
 
 // IssueComment represents a single comment on a GitHub issue
