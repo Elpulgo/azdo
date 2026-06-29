@@ -213,6 +213,51 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
   - `go test -count=1 ./internal/github/...` → `ok ... 0.043s`
   - `go vet ./internal/github/...` → clean; `gofmt -l internal/github/` → no output.
 
+## Validation: Task 12
+
+- **COMPLETE** (commit `fbf695e`). Verified against the diff and codebase:
+  - `internal/github/multiclient.go` — `MultiClient` mirrors `azdevops.MultiClient`
+    (Decision #7): goroutine-per-repo, buffered channel + `sync.WaitGroup`, wire→neutral
+    mapping inside each goroutine (stamping per-repo scope/scopeDisplay + `conv`),
+    merge, and `sort.Slice` by the neutral date desc (`ChangedDate` for work items,
+    `CreationDate` for PRs, `QueueTime` for runs). Returns `*provider.PartialError`
+    when some-but-not-all repos fail; plain error when all fail. Zero-value
+    `LabelConvention` defaults to `DefaultLabelConvention()` (footgun guard).
+  - `internal/github/adapter.go` — `Adapter` implements the full `provider.Provider`
+    surface (list/detail/mutation/URL); list methods delegate to `MultiClient`,
+    detail/mutation route via `ClientFor(scope)` + map. `GetPRIterations` returns one
+    synthetic iteration (ID=1) per Decision #5.
+  - `adapter_conformance_test.go` carries `//go:build adapter` and the
+    `var _ provider.Provider = (*github.Adapter)(nil)` assertion — mirrors
+    `internal/azdevops/adapter_conformance_test.go` exactly.
+  - `multiclient_integration_test.go` carries `//go:build integration` (excluded from
+    default run).
+- Gate results (worktree root, `CGO_ENABLED=0`, worktree-local `GOCACHE`/`TMPDIR`):
+  - `go build -tags adapter ./...` → exit 0 (conformance gate: Adapter satisfies Provider)
+  - `go test ./...` → all packages `ok` (whole module); `go test -count=1 ./internal/github/...` → `ok 0.053s`
+  - `go vet ./...` → exit 0, no output
+  - `gofmt -l internal/github/` → no output
+
+## Review: Task 12
+
+- **APPROVE** (reviewer, opus, commit `fbf695e`). Capstone reviewed against the azdevops
+  reference (multiclient + adapter), the full `provider.Provider` interface, `PartialError`,
+  the neutral types, and all mappers; gate re-run independently (green).
+  - **Concurrency** — leak/deadlock-free: channel buffered to `len(clients)`, `wg.Wait()`+
+    `close(ch)` in a separate goroutine, consumer drains via `range`. `go.mod` is `go 1.24.2`
+    and loop vars are passed as params anyway → no capture bug. Race detector could not run
+    (sandbox blocks gcc exec: `cc1: execv: Permission denied`); verified race-free statically —
+    each goroutine maps into its own local slice; shared state (`conv`/`clients`/`displayNames`)
+    is read-only during fan-out.
+  - **PartialError** — exact azdevops parity: plain error on all-fail (nil items), `*PartialError`
+    only on `0 < len(errs) < total` with healthy items still returned and sorted.
+  - **Sort/identity/routing/synthetic-iteration/comment-synthesis** — all confirmed correct;
+    no stub/no-op Adapter methods; `repositoryID` documented-and-ignored.
+  - 🟢 nits (non-blocking, not actioned): equal-timestamp merge order is non-deterministic
+    (azdevops parity, no post-merge truncation so never drops data); `AddPRComment` hand-builds
+    its Thread inline rather than via a `MapX` helper (justified — no `IssueComment→Thread`
+    mapper exists).
+
 ## Unknowns
 
 - **RESOLVED (task 9).** Resolving a thread: matched by first-comment `databaseId` via a
