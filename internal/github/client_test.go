@@ -1,6 +1,7 @@
 package github
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -317,6 +318,126 @@ func TestClient_Get_InvalidURL(t *testing.T) {
 	_, err := c.get("/test")
 	if err == nil {
 		t.Fatal("expected error for invalid URL, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Typed *APIError recovery via errors.As
+// ---------------------------------------------------------------------------
+
+func TestClient_Get_ErrorIsTypedAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.get("/repos/o/r/issues")
+	if err == nil {
+		t.Fatal("expected error for 404, got nil")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if apiErr.StatusCode != http.StatusNotFound {
+		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotFound)
+	}
+	if apiErr.Message != "Not Found" {
+		t.Errorf("Message = %q, want %q", apiErr.Message, "Not Found")
+	}
+}
+
+func TestClient_Get_403_RateLimited_RemainingZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.get("/search/issues")
+	if err == nil {
+		t.Fatal("expected error for rate-limited 403, got nil")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if !apiErr.RateLimited {
+		t.Error("RateLimited = false, want true for 403 with X-RateLimit-Remaining: 0")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "rate limit") {
+		t.Errorf("error should mention rate limit: %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "scope") {
+		t.Errorf("rate-limited 403 should not mention scopes: %v", err)
+	}
+}
+
+func TestClient_Get_403_RateLimited_RetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"You have exceeded a secondary rate limit"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.get("/search/issues")
+	if err == nil {
+		t.Fatal("expected error for rate-limited 403, got nil")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if !apiErr.RateLimited {
+		t.Error("RateLimited = false, want true for 403 with Retry-After")
+	}
+	if apiErr.RetryAfter != "60" {
+		t.Errorf("RetryAfter = %q, want %q", apiErr.RetryAfter, "60")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "rate limit") {
+		t.Errorf("error should mention rate limit: %v", err)
+	}
+}
+
+func TestClient_Get_403_PlainStillMentionsScopes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.get("/repos/o/r/issues")
+	if err == nil {
+		t.Fatal("expected error for 403, got nil")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if apiErr.RateLimited {
+		t.Error("RateLimited = true, want false for plain 403")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "scope") {
+		t.Errorf("plain 403 should mention scopes: %v", err)
 	}
 }
 

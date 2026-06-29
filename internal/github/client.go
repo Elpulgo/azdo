@@ -85,9 +85,9 @@ func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request,
 }
 
 // do executes req, reads the response body, and returns the raw bytes.
-// A non-2xx status code is converted to a descriptive apiError; the response
-// body is intentionally not included in the error to avoid leaking server-side
-// details (mirrors azdevops.formatHTTPError).
+// A non-2xx status code is converted to a descriptive *APIError; the response
+// body is intentionally not surfaced in the error string to avoid leaking
+// server-side details (mirrors azdevops.formatHTTPError).
 func (c *Client) do(req *http.Request) ([]byte, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -101,7 +101,7 @@ func (c *Client) do(req *http.Request) ([]byte, error) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, apiError(resp.StatusCode)
+		return nil, newAPIError(resp.StatusCode, resp.Header, body)
 	}
 	return body, nil
 }
@@ -128,24 +128,78 @@ func (c *Client) getJSON(path string, dst any) error {
 	return nil
 }
 
-// apiError maps a non-2xx HTTP status code to a descriptive, user-facing
-// error. The caller should not include the response body to avoid leaking
-// server-internal details.
-func apiError(statusCode int) error {
-	switch statusCode {
-	case http.StatusUnauthorized:
-		return fmt.Errorf("github: authentication failed (HTTP 401): token may be expired or invalid")
-	case http.StatusForbidden:
-		return fmt.Errorf("github: access denied (HTTP 403): token lacks the required scopes")
-	case http.StatusNotFound:
-		return fmt.Errorf("github: resource not found (HTTP 404): check the repository name and token scopes")
-	case http.StatusTooManyRequests:
-		return fmt.Errorf("github: rate limit exceeded (HTTP 429): please wait before retrying")
-	case http.StatusInternalServerError:
-		return fmt.Errorf("github: server error (HTTP 500): GitHub encountered an internal error")
-	case http.StatusServiceUnavailable:
-		return fmt.Errorf("github: service unavailable (HTTP 503): GitHub is temporarily unavailable")
-	default:
-		return fmt.Errorf("github: request failed with status %d", statusCode)
+// APIError is the typed error returned for every non-2xx GitHub response.
+// Callers recover it with errors.As(err, &apiErr) — mirroring how the codebase
+// already inspects provider.PartialError — to branch on the status code rather
+// than string-matching the message. Later tasks rely on this: UpdateThreadStatus
+// no-ops on 404/422, and rate-limit handling keys off RateLimited/RetryAfter.
+//
+// Error() never includes Message or any response body, so server-side details
+// are not leaked through the error string; Message is retained on the struct
+// for callers that explicitly need it.
+type APIError struct {
+	StatusCode  int    // HTTP status code of the failed response
+	Message     string // GitHub's JSON {"message": "..."}, when present
+	RateLimited bool   // true when the response indicates rate limiting
+	RetryAfter  string // raw Retry-After header value, when present
+}
+
+// Error renders the friendly, status-specific message. A rate-limited response
+// (429, or a 403 flagged by the response headers) always reports as a rate
+// limit; a plain 403 keeps the missing-scopes wording.
+func (e *APIError) Error() string {
+	if e.RateLimited {
+		return fmt.Sprintf("github: rate limit exceeded (HTTP %d): please wait before retrying", e.StatusCode)
 	}
+	switch e.StatusCode {
+	case http.StatusUnauthorized:
+		return "github: authentication failed (HTTP 401): token may be expired or invalid"
+	case http.StatusForbidden:
+		return "github: access denied (HTTP 403): token lacks the required scopes"
+	case http.StatusNotFound:
+		return "github: resource not found (HTTP 404): check the repository name and token scopes"
+	case http.StatusTooManyRequests:
+		return "github: rate limit exceeded (HTTP 429): please wait before retrying"
+	case http.StatusInternalServerError:
+		return "github: server error (HTTP 500): GitHub encountered an internal error"
+	case http.StatusServiceUnavailable:
+		return "github: service unavailable (HTTP 503): GitHub is temporarily unavailable"
+	default:
+		return fmt.Sprintf("github: request failed with status %d", e.StatusCode)
+	}
+}
+
+// newAPIError builds an *APIError from a non-2xx response. It parses GitHub's
+// JSON {"message": "..."} body into Message and inspects the headers to tell a
+// throttled 403 (X-RateLimit-Remaining: 0 or a Retry-After header) apart from a
+// plain insufficient-scopes 403. A 429 is always treated as rate limited.
+func newAPIError(statusCode int, header http.Header, body []byte) *APIError {
+	e := &APIError{StatusCode: statusCode}
+
+	var parsed struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		e.Message = parsed.Message
+	}
+
+	e.RetryAfter = header.Get("Retry-After")
+
+	switch statusCode {
+	case http.StatusTooManyRequests:
+		e.RateLimited = true
+	case http.StatusForbidden:
+		if header.Get("X-RateLimit-Remaining") == "0" || e.RetryAfter != "" {
+			e.RateLimited = true
+		}
+	}
+
+	return e
+}
+
+// apiError maps a non-2xx HTTP status code to a descriptive *APIError without
+// response headers or body. Retained for status-only construction and tests;
+// the do path uses newAPIError so it can detect rate limiting from headers.
+func apiError(statusCode int) *APIError {
+	return newAPIError(statusCode, http.Header{}, nil)
 }
