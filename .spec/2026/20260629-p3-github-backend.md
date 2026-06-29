@@ -74,9 +74,9 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [x] 2. Scaffold `internal/github`: a per-repo `Client` (owner, repo, base URL, token, `*http.Client`) with shared request + JSON-decode + error helpers reusing `provider.PartialError`; add a token source (keyring + `GITHUB_TOKEN` env fallback). (blocked by: none)
 - [x] 3. Define GitHub wire types (issue, label, user, pull, review, reviewComment, run, job, step) and neutral enum mappers — state(+`state_reason`)→`StateCategory`, review→`VoteKind`, run status×conclusion→`RunStatus`; table-test each. (blocked by: 1)
 - [x] 4. Label-convention parser: prefixes (default `type:` / `priority:`, case-insensitive, injectable) → `ItemType` + `Priority`; unmatched labels → `Tags`; table-test incl. the no-match defaults. (blocked by: 3)
-- [ ] 5. Issue→`WorkItem` and issue-comment→`WorkItemComment` mappers, stamping `(KindGitHub, owner/repo, number)`; inline-JSON fixture tests asserting the identity invariant + fields. (blocked by: 4)
-- [ ] 6. PR→`PullRequest` (reviewers from reviews→votes), review-comments→`Thread`/`Comment`, files→`IterationChange` mappers; fixture tests. (blocked by: 3)
-- [ ] 7. Actions run→`PipelineRun` and jobs/steps→`Timeline` mappers; fixture tests. (blocked by: 3)
+- [x] 5. Issue→`WorkItem` and issue-comment→`WorkItemComment` mappers, stamping `(KindGitHub, owner/repo, number)`; inline-JSON fixture tests asserting the identity invariant + fields. (blocked by: 4)
+- [x] 6. PR→`PullRequest` (reviewers from reviews→votes), review-comments→`Thread`/`Comment`, files→`IterationChange` mappers; fixture tests. (blocked by: 3)
+- [x] 7. Actions run→`PipelineRun` and jobs/steps→`Timeline` mappers; fixture tests. (blocked by: 3)
 - [ ] 8. Work-item `Client` methods: `ListWorkItems`/`ListMyWorkItems` (`/issues` + `/search/issues` for mine), `GetWorkItemTypeStates`→open/closed, `UpdateWorkItemState` (PATCH state+reason), comments get/add. (blocked by: 5)
 - [ ] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
 - [ ] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
@@ -99,6 +99,32 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
     priority match gated on `!= 0`.
   - 🟢 notes (ASCII slice-offset on non-ASCII custom prefixes; leading-whitespace label names)
     logged as Phase-4 considerations — not reachable with ASCII defaults.
+
+## Review feedback: Task 6
+
+- **RESOLVED (fix commit `01d3781`).** `MapReviewThreads` rewritten to two passes:
+  pass 1 registers every root (`InReplyToID==nil`) in first-seen order; pass 2
+  attaches replies and only then creates defensive orphan threads — so a reply
+  preceding its root no longer collides with the real root or drops the reply.
+  New test `TestMapReviewThreads_ReplyBeforeRoot` pins it (one thread, root first,
+  reply with ParentCommentID 1); the absent-root orphan test still passes. The
+  🟢 tie-break comment was folded into `MapReviewers`. 73 tests green, vet clean.
+
+- 🔴 **(must-fix) Thread grouping is not order-independent.** `MapReviewThreads`'
+  single-pass loop assumes a reply never precedes its root. For input
+  `[reply(id=2,→1), root(id=1)]` the reply hits the defensive orphan branch
+  (`threadMap[1]` created with the reply as root), then the real root overwrites
+  `threadMap[1]` AND re-appends `1` to `threadOrder` → two threads with identical
+  Identity "1" and the reply silently dropped. Latent under GitHub's default
+  root-first ordering, but the code claims to be defensive/order-independent and
+  isn't. **Fix:** make grouping genuinely order-independent — two passes (register
+  all roots first, then attach replies), or in the root branch adopt an existing
+  orphan entry instead of overwriting + re-appending to `threadOrder`. Add a test
+  `[reply(id=2,→1), root(id=1)]` asserting exactly one thread, identity "1", two
+  comments in correct parent order.
+- 🟢 **(fold in) MapReviewers equal-timestamp tie-break** is order-dependent
+  (`.After` → first-seen wins on ties). Add a one-line comment documenting
+  "equal SubmittedAt → first-seen wins (GitHub returns chronological order)".
 
 ## Unknowns
 
