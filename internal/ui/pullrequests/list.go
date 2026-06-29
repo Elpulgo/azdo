@@ -51,27 +51,45 @@ func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// prBaseColumns are the per-row column specs for the pull request list,
+// excluding the optional project and glyph columns. They are defined once
+// and copied inside ToColumns to avoid mutating the package-level slice.
+var prBaseColumns = []listview.ColumnSpec{
+	{Title: "Status", WidthPct: 10, MinWidth: 8},
+	{Title: "Title", WidthPct: 30, MinWidth: 15},
+	{Title: "Branches", WidthPct: 20, MinWidth: 12},
+	{Title: "Author", WidthPct: 15, MinWidth: 10},
+	{Title: "Repo", WidthPct: 15, MinWidth: 10},
+	{Title: "Reviews", WidthPct: 10, MinWidth: 6},
+}
+
 // NewModelWithStyles creates a new pull request list model with custom styles
 func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Status", WidthPct: 10, MinWidth: 8},
-		{Title: "Title", WidthPct: 30, MinWidth: 15},
-		{Title: "Branches", WidthPct: 20, MinWidth: 12},
-		{Title: "Author", WidthPct: 15, MinWidth: 10},
-		{Title: "Repo", WidthPct: 15, MinWidth: 10},
-		{Title: "Reviews", WidthPct: 10, MinWidth: 6},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in prsToRows / prsToRowsMulti exactly:
+	//   [glyph?] [project?] [status] [title] [branches] [author] [repo] [reviews]
+	toColumns := func(items []provider.PullRequest) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, pr := range items {
+			kinds[i] = pr.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(prBaseColumns))
+		copy(cols, prBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := prsToRows
 	if isMulti {
@@ -84,11 +102,11 @@ func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	}
 
 	cfg := listview.Config[provider.PullRequest]{
-		Columns:        columns,
 		LoadingMessage: "Loading pull requests...",
 		EntityName:     "pull requests",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
 			return fetchPullRequestsMulti(client)
 		},

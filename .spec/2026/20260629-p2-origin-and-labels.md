@@ -73,6 +73,11 @@ scopes slice rendered as a joined, truncated list.
 - [ ] 6. Replace the status bar's single `project` with active **scopes**: add `SetScopes([]string)`, render them joined+truncated, and update the app init + theme-change call sites; test single-scope, multi-scope, and truncation. (blocked by: none)
 - [ ] 7. Verify: grep `internal/app` confirms no tab label is branched on `Kind()`; `CGO_ENABLED=0 go test ./...` and `go vet ./...` clean; manual smoke of all three tabs (glyph absent, labels/status-bar correct). (blocked by: 3,5,6)
 
+## Validation: Task 3
+
+- **MISSING — column/cell lockstep not implemented.** All three `NewModelWithStyles` functions build `cfg.Columns` (the `[]listview.ColumnSpec` fed into `makeColumns` → `table.Column` headers) at init time, gated only on `isMulti`. When `display.MixedKinds` is true at row-render time, each `ToRows` function prepends an extra glyph cell, producing rows with `N+1` cells while the column header slice still has `N` entries. `table.renderRow` (table.go:405) iterates over row cells and indexes `m.cols[i]` — an extra cell causes an index-out-of-bounds panic. Cells and column headers are **not** added in lockstep. Fix: add a `ColumnSpec{Title: "", WidthPct: 3, MinWidth: 3}` (or similar glyph column) to `cfg.Columns` at init time conditionally, or introduce a `ToColumns func(items []T) []ColumnSpec` callback into `listview.Config` so the column list can be recomputed alongside the rows when items are set. The bug cannot be triggered today (Azure-only means `mixed` is always false), but the framework would panic the moment a second backend appears.
+- Tests exercise `ToRows` functions directly and pass; they do not render through the table so they cannot catch the column/cell count mismatch.
+
 ## Unknowns
 
 - Status-bar scope cap/separator, and whether org renders once or per scope.

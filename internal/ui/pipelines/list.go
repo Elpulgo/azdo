@@ -44,27 +44,44 @@ func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// runBaseColumns are the per-row column specs for the pipeline run list,
+// excluding the optional project and glyph columns.
+var runBaseColumns = []listview.ColumnSpec{
+	{Title: "Status", WidthPct: 10, MinWidth: 10},
+	{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
+	{Title: "Branch", WidthPct: 20, MinWidth: 10},
+	{Title: "Build", WidthPct: 24, MinWidth: 8},
+	{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
+	{Title: "Duration", WidthPct: 10, MinWidth: 8},
+}
+
 // NewModelWithStyles creates a new pipeline list model with custom styles
 func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Status", WidthPct: 10, MinWidth: 10},
-		{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
-		{Title: "Branch", WidthPct: 20, MinWidth: 10},
-		{Title: "Build", WidthPct: 24, MinWidth: 8},
-		{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
-		{Title: "Duration", WidthPct: 10, MinWidth: 8},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in runsToRows / runsToRowsMulti exactly:
+	//   [glyph?] [project?] [status] [pipeline] [branch] [build] [timestamp] [duration]
+	toColumns := func(items []provider.PipelineRun) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, run := range items {
+			kinds[i] = run.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(runBaseColumns))
+		copy(cols, runBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := runsToRows
 	if isMulti {
@@ -77,11 +94,11 @@ func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	}
 
 	cfg := listview.Config[provider.PipelineRun]{
-		Columns:        columns,
 		LoadingMessage: "Loading pipeline runs...",
 		EntityName:     "pipeline runs",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
 			return fetchPipelineRuns(client)
 		},

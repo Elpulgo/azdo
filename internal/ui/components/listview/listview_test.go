@@ -735,6 +735,150 @@ func TestSearch_NoFilterFuncDisablesSearch(t *testing.T) {
 	}
 }
 
+// --- ToColumns Tests ---
+
+// testConfigWithToColumns returns a Config that adds a conditional "Extra" column
+// (and a matching cell in ToRows) when any item has ID > 100. This simulates the
+// mixed-kind glyph-column pattern: a column that appears only for certain item sets.
+func testConfigWithToColumns() Config[testItem] {
+	cfg := testConfig()
+
+	cfg.ToColumns = func(items []testItem) []ColumnSpec {
+		hasExtra := false
+		for _, it := range items {
+			if it.ID > 100 {
+				hasExtra = true
+				break
+			}
+		}
+		cols := []ColumnSpec{
+			{Title: "ID", WidthPct: 30, MinWidth: 6},
+			{Title: "Name", WidthPct: 70, MinWidth: 10},
+		}
+		if hasExtra {
+			cols = append([]ColumnSpec{{Title: "Extra", WidthPct: 10, MinWidth: 4}}, cols...)
+		}
+		NormalizeWidths(cols)
+		return cols
+	}
+
+	cfg.ToRows = func(items []testItem, s *styles.Styles) []table.Row {
+		hasExtra := false
+		for _, it := range items {
+			if it.ID > 100 {
+				hasExtra = true
+				break
+			}
+		}
+		rows := make([]table.Row, len(items))
+		for i, item := range items {
+			cells := table.Row{fmt.Sprintf("%d", item.ID), item.Name}
+			if hasExtra {
+				cells = append(table.Row{"*"}, cells...)
+			}
+			rows[i] = cells
+		}
+		return rows
+	}
+
+	return cfg
+}
+
+// TestToColumns_Nil_FallsBackToStaticColumns verifies that when ToColumns is nil
+// the model uses the static Columns slice from Config.
+func TestToColumns_Nil_FallsBackToStaticColumns(t *testing.T) {
+	s := styles.DefaultStyles()
+	cfg := testConfig() // ToColumns is nil
+	m := New(cfg, s)
+
+	items := []testItem{{ID: 1, Name: "Alpha"}}
+	m = m.SetItems(items)
+
+	gotCols := m.Table().Columns()
+	if len(gotCols) != len(cfg.Columns) {
+		t.Errorf("ToColumns=nil: got %d columns, want %d (static cfg.Columns)", len(gotCols), len(cfg.Columns))
+	}
+}
+
+// TestToColumns_NonNil_RecomputedFromItems verifies that when ToColumns is set the
+// model calls it with the current items and updates the table columns accordingly.
+func TestToColumns_NonNil_RecomputedFromItems(t *testing.T) {
+	s := styles.DefaultStyles()
+	cfg := testConfigWithToColumns()
+	m := New(cfg, s)
+
+	// Items without the extra trigger (ID <= 100): 2 columns.
+	m = m.SetItems([]testItem{{ID: 1, Name: "Alpha"}, {ID: 2, Name: "Beta"}})
+	if n := len(m.Table().Columns()); n != 2 {
+		t.Errorf("Normal items: got %d columns, want 2", n)
+	}
+
+	// Items with the extra trigger (any ID > 100): 3 columns.
+	m = m.SetItems([]testItem{{ID: 101, Name: "Gamma"}, {ID: 1, Name: "Delta"}})
+	if n := len(m.Table().Columns()); n != 3 {
+		t.Errorf("Extra items: got %d columns, want 3", n)
+	}
+}
+
+// TestToColumns_UpdatesWhenSetItemsChanges verifies that columns are re-derived
+// each time SetItems is called — not cached from the first call.
+func TestToColumns_UpdatesWhenSetItemsChanges(t *testing.T) {
+	s := styles.DefaultStyles()
+	cfg := testConfigWithToColumns()
+	m := New(cfg, s)
+
+	// Start with normal items.
+	m = m.SetItems([]testItem{{ID: 1, Name: "Alpha"}})
+	if n := len(m.Table().Columns()); n != 2 {
+		t.Fatalf("Before: got %d columns, want 2", n)
+	}
+
+	// Switch to items that trigger the extra column.
+	m = m.SetItems([]testItem{{ID: 200, Name: "Beta"}})
+	if n := len(m.Table().Columns()); n != 3 {
+		t.Fatalf("After trigger: got %d columns, want 3", n)
+	}
+
+	// Switch back to normal items — extra column must disappear.
+	m = m.SetItems([]testItem{{ID: 1, Name: "Gamma"}})
+	if n := len(m.Table().Columns()); n != 2 {
+		t.Fatalf("After revert: got %d columns, want 2", n)
+	}
+}
+
+// TestView_WithToColumns_MixedItems_NoPanic constructs a listview model whose
+// ToColumns callback adds an extra column for certain items, sets those items,
+// sends a resize, then calls View(). It must not panic and columns must equal
+// cells (the exact defect described in the Validation: Task 3 section).
+func TestView_WithToColumns_MixedItems_NoPanic(t *testing.T) {
+	s := styles.DefaultStyles()
+	cfg := testConfigWithToColumns()
+	m := New(cfg, s)
+
+	// Items that trigger the extra column (mixed set: one ID > 100, one not).
+	items := []testItem{{ID: 200, Name: "Extra"}, {ID: 1, Name: "Normal"}}
+	m = m.SetItems(items)
+
+	// Give the model proper dimensions via a WindowSizeMsg.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// View() must not panic.
+	view := m.View()
+	if view == "" {
+		t.Error("View() returned empty string for mixed items")
+	}
+
+	// Assert lock-step: column count == cell count in every row.
+	cols := m.Table().Columns()
+	rows := m.Table().Rows()
+	if len(rows) == 0 {
+		t.Fatal("Expected rows after SetItems, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("column count %d != row cell count %d (columns and rows out of sync)", len(cols), len(rows[0]))
+	}
+}
+
 func TestSearch_MatchCountInView(t *testing.T) {
 	s := styles.DefaultStyles()
 	m := New(testConfig(), s)

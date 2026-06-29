@@ -1304,3 +1304,112 @@ func TestPrsToRowsMulti_AzureOnly_NoGlyphColumn(t *testing.T) {
 		t.Errorf("Azure-only multi row has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
 	}
 }
+
+// ─── Column / cell count parity tests ────────────────────────────────────────
+// These tests prove that after SetItems the column headers derived by ToColumns
+// always equal the cell count produced by ToRows — the invariant that prevents
+// the index-out-of-range panic in table.renderRow.
+
+func makePR(kind provider.Kind, id string) provider.PullRequest {
+	return provider.PullRequest{
+		Identity:       provider.Identity{Kind: kind, Scope: "proj", ScopeDisplay: "proj", ID: id},
+		Title:          "PR " + id,
+		SourceRefName:  "refs/heads/feature/" + id,
+		TargetRefName:  "refs/heads/main",
+		CreatedByName:  "User",
+		RepositoryName: "repo",
+	}
+}
+
+// TestPRs_ColumnCellParity_AzureOnly checks single-project Azure-only layout:
+// 6 columns, 6 cells per row — unchanged from before this task.
+func TestPRs_ColumnCellParity_AzureOnly(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s) // nil client → isMulti = false
+
+	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.KindAzure, "2")}
+	m.list = m.list.SetItems(prs)
+
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("Azure-only: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+	if len(cols) != 6 {
+		t.Errorf("Azure-only single: want 6 columns, got %d", len(cols))
+	}
+}
+
+// TestPRs_ColumnCellParity_MixedKinds checks single-project mixed-kind layout:
+// 7 columns and 7 cells per row (glyph prepended to both).
+func TestPRs_ColumnCellParity_MixedKinds(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+
+	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")}
+	m.list = m.list.SetItems(prs)
+
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("Mixed-kinds: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+	if len(cols) != 7 {
+		t.Errorf("Mixed single: want 7 columns (glyph + 6), got %d", len(cols))
+	}
+	// Glyph column has empty title.
+	if cols[0].Title != "" {
+		t.Errorf("Glyph column title = %q, want empty string", cols[0].Title)
+	}
+}
+
+// TestPRs_ColumnCellParity_MixedKinds_View renders through the table to prove
+// no index-out-of-range panic occurs when columns and cells are in lock-step.
+func TestPRs_ColumnCellParity_MixedKinds_View(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+
+	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")}
+	m.list = m.list.SetItems(prs)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Must not panic.
+	view := m.View()
+	if view == "" {
+		t.Error("View() returned empty string")
+	}
+}
+
+// TestPRs_ColumnCellParity_AzureOnlyToMixed verifies that transitioning from an
+// Azure-only set to a mixed set via a second SetItems call updates both columns
+// and rows — catching any caching bug.
+func TestPRs_ColumnCellParity_AzureOnlyToMixed(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// First: Azure-only.
+	m.list = m.list.SetItems([]provider.PullRequest{makePR(provider.KindAzure, "1")})
+	if n := len(m.list.Table().Columns()); n != 6 {
+		t.Fatalf("Azure-only: want 6 columns, got %d", n)
+	}
+
+	// Second: mixed kinds.
+	m.list = m.list.SetItems([]provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")})
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+	if len(cols) != 7 {
+		t.Fatalf("Mixed: want 7 columns, got %d", len(cols))
+	}
+	if len(rows) > 0 && len(cols) != len(rows[0]) {
+		t.Errorf("Mixed: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+}
