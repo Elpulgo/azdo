@@ -68,14 +68,24 @@ scopes slice rendered as a joined, truncated list.
 - [x] 1. Add `KindGlyph(Kind)` and `KindLabel(Kind)` to `internal/ui/display` (Azure mark for `KindAzure`, placeholder for a future `KindGitHub`); table-test both.
 - [x] 2. Add a `mixedKinds(items)` helper (true iff >1 distinct `Identity.Kind`); unit-test single-kind→false, multi-kind→true, empty→false. (blocked by: 1)
 - [x] 3. Wire a leading glyph column into the PR/work-item/pipeline row builders, shown only when `mixedKinds` is true; test with synthetic multi-kind rows that the glyph column appears, and is absent for Azure-only rows. (blocked by: 2)
-- [ ] 4. Add `Terms map[string]string` to config: parse it, add `TermFor(key, fallback string) string`, and round-trip it in `Save()`; test parse + fallback + persistence.
+- [x] 4. Add `Terms map[string]string` to config: parse it, add `TermFor(key, fallback string) string`, and round-trip it in `Save()`; test parse + fallback + persistence.
 - [ ] 5. Route `Terms` into `app`; make `renderTabBar` resolve each tab label via `TermFor` with the current strings as defaults (no `Kind()` branch); test that defaults render unchanged and an override replaces the label. (blocked by: 4)
 - [ ] 6. Replace the status bar's single `project` with active **scopes**: add `SetScopes([]string)`, render them joined+truncated, and update the app init + theme-change call sites; test single-scope, multi-scope, and truncation. (blocked by: none)
 - [ ] 7. Verify: grep `internal/app` confirms no tab label is branched on `Kind()`; `CGO_ENABLED=0 go test ./...` and `go vet ./...` clean; manual smoke of all three tabs (glyph absent, labels/status-bar correct). (blocked by: 3,5,6)
 
 ## Validation: Task 3
 
-- **MISSING — column/cell lockstep not implemented.** All three `NewModelWithStyles` functions build `cfg.Columns` (the `[]listview.ColumnSpec` fed into `makeColumns` → `table.Column` headers) at init time, gated only on `isMulti`. When `display.MixedKinds` is true at row-render time, each `ToRows` function prepends an extra glyph cell, producing rows with `N+1` cells while the column header slice still has `N` entries. `table.renderRow` (table.go:405) iterates over row cells and indexes `m.cols[i]` — an extra cell causes an index-out-of-bounds panic. Cells and column headers are **not** added in lockstep. Fix: add a `ColumnSpec{Title: "", WidthPct: 3, MinWidth: 3}` (or similar glyph column) to `cfg.Columns` at init time conditionally, or introduce a `ToColumns func(items []T) []ColumnSpec` callback into `listview.Config` so the column list can be recomputed alongside the rows when items are set. The bug cannot be triggered today (Azure-only means `mixed` is always false), but the framework would panic the moment a second backend appears.
+- **RESOLVED (re-check, commit 9d74213).** Lockstep fix is in place: `listview.Config`
+  now has an optional `ToColumns func(items []T) []ColumnSpec` (nil-safe fallback to
+  static `Columns`), the model derives columns from the CURRENT items everywhere it
+  sets rows (init, SetItems, HandleFetchResult, applyFilter, exitSearch, resize), and
+  a new `setColumnsAndRows` clears rows → sets columns → sets rows so column and cell
+  counts never diverge mid-update. All three views supply a `ToColumns` mirroring their
+  `ToRows` gating exactly (`[glyph?] [project?] [base…]`, glyph at index 0). Parity +
+  render-through-`View()` no-panic tests added for all three views and the listview
+  component; `go test ./internal/ui/...` passes. No `KindGitHub` constant added.
+
+- (original finding, kept for record) **MISSING — column/cell lockstep not implemented.** All three `NewModelWithStyles` functions build `cfg.Columns` (the `[]listview.ColumnSpec` fed into `makeColumns` → `table.Column` headers) at init time, gated only on `isMulti`. When `display.MixedKinds` is true at row-render time, each `ToRows` function prepends an extra glyph cell, producing rows with `N+1` cells while the column header slice still has `N` entries. `table.renderRow` (table.go:405) iterates over row cells and indexes `m.cols[i]` — an extra cell causes an index-out-of-bounds panic. Cells and column headers are **not** added in lockstep. Fix: add a `ColumnSpec{Title: "", WidthPct: 3, MinWidth: 3}` (or similar glyph column) to `cfg.Columns` at init time conditionally, or introduce a `ToColumns func(items []T) []ColumnSpec` callback into `listview.Config` so the column list can be recomputed alongside the rows when items are set. The bug cannot be triggered today (Azure-only means `mixed` is always false), but the framework would panic the moment a second backend appears.
 - Tests exercise `ToRows` functions directly and pass; they do not render through the table so they cannot catch the column/cell count mismatch.
 
 ## Unknowns

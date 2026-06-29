@@ -1182,3 +1182,104 @@ func TestConfig_Validate_MetricsDisabledSkipsThresholdChecks(t *testing.T) {
 		t.Errorf("Validate() with disabled metrics = %v, want nil", err)
 	}
 }
+
+func TestLoad_WithTerms(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `organization: test-org
+projects:
+  - test-project
+polling_interval: 60
+theme: dark
+terms:
+  work_items: Tasks
+  pipelines: Builds
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if cfg.Terms["work_items"] != "Tasks" {
+		t.Errorf("Terms[work_items] = %q, want %q", cfg.Terms["work_items"], "Tasks")
+	}
+	if cfg.Terms["pipelines"] != "Builds" {
+		t.Errorf("Terms[pipelines] = %q, want %q", cfg.Terms["pipelines"], "Builds")
+	}
+}
+
+func TestConfig_TermFor(t *testing.T) {
+	tests := []struct {
+		name     string
+		terms    map[string]string
+		key      string
+		fallback string
+		want     string
+	}{
+		{"override present", map[string]string{"work_items": "Tasks"}, "work_items", "Work Items", "Tasks"},
+		{"key absent", map[string]string{"pipelines": "Builds"}, "work_items", "Work Items", "Work Items"},
+		{"nil terms", nil, "work_items", "Work Items", "Work Items"},
+		{"empty override falls through to fallback", map[string]string{"work_items": ""}, "work_items", "Work Items", "Work Items"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Terms: tt.terms}
+			if got := cfg.TermFor(tt.key, tt.fallback); got != tt.want {
+				t.Errorf("TermFor(%q, %q) = %q, want %q", tt.key, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSave_RoundTripsTerms(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Write initial config with a pre-existing key (theme) we want to verify survives.
+	initialContent := `organization: test-org
+projects:
+  - test-project
+polling_interval: 60
+theme: dark
+`
+	if err := os.WriteFile(configPath, []byte(initialContent), 0644); err != nil {
+		t.Fatalf("Failed to write initial config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	cfg.Terms = map[string]string{
+		"work_items": "Tasks",
+		"pipelines":  "Builds",
+	}
+
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	reloaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() after save failed: %v", err)
+	}
+
+	if reloaded.Terms["work_items"] != "Tasks" {
+		t.Errorf("Terms[work_items] = %q, want %q after round-trip", reloaded.Terms["work_items"], "Tasks")
+	}
+	if reloaded.Terms["pipelines"] != "Builds" {
+		t.Errorf("Terms[pipelines] = %q, want %q after round-trip", reloaded.Terms["pipelines"], "Builds")
+	}
+
+	// Unrelated key must survive the save.
+	if reloaded.Theme != "dark" {
+		t.Errorf("Theme = %q, want dark (lost on save)", reloaded.Theme)
+	}
+}
