@@ -970,17 +970,21 @@ func (m Model) measureFooterHeight() int {
 // renderTabBar renders the tab header content wrapped in its own bordered box,
 // with tabs on the left and the ASCII art logo on the right.
 func (m Model) renderTabBar(innerWidth int) string {
-	// Tab label and number are derived from position in enabledTabs
-	tabLabels := map[Tab]string{
-		TabPullRequests: "Pull Requests",
-		TabWorkItems:    "Work Items",
-		TabPipelines:    "Pipelines",
-		TabMetrics:      "Metrics",
+	// tabLabel pairs each tab with its config key and default display string.
+	// Keys MUST be lowercase — viper lowercases all config keys on load, so
+	// Terms map keys arrive lowercase. A capitalised lookup key would never match.
+	type tabLabel struct{ key, def string }
+	tabLabels := map[Tab]tabLabel{
+		TabPullRequests: {"pull_requests", "Pull Requests"},
+		TabWorkItems:    {"work_items", "Work Items"},
+		TabPipelines:    {"pipelines", "Pipelines"},
+		TabMetrics:      {"metrics", "Metrics"},
 	}
 
 	var renderedTabs []string
 	for i, tab := range m.enabledTabs {
-		label := fmt.Sprintf("%d: %s", i+1, tabLabels[tab])
+		tl := tabLabels[tab]
+		label := fmt.Sprintf("%d: %s", i+1, m.config.TermFor(tl.key, tl.def))
 		if tab == m.activeTab {
 			renderedTabs = append(renderedTabs, m.styles.TabActive.Render(label))
 		} else {
