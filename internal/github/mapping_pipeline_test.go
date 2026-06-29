@@ -491,7 +491,7 @@ func TestMapTimelineState(t *testing.T) {
 		{"waiting", "pending"},
 		{"pending", "pending"},
 		{"requested", "pending"},
-		{"", "pending"},   // unknown → pending
+		{"", "pending"},        // unknown → pending
 		{"unknown", "pending"}, // unknown → pending
 	}
 
@@ -517,13 +517,13 @@ func TestMapTimelineResult(t *testing.T) {
 		{"failure", "failed"},
 		{"timed_out", "failed"},
 		{"startup_failure", "failed"},
-		{"cancelled", "canceled"},   // GitHub's double-L → view's single-L
+		{"cancelled", "canceled"}, // GitHub's double-L → view's single-L
 		{"CANCELLED", "canceled"},
 		{"skipped", "skipped"},
 		{"neutral", "succeededwithissues"},
 		{"action_required", ""},
 		{"stale", ""},
-		{"", ""},   // null conclusion → empty → default muted glyph
+		{"", ""}, // null conclusion → empty → default muted glyph
 		{"unknown_future_value", ""},
 	}
 

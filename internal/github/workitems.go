@@ -34,11 +34,11 @@ func mapStateParam(states []provider.StateCategory) string {
 		return "all"
 	}
 	openSet := map[provider.StateCategory]bool{
-		provider.StateCategoryNew:           true,
-		provider.StateCategoryActive:        true,
-		provider.StateCategoryResolved:      true,
-		provider.StateCategoryReadyForTest:  true,
-		provider.StateCategoryUnknown:       true,
+		provider.StateCategoryNew:          true,
+		provider.StateCategoryActive:       true,
+		provider.StateCategoryResolved:     true,
+		provider.StateCategoryReadyForTest: true,
+		provider.StateCategoryUnknown:      true,
 	}
 	closedSet := map[provider.StateCategory]bool{
 		provider.StateCategoryClosedDone: true,
@@ -159,14 +159,14 @@ func (c *Client) ListMyWorkItems(top int, opts provider.ListOpts) ([]Issue, erro
 func (c *Client) GetWorkItemTypeStates(_ string) ([]provider.WorkItemTypeState, error) {
 	return []provider.WorkItemTypeState{
 		{
-			Name:     "open",
-			Color:    "",
+			Name:  "open",
+			Color: "",
 			// InProgress matches the statepicker's stateIcon("InProgress") → "◐"
 			Category: "InProgress",
 		},
 		{
-			Name:     "closed",
-			Color:    "",
+			Name:  "closed",
+			Color: "",
 			// Completed matches the statepicker's stateIcon("Completed") → "✓"
 			Category: "Completed",
 		},

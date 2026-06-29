@@ -42,19 +42,19 @@ type Milestone struct {
 // The field is decoded as a raw JSON value so that the presence/absence of the
 // "pull_request" key is detectable without importing the full PR wire type.
 type Issue struct {
-	Number      int              `json:"number"`
-	Title       string           `json:"title"`
-	Body        string           `json:"body"`
-	State       string           `json:"state"`
-	StateReason *string          `json:"state_reason"`
-	User        User             `json:"user"`
-	Assignee    *User            `json:"assignee"`
-	Labels      []Label          `json:"labels"`
-	Milestone   *Milestone       `json:"milestone"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
-	ClosedAt    *time.Time       `json:"closed_at"`
-	HTMLURL     string           `json:"html_url"`
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	State       string     `json:"state"`
+	StateReason *string    `json:"state_reason"`
+	User        User       `json:"user"`
+	Assignee    *User      `json:"assignee"`
+	Labels      []Label    `json:"labels"`
+	Milestone   *Milestone `json:"milestone"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	ClosedAt    *time.Time `json:"closed_at"`
+	HTMLURL     string     `json:"html_url"`
 	// PullRequest is non-nil when this object is a pull request masquerading as
 	// an issue. Filter out any Issue where PullRequest != nil.
 	PullRequest *json.RawMessage `json:"pull_request"`
@@ -119,16 +119,16 @@ type Review struct {
 // OriginalLine carries the anchor position when Line is null (outdated diff).
 // HTMLURL is the permalink to the comment on github.com.
 type ReviewComment struct {
-	ID           int64      `json:"id"`
-	InReplyToID  *int64     `json:"in_reply_to_id"`
-	Path         string     `json:"path"`
-	Line         *int       `json:"line"`
-	OriginalLine *int       `json:"original_line"`
-	Body         string     `json:"body"`
-	User         User       `json:"user"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	HTMLURL      string     `json:"html_url"`
+	ID           int64     `json:"id"`
+	InReplyToID  *int64    `json:"in_reply_to_id"`
+	Path         string    `json:"path"`
+	Line         *int      `json:"line"`
+	OriginalLine *int      `json:"original_line"`
+	Body         string    `json:"body"`
+	User         User      `json:"user"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	HTMLURL      string    `json:"html_url"`
 }
 
 // WorkflowRun represents a GitHub Actions workflow run wire type
