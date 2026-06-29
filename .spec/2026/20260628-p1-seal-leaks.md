@@ -63,7 +63,7 @@ state, status, search) and the adapter owns the WIQL/`@Me` translation.
 - [x] 7. Migrate the `pipelines` view: swap the status/result string switch for enum + display map. (blocked by: 4)
 - [x] 8. Define `ListOpts` (mine, states, status, search, top); thread it through the provider list methods; adapter builds WIQL/`@Me`/state filters from it; test the translation. (blocked by: 3)
 - [x] 9. Update the view filter call sites (my items / as reviewer / state picker / status picker / search) to pass `ListOpts`. (blocked by: 8)
-- [ ] 10. Grep `internal/ui` (minus `metrics`) for `dev.azure.com`, `System.`, WIQL, and vote ints to confirm none remain; run `go test ./...`, `go vet ./...`, and a manual smoke of all three tabs. (blocked by: 2,5,6,7,9)
+- [x] 10. Grep `internal/ui` (minus `metrics`) for `dev.azure.com`, `System.`, WIQL, and vote ints to confirm none remain; run `go test ./...`, `go vet ./...`, and a manual smoke of all three tabs. (blocked by: 2,5,6,7,9) (validated: all greps clean — two `dev.azure.com` hits are test-file URL assertions, one `WIQL` hit is a doc comment explaining `@Me`, zero `System.` hits, zero vote-int literals; all 22 packages pass `go test ./...`; `go vet ./...` clean; manual smoke deferred to user before merge)
 
 ## Unknowns
 
