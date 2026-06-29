@@ -81,7 +81,7 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [x] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
 - [x] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
 - [x] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)
-- [ ] 12. `github.MultiClient` fan-out across repos (goroutine/merge/sort/`PartialError`) + `Adapter` satisfying `provider.Provider`; `//go:build adapter` conformance test mirroring `azdevops`; `CGO_ENABLED=0 go test/vet ./...` green; integration tests written, run manually. (blocked by: 8,9,10,11)
+- [x] 12. `github.MultiClient` fan-out across repos (goroutine/merge/sort/`PartialError`) + `Adapter` satisfying `provider.Provider`; `//go:build adapter` conformance test mirroring `azdevops`; `CGO_ENABLED=0 go test/vet ./...` green; integration tests written, run manually. (blocked by: 8,9,10,11)
 
 ## Review feedback: Task 4
 
@@ -99,6 +99,17 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
     priority match gated on `!= 0`.
   - 🟢 notes (ASCII slice-offset on non-ASCII custom prefixes; leading-whitespace label names)
     logged as Phase-4 considerations — not reachable with ASCII defaults.
+
+## Validation: Task 11
+
+- **COMPLETE (`5c4bb15`).** `internal/github/weburl.go` adds the 4 per-repo `Client`
+  builders (no scope/repositoryID param), all producing `https://github.com/{owner}/{repo}/...`
+  from `c.owner`/`c.repo`: `WorkItemURL`→`/issues/{id}`, `PRURL`→`/pull/{prID}`,
+  `PRThreadWebURL`→`/pull/{prID}#discussion_r{threadID}`, `PipelineURL`→`/actions/runs/{id}`.
+  Empty-string guards present: `id<=0` / `prID<=0`, and `PRThreadWebURL` also on `threadID==0`.
+- `weburl_test.go` has 4 table tests asserting exact URLs incl. zero/negative empty-string
+  cases (and zero-threadID for the thread URL). `go test -count=1 ./internal/github/...` green,
+  `go vet` clean, `gofmt -l` empty.
 
 ## Review feedback: Task 6
 
