@@ -580,6 +580,56 @@ func TestMapReviewThreads_DefensiveNewThreadForOrphanReply(t *testing.T) {
 	}
 }
 
+func TestMapReviewThreads_ReplyBeforeRoot(t *testing.T) {
+	// Input is ordered [reply(id=2, in_reply_to_id=1), root(id=1, in_reply_to_id=nil)].
+	// The single-pass implementation would misgroup this: the reply is seen first and
+	// becomes an orphan thread root, then the real root overwrites the map entry and
+	// gets re-appended to threadOrder, producing two threads with the same ID and
+	// silently dropping the reply. The two-pass implementation must produce exactly one
+	// thread with the root at Comments[0] and the reply at Comments[1].
+	const raw = `[
+		{"id": 2, "in_reply_to_id": 1,    "path": "src/main.go", "line": null, "original_line": 5, "body": "A reply",       "user": {"login": "bob",   "id": 2}, "created_at": "2026-05-01T10:00:00Z", "updated_at": "2026-05-01T10:00:00Z", "html_url": ""},
+		{"id": 1, "in_reply_to_id": null, "path": "src/main.go", "line": 5,    "original_line": 5, "body": "Root comment",  "user": {"login": "alice", "id": 1}, "created_at": "2026-05-01T09:00:00Z", "updated_at": "2026-05-01T09:00:00Z", "html_url": ""}
+	]`
+
+	var comments []github.ReviewComment
+	if err := json.Unmarshal([]byte(raw), &comments); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	threads := github.MapReviewThreads(comments, testScope, testScopeDisplay)
+
+	if len(threads) != 1 {
+		t.Fatalf("len(threads) = %d, want 1 (reply-before-root must not produce duplicate threads)", len(threads))
+	}
+	th := threads[0]
+
+	if th.Identity.ID != "1" {
+		t.Errorf("Identity.ID = %q, want %q (thread keyed on root's ID)", th.Identity.ID, "1")
+	}
+	if len(th.Comments) != 2 {
+		t.Fatalf("len(comments) = %d, want 2 (root + one reply)", len(th.Comments))
+	}
+
+	// Comments[0] must be the root (id=1, parentCommentID=0).
+	root := th.Comments[0]
+	if root.Identity.ID != "1" {
+		t.Errorf("Comments[0].Identity.ID = %q, want %q (root must be first)", root.Identity.ID, "1")
+	}
+	if root.ParentCommentID != 0 {
+		t.Errorf("Comments[0].ParentCommentID = %d, want 0 (root has no parent)", root.ParentCommentID)
+	}
+
+	// Comments[1] must be the reply (id=2, parentCommentID=1).
+	reply := th.Comments[1]
+	if reply.Identity.ID != "2" {
+		t.Errorf("Comments[1].Identity.ID = %q, want %q (reply must be second)", reply.Identity.ID, "2")
+	}
+	if reply.ParentCommentID != 1 {
+		t.Errorf("Comments[1].ParentCommentID = %d, want 1 (reply's parent is root id=1)", reply.ParentCommentID)
+	}
+}
+
 // ── MapPRFile ─────────────────────────────────────────────────────────────────
 
 func TestMapPRFile_Added(t *testing.T) {

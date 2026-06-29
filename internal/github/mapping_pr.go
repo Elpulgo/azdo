@@ -104,6 +104,7 @@ func MapReviewers(reviews []Review, requested []User) []provider.Reviewer {
 			userOrder = append(userOrder, r.User.ID)
 			latestByUser[r.User.ID] = r
 		} else if r.SubmittedAt.After(existing.SubmittedAt) {
+			// equal SubmittedAt → first-seen wins (GitHub returns reviews in chronological order)
 			latestByUser[r.User.ID] = r
 		}
 	}
@@ -170,26 +171,37 @@ func MapReviewThreads(comments []ReviewComment, scope, scopeDisplay string) []pr
 	var threadOrder []int64
 	threadMap := make(map[int64]*threadData)
 
+	// Pass 1: register every root comment (InReplyToID == nil) in first-seen order.
+	// Pre-seeding roots before processing replies makes grouping order-independent:
+	// a reply that arrives before its root in the input slice will still find the
+	// correct thread in pass 2.
 	for _, c := range comments {
 		if c.InReplyToID == nil {
-			// Root comment → start a new thread.
 			td := &threadData{rootID: c.ID, root: c}
 			threadMap[c.ID] = td
 			threadOrder = append(threadOrder, c.ID)
+		}
+	}
+
+	// Pass 2: attach replies to their roots; create defensive orphan threads for
+	// replies whose root is absent from the input.
+	for _, c := range comments {
+		if c.InReplyToID == nil {
+			// Already handled in pass 1.
+			continue
+		}
+		replyTo := *c.InReplyToID
+		td, ok := threadMap[replyTo]
+		if !ok {
+			// Defensive: reply references a root we have not seen. Create a
+			// synthetic thread keyed on replyTo so the comment is not dropped.
+			// The reply itself becomes the effective root of this orphan thread.
+			td = &threadData{rootID: replyTo, root: c}
+			threadMap[replyTo] = td
+			threadOrder = append(threadOrder, replyTo)
+			// c is now the thread root; do not add it to replies.
 		} else {
-			replyTo := *c.InReplyToID
-			td, ok := threadMap[replyTo]
-			if !ok {
-				// Defensive: reply references a root we have not seen. Create a
-				// synthetic thread keyed on replyTo so the comment is not dropped.
-				// The reply itself becomes the effective root of this orphan thread.
-				td = &threadData{rootID: replyTo, root: c}
-				threadMap[replyTo] = td
-				threadOrder = append(threadOrder, replyTo)
-				// c is now the thread root; do not add it to replies.
-			} else {
-				td.replies = append(td.replies, c)
-			}
+			td.replies = append(td.replies, c)
 		}
 	}
 
