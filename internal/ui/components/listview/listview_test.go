@@ -800,26 +800,6 @@ func TestToColumns_Nil_FallsBackToStaticColumns(t *testing.T) {
 	}
 }
 
-// TestToColumns_NonNil_RecomputedFromItems verifies that when ToColumns is set the
-// model calls it with the current items and updates the table columns accordingly.
-func TestToColumns_NonNil_RecomputedFromItems(t *testing.T) {
-	s := styles.DefaultStyles()
-	cfg := testConfigWithToColumns()
-	m := New(cfg, s)
-
-	// Items without the extra trigger (ID <= 100): 2 columns.
-	m = m.SetItems([]testItem{{ID: 1, Name: "Alpha"}, {ID: 2, Name: "Beta"}})
-	if n := len(m.Table().Columns()); n != 2 {
-		t.Errorf("Normal items: got %d columns, want 2", n)
-	}
-
-	// Items with the extra trigger (any ID > 100): 3 columns.
-	m = m.SetItems([]testItem{{ID: 101, Name: "Gamma"}, {ID: 1, Name: "Delta"}})
-	if n := len(m.Table().Columns()); n != 3 {
-		t.Errorf("Extra items: got %d columns, want 3", n)
-	}
-}
-
 // TestToColumns_UpdatesWhenSetItemsChanges verifies that columns are re-derived
 // each time SetItems is called — not cached from the first call.
 func TestToColumns_UpdatesWhenSetItemsChanges(t *testing.T) {
