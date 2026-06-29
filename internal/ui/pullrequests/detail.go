@@ -627,24 +627,6 @@ func hyperlink(text, url string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
-// buildPRThreadURL constructs the Azure DevOps URL to view a specific comment thread in a PR
-func buildPRThreadURL(org, project, repoID string, prID int, threadID int) string {
-	if org == "" || project == "" || repoID == "" || threadID == 0 {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
-		org, project, repoID, prID, threadID)
-}
-
-// buildPROverviewURL constructs the Azure DevOps URL to view the PR overview page
-func buildPROverviewURL(org, project, repoID string, prID int) string {
-	if org == "" || project == "" || repoID == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
-		org, project, repoID, prID)
-}
-
 // truncateString truncates a string to maxRunes runes (not bytes)
 func truncateString(s string, maxRunes int) string {
 	if maxRunes <= 0 {

@@ -471,26 +471,6 @@ func TestShortenIterationPath(t *testing.T) {
 	}
 }
 
-func TestBuildWorkItemURL(t *testing.T) {
-	tests := []struct {
-		org     string
-		project string
-		id      int
-		want    string
-	}{
-		{"myorg", "myproject", 123, "https://dev.azure.com/myorg/myproject/_workitems/edit/123"},
-		{"", "project", 123, ""},
-		{"org", "", 123, ""},
-	}
-
-	for _, tt := range tests {
-		got := buildWorkItemURL(tt.org, tt.project, tt.id)
-		if got != tt.want {
-			t.Errorf("buildWorkItemURL(%q, %q, %d) = %q, want %q", tt.org, tt.project, tt.id, got, tt.want)
-		}
-	}
-}
-
 func TestDetailModel_SKeyStartsLoading(t *testing.T) {
 	wi := provider.WorkItem{
 		Identity:     provider.Identity{ID: "123"},

@@ -641,11 +641,3 @@ func hyperlink(text, url string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
-// buildWorkItemURL constructs the Azure DevOps URL to view a work item.
-// Kept for backward compatibility with tests that call it directly.
-func buildWorkItemURL(org, project string, id int) string {
-	if org == "" || project == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d", org, project, id)
-}

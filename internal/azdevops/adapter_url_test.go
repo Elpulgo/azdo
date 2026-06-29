@@ -97,6 +97,15 @@ func TestAdapter_PRURL_Shapes(t *testing.T) {
 			prID:    42,
 			want:    "",
 		},
+		{
+			name:    "empty repoID returns empty",
+			org:     "myorg",
+			project: "myproject",
+			scope:   "myproject",
+			repoID:  "",
+			prID:    42,
+			want:    "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -153,6 +162,16 @@ func TestAdapter_PRThreadWebURL_Shapes(t *testing.T) {
 			repoID:   "repo-guid-123",
 			prID:     123,
 			threadID: 0,
+			want:     "",
+		},
+		{
+			name:     "empty repoID returns empty",
+			org:      "myorg",
+			project:  "myproject",
+			scope:    "myproject",
+			repoID:   "",
+			prID:     123,
+			threadID: 456,
 			want:     "",
 		},
 	}

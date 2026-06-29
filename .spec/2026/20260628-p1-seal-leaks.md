@@ -55,7 +55,7 @@ state, status, search) and the adapter owns the WIQL/`@Me` translation.
 ## Tasks
 
 - [x] 1. Add per-entity `WebURL` methods to `Provider` + azdevops adapter (build from identity + org); table-test the exact URL shapes against today's output. (validated: `PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string` added to `provider.Provider` and `azdevops.Adapter`; table tests in `adapter_url_test.go` cover all three URL shapes — WorkItemURL, PRURL, PRThreadWebURL — plus nil-client and unknown-scope edge cases; `go vet ./...` and `go vet -tags adapter ./internal/azdevops/...` clean; `go test ./...` — all real packages pass, only the 5 pre-existing sandbox TMPDIR-cleanup failures remain)
-- [ ] 2. Replace the inline builders in `pullrequests/detail.go` and `workitems/detail.go` with provider `WebURL` calls. (blocked by: 1)
+- [x] 2. Replace the inline builders in `pullrequests/detail.go` and `workitems/detail.go` with provider `WebURL` calls. (blocked by: 1)
 - [x] 3. Define neutral semantic enums (`StateCategory`, `ItemType`, `VoteKind`, `RunStatus`) in `internal/provider`; map azdevops wire → enum in the adapter; test each mapping. `Priority` stays an optional value, not an enum. (blocked by: 1)
 - [ ] 4. Add one shared `enum → glyph+color+label` display map (in `ui/styles` or a `ui` helper) reproducing today's glyphs/colors exactly; unit-test it. (blocked by: 3)
 - [ ] 5. Migrate the `workitems` view: swap the type/state string switches for enum + display map; make the priority column render `-` when unset (no priority). (blocked by: 4)

@@ -429,9 +429,13 @@ func (a *Adapter) WorkItemURL(scope string, id int) string {
 
 // PRURL returns the browser URL for the given pull request in the given repository.
 // scope is the project name used to route to the correct sub-client.
-// Returns "" when the client is nil or scope does not match a known project.
+// Returns "" when the client is nil, scope does not match a known project, or
+// repositoryID is empty (matching the guard in the retired inline builder).
 func (a *Adapter) PRURL(scope, repositoryID string, prID int) string {
 	if a.mc == nil {
+		return ""
+	}
+	if repositoryID == "" {
 		return ""
 	}
 	c := a.mc.ClientFor(scope)
@@ -445,9 +449,12 @@ func (a *Adapter) PRURL(scope, repositoryID string, prID int) string {
 // PRThreadWebURL returns the browser URL for a specific comment thread in the
 // given pull request. The URL includes ?discussionId=threadID so the browser
 // anchors directly to that thread. Returns "" when the client is nil, scope
-// does not match a known project, or threadID is zero.
+// does not match a known project, repositoryID is empty, or threadID is zero.
 func (a *Adapter) PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string {
 	if a.mc == nil {
+		return ""
+	}
+	if repositoryID == "" {
 		return ""
 	}
 	if threadID == 0 {
