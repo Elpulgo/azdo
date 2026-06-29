@@ -88,14 +88,22 @@ func MapRunStatus(status, result string) provider.RunStatus {
 		return provider.RunStatusQueued
 	case statusLower == "canceling":
 		return provider.RunStatusCanceling
+	case statusLower == "pending":
+		// "pending" is an Azure status for stages/jobs awaiting an approval gate.
+		return provider.RunStatusPending
 	case resultLower == "succeeded":
 		return provider.RunStatusSucceeded
+	case resultLower == "succeededwithissues":
+		return provider.RunStatusSucceededWithIssues
 	case resultLower == "failed":
 		return provider.RunStatusFailed
 	case resultLower == "canceled":
 		return provider.RunStatusCanceled
 	case resultLower == "partiallysucceeded":
 		return provider.RunStatusPartiallySucceeded
+	// "skipped" and "abandoned" results both render as Muted "○" in the detail
+	// view — identical to the default glyph for RunStatusUnknown — so they fall
+	// through intentionally.
 	default:
 		return provider.RunStatusUnknown
 	}

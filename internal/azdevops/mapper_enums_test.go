@@ -127,6 +127,16 @@ func TestMapRunStatus(t *testing.T) {
 		{name: "completed canceled", status: "completed", result: "canceled", want: provider.RunStatusCanceled},
 		{name: "completed partiallySucceeded", status: "completed", result: "partiallySucceeded", want: provider.RunStatusPartiallySucceeded},
 		{name: "partiallysucceeded lowercase", status: "completed", result: "partiallysucceeded", want: provider.RunStatusPartiallySucceeded},
+		// pending status (approval gate)
+		{name: "pending status", status: "pending", result: "", want: provider.RunStatusPending},
+		{name: "Pending mixed case", status: "Pending", result: "", want: provider.RunStatusPending},
+		// succeededWithIssues result
+		{name: "completed succeededWithIssues", status: "completed", result: "succeededWithIssues", want: provider.RunStatusSucceededWithIssues},
+		{name: "succeededwithissues lowercase", status: "completed", result: "succeededwithissues", want: provider.RunStatusSucceededWithIssues},
+		// skipped and abandoned render the same Muted "○" glyph as Unknown, so
+		// they intentionally fall through to RunStatusUnknown.
+		{name: "skipped falls through to Unknown", status: "completed", result: "skipped", want: provider.RunStatusUnknown},
+		{name: "abandoned falls through to Unknown", status: "completed", result: "abandoned", want: provider.RunStatusUnknown},
 		{name: "empty status and result", status: "", result: "", want: provider.RunStatusUnknown},
 		{name: "unknown status only", status: "postponed", result: "", want: provider.RunStatusUnknown},
 		{name: "unknown both", status: "other", result: "other", want: provider.RunStatusUnknown},

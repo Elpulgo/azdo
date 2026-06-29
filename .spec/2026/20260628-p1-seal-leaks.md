@@ -68,3 +68,8 @@ state, status, search) and the adapter owns the WIQL/`@Me` translation.
 ## Unknowns
 
 - Whether the `ready for test`-style custom states need a dedicated category or fold into an `InProgress`/`other` bucket without losing the current color.
+
+## Review feedback: 3. Define neutral semantic enums
+
+- 🔴 **Add `RunStatusPending` and `RunStatusSucceededWithIssues` to `RunStatus` enum and mapper.** `internal/ui/pipelines/detail.go:592-606` renders `pending` (status) and `succeededWithIssues` (result) with distinct glyphs/colors today — existing tests at `detail_test.go:60,128` confirm this. `MapRunStatus` currently sends both to `RunStatusUnknown`. When Task 7 migrates the pipelines view to the enum+display map, those glyphs will be dropped and those tests will fail — violating the spec's "no behavior change / every existing test stays green" constraint. Add the two variants, mapper cases, and test rows.
+- 🟡 **Add `RunStatusSkipped` and `RunStatusAbandoned` (or document `Unknown` reproduces their glyph intentionally).** `skipped` and `abandoned` results currently render a specific Muted `○` in the pipelines detail view — either fold them into a Canceled-equivalent variant or add a comment explaining `Unknown` produces the correct glyph for them, and add test cases.

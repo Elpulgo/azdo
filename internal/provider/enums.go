@@ -93,4 +93,12 @@ const (
 	// RunStatusPartiallySucceeded corresponds to Azure result
 	// "partiallySucceeded".
 	RunStatusPartiallySucceeded
+	// RunStatusPending corresponds to Azure status "pending" (e.g. a stage or
+	// job waiting for an approval gate). The detail view renders it with the
+	// Muted style and a hollow circle — distinct from RunStatusQueued.
+	RunStatusPending
+	// RunStatusSucceededWithIssues corresponds to Azure result
+	// "succeededWithIssues". The detail view renders it with the Warning style
+	// and a half-circle glyph, distinct from RunStatusSucceeded.
+	RunStatusSucceededWithIssues
 )
