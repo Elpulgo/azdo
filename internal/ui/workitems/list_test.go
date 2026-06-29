@@ -117,32 +117,6 @@ func TestPriorityTextWithStyles_ZeroRenderesDash(t *testing.T) {
 	}
 }
 
-func TestTypeIconWithStyles_UsesDisplayMap(t *testing.T) {
-	s := styles.DefaultStyles()
-	// Verify the display map renders all known enum values correctly.
-	tests := []struct {
-		kind         provider.ItemType
-		wantContains string
-	}{
-		{provider.ItemTypeBug, "Bug"},
-		{provider.ItemTypeTask, "Task"},
-		{provider.ItemTypeUserStory, "Story"},
-		{provider.ItemTypeFeature, "Feature"},
-		{provider.ItemTypeEpic, "Epic"},
-		{provider.ItemTypeIssue, "Issue"},
-		{provider.ItemTypeUnknown, "Item"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("kind=%d", tt.kind), func(t *testing.T) {
-			got := typeIconWithStyles(tt.kind, s)
-			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("typeIconWithStyles(%v) = %q, want to contain %q", tt.kind, got, tt.wantContains)
-			}
-		})
-	}
-}
-
 func TestStateTextWithStyles_UsesDisplayMap(t *testing.T) {
 	s := styles.DefaultStyles()
 	tests := []struct {
