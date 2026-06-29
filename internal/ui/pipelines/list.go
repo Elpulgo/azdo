@@ -44,27 +44,44 @@ func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// runBaseColumns are the per-row column specs for the pipeline run list,
+// excluding the optional project and glyph columns.
+var runBaseColumns = []listview.ColumnSpec{
+	{Title: "Status", WidthPct: 10, MinWidth: 10},
+	{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
+	{Title: "Branch", WidthPct: 20, MinWidth: 10},
+	{Title: "Build", WidthPct: 24, MinWidth: 8},
+	{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
+	{Title: "Duration", WidthPct: 10, MinWidth: 8},
+}
+
 // NewModelWithStyles creates a new pipeline list model with custom styles
 func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Status", WidthPct: 10, MinWidth: 10},
-		{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
-		{Title: "Branch", WidthPct: 20, MinWidth: 10},
-		{Title: "Build", WidthPct: 24, MinWidth: 8},
-		{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
-		{Title: "Duration", WidthPct: 10, MinWidth: 8},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in runsToRows / runsToRowsMulti exactly:
+	//   [glyph?] [project?] [status] [pipeline] [branch] [build] [timestamp] [duration]
+	toColumns := func(items []provider.PipelineRun) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, run := range items {
+			kinds[i] = run.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(runBaseColumns))
+		copy(cols, runBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := runsToRows
 	if isMulti {
@@ -77,11 +94,11 @@ func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	}
 
 	cfg := listview.Config[provider.PipelineRun]{
-		Columns:        columns,
 		LoadingMessage: "Loading pipeline runs...",
 		EntityName:     "pipeline runs",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
 			return fetchPipelineRuns(client)
 		},
@@ -359,11 +376,20 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// runsToRows converts pipeline runs to table rows
+// runsToRows converts pipeline runs to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
 func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, run := range items {
+		kinds[i] = run.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
-		rows[i] = table.Row{
+		cells := table.Row{
 			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
 			branchShortName(run.SourceBranch),
@@ -371,6 +397,10 @@ func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
 			runTimestamp(run.QueueTime),
 			runDuration(run.StartTime, run.FinishTime),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(run.Identity.Kind, s).Render(display.KindGlyph(run.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
@@ -391,10 +421,19 @@ func statusIconWithStyles(runStatus provider.RunStatus, s *styles.Styles) string
 }
 
 // runsToRowsMulti converts pipeline runs to table rows with a Project column.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [status] [pipeline] …
 func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, run := range items {
+		kinds[i] = run.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
-		rows[i] = table.Row{
+		cells := table.Row{
 			run.Identity.ScopeDisplay,
 			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
@@ -403,6 +442,10 @@ func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row
 			runTimestamp(run.QueueTime),
 			runDuration(run.StartTime, run.FinishTime),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(run.Identity.Kind, s).Render(display.KindGlyph(run.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }

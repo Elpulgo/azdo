@@ -20,6 +20,16 @@ promote them — move a line up into Active to accept it, delete it to reject.
 
 6. **View migration tests must assert glyph and style, not just label substring.** A test that only checks `wantContains: "Active"` does not catch a glyph change (`●`→`◐`) or a color regression (Info→Warning). Assert the full rendered token (glyph + label) and verify the style function returns the expected named style. _(approved 2026-06-29)_
 
+7. **In `listview`, any dynamic per-row cell needs a matching dynamic column.** If a view's `ToRows` conditionally prepends/appends a cell (e.g. the provider glyph gated on `MixedKinds`, the project column gated on multi-project), it MUST supply a `ToColumns` driven by the *same* predicate over the *same* item slice, so column count and row-cell count never diverge. `table.renderRow` indexes `m.cols[i]`, so a cell with no column panics. _(approved 2026-06-29)_
+
+8. **`listview` tests must render through `View()` after a `WindowSizeMsg`, not just call `ToRows`/`ToColumns` in isolation.** A unit test that invokes the row builder directly passed while the table panicked on render, because the column/cell mismatch only surfaces during `table.renderRow`. Drive at least one no-panic test through the full render path. _(approved 2026-06-29)_
+
+9. **Config map keys arrive lowercased — look them up in lowercase snake_case.** viper lowercases all config keys on load, so `Terms` (and any future `map[string]string` config) only matches lowercase keys like `work_items`/`pull_requests`. A capitalized lookup key silently never matches the override. _(approved 2026-06-29)_
+
 ## Proposed — awaiting approval
 
 <!-- afk appends candidates here -->
+
+10. **Truncation/cap rendering needs a boundary test at exactly the cap.** When a renderer shows the first N items then `+M more`, add a case at `n == cap` (all shown, no suffix) — that's the off-by-one site; testing only well-below and well-above the cap leaves it unpinned. _(Phase 2, Task 6 reviewer nit.)_
+
+11. **Test the dynamic-column collapse path, not just the expand path.** When filtering/search can narrow a list so its column set shrinks mid-session (e.g. a mixed-Kind list filtered down to one Kind drops the glyph column), assert that transition and that the cursor/selection survives the column-count change — the expand direction passing does not prove the shrink direction. _(Phase 2, Task 3 reviewer 🟡 — filter-collapse path left unasserted.)_

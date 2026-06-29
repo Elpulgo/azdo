@@ -315,11 +315,11 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
-	if cfg.IsMultiProject() {
-		statusBar.SetProject(fmt.Sprintf("%d projects", len(cfg.Projects)))
-	} else {
-		statusBar.SetProject(cfg.DisplayNameFor(cfg.Projects[0]))
+	scopes := make([]string, len(cfg.Projects))
+	for i, p := range cfg.Projects {
+		scopes[i] = cfg.DisplayNameFor(p)
 	}
+	statusBar.SetScopes(scopes)
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
@@ -334,16 +334,19 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		helpModal.RemoveBindingsByDescription("pipelines")
 	}
 
-	// Update tab description in help modal based on enabled tabs
-	enabledTabNames := []string{"PR"}
+	// Update tab description in help modal based on enabled tabs.
+	// Labels resolve through TermFor (same lowercase keys as renderTabBar) so a
+	// configured term override shows up in the help dialog too, not just the tab
+	// bar. The fallbacks are the help line's abbreviated defaults ("PR").
+	enabledTabNames := []string{cfg.TermFor("pull_requests", "PR")}
 	if cfg.IsPaneEnabled("workitems") {
-		enabledTabNames = append(enabledTabNames, "Work Items")
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("work_items", "Work Items"))
 	}
 	if cfg.IsPaneEnabled("pipelines") {
-		enabledTabNames = append(enabledTabNames, "Pipelines")
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("pipelines", "Pipelines"))
 	}
 	if cfg.Metrics.Enabled {
-		enabledTabNames = append(enabledTabNames, "Metrics")
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("metrics", "Metrics"))
 	}
 	// Rebuild the tabs help line whenever the set differs from the default
 	// "1/2/3 — PR / Work Items / Pipelines" (e.g. a pane disabled, metrics
@@ -611,11 +614,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetWarningMessage(previousWarning)
 		}
 		m.statusBar.SetOrganization(m.config.Organization)
-		if m.config.IsMultiProject() {
-			m.statusBar.SetProject(fmt.Sprintf("%d projects", len(m.config.Projects)))
-		} else {
-			m.statusBar.SetProject(m.config.DisplayNameFor(m.config.Projects[0]))
+		scopes := make([]string, len(m.config.Projects))
+		for i, p := range m.config.Projects {
+			scopes[i] = m.config.DisplayNameFor(p)
 		}
+		m.statusBar.SetScopes(scopes)
 		m.statusBar.SetWidth(m.width)
 
 		m.logo = components.NewLogo(m.styles)
@@ -970,17 +973,21 @@ func (m Model) measureFooterHeight() int {
 // renderTabBar renders the tab header content wrapped in its own bordered box,
 // with tabs on the left and the ASCII art logo on the right.
 func (m Model) renderTabBar(innerWidth int) string {
-	// Tab label and number are derived from position in enabledTabs
-	tabLabels := map[Tab]string{
-		TabPullRequests: "Pull Requests",
-		TabWorkItems:    "Work Items",
-		TabPipelines:    "Pipelines",
-		TabMetrics:      "Metrics",
+	// tabLabel pairs each tab with its config key and default display string.
+	// Keys MUST be lowercase — viper lowercases all config keys on load, so
+	// Terms map keys arrive lowercase. A capitalised lookup key would never match.
+	type tabLabel struct{ key, def string }
+	tabLabels := map[Tab]tabLabel{
+		TabPullRequests: {"pull_requests", "Pull Requests"},
+		TabWorkItems:    {"work_items", "Work Items"},
+		TabPipelines:    {"pipelines", "Pipelines"},
+		TabMetrics:      {"metrics", "Metrics"},
 	}
 
 	var renderedTabs []string
 	for i, tab := range m.enabledTabs {
-		label := fmt.Sprintf("%d: %s", i+1, tabLabels[tab])
+		tl := tabLabels[tab]
+		label := fmt.Sprintf("%d: %s", i+1, m.config.TermFor(tl.key, tl.def))
 		if tab == m.activeTab {
 			renderedTabs = append(renderedTabs, m.styles.TabActive.Render(label))
 		} else {

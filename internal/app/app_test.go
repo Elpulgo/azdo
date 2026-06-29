@@ -295,6 +295,39 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	}
 }
 
+func TestModel_HelpModal_ReflectsTermOverride(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Terms:           map[string]string{"work_items": "Tasks"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	// Open the help modal.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// The help dialog's Tabs line must honor the term override, not the
+	// hard-coded default label.
+	if !strings.Contains(view, "Tasks") {
+		t.Error("help modal Tabs line should show the overridden term 'Tasks'")
+	}
+	if strings.Contains(view, "Work Items") {
+		t.Error("help modal Tabs line should not show the default 'Work Items' once overridden")
+	}
+}
+
 func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1326,6 +1359,66 @@ func TestModel_DisabledPanes_ArrowKeys_SkipDisabledTabs(t *testing.T) {
 
 	if m.activeTab != TabPipelines {
 		t.Errorf("Left arrow should wrap to Pipelines, got %d", m.activeTab)
+	}
+}
+
+func TestModel_TabBar_DefaultLabels_Unchanged(t *testing.T) {
+	// With no Terms configured the tab bar must show the built-in default labels
+	// byte-for-byte — "Pull Requests", "Work Items", "Pipelines".
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		// Terms is nil — no overrides
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	for _, want := range []string{"1: Pull Requests", "2: Work Items", "3: Pipelines"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("expected tab bar to contain %q with default Terms (nil)", want)
+		}
+	}
+}
+
+func TestModel_TabBar_TermOverride_ReplacesLabel(t *testing.T) {
+	// When Terms["work_items"] is set the tab bar must show the override instead
+	// of the default "Work Items", while the other tabs keep their defaults.
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Terms:           map[string]string{"work_items": "Tasks"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	// Overridden label must appear with its positional number
+	if !strings.Contains(view, "2: Tasks") {
+		t.Error("expected tab bar to contain '2: Tasks' when Terms[\"work_items\"] = \"Tasks\"")
+	}
+	// Default label must be gone for that slot
+	if strings.Contains(view, "Work Items") {
+		t.Error("tab bar must NOT contain 'Work Items' when it is overridden to 'Tasks'")
+	}
+	// Other tabs must keep their default labels
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Error("expected tab bar to contain '1: Pull Requests' (not overridden)")
+	}
+	if !strings.Contains(view, "3: Pipelines") {
+		t.Error("expected tab bar to contain '3: Pipelines' (not overridden)")
 	}
 }
 

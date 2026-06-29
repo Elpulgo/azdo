@@ -18,7 +18,8 @@ type Config struct {
 	Organization    string            `mapstructure:"organization"`
 	Project         string            `mapstructure:"project"` // deprecated: use Projects
 	Projects        []string          `mapstructure:"projects"`
-	DisplayNames    map[string]string `mapstructure:"-"` // API name → display name
+	DisplayNames    map[string]string `mapstructure:"-"`        // API name → display name
+	Terms           map[string]string `mapstructure:"terms"`    // tab/term key → user-facing label
 	PollingInterval int               `mapstructure:"polling_interval"`
 	Theme           string            `mapstructure:"theme"`
 	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
@@ -78,6 +79,18 @@ func (c *Config) DisplayNameFor(apiName string) string {
 		}
 	}
 	return apiName
+}
+
+// TermFor returns the configured label for a term key, or the fallback
+// when no override is configured. An empty-string override also falls
+// through to the fallback so that a misconfigured entry doesn't erase labels.
+func (c *Config) TermFor(key, fallback string) string {
+	if c.Terms != nil {
+		if t, ok := c.Terms[key]; ok && t != "" {
+			return t
+		}
+	}
+	return fallback
 }
 
 // parseProjects parses the raw "projects" value from YAML which can be:
@@ -439,6 +452,10 @@ func (c *Config) Save() error {
 
 	if len(c.DisabledPanes) > 0 {
 		v.Set("disabled_panes", strings.Join(c.DisabledPanes, ","))
+	}
+
+	if len(c.Terms) > 0 {
+		v.Set("terms", c.Terms)
 	}
 
 	// Write config file

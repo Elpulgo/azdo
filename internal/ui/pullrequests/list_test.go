@@ -8,6 +8,7 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -1128,5 +1129,287 @@ func TestGetStatusMessage_DelegatedToDiffView(t *testing.T) {
 	msg := model.GetStatusMessage()
 	if msg != "Comment added" {
 		t.Errorf("GetStatusMessage() = %q, want %q", msg, "Comment added")
+	}
+}
+
+// ─── Mixed-kind glyph column tests ───────────────────────────────────────────
+// These tests use a synthetic provider.Kind(2) to simulate a second backend
+// (e.g. a future GitHub provider) without adding any KindGitHub constant.
+// In production, all items are KindAzure so the glyph column never appears.
+
+// TestPrsToRows_MixedKinds_GlyphColumnFirst verifies that when items span more
+// than one distinct Kind, prsToRows prepends a glyph cell at position 0.
+// Convention #6: assert the full glyph token AND the KindStyle foreground.
+func TestPrsToRows_MixedKinds_GlyphColumnFirst(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	prs := []provider.PullRequest{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			Title:          "PR One",
+			SourceRefName:  "refs/heads/feature/one",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Alice",
+			RepositoryName: "repo",
+		},
+		{
+			Identity:       provider.Identity{Kind: provider.Kind(2), Scope: "proj", ID: "2"},
+			Title:          "PR Two",
+			SourceRefName:  "refs/heads/feature/two",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Bob",
+			RepositoryName: "repo",
+		},
+	}
+
+	rows := prsToRows(prs, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Mixed kinds: 6 normal + 1 leading glyph = 7 cells per row.
+	const wantCells = 7
+	if len(rows[0]) != wantCells {
+		t.Fatalf("Mixed-kind row[0] has %d cells, want %d (glyph + 6 normal)", len(rows[0]), wantCells)
+	}
+	if len(rows[1]) != wantCells {
+		t.Fatalf("Mixed-kind row[1] has %d cells, want %d", len(rows[1]), wantCells)
+	}
+
+	// Row 0 (KindAzure): glyph cell must contain the Azure glyph "⬡".
+	wantGlyph0 := display.KindGlyph(provider.KindAzure)
+	if !strings.Contains(rows[0][0], wantGlyph0) {
+		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph0)
+	}
+
+	// Row 1 (Kind(2)): glyph cell must contain the unknown-kind fallback "?".
+	wantGlyph1 := display.KindGlyph(provider.Kind(2))
+	if !strings.Contains(rows[1][0], wantGlyph1) {
+		t.Errorf("Row 1 glyph cell = %q, want to contain %q", rows[1][0], wantGlyph1)
+	}
+
+	// Style assertion: KindStyle(KindAzure) must use the Muted foreground.
+	wantFg := s.Theme.ForegroundMuted
+	gotFg := display.KindStyle(provider.KindAzure, s).GetForeground()
+	if gotFg != wantFg {
+		t.Errorf("KindStyle(KindAzure) foreground = %v, want %v (Muted)", gotFg, wantFg)
+	}
+}
+
+// TestPrsToRows_AzureOnly_NoGlyphColumn verifies that Azure-only items produce
+// the standard 6-cell layout without a leading glyph cell (unchanged behavior).
+func TestPrsToRows_AzureOnly_NoGlyphColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	prs := []provider.PullRequest{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			Title:          "PR One",
+			SourceRefName:  "refs/heads/feature/one",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Alice",
+			RepositoryName: "repo",
+		},
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "2"},
+			Title:          "PR Two",
+			SourceRefName:  "refs/heads/feature/two",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Bob",
+			RepositoryName: "repo",
+		},
+	}
+
+	rows := prsToRows(prs, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Azure-only: must produce exactly 6 cells (no glyph column prepended).
+	const wantCells = 6
+	if len(rows[0]) != wantCells {
+		t.Errorf("Azure-only row[0] has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
+	}
+}
+
+// TestPrsToRowsMulti_MixedKinds_GlyphColumnFirst verifies the multi-project
+// variant: [glyph] [project] [status] [title] … (8 cells total) when mixed.
+func TestPrsToRowsMulti_MixedKinds_GlyphColumnFirst(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	prs := []provider.PullRequest{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
+			Title:          "PR One",
+			SourceRefName:  "refs/heads/feature/one",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Alice",
+			RepositoryName: "repo",
+		},
+		{
+			Identity:       provider.Identity{Kind: provider.Kind(2), Scope: "beta", ScopeDisplay: "Beta", ID: "2"},
+			Title:          "PR Two",
+			SourceRefName:  "refs/heads/feature/two",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Bob",
+			RepositoryName: "repo",
+		},
+	}
+
+	rows := prsToRowsMulti(prs, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Mixed + multi: 7 normal (project + 6) + 1 glyph = 8 cells.
+	const wantCells = 8
+	if len(rows[0]) != wantCells {
+		t.Fatalf("Mixed-kind multi row[0] has %d cells, want %d", len(rows[0]), wantCells)
+	}
+
+	// Glyph is at position 0; project is at position 1.
+	wantGlyph := display.KindGlyph(provider.KindAzure)
+	if !strings.Contains(rows[0][0], wantGlyph) {
+		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph)
+	}
+	if rows[0][1] != "Alpha" {
+		t.Errorf("Row 0 project cell = %q, want %q", rows[0][1], "Alpha")
+	}
+}
+
+// TestPrsToRowsMulti_AzureOnly_NoGlyphColumn verifies the multi-project
+// variant produces the standard 7-cell layout when all items are KindAzure.
+func TestPrsToRowsMulti_AzureOnly_NoGlyphColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	prs := []provider.PullRequest{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
+			Title:          "PR One",
+			SourceRefName:  "refs/heads/feature/one",
+			TargetRefName:  "refs/heads/main",
+			CreatedByName:  "Alice",
+			RepositoryName: "repo",
+		},
+	}
+
+	rows := prsToRowsMulti(prs, s)
+
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+	// Azure-only multi: must be exactly 7 cells (project + 6 normal, no glyph).
+	const wantCells = 7
+	if len(rows[0]) != wantCells {
+		t.Errorf("Azure-only multi row has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
+	}
+}
+
+// ─── Column / cell count parity tests ────────────────────────────────────────
+// These tests prove that after SetItems the column headers derived by ToColumns
+// always equal the cell count produced by ToRows — the invariant that prevents
+// the index-out-of-range panic in table.renderRow.
+
+func makePR(kind provider.Kind, id string) provider.PullRequest {
+	return provider.PullRequest{
+		Identity:       provider.Identity{Kind: kind, Scope: "proj", ScopeDisplay: "proj", ID: id},
+		Title:          "PR " + id,
+		SourceRefName:  "refs/heads/feature/" + id,
+		TargetRefName:  "refs/heads/main",
+		CreatedByName:  "User",
+		RepositoryName: "repo",
+	}
+}
+
+// TestPRs_ColumnCellParity_AzureOnly checks single-project Azure-only layout:
+// 6 columns, 6 cells per row — unchanged from before this task.
+func TestPRs_ColumnCellParity_AzureOnly(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s) // nil client → isMulti = false
+
+	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.KindAzure, "2")}
+	m.list = m.list.SetItems(prs)
+
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("Azure-only: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+	if len(cols) != 6 {
+		t.Errorf("Azure-only single: want 6 columns, got %d", len(cols))
+	}
+}
+
+// TestPRs_ColumnCellParity_MixedKinds checks single-project mixed-kind layout:
+// 7 columns and 7 cells per row (glyph prepended to both).
+func TestPRs_ColumnCellParity_MixedKinds(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+
+	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")}
+	m.list = m.list.SetItems(prs)
+
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("Mixed-kinds: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+	if len(cols) != 7 {
+		t.Errorf("Mixed single: want 7 columns (glyph + 6), got %d", len(cols))
+	}
+	// Glyph column has empty title.
+	if cols[0].Title != "" {
+		t.Errorf("Glyph column title = %q, want empty string", cols[0].Title)
+	}
+}
+
+// TestPRs_ColumnCellParity_MixedKinds_View renders through the table to prove
+// no index-out-of-range panic occurs when columns and cells are in lock-step.
+func TestPRs_ColumnCellParity_MixedKinds_View(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+
+	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")}
+	m.list = m.list.SetItems(prs)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Must not panic.
+	view := m.View()
+	if view == "" {
+		t.Error("View() returned empty string")
+	}
+}
+
+// TestPRs_ColumnCellParity_AzureOnlyToMixed verifies that transitioning from an
+// Azure-only set to a mixed set via a second SetItems call updates both columns
+// and rows — catching any caching bug.
+func TestPRs_ColumnCellParity_AzureOnlyToMixed(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// First: Azure-only.
+	m.list = m.list.SetItems([]provider.PullRequest{makePR(provider.KindAzure, "1")})
+	if n := len(m.list.Table().Columns()); n != 6 {
+		t.Fatalf("Azure-only: want 6 columns, got %d", n)
+	}
+
+	// Second: mixed kinds.
+	m.list = m.list.SetItems([]provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")})
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+	if len(cols) != 7 {
+		t.Fatalf("Mixed: want 7 columns, got %d", len(cols))
+	}
+	if len(rows) > 0 && len(cols) != len(rows[0]) {
+		t.Errorf("Mixed: column count %d != cell count %d", len(cols), len(rows[0]))
 	}
 }

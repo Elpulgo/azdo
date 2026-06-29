@@ -53,27 +53,44 @@ func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// wiBaseColumns are the per-row column specs for the work item list,
+// excluding the optional project and glyph columns.
+var wiBaseColumns = []listview.ColumnSpec{
+	{Title: "Type", WidthPct: 10, MinWidth: 8},
+	{Title: "ID", WidthPct: 8, MinWidth: 6},
+	{Title: "Title", WidthPct: 40, MinWidth: 25},
+	{Title: "State", WidthPct: 10, MinWidth: 10},
+	{Title: "Prio", WidthPct: 6, MinWidth: 4},
+	{Title: "Assigned", WidthPct: 26, MinWidth: 10},
+}
+
 // NewModelWithStyles creates a new work items list model with custom styles
 func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Type", WidthPct: 10, MinWidth: 8},
-		{Title: "ID", WidthPct: 8, MinWidth: 6},
-		{Title: "Title", WidthPct: 40, MinWidth: 25},
-		{Title: "State", WidthPct: 10, MinWidth: 10},
-		{Title: "Prio", WidthPct: 6, MinWidth: 4},
-		{Title: "Assigned", WidthPct: 26, MinWidth: 10},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in workItemsToRows / workItemsToRowsMulti exactly:
+	//   [glyph?] [project?] [type] [id] [title] [state] [prio] [assigned]
+	toColumns := func(items []provider.WorkItem) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, wi := range items {
+			kinds[i] = wi.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 8}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(wiBaseColumns))
+		copy(cols, wiBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 8}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := workItemsToRows
 	if isMulti {
@@ -86,11 +103,11 @@ func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	}
 
 	cfg := listview.Config[provider.WorkItem]{
-		Columns:        columns,
 		LoadingMessage: "Loading work items...",
 		EntityName:     "work items",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
 			return fetchWorkItems(client)
 		},
@@ -489,15 +506,24 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// workItemsToRows converts work items to table rows
+// workItemsToRows converts work items to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
 func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, wi := range items {
+		kinds[i] = wi.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
 		assignedTo := wi.AssignedToName
 		if assignedTo == "" {
 			assignedTo = "-"
 		}
-		rows[i] = table.Row{
+		cells := table.Row{
 			typeIconWithStyles(wi.ItemKind, s),
 			wi.Identity.ID,
 			wi.Title,
@@ -505,19 +531,32 @@ func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
 			priorityTextWithStyles(wi.Priority, s),
 			assignedTo,
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(wi.Identity.Kind, s).Render(display.KindGlyph(wi.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
 
 // workItemsToRowsMulti converts work items to table rows with a Project column.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [type] [id] [title] …
 func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, wi := range items {
+		kinds[i] = wi.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
 		assignedTo := wi.AssignedToName
 		if assignedTo == "" {
 			assignedTo = "-"
 		}
-		rows[i] = table.Row{
+		cells := table.Row{
 			wi.Identity.ScopeDisplay,
 			typeIconWithStyles(wi.ItemKind, s),
 			wi.Identity.ID,
@@ -526,6 +565,10 @@ func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.R
 			priorityTextWithStyles(wi.Priority, s),
 			assignedTo,
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(wi.Identity.Kind, s).Render(display.KindGlyph(wi.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }

@@ -194,6 +194,106 @@ func TestRunStatusLabel(t *testing.T) {
 	}
 }
 
+// ─── Kind ────────────────────────────────────────────────────────────────────
+
+func TestKindGlyph(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     provider.Kind
+		expected string
+	}{
+		// Zero/unknown Kind returns a neutral fallback; no constant exists for it yet.
+		{"Zero", provider.Kind(0), "?"},
+		{"Azure", provider.KindAzure, "⬡"},
+		// Sentinel: out-of-range value falls through to default
+		{"OutOfRange", provider.Kind(99), "?"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.KindGlyph(tc.kind)
+			if got != tc.expected {
+				t.Errorf("KindGlyph(%v) = %q, want %q", tc.kind, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestKindLabel(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     provider.Kind
+		expected string
+	}{
+		// Zero/unknown Kind returns "" (caller decides how to handle unknown origin).
+		{"Zero", provider.Kind(0), ""},
+		{"Azure", provider.KindAzure, "Azure"},
+		// Sentinel: out-of-range value falls through to default
+		{"OutOfRange", provider.Kind(99), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.KindLabel(tc.kind)
+			if got != tc.expected {
+				t.Errorf("KindLabel(%v) = %q, want %q", tc.kind, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestKindStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name   string
+		kind   provider.Kind
+		wantFg lipgloss.Color
+	}{
+		// All kinds (including zero/unknown and KindAzure) use Muted so the glyph
+		// reads as secondary metadata rather than a status indicator.
+		{"Zero", provider.Kind(0), th.ForegroundMuted},
+		{"Azure", provider.KindAzure, th.ForegroundMuted},
+		// Sentinel: out-of-range value also returns Muted
+		{"OutOfRange", provider.Kind(99), th.ForegroundMuted},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.KindStyle(tc.kind, s).GetForeground()
+			if got != tc.wantFg {
+				t.Errorf("KindStyle(%v) foreground = %v, want %v", tc.kind, got, tc.wantFg)
+			}
+		})
+	}
+}
+
+// ─── MixedKinds ──────────────────────────────────────────────────────────────
+
+func TestMixedKinds(t *testing.T) {
+	tests := []struct {
+		name     string
+		kinds    []provider.Kind
+		expected bool
+	}{
+		// empty → false
+		{"Empty", []provider.Kind{}, false},
+		// single element, single kind → false
+		{"SingleKind_OneElement", []provider.Kind{provider.KindAzure}, false},
+		// multiple elements, all same kind → false
+		{"SingleKind_MultipleElements", []provider.Kind{provider.KindAzure, provider.KindAzure, provider.KindAzure}, false},
+		// two distinct kinds → true
+		{"TwoDistinctKinds", []provider.Kind{provider.KindAzure, provider.Kind(2)}, true},
+		// more than two distinct kinds → true
+		{"ThreeDistinctKinds", []provider.Kind{provider.KindAzure, provider.Kind(2), provider.Kind(3)}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.MixedKinds(tc.kinds)
+			if got != tc.expected {
+				t.Errorf("MixedKinds(%v) = %v, want %v", tc.kinds, got, tc.expected)
+			}
+		})
+	}
+}
+
 // ─── Style function tests ─────────────────────────────────────────────────────
 
 func TestStateStyle(t *testing.T) {

@@ -120,6 +120,66 @@ func ItemTypeStyle(t provider.ItemType, s *styles.Styles) lipgloss.Style {
 	}
 }
 
+// ─── Kind ────────────────────────────────────────────────────────────────────
+
+// KindGlyph returns the provider-origin icon for a backend Kind.
+// Used when a list mixes entities from different backends and a per-row marker
+// is needed. Returns "?" for the zero/unknown Kind and any unrecognised value.
+//
+// Phase 3 note: when KindGitHub is added, map it here (e.g. "⑂" or similar).
+func KindGlyph(k provider.Kind) string {
+	switch k {
+	case provider.KindAzure:
+		return "⬡"
+	default: // KindUnknown (zero) and future/unrecognised values
+		return "?"
+	}
+}
+
+// MixedKinds reports whether the given kinds span more than one distinct
+// provider Kind. Returns false for an empty slice and for a slice where all
+// elements share the same Kind.
+func MixedKinds(kinds []provider.Kind) bool {
+	if len(kinds) == 0 {
+		return false
+	}
+	first := kinds[0]
+	for _, k := range kinds[1:] {
+		if k != first {
+			return true
+		}
+	}
+	return false
+}
+
+// KindStyle returns the lipgloss style for a provider-kind glyph cell.
+// All kinds — including KindAzure — use a muted/neutral style so the glyph
+// reads as secondary metadata rather than a status indicator.
+//
+// Phase 3 note: when KindGitHub is added, it can keep the same Muted style
+// or be given a distinct colour (e.g. Info) to differentiate origins visually.
+func KindStyle(k provider.Kind, s *styles.Styles) lipgloss.Style {
+	switch k {
+	case provider.KindAzure:
+		return s.Muted
+	default: // KindUnknown (zero) and future/unrecognised values
+		return s.Muted
+	}
+}
+
+// KindLabel returns the human-readable provider name for a backend Kind.
+// Returns "" for the zero/unknown Kind so callers can apply their own fallback.
+//
+// Phase 3 note: when KindGitHub is added, map it here (e.g. "GitHub").
+func KindLabel(k provider.Kind) string {
+	switch k {
+	case provider.KindAzure:
+		return "Azure"
+	default: // KindUnknown (zero) and future/unrecognised values
+		return ""
+	}
+}
+
 // ─── VoteKind ────────────────────────────────────────────────────────────────
 
 // VoteGlyph returns the icon for a reviewer vote kind.

@@ -51,27 +51,45 @@ func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// prBaseColumns are the per-row column specs for the pull request list,
+// excluding the optional project and glyph columns. They are defined once
+// and copied inside ToColumns to avoid mutating the package-level slice.
+var prBaseColumns = []listview.ColumnSpec{
+	{Title: "Status", WidthPct: 10, MinWidth: 8},
+	{Title: "Title", WidthPct: 30, MinWidth: 15},
+	{Title: "Branches", WidthPct: 20, MinWidth: 12},
+	{Title: "Author", WidthPct: 15, MinWidth: 10},
+	{Title: "Repo", WidthPct: 15, MinWidth: 10},
+	{Title: "Reviews", WidthPct: 10, MinWidth: 6},
+}
+
 // NewModelWithStyles creates a new pull request list model with custom styles
 func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Status", WidthPct: 10, MinWidth: 8},
-		{Title: "Title", WidthPct: 30, MinWidth: 15},
-		{Title: "Branches", WidthPct: 20, MinWidth: 12},
-		{Title: "Author", WidthPct: 15, MinWidth: 10},
-		{Title: "Repo", WidthPct: 15, MinWidth: 10},
-		{Title: "Reviews", WidthPct: 10, MinWidth: 6},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in prsToRows / prsToRowsMulti exactly:
+	//   [glyph?] [project?] [status] [title] [branches] [author] [repo] [reviews]
+	toColumns := func(items []provider.PullRequest) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, pr := range items {
+			kinds[i] = pr.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(prBaseColumns))
+		copy(cols, prBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := prsToRows
 	if isMulti {
@@ -84,11 +102,11 @@ func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	}
 
 	cfg := listview.Config[provider.PullRequest]{
-		Columns:        columns,
 		LoadingMessage: "Loading pull requests...",
 		EntityName:     "pull requests",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
 			return fetchPullRequestsMulti(client)
 		},
@@ -497,12 +515,21 @@ func branchShortName(ref string) string {
 	return strings.TrimPrefix(ref, "refs/heads/")
 }
 
-// prsToRows converts pull requests to table rows
+// prsToRows converts pull requests to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
 func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, pr := range items {
+		kinds[i] = pr.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
-		rows[i] = table.Row{
+		cells := table.Row{
 			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
@@ -510,6 +537,10 @@ func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
 			pr.RepositoryName,
 			voteIconWithStyles(pr.Reviewers, s),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(pr.Identity.Kind, s).Render(display.KindGlyph(pr.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
@@ -588,11 +619,20 @@ func voteIconWithStyles(reviewers []provider.Reviewer, s *styles.Styles) string 
 }
 
 // prsToRowsMulti converts pull requests to table rows with a Project column.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [status] [title] …
 func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, pr := range items {
+		kinds[i] = pr.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
-		rows[i] = table.Row{
+		cells := table.Row{
 			pr.Identity.ScopeDisplay,
 			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
@@ -601,6 +641,10 @@ func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row 
 			pr.RepositoryName,
 			voteIconWithStyles(pr.Reviewers, s),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(pr.Identity.Kind, s).Render(display.KindGlyph(pr.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
