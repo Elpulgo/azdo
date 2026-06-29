@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
@@ -30,12 +31,12 @@ type TagSelectedMsg = components.TagSelectedMsg
 
 // Model represents the work items list view with sub-views
 type Model struct {
-	list        listview.Model[azdevops.WorkItem]
-	client      *azdevops.MultiClient
+	list        listview.Model[provider.WorkItem]
+	client      provider.Provider
 	styles      *styles.Styles
 	myItemsOnly bool
-	allItems    []azdevops.WorkItem
-	myItems     []azdevops.WorkItem // base my-items set (before tag/state filter)
+	allItems    []provider.WorkItem
+	myItems     []provider.WorkItem // base my-items set (before tag/state filter)
 	activeTag   string
 	activeState string
 	tagPicker   components.TagPicker
@@ -48,12 +49,12 @@ type Model struct {
 }
 
 // NewModel creates a new work items list model with default styles
-func NewModel(client *azdevops.MultiClient) Model {
+func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
 // NewModelWithStyles creates a new work items list model with custom styles
-func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
+func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
 	columns := []listview.ColumnSpec{
@@ -84,21 +85,17 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		filterFunc = filterWorkItemMulti
 	}
 
-	cfg := listview.Config[azdevops.WorkItem]{
+	cfg := listview.Config[provider.WorkItem]{
 		Columns:        columns,
 		LoadingMessage: "Loading work items...",
 		EntityName:     "work items",
 		MinWidth:       50,
 		ToRows:         toRows,
 		Fetch: func() tea.Cmd {
-			return fetchWorkItemsMulti(client)
+			return fetchWorkItems(client)
 		},
-		EnterDetail: func(item azdevops.WorkItem, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			var projectClient *azdevops.Client
-			if client != nil {
-				projectClient = client.ClientFor(item.ProjectName)
-			}
-			d := NewDetailModelWithStyles(projectClient, item, st)
+		EnterDetail: func(item provider.WorkItem, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
+			d := NewDetailModelWithStyles(client, item, st)
 			d.SetSize(w, h)
 			// d.Init() kicks off the comment fetch so the Discussion section
 			// populates as soon as the detail view opens.
@@ -134,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if errors.As(msg.err, &partialErr) {
 				m.allItems = msg.workItems
 				if m.myItemsOnly {
-					return m, fetchMyWorkItemsMulti(m.client)
+					return m, fetchMyWorkItems(m.client)
 				}
 				m.list = m.list.HandleFetchResult(msg.workItems, nil)
 				return m.withRestore(nil)
@@ -152,7 +149,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.allItems = msg.workItems
 		if m.myItemsOnly {
 			// Chain to my-items fetch so loading state is eventually cleared
-			return m, fetchMyWorkItemsMulti(m.client)
+			return m, fetchMyWorkItems(m.client)
 		}
 		m.list = m.list.HandleFetchResult(msg.workItems, nil)
 		return m.withRestore(nil)
@@ -176,7 +173,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.withRestore(nil)
 	case WorkItemStateChangedMsg:
 		// Re-fetch work items so the list reflects the updated state
-		return m, fetchWorkItemsMulti(m.client)
+		return m, fetchWorkItems(m.client)
 	case SetWorkItemsMsg:
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
@@ -210,7 +207,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if msg.String() == "m" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
 				m.myItemsOnly = !m.myItemsOnly
 				if m.myItemsOnly {
-					return m, fetchMyWorkItemsMulti(m.client)
+					return m, fetchMyWorkItems(m.client)
 				}
 				// Toggle OFF: restore all items (with filters if active)
 				m.myItems = nil
@@ -344,7 +341,7 @@ func (m Model) DetailItemID() int {
 	if !ok || adapter == nil {
 		return 0
 	}
-	return adapter.model.GetWorkItem().ID
+	return adapter.model.GetWorkItemID()
 }
 
 // WithPendingDetailRestore queues a one-shot request to open the work
@@ -364,8 +361,9 @@ func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
 	m.pendingDetailID = 0
 	m.pendingRestoreHandled = true
 
-	idx := m.list.FindIndex(func(wi azdevops.WorkItem) bool {
-		return wi.ID == target
+	idx := m.list.FindIndex(func(wi provider.WorkItem) bool {
+		id, _ := strconv.Atoi(wi.Identity.ID)
+		return id == target
 	})
 	if idx < 0 {
 		return m, nil
@@ -446,7 +444,7 @@ func (m *Model) SetStatePickerSize(width, height int) {
 }
 
 // getBaseItems returns the appropriate base items (allItems or myItems)
-func (m Model) getBaseItems() []azdevops.WorkItem {
+func (m Model) getBaseItems() []provider.WorkItem {
 	if m.myItemsOnly {
 		return m.myItems
 	}
@@ -454,7 +452,7 @@ func (m Model) getBaseItems() []azdevops.WorkItem {
 }
 
 // applyAllFilters applies tag and state filters to the given items.
-func (m Model) applyAllFilters(items []azdevops.WorkItem) []azdevops.WorkItem {
+func (m Model) applyAllFilters(items []provider.WorkItem) []provider.WorkItem {
 	result := applyTagFilter(items, m.activeTag)
 	result = applyStateFilter(result, m.activeState)
 	return result
@@ -492,69 +490,75 @@ func (a *detailAdapter) GetStatusMessage() string {
 }
 
 // workItemsToRows converts work items to table rows
-func workItemsToRows(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
+func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
+		assignedTo := wi.AssignedToName
+		if assignedTo == "" {
+			assignedTo = "-"
+		}
 		rows[i] = table.Row{
-			typeIconWithStyles(wi.Fields.WorkItemType, s),
-			strconv.Itoa(wi.ID),
-			wi.Fields.Title,
-			stateTextWithStyles(wi.Fields.State, s),
-			priorityTextWithStyles(wi.Fields.Priority, s),
-			wi.AssignedToName(),
+			typeIconWithStyles(wi.WorkItemType, s),
+			wi.Identity.ID,
+			wi.Title,
+			stateTextWithStyles(wi.State, s),
+			priorityTextWithStyles(wi.Priority, s),
+			assignedTo,
 		}
 	}
 	return rows
 }
 
 // workItemsToRowsMulti converts work items to table rows with a Project column.
-func workItemsToRowsMulti(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
+func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.Row {
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
+		assignedTo := wi.AssignedToName
+		if assignedTo == "" {
+			assignedTo = "-"
+		}
 		rows[i] = table.Row{
-			wi.ProjectDisplayName,
-			typeIconWithStyles(wi.Fields.WorkItemType, s),
-			strconv.Itoa(wi.ID),
-			wi.Fields.Title,
-			stateTextWithStyles(wi.Fields.State, s),
-			priorityTextWithStyles(wi.Fields.Priority, s),
-			wi.AssignedToName(),
+			wi.Identity.ScopeDisplay,
+			typeIconWithStyles(wi.WorkItemType, s),
+			wi.Identity.ID,
+			wi.Title,
+			stateTextWithStyles(wi.State, s),
+			priorityTextWithStyles(wi.Priority, s),
+			assignedTo,
 		}
 	}
 	return rows
 }
 
 // filterWorkItem returns true if the work item matches the search query.
-func filterWorkItem(wi azdevops.WorkItem, query string) bool {
+func filterWorkItem(wi provider.WorkItem, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	if strings.Contains(strings.ToLower(wi.Fields.Title), q) ||
-		strings.Contains(strconv.Itoa(wi.ID), q) ||
-		strings.Contains(strings.ToLower(wi.Fields.State), q) ||
-		strings.Contains(strings.ToLower(wi.Fields.WorkItemType), q) {
+	if strings.Contains(strings.ToLower(wi.Title), q) ||
+		strings.Contains(wi.Identity.ID, q) ||
+		strings.Contains(strings.ToLower(wi.State), q) ||
+		strings.Contains(strings.ToLower(wi.WorkItemType), q) {
 		return true
 	}
-	if wi.Fields.AssignedTo != nil {
-		if strings.Contains(strings.ToLower(wi.Fields.AssignedTo.DisplayName), q) {
-			return true
-		}
+	if strings.Contains(strings.ToLower(wi.AssignedToName), q) {
+		return true
 	}
-	if strings.Contains(strings.ToLower(wi.Fields.Tags), q) {
+	if strings.Contains(strings.ToLower(wi.Tags), q) {
 		return true
 	}
 	return false
 }
 
 // filterWorkItemMulti matches work item fields including project name.
-func filterWorkItemMulti(wi azdevops.WorkItem, query string) bool {
+func filterWorkItemMulti(wi provider.WorkItem, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	if strings.Contains(strings.ToLower(wi.ProjectDisplayName), q) ||
-		strings.Contains(strings.ToLower(wi.ProjectName), q) {
+	if strings.Contains(strings.ToLower(wi.Identity.ScopeDisplay), q) ||
+		strings.Contains(strings.ToLower(wi.Identity.Scope), q) {
 		return true
 	}
 	return filterWorkItem(wi, query)
@@ -567,22 +571,22 @@ type WorkItemStateChangedMsg struct{}
 // Messages
 
 type workItemsMsg struct {
-	workItems []azdevops.WorkItem
+	workItems []provider.WorkItem
 	err       error
 }
 
 type myWorkItemsMsg struct {
-	workItems []azdevops.WorkItem
+	workItems []provider.WorkItem
 	err       error
 }
 
 // SetWorkItemsMsg is a message to directly set the work items (from polling)
 type SetWorkItemsMsg struct {
-	WorkItems []azdevops.WorkItem
+	WorkItems []provider.WorkItem
 }
 
-// fetchWorkItemsMulti fetches work items from all projects via MultiClient.
-func fetchWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
+// fetchWorkItems fetches work items from all projects via the provider.
+func fetchWorkItems(client provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return workItemsMsg{workItems: nil, err: nil}
@@ -592,9 +596,9 @@ func fetchWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 	}
 }
 
-// fetchMyWorkItemsMulti fetches work items assigned to the authenticated user
+// fetchMyWorkItems fetches work items assigned to the authenticated user
 // using the @Me WIQL macro.
-func fetchMyWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
+func fetchMyWorkItems(client provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return myWorkItemsMsg{workItems: nil, err: nil}
@@ -604,11 +608,28 @@ func fetchMyWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 	}
 }
 
+// tagList splits a semicolon-separated tags string into a trimmed slice.
+// Returns nil if there are no tags.
+func tagList(tags string) []string {
+	if tags == "" {
+		return nil
+	}
+	raw := strings.Split(tags, ";")
+	result := make([]string, 0, len(raw))
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
 // collectUniqueTags extracts all unique tags from the work items, sorted alphabetically.
-func collectUniqueTags(items []azdevops.WorkItem) []string {
+func collectUniqueTags(items []provider.WorkItem) []string {
 	seen := make(map[string]struct{})
 	for i := range items {
-		for _, tag := range items[i].TagList() {
+		for _, tag := range tagList(items[i].Tags) {
 			seen[tag] = struct{}{}
 		}
 	}
@@ -621,11 +642,11 @@ func collectUniqueTags(items []azdevops.WorkItem) []string {
 }
 
 // collectUniqueStates extracts all unique states from the work items, sorted alphabetically.
-func collectUniqueStates(items []azdevops.WorkItem) []string {
+func collectUniqueStates(items []provider.WorkItem) []string {
 	seen := make(map[string]struct{})
 	for i := range items {
-		if items[i].Fields.State != "" {
-			seen[items[i].Fields.State] = struct{}{}
+		if items[i].State != "" {
+			seen[items[i].State] = struct{}{}
 		}
 	}
 	states := make([]string, 0, len(seen))
@@ -638,13 +659,13 @@ func collectUniqueStates(items []azdevops.WorkItem) []string {
 
 // applyTagFilter returns only work items that have the given tag.
 // If tag is empty, all items are returned unfiltered.
-func applyTagFilter(items []azdevops.WorkItem, tag string) []azdevops.WorkItem {
+func applyTagFilter(items []provider.WorkItem, tag string) []provider.WorkItem {
 	if tag == "" {
 		return items
 	}
-	var filtered []azdevops.WorkItem
+	var filtered []provider.WorkItem
 	for _, wi := range items {
-		for _, t := range wi.TagList() {
+		for _, t := range tagList(wi.Tags) {
 			if t == tag {
 				filtered = append(filtered, wi)
 				break
@@ -656,13 +677,13 @@ func applyTagFilter(items []azdevops.WorkItem, tag string) []azdevops.WorkItem {
 
 // applyStateFilter returns only work items that have the given state.
 // If state is empty, all items are returned unfiltered.
-func applyStateFilter(items []azdevops.WorkItem, state string) []azdevops.WorkItem {
+func applyStateFilter(items []provider.WorkItem, state string) []provider.WorkItem {
 	if state == "" {
 		return items
 	}
-	var filtered []azdevops.WorkItem
+	var filtered []provider.WorkItem
 	for _, wi := range items {
-		if wi.Fields.State == state {
+		if wi.State == state {
 			filtered = append(filtered, wi)
 		}
 	}

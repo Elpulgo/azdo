@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
@@ -140,13 +140,13 @@ func TestViewModeNavigation(t *testing.T) {
 	}
 
 	// Simulate having some runs loaded
-	model.list = model.list.SetItems([]azdevops.PipelineRun{
+	model.list = model.list.SetItems([]provider.PipelineRun{
 		{
-			ID:          123,
-			BuildNumber: "20240206.1",
-			Status:      "completed",
-			Result:      "succeeded",
-			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "CI Pipeline"},
+			Identity:       provider.Identity{ID: "123", Scope: "proj"},
+			BuildNumber:    "20240206.1",
+			Status:         "completed",
+			Result:         "succeeded",
+			DefinitionName: "CI Pipeline",
 		},
 	})
 
@@ -174,11 +174,11 @@ func TestViewModeNavigationToLogs(t *testing.T) {
 	model.height = 24
 
 	// Load runs and enter detail view
-	model.list = model.list.SetItems([]azdevops.PipelineRun{
+	model.list = model.list.SetItems([]provider.PipelineRun{
 		{
-			ID:          456,
-			BuildNumber: "20240206.2",
-			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Build Pipeline"},
+			Identity:       provider.Identity{ID: "456", Scope: "proj"},
+			BuildNumber:    "20240206.2",
+			DefinitionName: "Build Pipeline",
 		},
 	})
 
@@ -187,15 +187,15 @@ func TestViewModeNavigationToLogs(t *testing.T) {
 
 	// Get the detail adapter to set timeline
 	adapter := model.list.Detail().(*detailAdapter)
-	timeline := &azdevops.Timeline{
-		ID: "test-timeline",
-		Records: []azdevops.TimelineRecord{
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test-timeline", Scope: "proj"},
+		Records: []provider.TimelineRecord{
 			{
 				ID:    "task-1",
 				Type:  "Task",
 				Name:  "npm install",
 				State: "completed",
-				Log:   &azdevops.LogReference{ID: 10},
+				LogID: 10,
 			},
 		},
 	}
@@ -231,11 +231,11 @@ func TestViewModeNoLogDoesNotTransition(t *testing.T) {
 	model.height = 24
 
 	// Load runs and enter detail view
-	model.list = model.list.SetItems([]azdevops.PipelineRun{
+	model.list = model.list.SetItems([]provider.PipelineRun{
 		{
-			ID:          789,
-			BuildNumber: "20240206.3",
-			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Test Pipeline"},
+			Identity:       provider.Identity{ID: "789", Scope: "proj"},
+			BuildNumber:    "20240206.3",
+			DefinitionName: "Test Pipeline",
 		},
 	})
 
@@ -244,15 +244,15 @@ func TestViewModeNoLogDoesNotTransition(t *testing.T) {
 
 	// Set timeline without log reference
 	adapter := model.list.Detail().(*detailAdapter)
-	timeline := &azdevops.Timeline{
-		ID: "test-timeline",
-		Records: []azdevops.TimelineRecord{
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test-timeline", Scope: "proj"},
+		Records: []provider.TimelineRecord{
 			{
 				ID:    "stage-1",
 				Type:  "Stage",
 				Name:  "Build Stage",
 				State: "completed",
-				Log:   nil, // No log
+				LogID: 0, // No log
 			},
 		},
 	}
@@ -272,17 +272,17 @@ func TestRunsToRowsIncludesTimestamp(t *testing.T) {
 	startTime := time.Date(2024, time.February, 10, 14, 31, 0, 0, time.UTC)
 	finishTime := time.Date(2024, time.February, 10, 14, 36, 0, 0, time.UTC)
 
-	items := []azdevops.PipelineRun{
+	items := []provider.PipelineRun{
 		{
-			ID:           123,
-			BuildNumber:  "20240210.1",
-			Status:       "completed",
-			Result:       "succeeded",
-			SourceBranch: "refs/heads/main",
-			QueueTime:    queueTime,
-			StartTime:    &startTime,
-			FinishTime:   &finishTime,
-			Definition:   azdevops.PipelineDefinition{ID: 1, Name: "CI Pipeline"},
+			Identity:       provider.Identity{ID: "123", Scope: "proj"},
+			BuildNumber:    "20240210.1",
+			Status:         "completed",
+			Result:         "succeeded",
+			SourceBranch:   "refs/heads/main",
+			QueueTime:      queueTime,
+			StartTime:      &startTime,
+			FinishTime:     &finishTime,
+			DefinitionName: "CI Pipeline",
 		},
 	}
 
@@ -313,11 +313,11 @@ func TestDetailView_EnterTogglesExpandOnNodeWithChildren(t *testing.T) {
 	model.width = 80
 	model.height = 24
 
-	model.list = model.list.SetItems([]azdevops.PipelineRun{
+	model.list = model.list.SetItems([]provider.PipelineRun{
 		{
-			ID:          123,
-			BuildNumber: "20240206.1",
-			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Build Pipeline"},
+			Identity:       provider.Identity{ID: "123", Scope: "proj"},
+			BuildNumber:    "20240206.1",
+			DefinitionName: "Build Pipeline",
 		},
 	})
 
@@ -326,12 +326,12 @@ func TestDetailView_EnterTogglesExpandOnNodeWithChildren(t *testing.T) {
 
 	// Set timeline with stage containing children
 	adapter := model.list.Detail().(*detailAdapter)
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "stage-1", ParentID: nil, Type: "Stage", Name: "Build", Order: 1},
-			{ID: "job-1", ParentID: strPtr("stage-1"), Type: "Job", Name: "Build Job", Order: 1,
-				Log: &azdevops.LogReference{ID: 10}},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "stage-1", ParentID: "", Type: "Stage", Name: "Build", Order: 1},
+			{ID: "job-1", ParentID: "stage-1", Type: "Job", Name: "Build Job", Order: 1,
+				LogID: 10},
 		},
 	}
 	adapter.model.SetTimeline(timeline)
@@ -358,11 +358,11 @@ func TestDetailView_EnterOnLeafWithLogsOpensLogViewer(t *testing.T) {
 	model.width = 80
 	model.height = 24
 
-	model.list = model.list.SetItems([]azdevops.PipelineRun{
+	model.list = model.list.SetItems([]provider.PipelineRun{
 		{
-			ID:          123,
-			BuildNumber: "20240206.1",
-			Definition:  azdevops.PipelineDefinition{ID: 1, Name: "Build Pipeline"},
+			Identity:       provider.Identity{ID: "123", Scope: "proj"},
+			BuildNumber:    "20240206.1",
+			DefinitionName: "Build Pipeline",
 		},
 	})
 
@@ -371,11 +371,11 @@ func TestDetailView_EnterOnLeafWithLogsOpensLogViewer(t *testing.T) {
 
 	// Set timeline with a single task (no children, has log)
 	adapter := model.list.Detail().(*detailAdapter)
-	timeline := &azdevops.Timeline{
-		ID: "test",
-		Records: []azdevops.TimelineRecord{
-			{ID: "task-1", ParentID: nil, Type: "Task", Name: "npm install", Order: 1,
-				Log: &azdevops.LogReference{ID: 10}},
+	timeline := &provider.Timeline{
+		Identity: provider.Identity{ID: "test", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "task-1", ParentID: "", Type: "Task", Name: "npm install", Order: 1,
+				LogID: 10},
 		},
 	}
 	adapter.model.SetTimeline(timeline)
@@ -388,10 +388,10 @@ func TestDetailView_EnterOnLeafWithLogsOpensLogViewer(t *testing.T) {
 }
 
 func TestFilterPipelineRun(t *testing.T) {
-	run := azdevops.PipelineRun{
-		BuildNumber:  "20240210.1",
-		SourceBranch: "refs/heads/feature/deploy",
-		Definition:   azdevops.PipelineDefinition{Name: "CI Pipeline"},
+	run := provider.PipelineRun{
+		BuildNumber:    "20240210.1",
+		SourceBranch:   "refs/heads/feature/deploy",
+		DefinitionName: "CI Pipeline",
 	}
 
 	tests := []struct {
@@ -422,11 +422,11 @@ func TestMakeColumnsHasSixColumns(t *testing.T) {
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	// Verify by checking table view contains expected headers
-	model.list = model.list.SetItems([]azdevops.PipelineRun{
+	model.list = model.list.SetItems([]provider.PipelineRun{
 		{
-			ID:          1,
-			BuildNumber: "1",
-			Definition:  azdevops.PipelineDefinition{Name: "test"},
+			Identity:       provider.Identity{ID: "1", Scope: "proj"},
+			BuildNumber:    "1",
+			DefinitionName: "test",
 		},
 	})
 
@@ -441,17 +441,15 @@ func TestMakeColumnsHasSixColumns(t *testing.T) {
 
 func TestRunsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
-	items := []azdevops.PipelineRun{
+	items := []provider.PipelineRun{
 		{
-			ID:                 1,
-			BuildNumber:        "20240210.1",
-			Status:             "completed",
-			Result:             "succeeded",
-			SourceBranch:       "refs/heads/main",
-			QueueTime:          time.Now(),
-			Definition:         azdevops.PipelineDefinition{Name: "CI"},
-			Project:            azdevops.Project{Name: "alpha"},
-			ProjectDisplayName: "alpha",
+			Identity:       provider.Identity{ID: "1", Scope: "alpha", ScopeDisplay: "alpha"},
+			BuildNumber:    "20240210.1",
+			Status:         "completed",
+			Result:         "succeeded",
+			SourceBranch:   "refs/heads/main",
+			QueueTime:      time.Now(),
+			DefinitionName: "CI",
 		},
 	}
 
@@ -476,6 +474,7 @@ func TestUpdate_PipelineRunsMsg_BubblesCriticalError(t *testing.T) {
 	// Send a pipelineRunsMsg with a critical error (HTTP 400)
 	criticalErr := fmt.Errorf("all projects failed: [HTTP request failed with status 400]")
 	model, cmd := model.Update(pipelineRunsMsg{runs: nil, err: criticalErr})
+
 
 	if cmd == nil {
 		t.Fatal("Expected a command to be returned for critical error, got nil")
@@ -517,7 +516,7 @@ func TestUpdate_PipelineRunsMsg_NoCmdForSuccess(t *testing.T) {
 	model := NewModel(nil)
 
 	// Send a successful pipelineRunsMsg
-	_, cmd := model.Update(pipelineRunsMsg{runs: []azdevops.PipelineRun{}, err: nil})
+	_, cmd := model.Update(pipelineRunsMsg{runs: []provider.PipelineRun{}, err: nil})
 
 	if cmd != nil {
 		t.Error("Expected nil command for successful fetch, got non-nil")
@@ -525,11 +524,11 @@ func TestUpdate_PipelineRunsMsg_NoCmdForSuccess(t *testing.T) {
 }
 
 func TestFilterPipelineRunMulti_MatchesProjectName(t *testing.T) {
-	run := azdevops.PipelineRun{
-		BuildNumber:  "20240210.1",
-		SourceBranch: "refs/heads/main",
-		Definition:   azdevops.PipelineDefinition{Name: "CI"},
-		Project:      azdevops.Project{Name: "alpha"},
+	run := provider.PipelineRun{
+		Identity:       provider.Identity{ID: "1", Scope: "alpha", ScopeDisplay: "alpha"},
+		BuildNumber:    "20240210.1",
+		SourceBranch:   "refs/heads/main",
+		DefinitionName: "CI",
 	}
 
 	if !filterPipelineRunMulti(run, "alpha") {

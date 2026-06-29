@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -20,7 +20,8 @@ var timestampRegex = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\
 
 // LogViewerModel represents a scrollable log viewer
 type LogViewerModel struct {
-	client   *azdevops.Client
+	client   provider.Provider
+	scope    string
 	buildID  int
 	logID    int
 	title    string
@@ -36,17 +37,18 @@ type LogViewerModel struct {
 }
 
 // NewLogViewerModel creates a new log viewer model with default styles
-func NewLogViewerModel(client *azdevops.Client, buildID, logID int, title string) *LogViewerModel {
-	return NewLogViewerModelWithStyles(client, buildID, logID, title, styles.DefaultStyles())
+func NewLogViewerModel(client provider.Provider, scope string, buildID, logID int, title string) *LogViewerModel {
+	return NewLogViewerModelWithStyles(client, scope, buildID, logID, title, styles.DefaultStyles())
 }
 
 // NewLogViewerModelWithStyles creates a new log viewer model with custom styles
-func NewLogViewerModelWithStyles(client *azdevops.Client, buildID, logID int, title string, s *styles.Styles) *LogViewerModel {
+func NewLogViewerModelWithStyles(client provider.Provider, scope string, buildID, logID int, title string, s *styles.Styles) *LogViewerModel {
 	spinner := components.NewLoadingIndicator(s)
 	spinner.SetMessage(fmt.Sprintf("Loading log for %s...", title))
 
 	return &LogViewerModel{
 		client:  client,
+		scope:   scope,
 		buildID: buildID,
 		logID:   logID,
 		title:   title,
@@ -253,7 +255,10 @@ type logContentMsg struct {
 
 func (m *LogViewerModel) fetchLogContent() tea.Cmd {
 	return func() tea.Msg {
-		content, err := m.client.GetBuildLogContent(m.buildID, m.logID)
+		if m.client == nil {
+			return logContentMsg{content: "", err: nil}
+		}
+		content, err := m.client.GetBuildLogContent(m.scope, m.buildID, m.logID)
 		return logContentMsg{content: content, err: err}
 	}
 }

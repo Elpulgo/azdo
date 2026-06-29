@@ -211,8 +211,9 @@ func runTUI() error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Create and run the TUI application
-	model := app.NewModel(client, cfg, version, commit)
+	// Create and run the TUI application.
+	adapter := azdevops.NewAdapter(client)
+	model := app.NewModel(adapter, client, cfg, version, commit)
 	model.SetStateStore(stateStore)
 	model.ApplyState(stateStore.State())
 	p := tea.NewProgram(model, tea.WithAltScreen())

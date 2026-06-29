@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
@@ -81,52 +81,52 @@ func TestStatusIcon(t *testing.T) {
 func TestVoteIcon(t *testing.T) {
 	tests := []struct {
 		name         string
-		reviewers    []azdevops.Reviewer
+		reviewers    []provider.Reviewer
 		wantContains string
 	}{
 		{
 			name:         "no reviewers shows dash",
-			reviewers:    []azdevops.Reviewer{},
+			reviewers:    []provider.Reviewer{},
 			wantContains: "-",
 		},
 		{
 			name: "approved vote shows check",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User", Vote: 10},
 			},
 			wantContains: "✓",
 		},
 		{
 			name: "approved with suggestions shows tilde",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User", Vote: 5},
 			},
 			wantContains: "~",
 		},
 		{
 			name: "rejected vote shows x",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User", Vote: -10},
 			},
 			wantContains: "✗",
 		},
 		{
 			name: "waiting for author shows wait icon",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User", Vote: -5},
 			},
 			wantContains: "◐",
 		},
 		{
 			name: "no vote shows pending",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User", Vote: 0},
 			},
 			wantContains: "○",
 		},
 		{
 			name: "mixed votes shows most significant (approved)",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User1", Vote: 10},
 				{ID: "2", DisplayName: "User2", Vote: 0},
 			},
@@ -134,7 +134,7 @@ func TestVoteIcon(t *testing.T) {
 		},
 		{
 			name: "mixed votes shows most significant (rejected)",
-			reviewers: []azdevops.Reviewer{
+			reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "User1", Vote: 10},
 				{ID: "2", DisplayName: "User2", Vote: -10},
 			},
@@ -168,25 +168,25 @@ func TestNewModel(t *testing.T) {
 func TestUpdateWithSetPRsMsg(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []azdevops.PullRequest{
+	prs := []provider.PullRequest{
 		{
-			ID:            101,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
 			Title:         "Add feature",
 			Status:        "active",
 			SourceRefName: "refs/heads/feature/test",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
-			Repository:    azdevops.Repository{Name: "my-repo"},
+			CreatedByName: "John Doe",
+			RepositoryName: "my-repo",
 		},
 		{
-			ID:            102,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "102"},
 			Title:         "Fix bug",
 			Status:        "active",
 			IsDraft:       true,
 			SourceRefName: "refs/heads/fix/bug",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "Jane Smith"},
-			Repository:    azdevops.Repository{Name: "my-repo"},
+			CreatedByName: "Jane Smith",
+			RepositoryName: "my-repo",
 		},
 	}
 
@@ -196,19 +196,19 @@ func TestUpdateWithSetPRsMsg(t *testing.T) {
 		t.Errorf("After SetPRsMsg, prs length = %d, want 2", len(model.list.Items()))
 	}
 
-	if model.list.Items()[0].ID != 101 {
-		t.Errorf("First PR ID = %d, want 101", model.list.Items()[0].ID)
+	if model.list.Items()[0].Identity.ID != "101" {
+		t.Errorf("First PR ID = %q, want 101", model.list.Items()[0].Identity.ID)
 	}
 }
 
 func TestUpdateWithPullRequestsMsg(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []azdevops.PullRequest{
+	prs := []provider.PullRequest{
 		{
-			ID:     201,
-			Title:  "Test PR",
-			Status: "active",
+			Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "201"},
+			Title:    "Test PR",
+			Status:   "active",
 		},
 	}
 
@@ -240,15 +240,15 @@ func TestViewModeNavigation(t *testing.T) {
 	}
 
 	// Simulate having some PRs loaded
-	model.list = model.list.SetItems([]azdevops.PullRequest{
+	model.list = model.list.SetItems([]provider.PullRequest{
 		{
-			ID:            123,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/feature/test",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "Test User"},
-			Repository:    azdevops.Repository{Name: "test-repo"},
+			CreatedByName: "Test User",
+			RepositoryName: "test-repo",
 		},
 	})
 
@@ -284,7 +284,7 @@ func TestViewError(t *testing.T) {
 
 func TestViewEmpty(t *testing.T) {
 	model := NewModel(nil)
-	model.list = model.list.SetItems([]azdevops.PullRequest{})
+	model.list = model.list.SetItems([]provider.PullRequest{})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	view := model.View()
@@ -298,18 +298,18 @@ func TestPRsToRows(t *testing.T) {
 	s := styles.DefaultStyles()
 	now := time.Now()
 
-	prs := []azdevops.PullRequest{
+	prs := []provider.PullRequest{
 		{
-			ID:            101,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
 			Title:         "Add new feature",
 			Status:        "active",
 			IsDraft:       false,
 			SourceRefName: "refs/heads/feature/new",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
-			Repository:    azdevops.Repository{Name: "my-repo"},
+			CreatedByName: "John Doe",
+			RepositoryName: "my-repo",
 			CreationDate:  now,
-			Reviewers: []azdevops.Reviewer{
+			Reviewers: []provider.Reviewer{
 				{ID: "1", DisplayName: "Jane", Vote: 10},
 			},
 		},
@@ -356,15 +356,15 @@ func TestHasContextBar(t *testing.T) {
 	}
 
 	// PR detail view should have context bar (shows diff, navigate, etc.)
-	model.list = model.list.SetItems([]azdevops.PullRequest{
+	model.list = model.list.SetItems([]provider.PullRequest{
 		{
-			ID:            123,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "User"},
-			Repository:    azdevops.Repository{Name: "repo"},
+			CreatedByName: "User",
+			RepositoryName: "repo",
 		},
 	})
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -375,10 +375,10 @@ func TestHasContextBar(t *testing.T) {
 }
 
 func TestFilterPR(t *testing.T) {
-	pr := azdevops.PullRequest{
+	pr := provider.PullRequest{
 		Title:         "Add login feature",
-		CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
-		Repository:    azdevops.Repository{Name: "frontend-app"},
+		CreatedByName: "John Doe",
+		RepositoryName: "frontend-app",
 		SourceRefName: "refs/heads/feature/login",
 		TargetRefName: "refs/heads/main",
 	}
@@ -425,17 +425,20 @@ func TestSpinnerIntegration(t *testing.T) {
 
 func TestPrsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
-	prs := []azdevops.PullRequest{
+	prs := []provider.PullRequest{
 		{
-			ID:                 101,
-			Title:              "Test PR",
-			Status:             "active",
-			SourceRefName:      "refs/heads/feature/x",
-			TargetRefName:      "refs/heads/main",
-			CreatedBy:          azdevops.Identity{DisplayName: "John"},
-			Repository:         azdevops.Repository{Name: "repo"},
-			ProjectName:        "alpha",
-			ProjectDisplayName: "alpha",
+			Identity: provider.Identity{
+				Kind:         provider.KindAzure,
+				Scope:        "alpha",
+				ScopeDisplay: "alpha",
+				ID:           "101",
+			},
+			Title:         "Test PR",
+			Status:        "active",
+			SourceRefName: "refs/heads/feature/x",
+			TargetRefName: "refs/heads/main",
+			CreatedByName: "John",
+			RepositoryName: "repo",
 		},
 	}
 
@@ -457,15 +460,15 @@ func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
 	model := NewModel(nil)
 
 	// Set up PR data and navigate to diff view
-	model.list = model.list.SetItems([]azdevops.PullRequest{
+	model.list = model.list.SetItems([]provider.PullRequest{
 		{
-			ID:            123,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "User"},
-			Repository:    azdevops.Repository{Name: "repo"},
+			CreatedByName: "User",
+			RepositoryName: "repo",
 		},
 	})
 
@@ -476,7 +479,7 @@ func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
 
 	// Simulate having an active diff view with input mode
 	s := styles.DefaultStyles()
-	model.diffView = NewDiffModel(nil, azdevops.PullRequest{}, nil, s)
+	model.diffView = NewDiffModel(nil, provider.PullRequest{}, nil, s)
 	model.viewMode = ViewDiff
 
 	// Without input active, IsSearching should still be false
@@ -501,15 +504,15 @@ func TestModel_VoteFlowThroughDetailView(t *testing.T) {
 	model := NewModel(nil)
 
 	// Set up PR data and navigate to detail view
-	model.list = model.list.SetItems([]azdevops.PullRequest{
+	model.list = model.list.SetItems([]provider.PullRequest{
 		{
-			ID:            123,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "User"},
-			Repository:    azdevops.Repository{Name: "repo"},
+			CreatedByName: "User",
+			RepositoryName: "repo",
 		},
 	})
 
@@ -577,9 +580,9 @@ func TestUpdate_PullRequestsMsg_CriticalErrorNotShownInline(t *testing.T) {
 func TestModel_MyPRsToggle(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []azdevops.PullRequest{
-		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1", DisplayName: "Me"}},
-		{ID: 2, Title: "Other PR", CreatedBy: azdevops.Identity{ID: "user-2", DisplayName: "Other"}},
+	prs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "My PR", CreatedByName: "Me"},
+		{Identity: provider.Identity{ID: "2"}, Title: "Other PR", CreatedByName: "Other"},
 	}
 
 	// Load PRs
@@ -614,8 +617,8 @@ func TestModel_MyPRsToggle(t *testing.T) {
 func TestModel_MyPRsToggle_NotInSearchMode(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
+	prs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR", CreatedByName: "user-1"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -636,11 +639,12 @@ func TestModel_MyPRsToggle_NotInSearchMode(t *testing.T) {
 func TestModel_MyPRsToggle_NotInDetailView(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []azdevops.PullRequest{
+	prs := []provider.PullRequest{
 		{
-			ID: 1, Title: "PR", Status: "active",
+			Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			Title: "PR", Status: "active",
 			SourceRefName: "refs/heads/test", TargetRefName: "refs/heads/main",
-			CreatedBy: azdevops.Identity{DisplayName: "User"}, Repository: azdevops.Repository{Name: "repo"},
+			CreatedByName: "User", RepositoryName: "repo",
 		},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
@@ -661,9 +665,9 @@ func TestModel_MyPRsToggle_NotInDetailView(t *testing.T) {
 func TestModel_MyPRsMsg_SetsItems(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []azdevops.PullRequest{
-		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
-		{ID: 2, Title: "Other PR", CreatedBy: azdevops.Identity{ID: "user-2"}},
+	allPRs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "My PR", CreatedByName: "user-1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "Other PR", CreatedByName: "user-2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
@@ -671,25 +675,25 @@ func TestModel_MyPRsMsg_SetsItems(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 
 	// Simulate server returning filtered results
-	myPRs := []azdevops.PullRequest{
-		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
+	myPRs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "My PR", CreatedByName: "user-1"},
 	}
 	model, _ = model.Update(myPullRequestsMsg{prs: myPRs, err: nil})
 
 	if len(model.list.Items()) != 1 {
 		t.Errorf("expected 1 PR after my PRs fetch, got %d", len(model.list.Items()))
 	}
-	if model.list.Items()[0].ID != 1 {
-		t.Errorf("expected PR ID 1, got %d", model.list.Items()[0].ID)
+	if model.list.Items()[0].Identity.ID != "1" {
+		t.Errorf("expected PR ID '1', got %q", model.list.Items()[0].Identity.ID)
 	}
 }
 
 func TestModel_MyPRsMsg_ErrorFallsBack(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR 1"},
-		{ID: 2, Title: "PR 2"},
+	allPRs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
@@ -711,9 +715,9 @@ func TestModel_MyPRsMsg_ErrorFallsBack(t *testing.T) {
 func TestModel_AsReviewerToggle(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR 1"},
-		{ID: 2, Title: "PR 2"},
+	prs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -742,7 +746,7 @@ func TestModel_AsReviewerToggle(t *testing.T) {
 
 func TestModel_AsReviewerToggle_DisablesMyPRs(t *testing.T) {
 	model := NewModel(nil)
-	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
+	model, _ = model.Update(pullRequestsMsg{prs: []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}}, err: nil})
 
 	// Turn on my PRs
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
@@ -762,7 +766,7 @@ func TestModel_AsReviewerToggle_DisablesMyPRs(t *testing.T) {
 
 func TestModel_MyPRsToggle_DisablesAsReviewer(t *testing.T) {
 	model := NewModel(nil)
-	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
+	model, _ = model.Update(pullRequestsMsg{prs: []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}}, err: nil})
 
 	// Turn on as-reviewer
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
@@ -782,7 +786,7 @@ func TestModel_MyPRsToggle_DisablesAsReviewer(t *testing.T) {
 
 func TestModel_AsReviewerToggle_NotInSearchMode(t *testing.T) {
 	model := NewModel(nil)
-	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
+	model, _ = model.Update(pullRequestsMsg{prs: []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}}, err: nil})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
@@ -798,11 +802,12 @@ func TestModel_AsReviewerToggle_NotInSearchMode(t *testing.T) {
 
 func TestModel_AsReviewerToggle_NotInDetailView(t *testing.T) {
 	model := NewModel(nil)
-	prs := []azdevops.PullRequest{
+	prs := []provider.PullRequest{
 		{
-			ID: 1, Title: "PR", Status: "active",
+			Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			Title: "PR", Status: "active",
 			SourceRefName: "refs/heads/x", TargetRefName: "refs/heads/main",
-			CreatedBy: azdevops.Identity{DisplayName: "User"}, Repository: azdevops.Repository{Name: "r"},
+			CreatedByName: "User", RepositoryName: "r",
 		},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
@@ -820,9 +825,9 @@ func TestModel_AsReviewerToggle_NotInDetailView(t *testing.T) {
 
 func TestModel_MyPRs_EscTogglesOff(t *testing.T) {
 	model := NewModel(nil)
-	prs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR 1"},
-		{ID: 2, Title: "PR 2"},
+	prs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -844,9 +849,9 @@ func TestModel_MyPRs_EscTogglesOff(t *testing.T) {
 
 func TestModel_AsReviewer_EscTogglesOff(t *testing.T) {
 	model := NewModel(nil)
-	prs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR 1"},
-		{ID: 2, Title: "PR 2"},
+	prs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -868,9 +873,9 @@ func TestModel_AsReviewer_EscTogglesOff(t *testing.T) {
 
 func TestModel_Esc_DoesNotTurnOnMyPRs(t *testing.T) {
 	model := NewModel(nil)
-	prs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR 1"},
-		{ID: 2, Title: "PR 2"},
+	prs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -889,7 +894,7 @@ func TestModel_Esc_DoesNotTurnOnMyPRs(t *testing.T) {
 
 func TestModel_Esc_InSearchMode_ExitsSearchNotFilter(t *testing.T) {
 	model := NewModel(nil)
-	prs := []azdevops.PullRequest{{ID: 1, Title: "PR 1"}}
+	prs := []provider.PullRequest{{Identity: provider.Identity{ID: "1"}, Title: "PR 1"}}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
@@ -913,9 +918,9 @@ func TestModel_Esc_InSearchMode_ExitsSearchNotFilter(t *testing.T) {
 func TestModel_AsReviewerMsg_SetsItems(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []azdevops.PullRequest{
-		{ID: 1, Title: "PR 1"},
-		{ID: 2, Title: "PR 2"},
+	allPRs := []provider.PullRequest{
+		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
@@ -923,21 +928,21 @@ func TestModel_AsReviewerMsg_SetsItems(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
 
 	// Simulate server returning filtered results
-	reviewerPRs := []azdevops.PullRequest{{ID: 2, Title: "PR 2"}}
+	reviewerPRs := []provider.PullRequest{{Identity: provider.Identity{ID: "2"}, Title: "PR 2"}}
 	model, _ = model.Update(asReviewerPullRequestsMsg{prs: reviewerPRs, err: nil})
 
 	if len(model.list.Items()) != 1 {
 		t.Errorf("expected 1 PR, got %d", len(model.list.Items()))
 	}
-	if model.list.Items()[0].ID != 2 {
-		t.Errorf("expected PR ID 2, got %d", model.list.Items()[0].ID)
+	if model.list.Items()[0].Identity.ID != "2" {
+		t.Errorf("expected PR ID '2', got %q", model.list.Items()[0].Identity.ID)
 	}
 }
 
 func TestModel_AsReviewerMsg_ErrorFallsBack(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []azdevops.PullRequest{{ID: 1}, {ID: 2}}
+	allPRs := []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}, {Identity: provider.Identity{ID: "2"}}}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
@@ -953,9 +958,9 @@ func TestModel_AsReviewerMsg_ErrorFallsBack(t *testing.T) {
 }
 
 func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
-	pr := azdevops.PullRequest{
-		Title:       "Test PR",
-		ProjectName: "alpha",
+	pr := provider.PullRequest{
+		Identity: provider.Identity{Scope: "alpha", ScopeDisplay: "alpha"},
+		Title:    "Test PR",
 	}
 
 	if !filterPRMulti(pr, "alpha") {
@@ -972,12 +977,12 @@ func newModelInDiffView() Model {
 	s := styles.DefaultStyles()
 	model := NewModel(nil)
 	model.viewMode = ViewDiff
-	model.diffView = NewDiffModel(nil, azdevops.PullRequest{
-		ID:            123,
+	model.diffView = NewDiffModel(nil, provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
 		Title:         "Test PR",
 		SourceRefName: "refs/heads/feature/test",
 		TargetRefName: "refs/heads/main",
-		Repository:    azdevops.Repository{ID: "repo-123"},
+		RepositoryID:  "repo-123",
 	}, nil, s)
 	model.diffView.SetSize(80, 24)
 	return model
@@ -1022,15 +1027,16 @@ func TestUpdateDiffView_NilDiffView_FallsBackToDetail(t *testing.T) {
 
 func newModelInDetailView() Model {
 	model := NewModel(nil)
-	model.list = model.list.SetItems([]azdevops.PullRequest{
+	model.list = model.list.SetItems([]provider.PullRequest{
 		{
-			ID:            123,
+			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedBy:     azdevops.Identity{DisplayName: "User"},
-			Repository:    azdevops.Repository{ID: "repo-123", Name: "repo"},
+			CreatedByName: "User",
+			RepositoryID:  "repo-123",
+			RepositoryName: "repo",
 		},
 	})
 	// Enter detail view
@@ -1044,9 +1050,9 @@ func TestUpdateDetail_OpenFileDiffMsg_TransitionsToDiffView(t *testing.T) {
 		t.Fatalf("Expected ViewDetail, got %d", model.GetViewMode())
 	}
 
-	file := azdevops.IterationChange{
+	file := provider.IterationChange{
 		ChangeID:   1,
-		Item:       azdevops.ChangeItem{Path: "/src/main.go"},
+		Path:       "/src/main.go",
 		ChangeType: "edit",
 	}
 

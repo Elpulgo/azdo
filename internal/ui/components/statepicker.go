@@ -3,7 +3,7 @@ package components
 import (
 	"fmt"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,7 +43,7 @@ func NewStatePicker(s *styles.Styles) StatePicker {
 }
 
 // SetStates sets the available states and positions the cursor on the current state
-func (sp *StatePicker) SetStates(states []azdevops.WorkItemTypeState, currentState string) {
+func (sp *StatePicker) SetStates(states []provider.WorkItemTypeState, currentState string) {
 	sp.currentState = currentState
 	sp.options = make([]stateOption, len(states))
 	sp.cursor = 0

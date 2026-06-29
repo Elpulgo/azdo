@@ -9,7 +9,7 @@ func TestLogViewerModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	// The height passed to SetSize is already the content area (after app-level
 	// borders and footer are subtracted). The log viewer should only subtract
 	// its own header lines (title + separator = 2 lines).
-	model := NewLogViewerModel(nil, 123, 5, "npm install")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "npm install")
 
 	height := 30
 	model.SetSize(80, height)
@@ -32,7 +32,7 @@ func TestLogViewerModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 }
 
 func TestLogViewerModel_LoadingState(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "Test Task")
 
 	// Initially loading should be true (until content is set)
 	if !model.IsLoading() {
@@ -47,7 +47,7 @@ func TestLogViewerModel_LoadingState(t *testing.T) {
 }
 
 func TestLogViewerModel_ErrorState(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "Test Task")
 
 	// Initially no error
 	if model.GetError() != nil {
@@ -65,7 +65,7 @@ func TestLogViewerModel_ErrorState(t *testing.T) {
 }
 
 func TestLogViewerModel_View(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "npm install")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "npm install")
 	model.SetSize(80, 24)
 	model.spinner.SetVisible(true)
 
@@ -84,7 +84,7 @@ func TestLogViewerModel_View(t *testing.T) {
 }
 
 func TestLogViewerModel_EmptyContent(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "Test Task")
 	model.SetSize(80, 24)
 	model.SetContent("")
 
@@ -171,7 +171,7 @@ func TestStripAnsiTimestamps(t *testing.T) {
 }
 
 func TestLogViewerModel_GetContextItems(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "Test Task")
 
 	items := model.GetContextItems()
 
@@ -206,7 +206,7 @@ func TestLogViewerModel_GetContextItems(t *testing.T) {
 }
 
 func TestLogViewerModel_GetScrollPercent(t *testing.T) {
-	model := NewLogViewerModel(nil, 123, 5, "Test Task")
+	model := NewLogViewerModel(nil, "proj", 123, 5, "Test Task")
 	model.SetSize(80, 20)
 
 	// Generate content with many lines
