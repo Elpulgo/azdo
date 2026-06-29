@@ -35,3 +35,7 @@ go.work.sum
 # .idea/
 # .vscode/
 .claude/settings.local.json
+
+# Local Go build cache + tmp used by the sandboxed afk loop (noexec /tmp workaround)
+.go-cache/
+.go-tmp/
