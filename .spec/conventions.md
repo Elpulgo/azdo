@@ -17,3 +17,9 @@ promote them — move a line up into Active to accept it, delete it to reject.
 ## Proposed — awaiting approval
 
 <!-- afk appends candidates here -->
+
+4. **Cross-check view-specific glyphs before wiring to a shared display map.** When migrating a view's string switch to a shared enum+display map, diff the original switch case-by-case against the display map's output for that view — different views may use different glyphs for the same semantic (e.g. PR Active=`●` vs work-item Active=`◐`). If they diverge, special-case the view rather than assuming the shared map reproduces it.
+
+5. **Verify filter-key functions when migrating to enum labels.** When a filter-key function (`getStatusKey`, `applyStatusFilter`) switches from raw strings to `display.RunStatusLabel`, check every value the old code left as `""` (excluded from filter) — the new enum's label for that value may now return a non-empty string, silently including items that were previously excluded.
+
+6. **View migration tests must assert glyph and style, not just label substring.** A test that only checks `wantContains: "Active"` does not catch a glyph change (`●`→`◐`) or a color regression (Info→Warning). Assert the full rendered token (glyph + label) and verify the style function returns the expected named style.
