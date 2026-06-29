@@ -59,7 +59,7 @@ state, status, search) and the adapter owns the WIQL/`@Me` translation.
 - [x] 3. Define neutral semantic enums (`StateCategory`, `ItemType`, `VoteKind`, `RunStatus`) in `internal/provider`; map azdevops wire → enum in the adapter; test each mapping. `Priority` stays an optional value, not an enum. (blocked by: 1)
 - [x] 4. Add one shared `enum → glyph+color+label` display map (in `ui/styles` or a `ui` helper) reproducing today's glyphs/colors exactly; unit-test it. (blocked by: 3)
 - [x] 5. Migrate the `workitems` view: swap the type/state string switches for enum + display map; make the priority column render `-` when unset (no priority). (blocked by: 4)
-- [ ] 6. Migrate the `pullrequests` view: swap the PR-status + reviewer-vote string switches for enum + display map. (blocked by: 4)
+- [x] 6. Migrate the `pullrequests` view: swap the PR-status + reviewer-vote string switches for enum + display map. (blocked by: 4)
 - [x] 7. Migrate the `pipelines` view: swap the status/result string switch for enum + display map. (blocked by: 4)
 - [x] 8. Define `ListOpts` (mine, states, status, search, top); thread it through the provider list methods; adapter builds WIQL/`@Me`/state filters from it; test the translation. (blocked by: 3)
 - [x] 9. Update the view filter call sites (my items / as reviewer / state picker / status picker / search) to pass `ListOpts`. (blocked by: 8)

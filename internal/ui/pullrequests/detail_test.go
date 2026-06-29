@@ -69,10 +69,14 @@ func TestDetailModel_WithStyles(t *testing.T) {
 func TestIconRendering_AllThemes_NoPanic(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
 	votes := []struct {
-		vote int
+		kind provider.VoteKind
 		icon string
 	}{
-		{10, "✓"}, {5, "~"}, {0, "○"}, {-5, "◐"}, {-10, "✗"},
+		{provider.VoteKindApproved, "✓"},
+		{provider.VoteKindApprovedWithSuggestions, "~"},
+		{provider.VoteKindNoVote, "○"},
+		{provider.VoteKindWaitingForAuthor, "◐"},
+		{provider.VoteKindRejected, "✗"},
 	}
 	statuses := []struct {
 		status string
@@ -86,9 +90,9 @@ func TestIconRendering_AllThemes_NoPanic(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			for _, tt := range votes {
-				got := reviewerVoteIconWithStyles(tt.vote, s)
+				got := reviewerVoteIconWithStyles(tt.kind, s)
 				if !strings.Contains(got, tt.icon) {
-					t.Errorf("vote %d: got %q, want icon %q", tt.vote, got, tt.icon)
+					t.Errorf("VoteKind %v: got %q, want icon %q", tt.kind, got, tt.icon)
 				}
 			}
 
@@ -308,7 +312,7 @@ func TestDetailModel_View_WithContent(t *testing.T) {
 		RepositoryID:   "repo-123",
 		RepositoryName: "my-repo",
 		Reviewers: []provider.Reviewer{
-			{ID: "1", DisplayName: "Jane Smith", Vote: 10},
+			{ID: "1", DisplayName: "Jane Smith", Vote: 10, Kind: provider.VoteKindApproved},
 		},
 	}
 	model := NewDetailModel(nil, pr)
@@ -744,21 +748,21 @@ func TestDetailModel_View_RenamedShowsBothPaths(t *testing.T) {
 func TestReviewerVoteIcon(t *testing.T) {
 	tests := []struct {
 		name         string
-		vote         int
+		kind         provider.VoteKind
 		wantContains string
 	}{
-		{name: "approved", vote: 10, wantContains: "✓"},
-		{name: "approved with suggestions", vote: 5, wantContains: "~"},
-		{name: "no vote", vote: 0, wantContains: "○"},
-		{name: "waiting", vote: -5, wantContains: "◐"},
-		{name: "rejected", vote: -10, wantContains: "✗"},
+		{name: "approved", kind: provider.VoteKindApproved, wantContains: "✓"},
+		{name: "approved with suggestions", kind: provider.VoteKindApprovedWithSuggestions, wantContains: "~"},
+		{name: "no vote", kind: provider.VoteKindNoVote, wantContains: "○"},
+		{name: "waiting", kind: provider.VoteKindWaitingForAuthor, wantContains: "◐"},
+		{name: "rejected", kind: provider.VoteKindRejected, wantContains: "✗"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewerVoteIconWithStyles(tt.vote, styles.DefaultStyles())
+			got := reviewerVoteIconWithStyles(tt.kind, styles.DefaultStyles())
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("reviewerVoteIconWithStyles(%d) = %q, want to contain %q", tt.vote, got, tt.wantContains)
+				t.Errorf("reviewerVoteIconWithStyles(%v) = %q, want to contain %q", tt.kind, got, tt.wantContains)
 			}
 		})
 	}
@@ -767,22 +771,22 @@ func TestReviewerVoteIcon(t *testing.T) {
 func TestReviewerVoteDescription(t *testing.T) {
 	tests := []struct {
 		name     string
-		vote     int
+		kind     provider.VoteKind
 		expected string
 	}{
-		{name: "approved", vote: 10, expected: "Approved"},
-		{name: "approved with suggestions", vote: 5, expected: "Approved with suggestions"},
-		{name: "no vote", vote: 0, expected: "No vote"},
-		{name: "waiting for author", vote: -5, expected: "Waiting for author"},
-		{name: "rejected", vote: -10, expected: "Rejected"},
-		{name: "unknown vote", vote: 99, expected: "Unknown"},
+		{name: "approved", kind: provider.VoteKindApproved, expected: "Approved"},
+		{name: "approved with suggestions", kind: provider.VoteKindApprovedWithSuggestions, expected: "Approved with suggestions"},
+		{name: "no vote", kind: provider.VoteKindNoVote, expected: "No vote"},
+		{name: "waiting for author", kind: provider.VoteKindWaitingForAuthor, expected: "Waiting for author"},
+		{name: "rejected", kind: provider.VoteKindRejected, expected: "Rejected"},
+		{name: "unknown (zero VoteKindNoVote) is No vote", kind: provider.VoteKind(99), expected: "Unknown"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewerVoteDescription(tt.vote)
+			got := reviewerVoteDescription(tt.kind)
 			if got != tt.expected {
-				t.Errorf("reviewerVoteDescription(%d) = %q, want %q", tt.vote, got, tt.expected)
+				t.Errorf("reviewerVoteDescription(%v) = %q, want %q", tt.kind, got, tt.expected)
 			}
 		})
 	}
