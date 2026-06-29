@@ -1,0 +1,147 @@
+package github
+
+import "time"
+
+// User represents a GitHub user in wire responses. It appears as the author,
+// assignee, or reviewer in issue, PR, review, and comment payloads.
+type User struct {
+	Login string `json:"login"`
+	ID    int64  `json:"id"`
+}
+
+// Label represents a GitHub issue/PR label in wire responses.
+type Label struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
+}
+
+// Issue represents a GitHub REST issue wire type
+// (GET /repos/{owner}/{repo}/issues/{number}).
+// StateReason is null when the issue is open or when the API omits it (legacy
+// issues); use a pointer so the mapper can distinguish null from empty string.
+// Assignee is null when no one is assigned.
+// ClosedAt is null while the issue is open.
+type Issue struct {
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	State       string     `json:"state"`
+	StateReason *string    `json:"state_reason"`
+	User        User       `json:"user"`
+	Assignee    *User      `json:"assignee"`
+	Labels      []Label    `json:"labels"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	ClosedAt    *time.Time `json:"closed_at"`
+	HTMLURL     string     `json:"html_url"`
+}
+
+// PullRequestBranch holds the branch reference within a pull request.
+type PullRequestBranch struct {
+	Ref string `json:"ref"`
+}
+
+// PullRequest represents a GitHub REST pull request wire type
+// (GET /repos/{owner}/{repo}/pulls/{number}).
+// ClosedAt and MergedAt are null while the PR is open.
+type PullRequest struct {
+	Number    int               `json:"number"`
+	Title     string            `json:"title"`
+	Body      string            `json:"body"`
+	State     string            `json:"state"`
+	Draft     bool              `json:"draft"`
+	User      User              `json:"user"`
+	Head      PullRequestBranch `json:"head"`
+	Base      PullRequestBranch `json:"base"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	ClosedAt  *time.Time        `json:"closed_at"`
+	MergedAt  *time.Time        `json:"merged_at"`
+	HTMLURL   string            `json:"html_url"`
+}
+
+// Review represents a GitHub REST pull request review wire type
+// (GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews).
+// State is one of: APPROVED, CHANGES_REQUESTED, COMMENTED, PENDING, DISMISSED.
+type Review struct {
+	ID          int64     `json:"id"`
+	State       string    `json:"state"`
+	User        User      `json:"user"`
+	Body        string    `json:"body"`
+	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+// ReviewComment represents a GitHub REST pull request review comment wire type
+// (GET /repos/{owner}/{repo}/pulls/{pull_number}/comments).
+// InReplyToID is null for the first (root) comment in a thread.
+// Line is null for some legacy comments not anchored to a specific line.
+type ReviewComment struct {
+	ID          int64      `json:"id"`
+	InReplyToID *int64     `json:"in_reply_to_id"`
+	Path        string     `json:"path"`
+	Line        *int       `json:"line"`
+	Body        string     `json:"body"`
+	User        User       `json:"user"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// WorkflowRun represents a GitHub Actions workflow run wire type
+// (GET /repos/{owner}/{repo}/actions/runs/{run_id}).
+// Conclusion is null while the run has not yet completed.
+type WorkflowRun struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	Conclusion *string    `json:"conclusion"`
+	RunNumber  int        `json:"run_number"`
+	HeadBranch string     `json:"head_branch"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	HTMLURL    string     `json:"html_url"`
+}
+
+// Job represents a GitHub Actions workflow job wire type
+// (GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs, inside JobsResponse).
+// Conclusion is null while the job is running.
+// StartedAt / CompletedAt are null for queued or not-yet-started jobs.
+type Job struct {
+	ID          int64      `json:"id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  *string    `json:"conclusion"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+	Steps       []Step     `json:"steps"`
+}
+
+// JobsResponse is the envelope returned by
+// GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs.
+type JobsResponse struct {
+	TotalCount int   `json:"total_count"`
+	Jobs       []Job `json:"jobs"`
+}
+
+// Step represents a single step within a GitHub Actions job.
+// Conclusion is null while the step is running.
+// StartedAt / CompletedAt are null for steps that have not started yet.
+type Step struct {
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  *string    `json:"conclusion"`
+	Number      int        `json:"number"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
+
+// PRFile represents a changed file in a pull request
+// (GET /repos/{owner}/{repo}/pulls/{pull_number}/files).
+// PreviousFilename is non-empty only on renames.
+type PRFile struct {
+	Filename         string `json:"filename"`
+	Status           string `json:"status"` // "added", "removed", "modified", "renamed", "copied", "changed", "unchanged"
+	PreviousFilename string `json:"previous_filename,omitempty"`
+	Changes          int    `json:"changes"`
+}

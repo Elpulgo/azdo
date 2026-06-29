@@ -72,7 +72,7 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 
 - [x] 1. Add `KindGitHub` to the `provider` `Kind` enum; fill the GitHub case in `display.KindGlyph`/`KindLabel`/`KindStyle` (replace the Phase 2 placeholders); table-test all three.
 - [x] 2. Scaffold `internal/github`: a per-repo `Client` (owner, repo, base URL, token, `*http.Client`) with shared request + JSON-decode + error helpers reusing `provider.PartialError`; add a token source (keyring + `GITHUB_TOKEN` env fallback). (blocked by: none)
-- [ ] 3. Define GitHub wire types (issue, label, user, pull, review, reviewComment, run, job, step) and neutral enum mappers — state(+`state_reason`)→`StateCategory`, review→`VoteKind`, run status×conclusion→`RunStatus`; table-test each. (blocked by: 1)
+- [x] 3. Define GitHub wire types (issue, label, user, pull, review, reviewComment, run, job, step) and neutral enum mappers — state(+`state_reason`)→`StateCategory`, review→`VoteKind`, run status×conclusion→`RunStatus`; table-test each. (blocked by: 1)
 - [ ] 4. Label-convention parser: prefixes (default `type:` / `priority:`, case-insensitive, injectable) → `ItemType` + `Priority`; unmatched labels → `Tags`; table-test incl. the no-match defaults. (blocked by: 3)
 - [ ] 5. Issue→`WorkItem` and issue-comment→`WorkItemComment` mappers, stamping `(KindGitHub, owner/repo, number)`; inline-JSON fixture tests asserting the identity invariant + fields. (blocked by: 4)
 - [ ] 6. PR→`PullRequest` (reviewers from reviews→votes), review-comments→`Thread`/`Comment`, files→`IterationChange` mappers; fixture tests. (blocked by: 3)
