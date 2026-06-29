@@ -77,6 +77,51 @@ func TestMapWorkItem(t *testing.T) {
 	if got.WorkItemType != wire.Fields.WorkItemType {
 		t.Errorf("expected WorkItemType %q, got %q", wire.Fields.WorkItemType, got.WorkItemType)
 	}
+	// Neutral enum fields must be populated by MapWorkItem.
+	if got.StateCategory != provider.StateCategoryActive {
+		t.Errorf("expected StateCategory StateCategoryActive for state %q, got %v", wire.Fields.State, got.StateCategory)
+	}
+	if got.ItemKind != provider.ItemTypeBug {
+		t.Errorf("expected ItemKind ItemTypeBug for type %q, got %v", wire.Fields.WorkItemType, got.ItemKind)
+	}
+}
+
+func TestMapWorkItem_EnumFields_AllTypes(t *testing.T) {
+	cases := []struct {
+		state    string
+		wantCat  provider.StateCategory
+		wiType   string
+		wantKind provider.ItemType
+	}{
+		{"New", provider.StateCategoryNew, "Bug", provider.ItemTypeBug},
+		{"Active", provider.StateCategoryActive, "Task", provider.ItemTypeTask},
+		{"Resolved", provider.StateCategoryResolved, "User Story", provider.ItemTypeUserStory},
+		{"Closed", provider.StateCategoryClosedDone, "Feature", provider.ItemTypeFeature},
+		{"Removed", provider.StateCategoryRemoved, "Epic", provider.ItemTypeEpic},
+		{"Ready for Test", provider.StateCategoryReadyForTest, "Issue", provider.ItemTypeIssue},
+		{"Custom State", provider.StateCategoryUnknown, "Custom Type", provider.ItemTypeUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.state+"/"+tc.wiType, func(t *testing.T) {
+			wire := azdevops.WorkItem{
+				ID: 1,
+				Fields: azdevops.WorkItemFields{
+					Title:        "t",
+					State:        tc.state,
+					WorkItemType: tc.wiType,
+				},
+				ProjectName:        testScope,
+				ProjectDisplayName: testScopeDisplay,
+			}
+			got := azdevops.MapWorkItem(wire, testScope, testScopeDisplay)
+			if got.StateCategory != tc.wantCat {
+				t.Errorf("state=%q: got StateCategory %v, want %v", tc.state, got.StateCategory, tc.wantCat)
+			}
+			if got.ItemKind != tc.wantKind {
+				t.Errorf("type=%q: got ItemKind %v, want %v", tc.wiType, got.ItemKind, tc.wantKind)
+			}
+		})
+	}
 }
 
 // --- PullRequest ---
@@ -129,6 +174,50 @@ func TestMapPullRequest(t *testing.T) {
 	if got.Reviewers[0].Vote != 10 {
 		t.Errorf("expected reviewer vote 10, got %d", got.Reviewers[0].Vote)
 	}
+	// Task 6: StatusCategory and Reviewer.Kind must be populated by the mapper.
+	if got.StatusCategory != provider.StateCategoryActive {
+		t.Errorf("expected StatusCategory StateCategoryActive for status 'active', got %v", got.StatusCategory)
+	}
+	if got.Reviewers[0].Kind != provider.VoteKindApproved {
+		t.Errorf("expected reviewer Kind VoteKindApproved for vote 10, got %v", got.Reviewers[0].Kind)
+	}
+}
+
+func TestMapPullRequest_StatusCategoryAndVoteKind_AllVariants(t *testing.T) {
+	tests := []struct {
+		status   string
+		wantCat  provider.StateCategory
+		vote     int
+		wantKind provider.VoteKind
+	}{
+		{"active", provider.StateCategoryActive, 10, provider.VoteKindApproved},
+		{"completed", provider.StateCategoryClosedDone, 5, provider.VoteKindApprovedWithSuggestions},
+		{"abandoned", provider.StateCategoryRemoved, 0, provider.VoteKindNoVote},
+		{"active", provider.StateCategoryActive, -5, provider.VoteKindWaitingForAuthor},
+		{"active", provider.StateCategoryActive, -10, provider.VoteKindRejected},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			wire := azdevops.PullRequest{
+				ID:     1,
+				Status: tt.status,
+				Repository: azdevops.Repository{ID: "r", Name: "r"},
+				Reviewers: []azdevops.Reviewer{
+					{ID: "u", DisplayName: "U", Vote: tt.vote},
+				},
+				ProjectName:        testScope,
+				ProjectDisplayName: testScopeDisplay,
+			}
+			got := azdevops.MapPullRequest(wire, testScope, testScopeDisplay)
+			if got.StatusCategory != tt.wantCat {
+				t.Errorf("status %q: StatusCategory = %v, want %v", tt.status, got.StatusCategory, tt.wantCat)
+			}
+			if got.Reviewers[0].Kind != tt.wantKind {
+				t.Errorf("vote %d: Reviewer.Kind = %v, want %v", tt.vote, got.Reviewers[0].Kind, tt.wantKind)
+			}
+		})
+	}
 }
 
 // --- PipelineRun ---
@@ -171,6 +260,46 @@ func TestMapPipelineRun(t *testing.T) {
 	}
 	if got.WebURL != wire.Links.Web.Href {
 		t.Errorf("expected WebURL %q, got %q", wire.Links.Web.Href, got.WebURL)
+	}
+	// RunStatus field must be populated from MapRunStatus(Status, Result).
+	if got.RunStatus != provider.RunStatusSucceeded {
+		t.Errorf("expected RunStatus RunStatusSucceeded, got %v", got.RunStatus)
+	}
+}
+
+func TestMapPipelineRun_RunStatus_AllKnownValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		result string
+		want   provider.RunStatus
+	}{
+		{"inProgress", "inProgress", "", provider.RunStatusRunning},
+		{"notStarted", "notStarted", "", provider.RunStatusQueued},
+		{"canceling", "canceling", "", provider.RunStatusCanceling},
+		{"succeeded", "completed", "succeeded", provider.RunStatusSucceeded},
+		{"failed", "completed", "failed", provider.RunStatusFailed},
+		{"canceled", "completed", "canceled", provider.RunStatusCanceled},
+		{"partiallySucceeded", "completed", "partiallySucceeded", provider.RunStatusPartiallySucceeded},
+		{"unknown", "", "", provider.RunStatusUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wire := azdevops.PipelineRun{
+				ID:     1,
+				Status: tt.status,
+				Result: tt.result,
+				Definition: azdevops.PipelineDefinition{
+					ID:   1,
+					Name: "CI",
+				},
+			}
+			got := azdevops.MapPipelineRun(wire, testScope, testScopeDisplay)
+			if got.RunStatus != tt.want {
+				t.Errorf("MapPipelineRun status=%q result=%q: RunStatus = %v, want %v",
+					tt.status, tt.result, got.RunStatus, tt.want)
+			}
+		})
 	}
 }
 

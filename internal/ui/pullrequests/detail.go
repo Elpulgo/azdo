@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/diff"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -277,8 +278,8 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString(m.styles.Label.Render("Reviewers"))
 		sb.WriteString("\n")
 		for _, reviewer := range m.pr.Reviewers {
-			icon := reviewerVoteIconWithStyles(reviewer.Vote, m.styles)
-			voteDesc := reviewerVoteDescription(reviewer.Vote)
+			icon := reviewerVoteIconWithStyles(reviewer.Kind, m.styles)
+			voteDesc := reviewerVoteDescription(reviewer.Kind)
 			sb.WriteString(fmt.Sprintf("  %s %s (%s)\n", icon, reviewer.DisplayName, m.styles.Muted.Render(voteDesc)))
 		}
 		sb.WriteString("\n")
@@ -627,24 +628,6 @@ func hyperlink(text, url string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
-// buildPRThreadURL constructs the Azure DevOps URL to view a specific comment thread in a PR
-func buildPRThreadURL(org, project, repoID string, prID int, threadID int) string {
-	if org == "" || project == "" || repoID == "" || threadID == 0 {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
-		org, project, repoID, prID, threadID)
-}
-
-// buildPROverviewURL constructs the Azure DevOps URL to view the PR overview page
-func buildPROverviewURL(org, project, repoID string, prID int) string {
-	if org == "" || project == "" || repoID == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
-		org, project, repoID, prID)
-}
-
 // truncateString truncates a string to maxRunes runes (not bytes)
 func truncateString(s string, maxRunes int) string {
 	if maxRunes <= 0 {
@@ -686,40 +669,16 @@ func shortenFilePath(path string) string {
 	return path
 }
 
-// reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles
-func reviewerVoteIconWithStyles(vote int, s *styles.Styles) string {
-	switch vote {
-	case 10:
-		return s.Success.Render("✓")
-	case 5:
-		return s.Warning.Render("~")
-	case 0:
-		return s.Muted.Render("○")
-	case -5:
-		return s.Warning.Render("◐")
-	case -10:
-		return s.Error.Render("✗")
-	default:
-		return s.Muted.Render("?")
-	}
+// reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles.
+// Delegates to the display map so glyph+color stay in one place.
+func reviewerVoteIconWithStyles(kind provider.VoteKind, s *styles.Styles) string {
+	return display.VoteStyle(kind, s).Render(display.VoteGlyph(kind))
 }
 
-// reviewerVoteDescription returns a human-readable description of the vote
-func reviewerVoteDescription(vote int) string {
-	switch vote {
-	case 10:
-		return "Approved"
-	case 5:
-		return "Approved with suggestions"
-	case 0:
-		return "No vote"
-	case -5:
-		return "Waiting for author"
-	case -10:
-		return "Rejected"
-	default:
-		return "Unknown"
-	}
+// reviewerVoteDescription returns a human-readable description of a vote kind.
+// Delegates to the display map.
+func reviewerVoteDescription(kind provider.VoteKind) string {
+	return display.VoteLabel(kind)
 }
 
 // voteResultDescription returns a human-readable result message for a vote action

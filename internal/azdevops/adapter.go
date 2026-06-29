@@ -39,7 +39,10 @@ func (a *Adapter) IsMultiProject() bool {
 
 // ListPullRequests returns up to top active pull requests across all projects,
 // mapping wire types to neutral types with identity stamped per project.
-func (a *Adapter) ListPullRequests(top int) ([]provider.PullRequest, error) {
+// opts is accepted for interface compliance; PR filtering is handled by the
+// REST API's searchCriteria parameters rather than WIQL, so opts fields other
+// than Top are unused at this layer (they will be wired in Task 9).
+func (a *Adapter) ListPullRequests(top int, opts provider.ListOpts) ([]provider.PullRequest, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
@@ -56,7 +59,9 @@ func (a *Adapter) ListPullRequests(top int) ([]provider.PullRequest, error) {
 
 // ListMyPullRequests returns up to top pull requests created by the
 // authenticated user, mapped to neutral types.
-func (a *Adapter) ListMyPullRequests(top int) ([]provider.PullRequest, error) {
+// opts is accepted for interface compliance; additional filtering will be
+// wired in Task 9.
+func (a *Adapter) ListMyPullRequests(top int, opts provider.ListOpts) ([]provider.PullRequest, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
@@ -73,7 +78,9 @@ func (a *Adapter) ListMyPullRequests(top int) ([]provider.PullRequest, error) {
 
 // ListPullRequestsAsReviewer returns up to top pull requests where the
 // authenticated user is a reviewer, mapped to neutral types.
-func (a *Adapter) ListPullRequestsAsReviewer(top int) ([]provider.PullRequest, error) {
+// opts is accepted for interface compliance; additional filtering will be
+// wired in Task 9.
+func (a *Adapter) ListPullRequestsAsReviewer(top int, opts provider.ListOpts) ([]provider.PullRequest, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
@@ -251,8 +258,11 @@ func (a *Adapter) UpdateThreadStatus(scope, repositoryID string, pullRequestID i
 // --- Work-item surface ---
 
 // ListWorkItems returns up to top work items across all projects,
-// mapped to neutral types.
-func (a *Adapter) ListWorkItems(top int) ([]provider.WorkItem, error) {
+// mapped to neutral types. opts carries neutral filter intent; zero value
+// reproduces the current default behavior. Additional WIQL filters from opts
+// will be applied in Task 9 — for now the adapter accepts opts for interface
+// compliance.
+func (a *Adapter) ListWorkItems(top int, opts provider.ListOpts) ([]provider.WorkItem, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
@@ -268,8 +278,10 @@ func (a *Adapter) ListWorkItems(top int) ([]provider.WorkItem, error) {
 }
 
 // ListMyWorkItems returns up to top work items assigned to the authenticated
-// user, mapped to neutral types.
-func (a *Adapter) ListMyWorkItems(top int) ([]provider.WorkItem, error) {
+// user, mapped to neutral types. opts carries neutral filter intent; zero value
+// reproduces the current default behavior. Additional WIQL filters from opts
+// will be applied in Task 9.
+func (a *Adapter) ListMyWorkItems(top int, opts provider.ListOpts) ([]provider.WorkItem, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
@@ -362,8 +374,10 @@ func (a *Adapter) AddWorkItemComment(scope string, id int, text string) (*provid
 // --- Pipeline surface ---
 
 // ListPipelineRuns returns up to top recent pipeline runs across all projects,
-// mapped to neutral types.
-func (a *Adapter) ListPipelineRuns(top int) ([]provider.PipelineRun, error) {
+// mapped to neutral types. opts carries neutral filter intent; zero value
+// reproduces the current default behavior. Status filtering from opts will be
+// applied in Task 9.
+func (a *Adapter) ListPipelineRuns(top int, opts provider.ListOpts) ([]provider.PipelineRun, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
@@ -429,9 +443,13 @@ func (a *Adapter) WorkItemURL(scope string, id int) string {
 
 // PRURL returns the browser URL for the given pull request in the given repository.
 // scope is the project name used to route to the correct sub-client.
-// Returns "" when the client is nil or scope does not match a known project.
+// Returns "" when the client is nil, scope does not match a known project, or
+// repositoryID is empty (matching the guard in the retired inline builder).
 func (a *Adapter) PRURL(scope, repositoryID string, prID int) string {
 	if a.mc == nil {
+		return ""
+	}
+	if repositoryID == "" {
 		return ""
 	}
 	c := a.mc.ClientFor(scope)
@@ -440,6 +458,28 @@ func (a *Adapter) PRURL(scope, repositoryID string, prID int) string {
 	}
 	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
 		c.GetOrg(), c.GetProject(), repositoryID, prID)
+}
+
+// PRThreadWebURL returns the browser URL for a specific comment thread in the
+// given pull request. The URL includes ?discussionId=threadID so the browser
+// anchors directly to that thread. Returns "" when the client is nil, scope
+// does not match a known project, repositoryID is empty, or threadID is zero.
+func (a *Adapter) PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string {
+	if a.mc == nil {
+		return ""
+	}
+	if repositoryID == "" {
+		return ""
+	}
+	if threadID == 0 {
+		return ""
+	}
+	c := a.mc.ClientFor(scope)
+	if c == nil {
+		return ""
+	}
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
+		c.GetOrg(), c.GetProject(), repositoryID, prID, threadID)
 }
 
 // PipelineURL returns the browser URL for the given pipeline build ID.

@@ -24,55 +24,49 @@ func TestNewModelWithStyles(t *testing.T) {
 func TestStatusIcon(t *testing.T) {
 	tests := []struct {
 		name         string
-		status       string
+		statusCat    provider.StateCategory
 		isDraft      bool
 		wantContains string
 	}{
 		{
 			name:         "active PR shows Active",
-			status:       "active",
+			statusCat:    provider.StateCategoryActive,
 			isDraft:      false,
-			wantContains: "Active",
-		},
-		{
-			name:         "Active (capitalized) shows Active",
-			status:       "Active",
-			isDraft:      false,
-			wantContains: "Active",
+			wantContains: "● Active",
 		},
 		{
 			name:         "draft PR shows Draft",
-			status:       "active",
+			statusCat:    provider.StateCategoryActive,
 			isDraft:      true,
 			wantContains: "Draft",
 		},
 		{
 			name:         "completed PR shows Merged",
-			status:       "completed",
+			statusCat:    provider.StateCategoryClosedDone,
 			isDraft:      false,
 			wantContains: "Merged",
 		},
 		{
 			name:         "abandoned PR shows Closed",
-			status:       "abandoned",
+			statusCat:    provider.StateCategoryRemoved,
 			isDraft:      false,
-			wantContains: "Closed",
+			wantContains: "○ Closed",
 		},
 		{
-			name:         "unknown status shows the status",
-			status:       "unknown",
+			name:         "unknown status category shows glyph",
+			statusCat:    provider.StateCategoryUnknown,
 			isDraft:      false,
-			wantContains: "unknown",
+			wantContains: "○",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := statusIconWithStyles(tt.status, tt.isDraft, styles.DefaultStyles())
+			got := statusIconWithStyles(tt.statusCat, tt.isDraft, styles.DefaultStyles())
 
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("statusIconWithStyles(%q, %v) = %q, want to contain %q",
-					tt.status, tt.isDraft, got, tt.wantContains)
+				t.Errorf("statusIconWithStyles(%v, %v) = %q, want to contain %q",
+					tt.statusCat, tt.isDraft, got, tt.wantContains)
 			}
 		})
 	}
@@ -92,51 +86,51 @@ func TestVoteIcon(t *testing.T) {
 		{
 			name: "approved vote shows check",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: 10},
+				{ID: "1", DisplayName: "User", Vote: 10, Kind: provider.VoteKindApproved},
 			},
 			wantContains: "✓",
 		},
 		{
 			name: "approved with suggestions shows tilde",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: 5},
+				{ID: "1", DisplayName: "User", Vote: 5, Kind: provider.VoteKindApprovedWithSuggestions},
 			},
 			wantContains: "~",
 		},
 		{
 			name: "rejected vote shows x",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: -10},
+				{ID: "1", DisplayName: "User", Vote: -10, Kind: provider.VoteKindRejected},
 			},
 			wantContains: "✗",
 		},
 		{
 			name: "waiting for author shows wait icon",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: -5},
+				{ID: "1", DisplayName: "User", Vote: -5, Kind: provider.VoteKindWaitingForAuthor},
 			},
 			wantContains: "◐",
 		},
 		{
 			name: "no vote shows pending",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: 0},
+				{ID: "1", DisplayName: "User", Vote: 0, Kind: provider.VoteKindNoVote},
 			},
 			wantContains: "○",
 		},
 		{
 			name: "mixed votes shows most significant (approved)",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User1", Vote: 10},
-				{ID: "2", DisplayName: "User2", Vote: 0},
+				{ID: "1", DisplayName: "User1", Vote: 10, Kind: provider.VoteKindApproved},
+				{ID: "2", DisplayName: "User2", Vote: 0, Kind: provider.VoteKindNoVote},
 			},
 			wantContains: "✓",
 		},
 		{
 			name: "mixed votes shows most significant (rejected)",
 			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User1", Vote: 10},
-				{ID: "2", DisplayName: "User2", Vote: -10},
+				{ID: "1", DisplayName: "User1", Vote: 10, Kind: provider.VoteKindApproved},
+				{ID: "2", DisplayName: "User2", Vote: -10, Kind: provider.VoteKindRejected},
 			},
 			wantContains: "✗",
 		},

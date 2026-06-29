@@ -8,6 +8,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -335,7 +336,11 @@ func (m *DetailModel) View() string {
 	// Type, state and priority
 	metadataStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.styles.Theme.Secondary))
-	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.WorkItemType, wiStateIcon(wi.State), wi.State, wi.Priority)))
+	prioLabel := fmt.Sprintf("P%d", wi.Priority)
+	if wi.Priority == 0 {
+		prioLabel = "-"
+	}
+	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  %s", wi.WorkItemType, display.StateGlyph(wi.StateCategory), wi.State, prioLabel)))
 	sb.WriteString("\n")
 
 	// Separator
@@ -557,26 +562,6 @@ func workItemNumericID(wi provider.WorkItem) int {
 	return n
 }
 
-// wiStateIcon returns an icon string for the given work item state.
-// The logic mirrors azdevops.WorkItem.StateIcon but operates on a plain string.
-func wiStateIcon(state string) string {
-	stateLower := strings.ToLower(state)
-	switch {
-	case stateLower == "new":
-		return "○"
-	case stateLower == "active":
-		return "◐"
-	case stateLower == "resolved" || strings.Contains(stateLower, "ready"):
-		return "●"
-	case stateLower == "closed":
-		return "✓"
-	case stateLower == "removed":
-		return "✗"
-	default:
-		return "○"
-	}
-}
-
 // wiEffectiveDescription returns the appropriate description text for the work item.
 // Bugs use ReproSteps when available; all other types use Description.
 func wiEffectiveDescription(wi provider.WorkItem) string {
@@ -641,11 +626,3 @@ func hyperlink(text, url string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
-// buildWorkItemURL constructs the Azure DevOps URL to view a work item.
-// Kept for backward compatibility with tests that call it directly.
-func buildWorkItemURL(org, project string, id int) string {
-	if org == "" || project == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d", org, project, id)
-}

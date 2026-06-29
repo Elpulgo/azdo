@@ -16,16 +16,19 @@ type Provider interface {
 	// --- Pull-request surface ---
 
 	// ListPullRequests returns up to top active pull requests across all
-	// projects the provider is configured for.
-	ListPullRequests(top int) ([]PullRequest, error)
+	// projects the provider is configured for. opts carries neutral filter
+	// intent; zero value reproduces the current default behavior.
+	ListPullRequests(top int, opts ListOpts) ([]PullRequest, error)
 
 	// ListMyPullRequests returns up to top pull requests created by the
-	// authenticated user.
-	ListMyPullRequests(top int) ([]PullRequest, error)
+	// authenticated user. opts carries additional neutral filter intent;
+	// zero value reproduces the current default behavior.
+	ListMyPullRequests(top int, opts ListOpts) ([]PullRequest, error)
 
 	// ListPullRequestsAsReviewer returns up to top pull requests where the
-	// authenticated user is listed as a reviewer.
-	ListPullRequestsAsReviewer(top int) ([]PullRequest, error)
+	// authenticated user is listed as a reviewer. opts carries additional
+	// neutral filter intent; zero value reproduces the current default behavior.
+	ListPullRequestsAsReviewer(top int, opts ListOpts) ([]PullRequest, error)
 
 	// GetPRThreads returns the comment threads for the given pull request.
 	// scope is the project name used to route to the correct sub-client.
@@ -70,10 +73,14 @@ type Provider interface {
 	// --- Work-item surface ---
 
 	// ListWorkItems returns up to top work items across all configured projects.
-	ListWorkItems(top int) ([]WorkItem, error)
+	// opts carries neutral filter intent; zero value reproduces the current
+	// default behavior.
+	ListWorkItems(top int, opts ListOpts) ([]WorkItem, error)
 
-	// ListMyWorkItems returns up to top work items assigned to the authenticated user.
-	ListMyWorkItems(top int) ([]WorkItem, error)
+	// ListMyWorkItems returns up to top work items assigned to the authenticated
+	// user. opts carries additional neutral filter intent; zero value reproduces
+	// the current default behavior.
+	ListMyWorkItems(top int, opts ListOpts) ([]WorkItem, error)
 
 	// GetWorkItemTypeStates returns the valid states for the given work item type.
 	// scope is the project name used to route to the correct sub-client.
@@ -95,7 +102,9 @@ type Provider interface {
 	// --- Pipeline surface ---
 
 	// ListPipelineRuns returns up to top recent pipeline/build runs.
-	ListPipelineRuns(top int) ([]PipelineRun, error)
+	// opts carries neutral filter intent; zero value reproduces the current
+	// default behavior.
+	ListPipelineRuns(top int, opts ListOpts) ([]PipelineRun, error)
 
 	// GetBuildTimeline returns the timeline (stages, jobs, tasks) for the given build.
 	// scope is the project name used to route to the correct sub-client.
@@ -118,6 +127,13 @@ type Provider interface {
 	// repository.
 	// scope is the project name used to route to the correct sub-client.
 	PRURL(scope, repositoryID string, prID int) string
+
+	// PRThreadWebURL returns the browser URL for a specific comment thread in
+	// the given pull request. The URL includes ?discussionId=threadID so the
+	// browser anchors directly to that thread. Returns "" when the URL cannot
+	// be constructed or when threadID is zero.
+	// scope is the project name used to route to the correct sub-client.
+	PRThreadWebURL(scope, repositoryID string, prID int, threadID int) string
 
 	// PipelineURL returns the browser URL for the given pipeline build.
 	// scope is the project name used to route to the correct sub-client.

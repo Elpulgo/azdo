@@ -31,10 +31,16 @@ type Identity struct {
 // WorkItem is the neutral representation of an Azure DevOps work item (or its
 // equivalent in another backend).
 type WorkItem struct {
-	Identity        Identity
-	Title           string
-	State           string
-	WorkItemType    string
+	Identity      Identity
+	Title         string
+	State         string
+	WorkItemType  string
+	// StateCategory is the neutral semantic bucket for the work item's state.
+	// Populated by the adapter at mapping time via azdevops.MapStateCategory.
+	StateCategory   StateCategory
+	// ItemKind is the neutral semantic type enum for the work item.
+	// Populated by the adapter at mapping time via azdevops.MapItemType.
+	ItemKind        ItemType
 	AssignedToName  string
 	Priority        int
 	ChangedDate     time.Time
@@ -56,6 +62,7 @@ type PullRequest struct {
 	Title          string
 	Description    string
 	Status         string
+	StatusCategory StateCategory // neutral semantic bucket derived from Status
 	CreationDate   time.Time
 	SourceRefName  string
 	TargetRefName  string
@@ -73,6 +80,7 @@ type Reviewer struct {
 	ID          string
 	DisplayName string
 	Vote        int
+	Kind        VoteKind // neutral semantic enum derived from Vote
 }
 
 // PipelineRun is the neutral representation of a pipeline/build run.
@@ -81,6 +89,7 @@ type PipelineRun struct {
 	BuildNumber    string
 	Status         string
 	Result         string
+	RunStatus      RunStatus // neutral enum; populated by MapRunStatus at the adapter boundary
 	SourceBranch   string
 	SourceVersion  string
 	QueueTime      time.Time

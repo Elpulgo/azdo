@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
@@ -20,19 +21,19 @@ func TestStatusIconWithStyles(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			tests := []struct {
-				status, result string
-				wantContains   string
+				runStatus    provider.RunStatus
+				wantContains string
 			}{
-				{"inProgress", "", "Running"},
-				{"completed", "succeeded", "Success"},
-				{"completed", "failed", "Failed"},
+				{provider.RunStatusRunning, "Running"},
+				{provider.RunStatusSucceeded, "Success"},
+				{provider.RunStatusFailed, "Failed"},
 			}
 
 			for _, tt := range tests {
-				got := statusIconWithStyles(tt.status, tt.result, s)
+				got := statusIconWithStyles(tt.runStatus, s)
 				if !strings.Contains(got, tt.wantContains) {
-					t.Errorf("statusIconWithStyles(%q, %q) with theme %s = %q, want to contain %q",
-						tt.status, tt.result, themeName, got, tt.wantContains)
+					t.Errorf("statusIconWithStyles(%v) with theme %s = %q, want to contain %q",
+						tt.runStatus, themeName, got, tt.wantContains)
 				}
 			}
 		})
@@ -41,92 +42,100 @@ func TestStatusIconWithStyles(t *testing.T) {
 
 func TestStatusIcon(t *testing.T) {
 	tests := []struct {
-		name           string
-		status         string
-		result         string
-		wantContains   string
-		wantNotContain string
+		name         string
+		runStatus    provider.RunStatus
+		wantContains string
 	}{
 		{
-			name:         "inProgress status shows Running",
-			status:       "inProgress",
-			result:       "",
+			name:         "Running shows Running",
+			runStatus:    provider.RunStatusRunning,
 			wantContains: "Running",
 		},
 		{
-			name:         "InProgress (capitalized) shows Running",
-			status:       "InProgress",
-			result:       "",
-			wantContains: "Running",
-		},
-		{
-			name:         "notStarted status shows Queued",
-			status:       "notStarted",
-			result:       "",
+			name:         "Queued shows Queued",
+			runStatus:    provider.RunStatusQueued,
 			wantContains: "Queued",
 		},
 		{
-			name:         "NotStarted (capitalized) shows Queued",
-			status:       "NotStarted",
-			result:       "",
-			wantContains: "Queued",
-		},
-		{
-			name:         "canceling status shows Cancel",
-			status:       "canceling",
-			result:       "",
+			name:         "Canceling shows Cancel",
+			runStatus:    provider.RunStatusCanceling,
 			wantContains: "Cancel",
 		},
 		{
-			name:         "succeeded result shows Success",
-			status:       "completed",
-			result:       "succeeded",
+			name:         "Succeeded shows Success",
+			runStatus:    provider.RunStatusSucceeded,
 			wantContains: "Success",
 		},
 		{
-			name:         "failed result shows Failed",
-			status:       "completed",
-			result:       "failed",
+			name:         "Failed shows Failed",
+			runStatus:    provider.RunStatusFailed,
 			wantContains: "Failed",
 		},
 		{
-			name:         "canceled result shows Cancel",
-			status:       "completed",
-			result:       "canceled",
+			name:         "Canceled shows Cancel",
+			runStatus:    provider.RunStatusCanceled,
 			wantContains: "Cancel",
 		},
 		{
-			name:         "partiallySucceeded result shows Partial",
-			status:       "completed",
-			result:       "partiallySucceeded",
+			name:         "PartiallySucceeded shows Partial",
+			runStatus:    provider.RunStatusPartiallySucceeded,
 			wantContains: "Partial",
 		},
 		{
-			name:         "empty status and result shows debug format",
-			status:       "",
-			result:       "",
-			wantContains: "/",
-		},
-		{
-			name:         "unrecognized status shows debug format",
-			status:       "somethingElse",
-			result:       "",
-			wantContains: "somethingElse",
+			name:         "Unknown shows hollow circle glyph",
+			runStatus:    provider.RunStatusUnknown,
+			wantContains: "○",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := statusIconWithStyles(tt.status, tt.result, styles.DefaultStyles())
+			got := statusIconWithStyles(tt.runStatus, styles.DefaultStyles())
 
-			if tt.wantContains != "" && !strings.Contains(got, tt.wantContains) {
-				t.Errorf("statusIconWithStyles(%q, %q) = %q, want to contain %q",
-					tt.status, tt.result, got, tt.wantContains)
+			if !strings.Contains(got, tt.wantContains) {
+				t.Errorf("statusIconWithStyles(%v) = %q, want to contain %q",
+					tt.runStatus, got, tt.wantContains)
 			}
+		})
+	}
+}
 
-			if tt.wantNotContain != "" && strings.Contains(got, tt.wantNotContain) {
-				t.Errorf("statusIconWithStyles(%q, %q) = %q, should NOT contain %q",
-					tt.status, tt.result, got, tt.wantNotContain)
+// TestStatusIconViaRun verifies that runsToRows uses run.RunStatus (the enum field)
+// so that end-to-end mapping from wire status/result flows through to display correctly.
+func TestStatusIconViaRun(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	tests := []struct {
+		name         string
+		status       string
+		result       string
+		wantContains string
+	}{
+		{"inProgress → Running", "inProgress", "", "Running"},
+		{"notStarted → Queued", "notStarted", "", "Queued"},
+		{"canceling → Cancel", "canceling", "", "Cancel"},
+		{"succeeded → Success", "completed", "succeeded", "Success"},
+		{"failed → Failed", "completed", "failed", "Failed"},
+		{"canceled → Cancel", "completed", "canceled", "Cancel"},
+		{"partiallySucceeded → Partial", "completed", "partiallySucceeded", "Partial"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := provider.PipelineRun{
+				Identity:  provider.Identity{ID: "1", Scope: "proj"},
+				Status:    tt.status,
+				Result:    tt.result,
+				RunStatus: azdevops.MapRunStatus(tt.status, tt.result),
+			}
+			rows := runsToRows([]provider.PipelineRun{run}, s)
+			if len(rows) != 1 {
+				t.Fatalf("expected 1 row, got %d", len(rows))
+			}
+			statusCell := rows[0][0]
+			if !strings.Contains(statusCell, tt.wantContains) {
+				t.Errorf("status cell for %q/%q = %q, want to contain %q",
+					tt.status, tt.result, statusCell, tt.wantContains)
 			}
 		})
 	}

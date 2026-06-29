@@ -10,6 +10,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -502,7 +503,7 @@ func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
 	for i, pr := range items {
 		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
 		rows[i] = table.Row{
-			statusIconWithStyles(pr.Status, pr.IsDraft, s),
+			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
 			pr.CreatedByName,
@@ -513,27 +514,35 @@ func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
 	return rows
 }
 
-// statusIconWithStyles returns a colored status icon using the provided styles
-func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string {
-	statusLower := strings.ToLower(status)
-
+// statusIconWithStyles returns a colored status icon using the provided styles.
+// isDraft takes precedence over StatusCategory. For the "completed" (merged) status,
+// the label "Merged" is used. For unknown/unmapped statuses the raw status string is
+// used as fallback via a separate path in the caller.
+func statusIconWithStyles(statusCat provider.StateCategory, isDraft bool, s *styles.Styles) string {
 	if isDraft {
 		return s.Warning.Render("◐ Draft")
 	}
 
-	switch statusLower {
-	case "active":
+	switch statusCat {
+	case provider.StateCategoryActive:
+		// PR active uses filled circle, not the work-item half-circle glyph.
 		return s.Info.Render("● Active")
-	case "completed":
-		return s.Success.Render("✓ Merged")
-	case "abandoned":
+	case provider.StateCategoryClosedDone:
+		// PR "completed" renders as "Merged", not "Closed".
+		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat) + " Merged")
+	case provider.StateCategoryRemoved:
+		// PR "abandoned" renders as "○ Closed" with Muted style, not the work-item ✗/Error.
 		return s.Muted.Render("○ Closed")
 	default:
-		return s.Muted.Render(status)
+		// Unknown/custom: the raw status string is unavailable at this point
+		// so fall back to the glyph-only rendering from the display map.
+		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat))
 	}
 }
 
-// voteIconWithStyles returns a summary icon for reviewer votes using provided styles
+// voteIconWithStyles returns a summary icon for reviewer votes using provided styles.
+// Priority order (most significant wins): Rejected > WaitingForAuthor >
+// ApprovedWithSuggestions > Approved > NoVote.
 func voteIconWithStyles(reviewers []provider.Reviewer, s *styles.Styles) string {
 	if len(reviewers) == 0 {
 		return s.Muted.Render("-")
@@ -546,16 +555,16 @@ func voteIconWithStyles(reviewers []provider.Reviewer, s *styles.Styles) string 
 	hasNoVote := false
 
 	for _, r := range reviewers {
-		switch r.Vote {
-		case -10:
+		switch r.Kind {
+		case provider.VoteKindRejected:
 			hasRejected = true
-		case -5:
+		case provider.VoteKindWaitingForAuthor:
 			hasWaiting = true
-		case 5:
+		case provider.VoteKindApprovedWithSuggestions:
 			hasApprovedWithSuggestions = true
-		case 10:
+		case provider.VoteKindApproved:
 			hasApproved = true
-		case 0:
+		case provider.VoteKindNoVote:
 			hasNoVote = true
 		}
 	}
@@ -564,15 +573,15 @@ func voteIconWithStyles(reviewers []provider.Reviewer, s *styles.Styles) string 
 
 	switch {
 	case hasRejected:
-		return s.Error.Render(fmt.Sprintf("✗ %d", count))
+		return display.VoteStyle(provider.VoteKindRejected, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindRejected), count))
 	case hasWaiting:
-		return s.Warning.Render(fmt.Sprintf("◐ %d", count))
+		return display.VoteStyle(provider.VoteKindWaitingForAuthor, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindWaitingForAuthor), count))
 	case hasApprovedWithSuggestions:
-		return s.Warning.Render(fmt.Sprintf("~ %d", count))
+		return display.VoteStyle(provider.VoteKindApprovedWithSuggestions, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindApprovedWithSuggestions), count))
 	case hasApproved:
-		return s.Success.Render(fmt.Sprintf("✓ %d", count))
+		return display.VoteStyle(provider.VoteKindApproved, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindApproved), count))
 	case hasNoVote:
-		return s.Muted.Render(fmt.Sprintf("○ %d", count))
+		return display.VoteStyle(provider.VoteKindNoVote, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindNoVote), count))
 	default:
 		return s.Muted.Render(fmt.Sprintf("- %d", count))
 	}
@@ -585,7 +594,7 @@ func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row 
 		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
 		rows[i] = table.Row{
 			pr.Identity.ScopeDisplay,
-			statusIconWithStyles(pr.Status, pr.IsDraft, s),
+			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
 			pr.CreatedByName,
@@ -660,7 +669,7 @@ func fetchPullRequestsMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return pullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListPullRequests(25)
+		prs, err := client.ListPullRequests(25, provider.ListOpts{})
 		return pullRequestsMsg{prs: prs, err: err}
 	}
 }
@@ -671,7 +680,7 @@ func fetchMyPullRequestsMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return myPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListMyPullRequests(25)
+		prs, err := client.ListMyPullRequests(25, provider.ListOpts{Mine: true})
 		return myPullRequestsMsg{prs: prs, err: err}
 	}
 }
@@ -682,7 +691,7 @@ func fetchPullRequestsAsReviewerMulti(client provider.Provider) tea.Cmd {
 		if client == nil {
 			return asReviewerPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListPullRequestsAsReviewer(25)
+		prs, err := client.ListPullRequestsAsReviewer(25, provider.ListOpts{})
 		return asReviewerPullRequestsMsg{prs: prs, err: err}
 	}
 }
