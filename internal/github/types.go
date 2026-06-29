@@ -47,6 +47,20 @@ type Issue struct {
 	HTMLURL     string     `json:"html_url"`
 }
 
+// IssueComment represents a single comment on a GitHub issue
+// (GET /repos/{owner}/{repo}/issues/{number}/comments).
+// Body is the raw Markdown text. User is the comment author.
+// UpdatedAt differs from CreatedAt only when the comment has been edited.
+// HTMLURL is the permalink to the comment on github.com.
+type IssueComment struct {
+	ID        int64     `json:"id"`
+	Body      string    `json:"body"`
+	User      User      `json:"user"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	HTMLURL   string    `json:"html_url"`
+}
+
 // PullRequestBranch holds the branch reference within a pull request.
 type PullRequestBranch struct {
 	Ref string `json:"ref"`
