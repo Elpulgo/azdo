@@ -79,7 +79,7 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [x] 7. Actions run→`PipelineRun` and jobs/steps→`Timeline` mappers; fixture tests. (blocked by: 3)
 - [x] 8. Work-item `Client` methods: `ListWorkItems`/`ListMyWorkItems` (`/issues` + `/search/issues` for mine), `GetWorkItemTypeStates`→open/closed, `UpdateWorkItemState` (PATCH state+reason), comments get/add. (blocked by: 5)
 - [x] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
-- [ ] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
+- [x] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
 - [ ] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)
 - [ ] 12. `github.MultiClient` fan-out across repos (goroutine/merge/sort/`PartialError`) + `Adapter` satisfying `provider.Provider`; `//go:build adapter` conformance test mirroring `azdevops`; `CGO_ENABLED=0 go test/vet ./...` green; integration tests written, run manually. (blocked by: 8,9,10,11)
 
@@ -148,6 +148,33 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - Test result (worktree-local cache/tmp, CGO off):
   - `go test ./internal/github/...` → `ok ... 0.026s`
   - `go vet ./internal/github/...` → clean (no output)
+
+## Validation: Task 9
+
+- **COMPLETE** (commit `bd22d50`). All 11 per-repo `Client` methods exist in
+  `internal/github/pullrequests.go` with the required no-scope/no-repositoryID
+  shape, returning wire types (`PullRequest`/`ReviewComment`/`PRFile`/`IssueComment`)
+  except `GetFileContent`→`string` and the mutation methods:
+  - `ListPullRequests(top, opts) ([]PullRequest, error)` — GET `/pulls`.
+  - `ListMyPullRequests(top, opts)` and `ListPullRequestsAsReviewer(top, opts)` →
+    GET `/search/issues` with `is:pr` + `author:@me` / `review-requested:@me`.
+  - `GetPRThreads(number) ([]ReviewComment, error)` — flat list, grouping deferred.
+  - `GetPRFiles(number) ([]PRFile, error)`.
+  - `VotePullRequest(number, vote) error` — POST `/reviews`, vote→APPROVE/REQUEST_CHANGES/COMMENT.
+  - `GetFileContent(filePath, branch) (string, error)` — base64 newline-strip + decode.
+  - `AddPRCodeComment(number, filePath, line, content) (ReviewComment, error)` — fetches head SHA then POSTs.
+  - `AddPRComment(number, content) (IssueComment, error)` — issue-comment endpoint.
+  - `ReplyToThread(number, rootCommentID, content) (ReviewComment, error)` — `in_reply_to`.
+  - `UpdateThreadStatus(number, rootCommentID, status) error` — minimal GraphQL
+    `resolveReviewThread`/`unresolveReviewThread`, matching by first-comment `databaseId`.
+- `types.go` adds `SHA` to `PullRequestBranch` (for code-comment `commit_id`).
+- Unit tests in `pullrequests_test.go` cover all 11 methods (26 `Test*` funcs),
+  including 6 GraphQL `UpdateThreadStatus` tests (resolve/unresolve/no-match/unrecognized/vars).
+- Integration test `pullrequests_integration_test.go` carries `//go:build integration`
+  and is excluded from the default run.
+- Test result (worktree-local cache/tmp, CGO off):
+  - `go test -count=1 ./internal/github/...` → `ok ... 0.038s`
+  - `go vet ./internal/github/...` → clean; `gofmt -l internal/github/` → no output.
 
 ## Unknowns
 
