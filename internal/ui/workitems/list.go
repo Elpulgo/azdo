@@ -12,9 +12,9 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ViewMode re-exports listview.ViewMode for backward compatibility.
@@ -498,10 +498,10 @@ func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
 			assignedTo = "-"
 		}
 		rows[i] = table.Row{
-			typeIconWithStyles(wi.WorkItemType, s),
+			typeIconWithStyles(wi.ItemKind, s),
 			wi.Identity.ID,
 			wi.Title,
-			stateTextWithStyles(wi.State, s),
+			stateTextWithStyles(wi.StateCategory, wi.State, s),
 			priorityTextWithStyles(wi.Priority, s),
 			assignedTo,
 		}
@@ -519,10 +519,10 @@ func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.R
 		}
 		rows[i] = table.Row{
 			wi.Identity.ScopeDisplay,
-			typeIconWithStyles(wi.WorkItemType, s),
+			typeIconWithStyles(wi.ItemKind, s),
 			wi.Identity.ID,
 			wi.Title,
-			stateTextWithStyles(wi.State, s),
+			stateTextWithStyles(wi.StateCategory, wi.State, s),
 			priorityTextWithStyles(wi.Priority, s),
 			assignedTo,
 		}
@@ -690,56 +690,32 @@ func applyStateFilter(items []provider.WorkItem, state string) []provider.WorkIt
 	return filtered
 }
 
-// Icon/text formatting functions (unchanged)
+// Icon/text formatting functions
 
-// typeIconWithStyles returns a styled text label for the work item type using provided styles
-func typeIconWithStyles(workItemType string, s *styles.Styles) string {
-	accentStyle := lipgloss.NewStyle().Foreground(s.Theme.Accent)
-
-	switch workItemType {
-	case "Bug":
-		return s.Error.Render("Bug")
-	case "Task":
-		return s.Info.Render("Task")
-	case "User Story":
-		return s.Success.Render("Story")
-	case "Feature":
-		return accentStyle.Render("Feature")
-	case "Epic":
-		return s.Warning.Render("Epic")
-	case "Issue":
-		return s.Error.Render("Issue")
-	default:
-		return s.Muted.Render("Item")
-	}
+// typeIconWithStyles returns a styled text label for the work item type using
+// the neutral ItemType enum and the shared display map.
+func typeIconWithStyles(kind provider.ItemType, s *styles.Styles) string {
+	return display.ItemTypeStyle(kind, s).Render(display.ItemTypeLabel(kind))
 }
 
-// stateTextWithStyles returns styled text for the work item state using provided styles
-func stateTextWithStyles(state string, s *styles.Styles) string {
-	stateLower := strings.ToLower(state)
-	secondaryStyle := lipgloss.NewStyle().Foreground(s.Theme.Secondary)
-
-	switch {
-	case stateLower == "new":
-		return s.Muted.Render("New")
-	case stateLower == "active":
-		return s.Info.Render("Active")
-	case stateLower == "resolved":
-		return s.Warning.Render("Resolved")
-	case strings.Contains(stateLower, "ready"):
-		return secondaryStyle.Render(state)
-	case stateLower == "closed":
-		return s.Success.Render("Closed")
-	case stateLower == "removed":
-		return s.Error.Render("Removed")
-	default:
-		return s.Muted.Render(state)
+// stateTextWithStyles returns styled text for the work item state using the
+// neutral StateCategory enum and the shared display map. The raw state string
+// is used as a label fallback when the display map returns "" (e.g. for
+// StateCategoryUnknown or custom ready-variants).
+func stateTextWithStyles(cat provider.StateCategory, state string, s *styles.Styles) string {
+	label := display.StateLabel(cat)
+	if label == "" {
+		label = state
 	}
+	return display.StateStyle(cat, s).Render(label)
 }
 
-// priorityTextWithStyles returns styled text for priority using provided styles
+// priorityTextWithStyles returns styled text for priority using provided styles.
+// A priority of 0 (unset) renders as "-".
 func priorityTextWithStyles(priority int, s *styles.Styles) string {
 	switch priority {
+	case 0:
+		return s.Muted.Render("-")
 	case 1:
 		return s.Error.Render("P1")
 	case 2:

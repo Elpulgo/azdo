@@ -30,20 +30,20 @@ func TestTypeIconWithStyles(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			tests := []struct {
-				workItemType string
+				kind         provider.ItemType
 				wantContains string
 			}{
-				{"Bug", "Bug"},
-				{"Task", "Task"},
-				{"User Story", "Story"},
-				{"Feature", "Feature"},
+				{provider.ItemTypeBug, "Bug"},
+				{provider.ItemTypeTask, "Task"},
+				{provider.ItemTypeUserStory, "Story"},
+				{provider.ItemTypeFeature, "Feature"},
 			}
 
 			for _, tt := range tests {
-				got := typeIconWithStyles(tt.workItemType, s)
+				got := typeIconWithStyles(tt.kind, s)
 				if !strings.Contains(got, tt.wantContains) {
-					t.Errorf("typeIconWithStyles(%q) with theme %s = %q, want to contain %q",
-						tt.workItemType, themeName, got, tt.wantContains)
+					t.Errorf("typeIconWithStyles(%v) with theme %s = %q, want to contain %q",
+						tt.kind, themeName, got, tt.wantContains)
 				}
 			}
 		})
@@ -58,19 +58,20 @@ func TestStateTextWithStyles(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			tests := []struct {
+				cat          provider.StateCategory
 				state        string
 				wantContains string
 			}{
-				{"New", "New"},
-				{"Active", "Active"},
-				{"Closed", "Closed"},
+				{provider.StateCategoryNew, "New", "New"},
+				{provider.StateCategoryActive, "Active", "Active"},
+				{provider.StateCategoryClosedDone, "Closed", "Closed"},
 			}
 
 			for _, tt := range tests {
-				got := stateTextWithStyles(tt.state, s)
+				got := stateTextWithStyles(tt.cat, tt.state, s)
 				if !strings.Contains(got, tt.wantContains) {
-					t.Errorf("stateTextWithStyles(%q) with theme %s = %q, want to contain %q",
-						tt.state, themeName, got, tt.wantContains)
+					t.Errorf("stateTextWithStyles(%v, %q) with theme %s = %q, want to contain %q",
+						tt.cat, tt.state, themeName, got, tt.wantContains)
 				}
 			}
 		})
@@ -100,6 +101,71 @@ func TestPriorityTextWithStyles(t *testing.T) {
 					t.Errorf("priorityTextWithStyles(%d) with theme %s = %q, want to contain %q",
 						tt.priority, themeName, got, tt.wantContains)
 				}
+			}
+		})
+	}
+}
+
+func TestPriorityTextWithStyles_ZeroRenderesDash(t *testing.T) {
+	s := styles.DefaultStyles()
+	got := priorityTextWithStyles(0, s)
+	if !strings.Contains(got, "-") {
+		t.Errorf("priorityTextWithStyles(0) = %q, want to contain '-'", got)
+	}
+	if strings.Contains(got, "P0") {
+		t.Errorf("priorityTextWithStyles(0) = %q, must not contain 'P0'", got)
+	}
+}
+
+func TestTypeIconWithStyles_UsesDisplayMap(t *testing.T) {
+	s := styles.DefaultStyles()
+	// Verify the display map renders all known enum values correctly.
+	tests := []struct {
+		kind         provider.ItemType
+		wantContains string
+	}{
+		{provider.ItemTypeBug, "Bug"},
+		{provider.ItemTypeTask, "Task"},
+		{provider.ItemTypeUserStory, "Story"},
+		{provider.ItemTypeFeature, "Feature"},
+		{provider.ItemTypeEpic, "Epic"},
+		{provider.ItemTypeIssue, "Issue"},
+		{provider.ItemTypeUnknown, "Item"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("kind=%d", tt.kind), func(t *testing.T) {
+			got := typeIconWithStyles(tt.kind, s)
+			if !strings.Contains(got, tt.wantContains) {
+				t.Errorf("typeIconWithStyles(%v) = %q, want to contain %q", tt.kind, got, tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestStateTextWithStyles_UsesDisplayMap(t *testing.T) {
+	s := styles.DefaultStyles()
+	tests := []struct {
+		cat          provider.StateCategory
+		state        string
+		wantContains string
+	}{
+		{provider.StateCategoryNew, "New", "New"},
+		{provider.StateCategoryActive, "Active", "Active"},
+		{provider.StateCategoryResolved, "Resolved", "Resolved"},
+		{provider.StateCategoryClosedDone, "Closed", "Closed"},
+		{provider.StateCategoryRemoved, "Removed", "Removed"},
+		// Ready-for-test: label falls back to raw state string
+		{provider.StateCategoryReadyForTest, "Ready for Test", "Ready for Test"},
+		// Unknown: falls back to raw state string
+		{provider.StateCategoryUnknown, "Custom", "Custom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			got := stateTextWithStyles(tt.cat, tt.state, s)
+			if !strings.Contains(got, tt.wantContains) {
+				t.Errorf("stateTextWithStyles(%v, %q) = %q, want to contain %q", tt.cat, tt.state, got, tt.wantContains)
 			}
 		})
 	}

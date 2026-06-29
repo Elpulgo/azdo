@@ -12,7 +12,6 @@ import (
 // ─── StateCategory ───────────────────────────────────────────────────────────
 
 // StateGlyph returns the icon used for a work-item state category.
-// Mirrors wiStateIcon in internal/ui/workitems/detail.go.
 func StateGlyph(cat provider.StateCategory) string {
 	switch cat {
 	case provider.StateCategoryNew:
@@ -31,9 +30,10 @@ func StateGlyph(cat provider.StateCategory) string {
 }
 
 // StateLabel returns the display label for a work-item state category.
-// Mirrors stateTextWithStyles in internal/ui/workitems/list.go.
-// For StateCategoryUnknown the raw state string is used by the caller;
-// this returns "" as a signal that the raw value should be used instead.
+// StateLabel returns the display label for a work-item state category.
+// For StateCategoryUnknown and StateCategoryReadyForTest the raw state string
+// is used by the caller; this returns "" as a signal that the raw value should
+// be used instead.
 func StateLabel(cat provider.StateCategory) string {
 	switch cat {
 	case provider.StateCategoryNew:

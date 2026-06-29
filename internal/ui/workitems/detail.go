@@ -8,6 +8,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -335,7 +336,11 @@ func (m *DetailModel) View() string {
 	// Type, state and priority
 	metadataStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.styles.Theme.Secondary))
-	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.WorkItemType, wiStateIcon(wi.State), wi.State, wi.Priority)))
+	prioLabel := fmt.Sprintf("P%d", wi.Priority)
+	if wi.Priority == 0 {
+		prioLabel = "-"
+	}
+	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  %s", wi.WorkItemType, display.StateGlyph(wi.StateCategory), wi.State, prioLabel)))
 	sb.WriteString("\n")
 
 	// Separator
@@ -555,26 +560,6 @@ func workItemNumericID(wi provider.WorkItem) int {
 		n = n*10 + int(ch-'0')
 	}
 	return n
-}
-
-// wiStateIcon returns an icon string for the given work item state.
-// The logic mirrors azdevops.WorkItem.StateIcon but operates on a plain string.
-func wiStateIcon(state string) string {
-	stateLower := strings.ToLower(state)
-	switch {
-	case stateLower == "new":
-		return "○"
-	case stateLower == "active":
-		return "◐"
-	case stateLower == "resolved" || strings.Contains(stateLower, "ready"):
-		return "●"
-	case stateLower == "closed":
-		return "✓"
-	case stateLower == "removed":
-		return "✗"
-	default:
-		return "○"
-	}
 }
 
 // wiEffectiveDescription returns the appropriate description text for the work item.
