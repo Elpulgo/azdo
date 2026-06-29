@@ -78,7 +78,7 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
 - [x] 6. PR→`PullRequest` (reviewers from reviews→votes), review-comments→`Thread`/`Comment`, files→`IterationChange` mappers; fixture tests. (blocked by: 3)
 - [x] 7. Actions run→`PipelineRun` and jobs/steps→`Timeline` mappers; fixture tests. (blocked by: 3)
 - [x] 8. Work-item `Client` methods: `ListWorkItems`/`ListMyWorkItems` (`/issues` + `/search/issues` for mine), `GetWorkItemTypeStates`→open/closed, `UpdateWorkItemState` (PATCH state+reason), comments get/add. (blocked by: 5)
-- [ ] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
+- [x] 9. PR `Client` methods: list/my/as-reviewer (search), `GetPRThreads`, `VotePullRequest`→submit review, `GetFileContent`, add code/general comment, reply; `UpdateThreadStatus` via the minimal GraphQL `resolveReviewThread`. (blocked by: 6)
 - [ ] 10. Pipeline `Client` methods: `ListPipelineRuns`, `GetBuildTimeline` (jobs+steps), `GetBuildLogContent` (per-job plaintext log). (blocked by: 7)
 - [ ] 11. `WebURL` builders (`WorkItemURL`/`PRURL`/`PRThreadWebURL`/`PipelineURL`) from `html_url` shapes; table-test the exact URLs. (blocked by: 1)
 - [ ] 12. `github.MultiClient` fan-out across repos (goroutine/merge/sort/`PartialError`) + `Adapter` satisfying `provider.Provider`; `//go:build adapter` conformance test mirroring `azdevops`; `CGO_ENABLED=0 go test/vet ./...` green; integration tests written, run manually. (blocked by: 8,9,10,11)
@@ -126,11 +126,37 @@ against inline JSON fixtures; HTTP paths are integration-tested manually.
   (`.After` → first-seen wins on ties). Add a one-line comment documenting
   "equal SubmittedAt → first-seen wins (GitHub returns chronological order)".
 
+## Validation: Task 8
+
+- **COMPLETE** (commit `36631ee`). All six per-repo `Client` methods exist in
+  `internal/github/workitems.go` with the required shapes (no scope param, wire
+  types returned except the synthesized states):
+  - `ListWorkItems(top int, opts provider.ListOpts) ([]Issue, error)` — GET `/issues`,
+    filters PRs via `Issue.PullRequest != nil`, caps top at 100, maps states.
+  - `ListMyWorkItems(top int, opts provider.ListOpts) ([]Issue, error)` — GET
+    `/search/issues` with `is:issue assignee:@me`, unwraps `issueSearchResponse`.
+  - `GetWorkItemTypeStates(_ string) ([]provider.WorkItemTypeState, error)` — static
+    open/closed, no HTTP.
+  - `UpdateWorkItemState(number int, state string) error` — PATCH `state`+`state_reason`
+    via new `doJSON` helper; rejects unknown states.
+  - `GetWorkItemComments(number int) ([]IssueComment, error)` — GET issue comments.
+  - `AddWorkItemComment(number int, text string) (IssueComment, error)` — POST comment.
+- `types.go` adds `PullRequest *json.RawMessage` to `Issue`; `client.go` adds `doJSON`.
+- Unit tests in `workitems_test.go` cover all six methods (18 `Test*` funcs).
+- Integration test `workitems_integration_test.go` carries `//go:build integration` and
+  is excluded from the default run.
+- Test result (worktree-local cache/tmp, CGO off):
+  - `go test ./internal/github/...` → `ok ... 0.026s`
+  - `go vet ./internal/github/...` → clean (no output)
+
 ## Unknowns
 
-- Resolving a thread needs the PR's GraphQL `reviewThread` node IDs; how to match
-  REST-grouped threads to GraphQL threads (file + line + first comment) — settle in task 9.
-  If a thread can't be matched, `UpdateThreadStatus` no-ops and surfaces the limitation.
+- **RESOLVED (task 9).** Resolving a thread: matched by first-comment `databaseId` via a
+  GraphQL `reviewThreads(first:100)` query; on no-match a descriptive error is returned
+  (not a silent no-op). See `UpdateThreadStatus` in `internal/github/pullrequests.go`.
+- **RESOLVED (task 9).** Search-PR fidelity: `/search/issues` items are issue-shaped;
+  `Draft`, `Head`, and `Base` are left zero; `merged_at` is captured from the nested
+  `pull_request` sub-object. Partial map is accepted for list views; N+1 fetch avoided.
 - `/search/issues` rate limits (30/min) and `Link`-header pagination vs Azure `$top`;
   per-repo paging is approximated, global top-N merged like the Azure fan-out.
 - Exact keyring user key for the GitHub token (proposed `github-token` under service

@@ -74,9 +74,11 @@ type IssueComment struct {
 	HTMLURL   string    `json:"html_url"`
 }
 
-// PullRequestBranch holds the branch reference within a pull request.
+// PullRequestBranch holds the branch reference and commit SHA within a pull request.
+// SHA is needed by AddPRCodeComment to supply the required commit_id field.
 type PullRequestBranch struct {
 	Ref string `json:"ref"`
+	SHA string `json:"sha"`
 }
 
 // PullRequest represents a GitHub REST pull request wire type
