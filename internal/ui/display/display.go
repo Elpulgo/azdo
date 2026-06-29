@@ -120,6 +120,35 @@ func ItemTypeStyle(t provider.ItemType, s *styles.Styles) lipgloss.Style {
 	}
 }
 
+// ─── Kind ────────────────────────────────────────────────────────────────────
+
+// KindGlyph returns the provider-origin icon for a backend Kind.
+// Used when a list mixes entities from different backends and a per-row marker
+// is needed. Returns "?" for the zero/unknown Kind and any unrecognised value.
+//
+// Phase 3 note: when KindGitHub is added, map it here (e.g. "⑂" or similar).
+func KindGlyph(k provider.Kind) string {
+	switch k {
+	case provider.KindAzure:
+		return "⬡"
+	default: // KindUnknown (zero) and future/unrecognised values
+		return "?"
+	}
+}
+
+// KindLabel returns the human-readable provider name for a backend Kind.
+// Returns "" for the zero/unknown Kind so callers can apply their own fallback.
+//
+// Phase 3 note: when KindGitHub is added, map it here (e.g. "GitHub").
+func KindLabel(k provider.Kind) string {
+	switch k {
+	case provider.KindAzure:
+		return "Azure"
+	default: // KindUnknown (zero) and future/unrecognised values
+		return ""
+	}
+}
+
 // ─── VoteKind ────────────────────────────────────────────────────────────────
 
 // VoteGlyph returns the icon for a reviewer vote kind.

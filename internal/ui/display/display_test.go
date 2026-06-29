@@ -194,6 +194,52 @@ func TestRunStatusLabel(t *testing.T) {
 	}
 }
 
+// ─── Kind ────────────────────────────────────────────────────────────────────
+
+func TestKindGlyph(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     provider.Kind
+		expected string
+	}{
+		// Zero/unknown Kind returns a neutral fallback; no constant exists for it yet.
+		{"Zero", provider.Kind(0), "?"},
+		{"Azure", provider.KindAzure, "⬡"},
+		// Sentinel: out-of-range value falls through to default
+		{"OutOfRange", provider.Kind(99), "?"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.KindGlyph(tc.kind)
+			if got != tc.expected {
+				t.Errorf("KindGlyph(%v) = %q, want %q", tc.kind, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestKindLabel(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     provider.Kind
+		expected string
+	}{
+		// Zero/unknown Kind returns "" (caller decides how to handle unknown origin).
+		{"Zero", provider.Kind(0), ""},
+		{"Azure", provider.KindAzure, "Azure"},
+		// Sentinel: out-of-range value falls through to default
+		{"OutOfRange", provider.Kind(99), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.KindLabel(tc.kind)
+			if got != tc.expected {
+				t.Errorf("KindLabel(%v) = %q, want %q", tc.kind, got, tc.expected)
+			}
+		})
+	}
+}
+
 // ─── Style function tests ─────────────────────────────────────────────────────
 
 func TestStateStyle(t *testing.T) {
