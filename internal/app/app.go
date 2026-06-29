@@ -315,11 +315,11 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
-	if cfg.IsMultiProject() {
-		statusBar.SetProject(fmt.Sprintf("%d projects", len(cfg.Projects)))
-	} else {
-		statusBar.SetProject(cfg.DisplayNameFor(cfg.Projects[0]))
+	scopes := make([]string, len(cfg.Projects))
+	for i, p := range cfg.Projects {
+		scopes[i] = cfg.DisplayNameFor(p)
 	}
+	statusBar.SetScopes(scopes)
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
@@ -611,11 +611,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetWarningMessage(previousWarning)
 		}
 		m.statusBar.SetOrganization(m.config.Organization)
-		if m.config.IsMultiProject() {
-			m.statusBar.SetProject(fmt.Sprintf("%d projects", len(m.config.Projects)))
-		} else {
-			m.statusBar.SetProject(m.config.DisplayNameFor(m.config.Projects[0]))
+		scopes := make([]string, len(m.config.Projects))
+		for i, p := range m.config.Projects {
+			scopes[i] = m.config.DisplayNameFor(p)
 		}
+		m.statusBar.SetScopes(scopes)
 		m.statusBar.SetWidth(m.width)
 
 		m.logo = components.NewLogo(m.styles)
