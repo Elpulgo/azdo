@@ -67,6 +67,11 @@ provider choice so a GitHub-only user can complete first-run setup.
 - [x] 5. Gate the metrics tab: `buildEnabledTabs` + `NewModel` add `TabMetrics`/build `metricsView` only when an Azure backend is present (`mc != nil`) AND `metrics.enabled`. Test the no-Azure path. (blocked by: 3)
 - [ ] 6. `azdo auth`: add an Azure/GitHub provider prompt; GitHub branch stores via `SetGitHubToken`; bare Azure flow output unchanged. (blocked by: 3)
 - [ ] 7. Setup wizard: front provider selector (Azure / GitHub / both); GitHub steps (token, repos); build a `Config` (and store the GitHub token) for any selection incl. GitHub-only; tests. (blocked by: 3)
+- [ ] 8. Guard pipeline polling against a nil Azure backend (GitHub-only). The poller is Azure-only (`*azdevops.MultiClient` → `[]azdevops.PipelineRun`) and `Init()`/`OnTick()` call it unconditionally; a GitHub-only user passes `mc == nil`, which boxes into a non-nil `PipelineClient` and panics on the first fetch (`mc.clients` deref). Fix: in `NewModel` pass an *untyped-nil* `polling.PipelineClient` when `mc == nil` (a boxed nil pointer is `!= nil`), and no-op `FetchPipelineRuns`/`OnTick` when `p.client == nil`. Azure path unchanged. Add a `NewModel` smoke test with `mc == nil` that drives `Init()` + a `WindowSizeMsg` without panicking. (blocked by: 4,5)
+
+## Review feedback: Task 5
+
+The Task-5 opus review APPROVED the metrics-gating diff (4f4fb22) — all four gate sites consistent, zero Azure-only regression, no nil-deref into the zero-value `metricsView`. It surfaced one 🔴 that is **cross-task** (not in the 4f4fb22 diff): Task 4+5 together first make a GitHub-only run reachable, and the Azure-only pipeline poller panics on a nil `*azdevops.MultiClient` at startup. Task 5 stays closed; the fix is tracked as **Task 8** above (per reviewer recommendation, rather than bouncing 4f4fb22).
 
 ## Unknowns
 
