@@ -43,6 +43,64 @@ func TestAdapter_IsMultiProject(t *testing.T) {
 	}
 }
 
+// TestAdapter_Scopes table-tests Scopes() for the GitHub adapter.
+func TestAdapter_Scopes(t *testing.T) {
+	tests := []struct {
+		name  string
+		repos []string // nil signals: use a nil MultiClient
+		want  []string // sorted expected scopes; nil means nil return
+	}{
+		{
+			name:  "nil MultiClient returns nil",
+			repos: nil,
+			want:  nil,
+		},
+		{
+			name:  "single repo",
+			repos: []string{"owner/repo"},
+			want:  []string{"owner/repo"},
+		},
+		{
+			name:  "multiple repos sorted",
+			repos: []string{"z/repo", "a/repo", "m/repo"},
+			want:  []string{"a/repo", "m/repo", "z/repo"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var a *Adapter
+			if tt.repos == nil {
+				a = NewAdapter(nil)
+			} else {
+				mc, err := NewMultiClient(tt.repos, "tok", DefaultLabelConvention(), nil)
+				if err != nil {
+					t.Fatalf("NewMultiClient: %v", err)
+				}
+				a = NewAdapter(mc)
+			}
+
+			got := a.Scopes()
+
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("Scopes() = %v, want nil", got)
+				}
+				return
+			}
+
+			if len(got) != len(tt.want) {
+				t.Fatalf("Scopes() = %v, want %v", got, tt.want)
+			}
+			for i, s := range tt.want {
+				if got[i] != s {
+					t.Errorf("Scopes()[%d] = %q, want %q", i, got[i], s)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Nil MultiClient returns errors
 // ---------------------------------------------------------------------------

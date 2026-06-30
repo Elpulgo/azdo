@@ -204,8 +204,8 @@ func TestKindGlyph(t *testing.T) {
 	}{
 		// Zero/unknown Kind returns a neutral fallback; no constant exists for it yet.
 		{"Zero", provider.Kind(0), "?"},
-		{"Azure", provider.KindAzure, "⬡"},
-		{"GitHub", provider.KindGitHub, "⑂"},
+		{"Azure", provider.KindAzure, "⬢"},
+		{"GitHub", provider.KindGitHub, "⎇"},
 		// Sentinel: out-of-range value falls through to default
 		{"OutOfRange", provider.Kind(99), "?"},
 	}

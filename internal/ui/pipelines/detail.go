@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
@@ -15,6 +16,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// openURL is a package-level seam so tests can intercept browser launches.
+var openURL = browser.Open
+
+// openURLResultMsg is sent when an attempt to open a URL in the browser completes.
+type openURLResultMsg struct {
+	err error
+}
 
 // TimelineNode represents a node in the timeline tree with its children
 type TimelineNode struct {
@@ -62,6 +71,7 @@ type DetailModel struct {
 	height        int
 	viewport      viewport.Model
 	ready         bool
+	statusMessage string
 	spinner       *components.LoadingIndicator
 	styles        *styles.Styles
 }
@@ -189,6 +199,8 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.loading = true
 			m.spinner.SetVisible(true)
 			return m, tea.Batch(m.fetchTimeline(), m.spinner.Tick())
+		case "o":
+			return m, m.openInBrowser()
 		}
 
 	case timelineMsg:
@@ -199,6 +211,14 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			return m, nil
 		}
 		m.SetTimeline(msg.timeline)
+
+	case openURLResultMsg:
+		if msg.err != nil {
+			m.statusMessage = fmt.Sprintf("Failed to open browser: %v", msg.err)
+		} else {
+			m.statusMessage = "Opened in browser"
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -302,6 +322,7 @@ func (m *DetailModel) SelectedItem() *TimelineNode {
 // MoveUp moves selection up
 func (m *DetailModel) MoveUp() {
 	if m.selectedIndex > 0 {
+		m.statusMessage = ""
 		m.selectedIndex--
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
@@ -311,6 +332,7 @@ func (m *DetailModel) MoveUp() {
 // MoveDown moves selection down
 func (m *DetailModel) MoveDown() {
 	if m.selectedIndex < len(m.flatItems)-1 {
+		m.statusMessage = ""
 		m.selectedIndex++
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
@@ -413,8 +435,13 @@ func (m *DetailModel) CanViewLogs() bool {
 	return selected != nil && selected.Record.LogID != 0
 }
 
-// GetStatusMessage returns a status message based on the selected item
+// GetStatusMessage returns a status message based on the selected item.
+// A transient browser-open result takes precedence; it is cleared the next time
+// the selection moves so the per-record log hint resumes.
 func (m *DetailModel) GetStatusMessage() string {
+	if m.statusMessage != "" {
+		return m.statusMessage
+	}
 	selected := m.SelectedItem()
 	if selected == nil {
 		return ""
@@ -431,11 +458,30 @@ func (m *DetailModel) GetRun() provider.PipelineRun {
 	return m.run
 }
 
+// openInBrowser returns a command that opens the pipeline-run URL in the user's
+// default browser. It prefers the WebURL carried on the run (populated by both
+// the Azure and GitHub mappers) and falls back to the provider's PipelineURL
+// builder. If no URL can be produced it sets a status message and returns nil.
+func (m *DetailModel) openInBrowser() tea.Cmd {
+	url := m.run.WebURL
+	if url == "" && m.client != nil {
+		url = m.client.PipelineURL(m.run.Identity.Scope, parseBuildID(m.run.Identity.ID))
+	}
+	if url == "" {
+		m.statusMessage = "Cannot open: no pipeline URL available"
+		return nil
+	}
+	return func() tea.Msg {
+		return openURLResultMsg{err: openURL(url)}
+	}
+}
+
 // GetContextItems returns context bar items for this view
 func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓/pgup/pgdn", Description: "navigate"},
 		{Key: "enter", Description: "expand/collapse or view logs"},
+		{Key: "o", Description: "open in browser"},
 	}
 }
 

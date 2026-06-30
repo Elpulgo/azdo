@@ -1,13 +1,13 @@
-// Package polling provides background polling functionality for Azure DevOps data
-// with tea.Msg types for Bubble Tea integration.
+// Package polling provides background polling of pipeline data (across all
+// configured provider backends) with tea.Msg types for Bubble Tea integration.
 package polling
 
-import "github.com/Elpulgo/azdo/internal/azdevops"
+import "github.com/Elpulgo/azdo/internal/provider"
 
 // PipelineRunsUpdated is a tea.Msg sent when pipeline runs are fetched.
 // It contains either the updated runs or an error.
 type PipelineRunsUpdated struct {
-	Runs []azdevops.PipelineRun
+	Runs []provider.PipelineRun
 	Err  error
 }
 

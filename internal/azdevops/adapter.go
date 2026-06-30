@@ -35,6 +35,15 @@ func (a *Adapter) IsMultiProject() bool {
 	return a.mc.IsMultiProject()
 }
 
+// Scopes returns the Azure DevOps project API names this adapter spans.
+// Returns nil when no client is configured.
+func (a *Adapter) Scopes() []string {
+	if a.mc == nil {
+		return nil
+	}
+	return a.mc.Projects()
+}
+
 // --- Pull-request surface ---
 
 // ListPullRequests returns up to top active pull requests across all projects,

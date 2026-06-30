@@ -949,6 +949,23 @@ func (m *DiffModel) fetchChangedFiles() tea.Cmd {
 // fetchFileDiff loads file content at both branches and computes the diff
 func (m *DiffModel) fetchFileDiff(change provider.IterationChange) tea.Cmd {
 	return func() tea.Msg {
+		// When the backend supplies a ready-made unified-diff patch (GitHub's PR
+		// files API), render it directly. This needs no client and avoids fetching
+		// full file content at branch refs — robust for deleted files, fork PRs,
+		// and search-sourced PRs whose source/target refs may be unavailable.
+		// Azure leaves Patch empty and falls through to the content-fetch path
+		// below (unchanged).
+		if change.Patch != "" {
+			fileDiff := &diff.FileDiff{
+				Path:       change.Path,
+				ChangeType: change.ChangeType,
+				OldPath:    change.OriginalPath,
+				Hunks:      diff.ParseUnifiedDiff(change.Patch),
+			}
+			fileThreads := diff.MapThreadsToLinesP(m.threads, change.Path)
+			return fileDiffMsg{diff: fileDiff, fileThreads: fileThreads}
+		}
+
 		if m.client == nil {
 			return fileDiffMsg{err: fmt.Errorf("no client available")}
 		}

@@ -63,7 +63,9 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 }
 
-func TestModel_HandlesPollingTick(t *testing.T) {
+func TestModel_HandlesPollingTick_NilClient_NoCmd(t *testing.T) {
+	// When mc is nil (GitHub-only), a TickMsg must produce no command —
+	// the poller no-ops rather than panicking on the nil Azure backend.
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -74,12 +76,10 @@ func TestModel_HandlesPollingTick(t *testing.T) {
 
 	m := NewModel(nil, client, cfg, "dev", "")
 
-	// Send a tick message
+	// Send a tick message — must not panic, cmd must be nil (no Azure polling).
 	_, cmd := m.Update(polling.TickMsg{})
-
-	// Should return a command (to fetch data)
-	if cmd == nil {
-		t.Error("expected a command after tick message")
+	if cmd != nil {
+		t.Error("expected no command after tick message when Azure backend is nil")
 	}
 }
 
@@ -97,8 +97,8 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	m.height = 30
 
 	// Simulate successful data fetch
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
 	}
 	msg := polling.PipelineRunsUpdated{Runs: runs, Err: nil}
 
@@ -263,6 +263,43 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	// Should show pull requests content (empty list message or similar)
 	if !strings.Contains(view, "pull request") && !strings.Contains(view, "No pull requests") {
 		t.Error("View should show pull requests content when on PR tab")
+	}
+}
+
+// scopeStub embeds provider.Provider so only Scopes() needs an implementation;
+// the other methods are never called by displayScopes.
+type scopeStub struct {
+	provider.Provider
+	scopes []string
+}
+
+func (s scopeStub) Scopes() []string { return s.scopes }
+
+func TestDisplayScopes_UnionWithDisplayNames(t *testing.T) {
+	cfg := &config.Config{
+		Projects:     []string{"projA"},
+		DisplayNames: map[string]string{"projA": "Project A"},
+	}
+	// A mixed setup: one Azure project (display-name mapped) and one GitHub repo
+	// (passed through unchanged). Both must appear.
+	p := scopeStub{scopes: []string{"projA", "octo/repo"}}
+
+	got := displayScopes(p, cfg)
+	want := []string{"Project A", "octo/repo"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("displayScopes() = %v, want %v", got, want)
+	}
+}
+
+func TestDisplayScopes_NilProviderFallsBackToProjects(t *testing.T) {
+	cfg := &config.Config{
+		Projects:     []string{"projA", "projB"},
+		DisplayNames: map[string]string{"projA": "Project A"},
+	}
+	got := displayScopes(nil, cfg)
+	want := []string{"Project A", "projB"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("displayScopes(nil) = %v, want %v (legacy cfg.Projects behavior)", got, want)
 	}
 }
 
@@ -453,14 +490,13 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate pipeline data arriving (like from polling)
-	runs := make([]azdevops.PipelineRun, 30)
+	runs := make([]provider.PipelineRun, 30)
 	for i := range runs {
-		runs[i] = azdevops.PipelineRun{
-			ID:          i + 1,
-			BuildNumber: fmt.Sprintf("2024.%d", i+1),
-			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
-			Status:      "completed",
-			Result:      "succeeded",
+		runs[i] = provider.PipelineRun{
+			Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
+			BuildNumber:    fmt.Sprintf("2024.%d", i+1),
+			DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
+			RunStatus:      provider.RunStatusSucceeded,
 		}
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -522,14 +558,13 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	m = updated.(Model)
 
 	// Load enough data to fill the table
-	runs := make([]azdevops.PipelineRun, 50)
+	runs := make([]provider.PipelineRun, 50)
 	for i := range runs {
-		runs[i] = azdevops.PipelineRun{
-			ID:          i + 1,
-			BuildNumber: fmt.Sprintf("2024.%d", i+1),
-			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
-			Status:      "completed",
-			Result:      "succeeded",
+		runs[i] = provider.PipelineRun{
+			Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
+			BuildNumber:    fmt.Sprintf("2024.%d", i+1),
+			DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
+			RunStatus:      provider.RunStatusSucceeded,
 		}
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -608,14 +643,13 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 			m = updated.(Model)
 
 			// Load data so content fills
-			runs := make([]azdevops.PipelineRun, 50)
+			runs := make([]provider.PipelineRun, 50)
 			for i := range runs {
-				runs[i] = azdevops.PipelineRun{
-					ID:          i + 1,
-					BuildNumber: fmt.Sprintf("2024.%d", i+1),
-					Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
-					Status:      "completed",
-					Result:      "succeeded",
+				runs[i] = provider.PipelineRun{
+					Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
+					BuildNumber:    fmt.Sprintf("2024.%d", i+1),
+					DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
+					RunStatus:      provider.RunStatusSucceeded,
 				}
 			}
 			updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -658,8 +692,8 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	m = updated.(Model)
 
 	// Load some pipeline data
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
 	m = updated.(Model)
@@ -1015,8 +1049,8 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate successful data fetch to set status to "connected"
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
 	m = updated.(Model)
@@ -1430,7 +1464,7 @@ func TestModel_DisabledPanes_EnabledTabs_AllEnabled(t *testing.T) {
 		Theme:           "dark",
 	}
 
-	tabs := buildEnabledTabs(cfg)
+	tabs := buildEnabledTabs(cfg, true)
 	if len(tabs) != 3 {
 		t.Fatalf("expected 3 enabled tabs, got %d", len(tabs))
 	}
@@ -1448,12 +1482,56 @@ func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
 		DisabledPanes:   []string{"pipelines", "workitems"},
 	}
 
-	tabs := buildEnabledTabs(cfg)
+	tabs := buildEnabledTabs(cfg, true)
 	if len(tabs) != 1 {
 		t.Fatalf("expected 1 enabled tab, got %d", len(tabs))
 	}
 	if tabs[0] != TabPullRequests {
 		t.Errorf("expected TabPullRequests, got %d", tabs[0])
+	}
+}
+
+// TestBuildEnabledTabs_MetricsGate tests the combined gate:
+// TabMetrics requires both cfg.Metrics.Enabled AND azurePresent.
+func TestBuildEnabledTabs_MetricsGate(t *testing.T) {
+	baseCfg := func(metricsEnabled bool) *config.Config {
+		return &config.Config{
+			Organization:    "testorg",
+			Projects:        []string{"testproject"},
+			PollingInterval: 60,
+			Theme:           "dark",
+			Metrics:         config.MetricsConfig{Enabled: metricsEnabled},
+		}
+	}
+
+	containsMetrics := func(tabs []Tab) bool {
+		for _, tab := range tabs {
+			if tab == TabMetrics {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No Azure backend + metrics enabled → no metrics tab.
+	tabs := buildEnabledTabs(baseCfg(true), false)
+	if containsMetrics(tabs) {
+		t.Error("expected no TabMetrics when azurePresent=false, even with metrics.enabled=true")
+	}
+
+	// Azure present + metrics enabled → metrics tab is present (regression guard).
+	tabs = buildEnabledTabs(baseCfg(true), true)
+	if !containsMetrics(tabs) {
+		t.Error("expected TabMetrics when azurePresent=true and metrics.enabled=true")
+	}
+	if tabs[len(tabs)-1] != TabMetrics {
+		t.Errorf("expected TabMetrics as last tab, got %v", tabs[len(tabs)-1])
+	}
+
+	// Azure present + metrics disabled → no metrics tab (confirms the AND).
+	tabs = buildEnabledTabs(baseCfg(false), true)
+	if containsMetrics(tabs) {
+		t.Error("expected no TabMetrics when metrics.enabled=false, even with azurePresent=true")
 	}
 }
 
@@ -1489,6 +1567,53 @@ func openTagPickerOnWorkItemsTab(t *testing.T) Model {
 		t.Fatal("precondition failed: tag picker should be visible")
 	}
 	return m
+}
+
+// TestNewModel_NilAzureBackend_NoInitPanic is a smoke test for the GitHub-only
+// path (mc == nil). It verifies that constructing the model, calling Init(), and
+// processing a WindowSizeMsg through Update() all complete without panicking.
+// Before the fix, NewModel passed the typed-nil *azdevops.MultiClient directly
+// into NewPoller, boxing it into a non-nil PipelineClient interface value. The
+// first FetchPipelineRuns call would then dispatch through the interface to a nil
+// MultiClient, dereferencing mc.clients and panicking at startup.
+func TestNewModel_NilAzureBackend_NoInitPanic(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "githubuser",
+		Projects:        []string{},
+		PollingInterval: 30,
+		Theme:           "dark",
+	}
+
+	// Explicitly typed nil — no Azure backend (GitHub-only user).
+	var mc *azdevops.MultiClient
+
+	// Must not panic during construction.
+	m := NewModel(nil, mc, cfg, "dev", "")
+
+	// Init() must not panic (previously panicked via FetchPipelineRuns → nil deref).
+	_ = m.Init()
+
+	// Pin the regression directly: the poller command that previously panicked is
+	// FetchPipelineRuns. Execute it WITHOUT a recover wrapper. The fix guards on a
+	// genuinely-nil client and returns a nil cmd; if the typed-nil *MultiClient is
+	// ever boxed back into a non-nil interface, p.client == nil is false and this
+	// closure dereferences the nil MultiClient — panicking and failing the test.
+	if cmd := m.poller.FetchPipelineRuns(); cmd != nil {
+		t.Errorf("FetchPipelineRuns() = non-nil cmd, want nil no-op for nil Azure backend; executing it: %v", cmd())
+	}
+	// Same guarantee on the periodic-tick path.
+	if cmd := m.poller.OnTick(); cmd != nil {
+		t.Errorf("OnTick() = non-nil cmd, want nil no-op for nil Azure backend; executing it: %v", cmd())
+	}
+
+	// WindowSizeMsg through Update must also be panic-free.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Basic sanity: model is usable.
+	if m.activeTab != TabPullRequests {
+		t.Errorf("expected default tab to be TabPullRequests, got %d", m.activeTab)
+	}
 }
 
 func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {

@@ -5,18 +5,20 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"strings"
+	"syscall"
 
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/demo"
+	"github.com/Elpulgo/azdo/internal/github"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
+	"github.com/Elpulgo/azdo/internal/ui/providerselect"
 	"github.com/Elpulgo/azdo/internal/ui/setupwizard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -64,24 +66,35 @@ func runHelp() error {
 		Foreground(lipgloss.Color("99"))
 	fmt.Println(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
 
-	fmt.Printf(`azdo - A TUI for Azure DevOps (%s)
+	fmt.Printf(`azdo - A TUI for Azure DevOps and GitHub (%s)
 
 Usage:
   azdo              Start the TUI application
-  azdo auth         Set or update your Personal Access Token (PAT)
+  azdo auth         Set or update credentials for Azure DevOps (PAT) or GitHub
   azdo demo         Launch with mock data (for screenshots/demos)
   azdo --help       Show this help message
   azdo --version    Show version information
 
 Configuration:
-  Config file: %s
-  PAT storage: System keyring (service: azdo-tui)
-  PAT fallback: AZDO_PAT environment variable
+  Config file:     %s
+  Token storage:   System keyring (service: azdo-tui)
+  Azure fallback:  AZDO_PAT environment variable
+  GitHub fallback: GITHUB_TOKEN environment variable
 
-Required PAT permissions:
+Required Azure DevOps PAT scopes:
   Build        (Read)         - pipelines, build logs
   Code         (Read & Write) - pull requests, voting, comments
   Work Items   (Read & Write) - queries, comments, state changes
+
+Required GitHub token scopes:
+  Classic PAT:   repo          (private repos) or public_repo (public only)
+  Fine-grained:  Metadata      (read)
+                 Contents      (read)
+                 Issues        (read & write)
+                 Pull requests (read & write)
+                 Actions       (read)
+  Note: resolving PR comment threads requires a classic 'repo' PAT;
+        fine-grained tokens are commonly rejected for that operation.
 
 Keyboard shortcuts (in TUI):
   Navigation:
@@ -104,7 +117,7 @@ Keyboard shortcuts (in TUI):
     v            Vote on PR (detail view)
     s            Change work item state (detail view)
     c            Add comment (work item detail)
-    o            Open in browser (PR / work item detail)
+    o            Open in browser (PR / work item / pipeline detail)
     t            Select theme
     ?            Toggle help overlay
     q            Quit
@@ -133,15 +146,43 @@ func runVersion() error {
 func runAuth() error {
 	store := config.NewKeyringStore()
 
-	// Check if PAT already exists to show appropriate message
-	_, err := store.GetPAT()
-	isUpdate := err == nil
-
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("99"))
 	fmt.Println(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
 	fmt.Println()
+
+	// Prompt the user to pick a provider.
+	selModel := providerselect.NewModel()
+	selProg := tea.NewProgram(selModel)
+	selResult, err := selProg.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run provider selection: %w", err)
+	}
+	finalSel, ok := selResult.(providerselect.Model)
+	if !ok {
+		return fmt.Errorf("unexpected model type from provider selection")
+	}
+	if finalSel.Cancelled() {
+		return nil
+	}
+
+	switch finalSel.Selected() {
+	case providerselect.ProviderAzure:
+		return runAuthAzure(store)
+	case providerselect.ProviderGitHub:
+		return runAuthGitHub(store)
+	default:
+		return fmt.Errorf("unknown provider selected")
+	}
+}
+
+// runAuthAzure is the Azure DevOps PAT auth flow — byte-for-byte identical to
+// the behaviour before the provider prompt was added.
+func runAuthAzure(store *config.KeyringStore) error {
+	_, err := store.GetPAT()
+	isUpdate := err == nil
+
 	if isUpdate {
 		fmt.Println("Azure DevOps PAT Update")
 		fmt.Println("This will replace your existing Personal Access Token in the system keyring.")
@@ -165,6 +206,60 @@ func runAuth() error {
 	return nil
 }
 
+// runAuthGitHub is the GitHub token auth flow.
+func runAuthGitHub(store *config.KeyringStore) error {
+	_, err := store.GetGitHubToken()
+	isUpdate := err == nil
+
+	if isUpdate {
+		fmt.Println("GitHub Token Update")
+		fmt.Println("This will replace your existing GitHub token in the system keyring (service: azdo-tui).")
+	} else {
+		fmt.Println("GitHub Token Setup")
+		fmt.Println("This will store your GitHub token in the system keyring (service: azdo-tui).")
+		fmt.Println("Tip: GITHUB_TOKEN environment variable is also accepted as a fallback.")
+	}
+	fmt.Println()
+	fmt.Println(`Required token scopes:
+  Classic PAT:  repo            (private repos) or public_repo (public only)
+  Fine-grained: Metadata        (read)
+                Contents        (read)
+                Issues          (read & write)
+                Pull requests   (read & write)
+                Actions         (read)`)
+	fmt.Println()
+
+	var model patinput.Model
+	if isUpdate {
+		model = patinput.NewGitHubModelForUpdate()
+	} else {
+		model = patinput.NewGitHubModel()
+	}
+	p := tea.NewProgram(model)
+
+	m, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run GitHub token input: %w", err)
+	}
+
+	finalModel, ok := m.(patinput.Model)
+	if !ok {
+		return fmt.Errorf("unexpected model type from GitHub token input")
+	}
+
+	token := finalModel.GetPAT()
+	if token == "" {
+		return nil
+	}
+
+	if err := store.SetGitHubToken(token); err != nil {
+		return fmt.Errorf("failed to save GitHub token: %w", err)
+	}
+
+	fmt.Println("\nGitHub token saved successfully to system keyring.")
+	return nil
+}
+
 func runTUI() error {
 	// Load configuration
 	cfg, err := config.Load()
@@ -179,26 +274,61 @@ func runTUI() error {
 		}
 	}
 
-	// Get PAT from keyring
+	// Build the configured backends and assemble a CompositeProvider.
 	store := config.NewKeyringStore()
-	pat, err := store.GetPAT()
-	if err != nil {
-		// If PAT not found, prompt user to enter it
-		if errors.Is(err, config.ErrNotFound) {
-			pat, err = promptForPAT(store)
-			if err != nil {
-				return fmt.Errorf("failed to set PAT: %w", err)
+
+	var backends []provider.Provider
+	var azureMC *azdevops.MultiClient
+
+	// --- Azure backend (only when fully configured) ---
+	if cfg.HasAzure() {
+		pat, err := store.GetPAT()
+		if err != nil {
+			if errors.Is(err, config.ErrNotFound) {
+				pat, err = promptForPAT(store)
+				if err != nil {
+					return fmt.Errorf("failed to set PAT: %w", err)
+				}
+			} else {
+				return fmt.Errorf("failed to get PAT: %w", err)
 			}
-		} else {
-			return fmt.Errorf("failed to get PAT: %w", err)
 		}
+
+		client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat, cfg.DisplayNames)
+		if err != nil {
+			return fmt.Errorf("failed to create Azure DevOps client: %w", err)
+		}
+		azureMC = client
+		backends = append(backends, azdevops.NewAdapter(client))
 	}
 
-	// Create multi-project Azure DevOps client
-	client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat, cfg.DisplayNames)
-	if err != nil {
-		return fmt.Errorf("failed to create Azure DevOps client: %w", err)
+	// --- GitHub backend (only when at least one repo is configured) ---
+	if cfg.HasGitHub() {
+		token, err := store.GetGitHubToken()
+		if err != nil {
+			return fmt.Errorf(
+				"GitHub token not found: run 'azdo auth' or set the GITHUB_TOKEN environment variable: %w", err)
+		}
+
+		conv := github.LabelConvention{
+			TypePrefix:     cfg.GitHub.TypePrefix,
+			PriorityPrefix: cfg.GitHub.PriorityPrefix,
+		}
+		ghMC, err := github.NewMultiClient(cfg.GitHub.Repos, token, conv, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create GitHub client: %w", err)
+		}
+		backends = append(backends, github.NewAdapter(ghMC))
 	}
+
+	// Defense-in-depth: config.Validate() already requires ≥1 backend, but guard
+	// here as well so a future caller of runTUI without a prior Validate does not
+	// silently produce a zero-backend composite.
+	if len(backends) <= 0 {
+		return fmt.Errorf("no provider configured: set up Azure DevOps or GitHub (run the setup wizard)")
+	}
+
+	composite := provider.NewCompositeProvider(backends...)
 
 	// Load persisted state (last active tab, last-viewed PR/work item).
 	// A missing file is treated as a clean slate — not an error.
@@ -212,8 +342,7 @@ func runTUI() error {
 	}
 
 	// Create and run the TUI application.
-	adapter := azdevops.NewAdapter(client)
-	model := app.NewModel(adapter, client, cfg, version, commit)
+	model := app.NewModel(composite, azureMC, cfg, version, commit)
 	model.SetStateStore(stateStore)
 	model.ApplyState(stateStore.State())
 	p := tea.NewProgram(model, tea.WithAltScreen())
@@ -273,6 +402,14 @@ func runSetupWizard() (*config.Config, error) {
 
 	if err := cfg.Save(); err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	// Persist the GitHub token to the keyring when the wizard collected one.
+	if tok := finalModel.GitHubToken(); tok != "" {
+		ks := config.NewKeyringStore()
+		if err := ks.SetGitHubToken(tok); err != nil {
+			return nil, fmt.Errorf("failed to store GitHub token: %w", err)
+		}
 	}
 
 	fmt.Println("\nConfiguration saved successfully!")

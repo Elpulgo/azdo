@@ -1371,6 +1371,164 @@ func TestDetailModel_SearchKey_IgnoredWhenEmpty(t *testing.T) {
 	}
 }
 
+// pipelineURLStub is a minimal provider.Provider whose PipelineURL returns a
+// fixed string, used to exercise the open-in-browser client fallback.
+type pipelineURLStub struct {
+	provider.Provider
+	url string
+}
+
+func (s pipelineURLStub) PipelineURL(scope string, id int) string { return s.url }
+
+func TestDetailModel_GetContextItemsIncludesOpenInBrowser(t *testing.T) {
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "1", Scope: "proj"}}
+	m := NewDetailModel(nil, run)
+
+	found := false
+	for _, item := range m.GetContextItems() {
+		if item.Key == "o" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected context items to include 'o' keybinding for open in browser")
+	}
+}
+
+func TestDetailModel_OKeyOpensBrowserUsingWebURL(t *testing.T) {
+	origOpen := openURL
+	defer func() { openURL = origOpen }()
+
+	var openedURL string
+	openURL = func(url string) error {
+		openedURL = url
+		return nil
+	}
+
+	run := provider.PipelineRun{
+		Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ID: "99"},
+		WebURL:   "https://github.com/owner/repo/actions/runs/99",
+	}
+	m := NewDetailModel(nil, run)
+	m.SetSize(80, 30)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if cmd == nil {
+		t.Fatal("Expected command after pressing 'o'")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(openURLResultMsg); !ok {
+		t.Fatalf("Expected openURLResultMsg, got %T", msg)
+	}
+
+	want := "https://github.com/owner/repo/actions/runs/99"
+	if openedURL != want {
+		t.Errorf("openURL called with %q, want %q", openedURL, want)
+	}
+}
+
+func TestDetailModel_OKeyFallsBackToPipelineURL(t *testing.T) {
+	origOpen := openURL
+	defer func() { openURL = origOpen }()
+
+	var openedURL string
+	openURL = func(url string) error {
+		openedURL = url
+		return nil
+	}
+
+	// No WebURL on the run, so the view must fall back to the provider builder.
+	want := "https://dev.azure.com/myorg/myproject/_build/results?buildId=7"
+	run := provider.PipelineRun{Identity: provider.Identity{Scope: "myproject", ID: "7"}}
+	m := NewDetailModel(pipelineURLStub{url: want}, run)
+	m.SetSize(80, 30)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if cmd == nil {
+		t.Fatal("Expected command after pressing 'o'")
+	}
+	if _, ok := cmd().(openURLResultMsg); !ok {
+		t.Fatal("Expected openURLResultMsg")
+	}
+	if openedURL != want {
+		t.Errorf("openURL called with %q, want %q", openedURL, want)
+	}
+}
+
+func TestDetailModel_OKeyNoURLSetsStatusMessage(t *testing.T) {
+	origOpen := openURL
+	defer func() { openURL = origOpen }()
+	openURL = func(string) error {
+		t.Fatal("openURL must not be called when no URL can be built")
+		return nil
+	}
+
+	// Empty WebURL and nil client → no URL can be produced.
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "1", Scope: "proj"}}
+	m := NewDetailModel(nil, run)
+	m.SetSize(80, 30)
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if cmd != nil {
+		t.Error("Expected no command when URL cannot be built")
+	}
+	if m.GetStatusMessage() == "" {
+		t.Error("Expected status message when URL cannot be built")
+	}
+}
+
+func TestDetailModel_OpenURLResultSuccessSetsStatusMessage(t *testing.T) {
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "1", Scope: "proj"}}
+	m := NewDetailModel(nil, run)
+	m.SetSize(80, 30)
+
+	m, _ = m.Update(openURLResultMsg{err: nil})
+
+	if m.GetStatusMessage() == "" {
+		t.Error("Expected a success status message after opening in browser")
+	}
+}
+
+func TestDetailModel_OpenURLResultErrorSetsStatusMessage(t *testing.T) {
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "1", Scope: "proj"}}
+	m := NewDetailModel(nil, run)
+	m.SetSize(80, 30)
+
+	m, _ = m.Update(openURLResultMsg{err: fmt.Errorf("no browser")})
+
+	got := strings.ToLower(m.GetStatusMessage())
+	if !strings.Contains(got, "fail") && !strings.Contains(got, "error") {
+		t.Errorf("Expected error status message, got %q", m.GetStatusMessage())
+	}
+}
+
+func TestDetailModel_NavigationClearsBrowserStatus(t *testing.T) {
+	run := provider.PipelineRun{Identity: provider.Identity{ID: "1", Scope: "proj"}}
+	m := NewDetailModel(nil, run)
+	m.SetSize(80, 30)
+
+	// Two navigable records so MoveDown actually moves.
+	m.SetTimeline(&provider.Timeline{
+		Identity: provider.Identity{ID: "t", Scope: "proj"},
+		Records: []provider.TimelineRecord{
+			{ID: "a", Type: "Task", Name: "A", Order: 0},
+			{ID: "b", Type: "Task", Name: "B", Order: 1},
+		},
+	})
+
+	m, _ = m.Update(openURLResultMsg{err: nil})
+	if m.GetStatusMessage() != "Opened in browser" {
+		t.Fatalf("expected browser status, got %q", m.GetStatusMessage())
+	}
+
+	m.MoveDown()
+	if m.GetStatusMessage() == "Opened in browser" {
+		t.Error("Expected navigation to clear the transient browser status message")
+	}
+}
+
 // Helper functions
 
 func timePtr(t time.Time) *time.Time {

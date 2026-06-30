@@ -36,6 +36,38 @@ func newTestDiffModel() *DiffModel {
 	return NewDiffModel(nil, pr, threads, s)
 }
 
+// When an IterationChange carries a unified-diff patch (GitHub), fetchFileDiff
+// must parse it directly — no client, no content fetch — so deleted files and
+// search-sourced PRs (whose branch refs may be unavailable) still render. Uses
+// the nil-client model from newTestDiffModel to prove the client is not touched.
+func TestDiffModel_FetchFileDiff_UsesPatchWithoutClient(t *testing.T) {
+	m := newTestDiffModel() // client is nil
+
+	change := provider.IterationChange{
+		Path:       "deleted.txt",
+		ChangeType: "delete",
+		Patch:      "@@ -1,2 +0,0 @@\n-line one\n-line two",
+	}
+
+	cmd := m.fetchFileDiff(change)
+	if cmd == nil {
+		t.Fatal("fetchFileDiff returned nil cmd")
+	}
+	msg, ok := cmd().(fileDiffMsg)
+	if !ok {
+		t.Fatalf("msg type = %T, want fileDiffMsg", cmd())
+	}
+	if msg.err != nil {
+		t.Fatalf("err = %v, want nil (patch path needs no client)", msg.err)
+	}
+	if msg.diff == nil || len(msg.diff.Hunks) != 1 {
+		t.Fatalf("diff = %+v, want one hunk parsed from the patch", msg.diff)
+	}
+	if msg.diff.ChangeType != "delete" {
+		t.Errorf("ChangeType = %q, want delete", msg.diff.ChangeType)
+	}
+}
+
 func TestNewDiffModel(t *testing.T) {
 	m := newTestDiffModel()
 

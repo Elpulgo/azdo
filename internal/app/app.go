@@ -235,7 +235,9 @@ func equalSlices(a, b []string) bool {
 }
 
 // buildEnabledTabs returns the list of enabled tabs based on config.
-func buildEnabledTabs(cfg *config.Config) []Tab {
+// azurePresent must be true when a live Azure MultiClient is available;
+// the metrics tab requires both cfg.Metrics.Enabled AND azurePresent.
+func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
 	tabs := []Tab{TabPullRequests} // always enabled
 	if cfg.IsPaneEnabled("workitems") {
 		tabs = append(tabs, TabWorkItems)
@@ -243,7 +245,7 @@ func buildEnabledTabs(cfg *config.Config) []Tab {
 	if cfg.IsPaneEnabled("pipelines") {
 		tabs = append(tabs, TabPipelines)
 	}
-	if cfg.Metrics.Enabled {
+	if cfg.Metrics.Enabled && azurePresent {
 		tabs = append(tabs, TabMetrics)
 	}
 	return tabs
@@ -270,6 +272,29 @@ func formatVersionInfo(version, commit string) string {
 		return fmt.Sprintf("%s (%s)", version, commit)
 	}
 	return version
+}
+
+// displayScopes returns the human-readable scope labels for the status bar,
+// drawn from the provider's full scope union (every configured Azure project and
+// GitHub repo) rather than just cfg.Projects — so a mixed Azure+GitHub setup
+// shows all backends, not only the Azure ones. Each scope is mapped through
+// DisplayNameFor, which returns Azure projects' display names and passes GitHub
+// "owner/repo" scopes through unchanged.
+//
+// When p is nil (provider-backed features disabled, e.g. in tests) it falls back
+// to cfg.Projects, reproducing the original Azure-only output. For a real
+// Azure-only run the composite's Scopes() equals cfg.Projects, so the output is
+// identical either way — zero behavior change for today's Azure-only users.
+func displayScopes(p provider.Provider, cfg *config.Config) []string {
+	raw := cfg.Projects
+	if p != nil {
+		raw = p.Scopes()
+	}
+	scopes := make([]string, len(raw))
+	for i, s := range raw {
+		scopes[i] = cfg.DisplayNameFor(s)
+	}
+	return scopes
 }
 
 // NewModel creates a new application model.
@@ -315,11 +340,12 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
-	scopes := make([]string, len(cfg.Projects))
-	for i, p := range cfg.Projects {
-		scopes[i] = cfg.DisplayNameFor(p)
-	}
-	statusBar.SetScopes(scopes)
+	statusBar.SetScopes(displayScopes(p, cfg))
+
+	// Gate metrics on both the config flag and a live Azure backend.
+	// The metrics view uses Azure-specific APIs not available via provider.Provider,
+	// so it must only be enabled when a concrete MultiClient is present.
+	metricsEnabled := cfg.Metrics.Enabled && mc != nil
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
@@ -345,7 +371,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	if cfg.IsPaneEnabled("pipelines") {
 		enabledTabNames = append(enabledTabNames, cfg.TermFor("pipelines", "Pipelines"))
 	}
-	if cfg.Metrics.Enabled {
+	if metricsEnabled {
 		enabledTabNames = append(enabledTabNames, cfg.TermFor("metrics", "Metrics"))
 	}
 	// Rebuild the tabs help line whenever the set differs from the default
@@ -362,7 +388,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 			strings.Join(enabledTabNames, " / "),
 		)
 	}
-	if cfg.Metrics.Enabled {
+	if metricsEnabled {
 		helpModal.AddSection("Metrics tab", []components.HelpBinding{
 			{Key: "v", Description: "Toggle Live ↔ Trends sub-view"},
 			{Key: "Tab", Description: "Switch focus between stuck-items and per-user pane (Live)"},
@@ -379,6 +405,9 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// Set version info in help modal
 	helpModal.SetVersionInfo(formatVersionInfo(currentVersion, commitHash))
 
+	// List every configured backend scope (Azure projects + GitHub repos).
+	helpModal.SetScopes(displayScopes(p, cfg))
+
 	// Set config path in help modal
 	if configPath, err := config.GetPath(); err == nil {
 		helpModal.SetConfigPath(configPath)
@@ -391,12 +420,14 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	availableThemes := styles.ListAvailableThemes()
 	themePicker := components.NewThemePicker(appStyles, availableThemes, cfg.GetTheme())
 
-	// Create poller with configured interval
+	// Create poller with configured interval. The poller fetches through the
+	// composite provider p, so initial load and every periodic tick fan out to
+	// all configured backends (Azure DevOps and/or GitHub) — not just Azure.
 	interval := time.Duration(cfg.PollingInterval) * time.Second
 	if interval <= 0 {
 		interval = polling.DefaultInterval
 	}
-	poller := polling.NewPoller(mc, interval)
+	poller := polling.NewPoller(p, interval)
 
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
@@ -408,21 +439,26 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		errorHandler.SetError(themeNotFoundErr)
 	}
 
-	enabledTabs := buildEnabledTabs(cfg)
+	enabledTabs := buildEnabledTabs(cfg, mc != nil)
+
+	var mv metrics.Model
+	if metricsEnabled {
+		mv = metrics.NewModelWithStyles(mc, cfg, appStyles)
+	}
 
 	return Model{
-		client:           p,
-		metricsClient:    mc,
-		config:           cfg,
-		styles:           appStyles,
-		activeTab:        TabPullRequests,
-		enabledTabs:      enabledTabs,
-		logo:             logo,
+		client:        p,
+		metricsClient: mc,
+		config:        cfg,
+		styles:        appStyles,
+		activeTab:     TabPullRequests,
+		enabledTabs:   enabledTabs,
+		logo:          logo,
 		// pullRequestsView, workItemsView, and pipelinesView all consume provider.Provider (tasks 7-9).
 		pipelinesView:    pipelines.NewModelWithStyles(p, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(p, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(p, appStyles),
-		metricsView:      metrics.NewModelWithStyles(mc, cfg, appStyles),
+		metricsView:      mv,
 		statusBar:        statusBar,
 		helpModal:        helpModal,
 		errorModal:       errorModal,
@@ -614,17 +650,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetWarningMessage(previousWarning)
 		}
 		m.statusBar.SetOrganization(m.config.Organization)
-		scopes := make([]string, len(m.config.Projects))
-		for i, p := range m.config.Projects {
-			scopes[i] = m.config.DisplayNameFor(p)
-		}
-		m.statusBar.SetScopes(scopes)
+		m.statusBar.SetScopes(displayScopes(m.client, m.config))
 		m.statusBar.SetWidth(m.width)
 
 		m.logo = components.NewLogo(m.styles)
 
 		m.helpModal = components.NewHelpModal(m.styles)
 		m.helpModal.SetVersionInfo(formatVersionInfo(m.currentVersion, m.commitHash))
+		m.helpModal.SetScopes(displayScopes(m.client, m.config))
 		if configPath, err := config.GetPath(); err == nil {
 			m.helpModal.SetConfigPath(configPath)
 		}
@@ -734,13 +767,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Update pipelines view with the runs, mapping wire types to neutral types.
+		// Update pipelines view with the runs. The poller already returns neutral
+		// provider.PipelineRun values fanned out across all backends.
 		if runs != nil {
-			providerRuns := make([]provider.PipelineRun, len(runs))
-			for i, r := range runs {
-				providerRuns[i] = azdevops.MapPipelineRun(r, r.ProjectName, r.ProjectDisplayName)
-			}
-			pipelineMsg := pipelines.SetRunsMsg{Runs: providerRuns}
+			pipelineMsg := pipelines.SetRunsMsg{Runs: runs}
 			var cmd tea.Cmd
 			m.pipelinesView, cmd = m.pipelinesView.Update(pipelineMsg)
 			cmds = append(cmds, cmd)

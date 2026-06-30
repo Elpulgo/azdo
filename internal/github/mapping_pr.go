@@ -290,6 +290,7 @@ func MapPRFile(f PRFile, changeID int) provider.IterationChange {
 		GitObjectType: "blob",
 		ChangeType:    mapChangeType(f.Status),
 		OriginalPath:  f.PreviousFilename,
+		Patch:         f.Patch,
 	}
 }
 

@@ -144,4 +144,9 @@ type Provider interface {
 	// IsMultiProject returns true when the provider spans more than one project,
 	// which the list views use to decide whether to show a Project column.
 	IsMultiProject() bool
+
+	// Scopes returns the API-name scopes this backend spans: Azure project names
+	// or GitHub "owner/repo" slugs. The composite uses this list to build its
+	// scope→backend routing index. Returns nil when no client is configured.
+	Scopes() []string
 }
