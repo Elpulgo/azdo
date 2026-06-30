@@ -1283,3 +1283,409 @@ theme: dark
 		t.Errorf("Theme = %q, want dark (lost on save)", reloaded.Theme)
 	}
 }
+
+// --- GitHub config tests (Task 3) ---
+
+func TestLoad_GitHubOnly_LoadsAndValidates(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo-a
+    - owner/repo-b
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed for GitHub-only config: %v", err)
+	}
+
+	if cfg.Organization != "" {
+		t.Errorf("Organization = %q, want empty for GitHub-only config", cfg.Organization)
+	}
+	if len(cfg.Projects) != 0 {
+		t.Errorf("Projects = %v, want empty for GitHub-only config", cfg.Projects)
+	}
+	if !cfg.HasGitHub() {
+		t.Error("HasGitHub() = false, want true")
+	}
+	if cfg.HasAzure() {
+		t.Error("HasAzure() = true, want false for GitHub-only config")
+	}
+	if len(cfg.GitHub.Repos) != 2 {
+		t.Fatalf("GitHub.Repos len = %d, want 2", len(cfg.GitHub.Repos))
+	}
+	if cfg.GitHub.Repos[0] != "owner/repo-a" {
+		t.Errorf("GitHub.Repos[0] = %q, want %q", cfg.GitHub.Repos[0], "owner/repo-a")
+	}
+	if cfg.GitHub.Repos[1] != "owner/repo-b" {
+		t.Errorf("GitHub.Repos[1] = %q, want %q", cfg.GitHub.Repos[1], "owner/repo-b")
+	}
+}
+
+func TestLoad_AzureAndGitHub_BothPresent_Valid(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := `organization: my-org
+projects:
+  - my-project
+polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed for Azure+GitHub config: %v", err)
+	}
+
+	if !cfg.HasAzure() {
+		t.Error("HasAzure() = false, want true")
+	}
+	if !cfg.HasGitHub() {
+		t.Error("HasGitHub() = false, want true")
+	}
+	if cfg.Organization != "my-org" {
+		t.Errorf("Organization = %q, want my-org", cfg.Organization)
+	}
+	if cfg.GitHub.Repos[0] != "owner/repo" {
+		t.Errorf("GitHub.Repos[0] = %q, want owner/repo", cfg.GitHub.Repos[0])
+	}
+}
+
+func TestLoad_AzureOnly_Regression(t *testing.T) {
+	// Azure-only config must still load, validate, and save unchanged — zero behavior change.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := `organization: test-org
+projects:
+  - project-alpha
+polling_interval: 60
+theme: dark
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed for Azure-only config: %v", err)
+	}
+
+	if !cfg.HasAzure() {
+		t.Error("HasAzure() = false, want true")
+	}
+	if cfg.HasGitHub() {
+		t.Error("HasGitHub() = true, want false for Azure-only config")
+	}
+	if len(cfg.GitHub.Repos) != 0 {
+		t.Errorf("GitHub.Repos = %v, want empty for Azure-only config", cfg.GitHub.Repos)
+	}
+
+	// Save and reload — must be unchanged.
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+	reloaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() after save failed: %v", err)
+	}
+	if reloaded.Organization != "test-org" {
+		t.Errorf("Organization = %q after round-trip, want test-org", reloaded.Organization)
+	}
+	if reloaded.HasGitHub() {
+		t.Error("HasGitHub() = true after round-trip, want false (no empty github: block expected)")
+	}
+}
+
+func TestConfig_Validate_NeitherBackend_ReturnsAtLeastOneBackendError(t *testing.T) {
+	cfg := Config{
+		PollingInterval: 60,
+		Theme:           "dark",
+		// No organization, no projects, no github.repos
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error when no backend configured")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "backend") {
+		t.Errorf("error should mention 'backend', got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
+		t.Error("error should contain configuration guide URL")
+	}
+}
+
+func TestConfig_Validate_HalfAzure_OrgSet_ProjectsEmpty(t *testing.T) {
+	cfg := Config{
+		Organization:    "my-org",
+		Projects:        nil,
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error for half-configured Azure (org set, projects empty)")
+	}
+	if !strings.Contains(err.Error(), "projects") {
+		t.Errorf("error should mention 'projects', got: %s", err.Error())
+	}
+}
+
+func TestConfig_Validate_HalfAzure_ProjectsSet_OrgEmpty(t *testing.T) {
+	cfg := Config{
+		Organization:    "",
+		Projects:        []string{"my-project"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error for half-configured Azure (projects set, org empty)")
+	}
+	if !strings.Contains(err.Error(), "organization") {
+		t.Errorf("error should mention 'organization', got: %s", err.Error())
+	}
+}
+
+func TestConfig_Validate_GitHubOnly_Valid(t *testing.T) {
+	cfg := Config{
+		PollingInterval: 60,
+		Theme:           "dark",
+		GitHub:          GitHubConfig{Repos: []string{"owner/repo"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil for GitHub-only config", err)
+	}
+}
+
+func TestConfig_Validate_MalformedRepoSlug(t *testing.T) {
+	tests := []struct {
+		name    string
+		repos   []string
+		wantErr bool
+	}{
+		{"valid single slug", []string{"owner/repo"}, false},
+		{"valid multiple slugs", []string{"owner/repo-a", "org/repo-b"}, false},
+		{"no slash", []string{"justaname"}, true},
+		{"leading slash only", []string{"/repo"}, true},
+		{"trailing slash only", []string{"owner/"}, true},
+		{"extra slash (a/b/c)", []string{"a/b/c"}, true},
+		{"empty string", []string{""}, true},
+		{"valid mixed with invalid", []string{"owner/repo", "bad"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				PollingInterval: 60,
+				Theme:           "dark",
+				GitHub:          GitHubConfig{Repos: tt.repos},
+			}
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoad_GitHubConfig_LabelPrefixes_WhenPresent(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+  type_prefix: "kind:"
+  priority_prefix: "sev:"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed: %v", err)
+	}
+
+	if cfg.GitHub.TypePrefix != "kind:" {
+		t.Errorf("GitHub.TypePrefix = %q, want %q", cfg.GitHub.TypePrefix, "kind:")
+	}
+	if cfg.GitHub.PriorityPrefix != "sev:" {
+		t.Errorf("GitHub.PriorityPrefix = %q, want %q", cfg.GitHub.PriorityPrefix, "sev:")
+	}
+}
+
+func TestLoad_GitHubConfig_LabelPrefixes_AbsentMeansEmptyNotDefaulted(t *testing.T) {
+	// When type_prefix / priority_prefix are absent, the struct fields must be
+	// empty strings — NOT defaulted to "type:"/"priority:" here. Task 4 applies
+	// DefaultLabelConvention() at construction time for the MultiClient.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed: %v", err)
+	}
+
+	if cfg.GitHub.TypePrefix != "" {
+		t.Errorf("GitHub.TypePrefix = %q, want empty (task 4 applies default)", cfg.GitHub.TypePrefix)
+	}
+	if cfg.GitHub.PriorityPrefix != "" {
+		t.Errorf("GitHub.PriorityPrefix = %q, want empty (task 4 applies default)", cfg.GitHub.PriorityPrefix)
+	}
+}
+
+func TestSave_GitHubOnly_RoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Write a GitHub-only config, load it, save it, reload it.
+	content := `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo-a
+    - owner/repo-b
+  type_prefix: "kind:"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed: %v", err)
+	}
+
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+
+	reloaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() after save failed: %v", err)
+	}
+
+	if len(reloaded.GitHub.Repos) != 2 {
+		t.Fatalf("GitHub.Repos len = %d after round-trip, want 2", len(reloaded.GitHub.Repos))
+	}
+	if reloaded.GitHub.Repos[0] != "owner/repo-a" {
+		t.Errorf("GitHub.Repos[0] = %q after round-trip, want owner/repo-a", reloaded.GitHub.Repos[0])
+	}
+	if reloaded.GitHub.Repos[1] != "owner/repo-b" {
+		t.Errorf("GitHub.Repos[1] = %q after round-trip, want owner/repo-b", reloaded.GitHub.Repos[1])
+	}
+	if reloaded.GitHub.TypePrefix != "kind:" {
+		t.Errorf("GitHub.TypePrefix = %q after round-trip, want kind:", reloaded.GitHub.TypePrefix)
+	}
+}
+
+func TestSave_AzureAndGitHub_RoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := `organization: my-org
+projects:
+  - my-project
+polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+  priority_prefix: "sev:"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed: %v", err)
+	}
+
+	// Simulate a theme change triggering a Save.
+	if err := cfg.UpdateTheme("nord"); err != nil {
+		t.Fatalf("UpdateTheme() failed: %v", err)
+	}
+
+	reloaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() after save failed: %v", err)
+	}
+
+	if reloaded.Theme != "nord" {
+		t.Errorf("Theme = %q after save, want nord", reloaded.Theme)
+	}
+	if reloaded.Organization != "my-org" {
+		t.Errorf("Organization = %q after save, want my-org", reloaded.Organization)
+	}
+	if len(reloaded.GitHub.Repos) != 1 || reloaded.GitHub.Repos[0] != "owner/repo" {
+		t.Errorf("GitHub.Repos = %v after save, want [owner/repo]", reloaded.GitHub.Repos)
+	}
+	if reloaded.GitHub.PriorityPrefix != "sev:" {
+		t.Errorf("GitHub.PriorityPrefix = %q after save, want sev:", reloaded.GitHub.PriorityPrefix)
+	}
+}
+
+func TestLoad_GitHubConfig_LowercaseKeys_Convention9(t *testing.T) {
+	// Convention #9: viper lowercases all keys. The config struct uses lowercase
+	// snake_case mapstructure tags to match. This test guards that exact mapping.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Write with the exact lowercase snake_case keys that viper will produce.
+	content := `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+  type_prefix: "type:"
+  priority_prefix: "priority:"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed: %v", err)
+	}
+
+	if len(cfg.GitHub.Repos) != 1 || cfg.GitHub.Repos[0] != "owner/repo" {
+		t.Errorf("GitHub.Repos = %v, want [owner/repo]", cfg.GitHub.Repos)
+	}
+	if cfg.GitHub.TypePrefix != "type:" {
+		t.Errorf("GitHub.TypePrefix = %q, want type:", cfg.GitHub.TypePrefix)
+	}
+	if cfg.GitHub.PriorityPrefix != "priority:" {
+		t.Errorf("GitHub.PriorityPrefix = %q, want priority:", cfg.GitHub.PriorityPrefix)
+	}
+}

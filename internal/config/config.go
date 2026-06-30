@@ -13,18 +13,43 @@ import (
 // ErrConfigNotFound is returned when the config file does not exist.
 var ErrConfigNotFound = errors.New("config file not found")
 
+// GitHubConfig holds the GitHub-specific configuration.
+// TypePrefix and PriorityPrefix are left empty by default so that task 4 can
+// fall back to github.DefaultLabelConvention() — a zero-value LabelConvention
+// routes all labels to tags, which is the safe default before a user configures
+// custom prefixes. Do NOT set viper defaults for these fields here.
+type GitHubConfig struct {
+	Repos          []string `mapstructure:"repos"`           // "owner/repo" slugs
+	TypePrefix     string   `mapstructure:"type_prefix"`     // label prefix for item type; empty → use DefaultLabelConvention
+	PriorityPrefix string   `mapstructure:"priority_prefix"` // label prefix for priority; empty → use DefaultLabelConvention
+}
+
 // Config holds the application configuration
 type Config struct {
 	Organization    string            `mapstructure:"organization"`
 	Project         string            `mapstructure:"project"` // deprecated: use Projects
 	Projects        []string          `mapstructure:"projects"`
-	DisplayNames    map[string]string `mapstructure:"-"`        // API name → display name
-	Terms           map[string]string `mapstructure:"terms"`    // tab/term key → user-facing label
+	DisplayNames    map[string]string `mapstructure:"-"`     // API name → display name
+	Terms           map[string]string `mapstructure:"terms"` // tab/term key → user-facing label
 	PollingInterval int               `mapstructure:"polling_interval"`
 	Theme           string            `mapstructure:"theme"`
 	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
 	Metrics         MetricsConfig     `mapstructure:"metrics"`
+	GitHub          GitHubConfig      `mapstructure:"github"`
 	configPath      string            // internal field to store config path for saving
+}
+
+// HasAzure reports whether Azure DevOps is fully configured (org AND projects
+// are both present). Used by Validate and main.go to decide whether to build
+// an Azure backend.
+func (c *Config) HasAzure() bool {
+	return c.Organization != "" && len(c.Projects) > 0
+}
+
+// HasGitHub reports whether GitHub is configured (at least one repo slug).
+// Used by Validate and main.go to decide whether to build a GitHub backend.
+func (c *Config) HasGitHub() bool {
+	return len(c.GitHub.Repos) > 0
 }
 
 // MetricsConfig holds opt-in settings for the metrics dashboard tab.
@@ -293,17 +318,30 @@ func NewWithPath(org string, projects []string, pollingInterval int, theme strin
 // configurationGuideURL is the link to the GitHub configuration documentation.
 const configurationGuideURL = "https://github.com/Elpulgo/azdo#configuration"
 
-// Validate checks if the configuration values are valid
+// Validate checks if the configuration values are valid.
+//
+// Backend requirement (D5): at least one of Azure or GitHub must be configured.
+// Azure is present when Organization AND Projects are both non-empty. GitHub is
+// present when at least one repo slug is listed. Both may coexist.
+//
+// Half-configured Azure rule: if Organization or Projects is set but not both,
+// that is a user error — both fields are required for a functioning Azure backend.
 func (c *Config) Validate() error {
-	if c.Organization == "" {
-		return fmt.Errorf(
-			"'organization' is not set in config.yaml\n\n"+
-				"Add your Azure DevOps organization name to the config file:\n\n"+
-				"  organization: your-org-name\n\n"+
-				"For more details, visit: %s", configurationGuideURL)
-	}
+	// --- Backend presence check ---
+	azureHasOrg := c.Organization != ""
+	azureHasProjects := len(c.Projects) > 0
+	azurePartial := azureHasOrg != azureHasProjects // XOR: one set, other not
 
-	if len(c.Projects) == 0 {
+	// Half-configured Azure: only one of org/projects is present.
+	if azurePartial {
+		if !azureHasOrg {
+			return fmt.Errorf(
+				"'organization' is not set in config.yaml\n\n"+
+					"Add your Azure DevOps organization name to the config file:\n\n"+
+					"  organization: your-org-name\n\n"+
+					"For more details, visit: %s", configurationGuideURL)
+		}
+		// org is set but projects is empty
 		return fmt.Errorf(
 			"no projects configured in config.yaml\n\n"+
 				"Add at least one project to the config file:\n\n"+
@@ -312,9 +350,37 @@ func (c *Config) Validate() error {
 				"For more details, visit: %s", configurationGuideURL)
 	}
 
+	// Require at least one backend.
+	if !c.HasAzure() && !c.HasGitHub() {
+		return fmt.Errorf(
+			"no backend configured in config.yaml\n\n"+
+				"Configure at least one of:\n\n"+
+				"  Azure DevOps:\n"+
+				"    organization: your-org-name\n"+
+				"    projects:\n"+
+				"      - your-project-name\n\n"+
+				"  GitHub:\n"+
+				"    github:\n"+
+				"      repos:\n"+
+				"        - owner/repo\n\n"+
+				"For more details, visit: %s", configurationGuideURL)
+	}
+
+	// Validate Azure project names when Azure is configured.
 	for i, p := range c.Projects {
 		if p == "" {
 			return fmt.Errorf("project name at index %d cannot be empty", i)
+		}
+	}
+
+	// Validate GitHub repo slugs when GitHub is configured.
+	// Each slug must be "owner/repo" — exactly one slash, both halves non-empty.
+	// Note: SplitN(r, "/", 2) allows "owner/repo/sub" (owner="owner", repo="repo/sub")
+	// which is invalid for our purposes, so we check for exactly one slash.
+	for _, r := range c.GitHub.Repos {
+		parts := strings.SplitN(r, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.Contains(parts[1], "/") {
+			return fmt.Errorf("invalid github repo slug %q: must be in owner/repo format (no extra slashes)", r)
 		}
 	}
 
@@ -456,6 +522,22 @@ func (c *Config) Save() error {
 
 	if len(c.Terms) > 0 {
 		v.Set("terms", c.Terms)
+	}
+
+	// Only persist the github section when at least one repo is configured —
+	// mirrors the pattern used for terms/disabled_panes and ensures Azure-only
+	// configs don't gain an empty github: {} block on every Save.
+	if c.HasGitHub() {
+		ghMap := map[string]interface{}{
+			"repos": c.GitHub.Repos,
+		}
+		if c.GitHub.TypePrefix != "" {
+			ghMap["type_prefix"] = c.GitHub.TypePrefix
+		}
+		if c.GitHub.PriorityPrefix != "" {
+			ghMap["priority_prefix"] = c.GitHub.PriorityPrefix
+		}
+		v.Set("github", ghMap)
 	}
 
 	// Write config file
