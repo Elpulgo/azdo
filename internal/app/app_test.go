@@ -1557,11 +1557,20 @@ func TestNewModel_NilAzureBackend_NoInitPanic(t *testing.T) {
 	m := NewModel(nil, mc, cfg, "dev", "")
 
 	// Init() must not panic (previously panicked via FetchPipelineRuns → nil deref).
-	cmd := m.Init()
+	_ = m.Init()
 
-	// Drive the command tree to confirm no command panics when executed.
-	// Use the helper already present in this file.
-	_ = collectMsgTypes(cmd)
+	// Pin the regression directly: the poller command that previously panicked is
+	// FetchPipelineRuns. Execute it WITHOUT a recover wrapper. The fix guards on a
+	// genuinely-nil client and returns a nil cmd; if the typed-nil *MultiClient is
+	// ever boxed back into a non-nil interface, p.client == nil is false and this
+	// closure dereferences the nil MultiClient — panicking and failing the test.
+	if cmd := m.poller.FetchPipelineRuns(); cmd != nil {
+		t.Errorf("FetchPipelineRuns() = non-nil cmd, want nil no-op for nil Azure backend; executing it: %v", cmd())
+	}
+	// Same guarantee on the periodic-tick path.
+	if cmd := m.poller.OnTick(); cmd != nil {
+		t.Errorf("OnTick() = non-nil cmd, want nil no-op for nil Azure backend; executing it: %v", cmd())
+	}
 
 	// WindowSizeMsg through Update must also be panic-free.
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})

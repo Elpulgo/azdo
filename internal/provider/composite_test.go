@@ -2,7 +2,7 @@ package provider_test
 
 import (
 	"errors"
-	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -454,10 +454,13 @@ func TestCompositeProvider_UnknownScope(t *testing.T) {
 	a := &fakeBackend{kind: provider.KindAzure, scopes: []string{"ProjectA"}}
 	cp := provider.NewCompositeProvider(a)
 
-	t.Run("error-returning method returns error", func(t *testing.T) {
+	t.Run("error-returning method returns error naming the scope", func(t *testing.T) {
 		_, err := cp.GetPRThreads("UnknownScope", "repo", 1)
 		if err == nil {
 			t.Fatal("want error for unknown scope, got nil")
+		}
+		if !strings.Contains(err.Error(), "UnknownScope") {
+			t.Errorf("want error message to name the unknown scope, got %q", err.Error())
 		}
 	})
 
@@ -728,31 +731,5 @@ func TestCompositeProvider_ListMyWorkItems(t *testing.T) {
 	}
 	if !items[0].ChangedDate.Equal(t3) {
 		t.Errorf("want first at t3, got %v", items[0].ChangedDate)
-	}
-}
-
-// TestCompositeProvider_ErrorMessages checks error messages for unknown scopes.
-func TestCompositeProvider_ErrorMessages(t *testing.T) {
-	cp := provider.NewCompositeProvider(&fakeBackend{kind: provider.KindAzure, scopes: []string{"known"}})
-
-	_, err := cp.GetBuildTimeline("mystery", 1)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	wantSubstr := "mystery"
-	if fmt.Sprintf("%v", err) == "" {
-		t.Error("error message should not be empty")
-	}
-	// The scope name should appear in the error message.
-	errStr := err.Error()
-	found := false
-	for i := 0; i <= len(errStr)-len(wantSubstr); i++ {
-		if errStr[i:i+len(wantSubstr)] == wantSubstr {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("want error message to contain %q, got %q", wantSubstr, errStr)
 	}
 }

@@ -1411,97 +1411,67 @@ theme: dark
 	}
 }
 
-func TestConfig_Validate_NeitherBackend_ReturnsAtLeastOneBackendError(t *testing.T) {
-	cfg := Config{
-		PollingInterval: 60,
-		Theme:           "dark",
-		// No organization, no projects, no github.repos
+// TestConfig_Validate_BackendCombinations covers backend-presence validation:
+// which (org, projects, github) combinations are valid, and when invalid which
+// substrings the error must surface. The half-Azure cases verify Decision D5 —
+// a partial Azure stanza is fatal on its own but tolerated when GitHub carries
+// the config (the Azure backend simply won't be built).
+func TestConfig_Validate_BackendCombinations(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr []string // substrings required in the error; nil/empty means expect no error
+	}{
+		{
+			name:    "neither backend configured",
+			cfg:     Config{PollingInterval: 60, Theme: "dark"},
+			wantErr: []string{"backend", "github.com/Elpulgo/azdo"}, // must include the config-guide URL
+		},
+		{
+			name:    "half Azure: org set, projects empty",
+			cfg:     Config{Organization: "my-org", Projects: nil, PollingInterval: 60, Theme: "dark"},
+			wantErr: []string{"projects"},
+		},
+		{
+			name:    "half Azure: projects set, org empty",
+			cfg:     Config{Organization: "", Projects: []string{"my-project"}, PollingInterval: 60, Theme: "dark"},
+			wantErr: []string{"organization"},
+		},
+		{
+			name:    "half Azure (org set) tolerated when GitHub present",
+			cfg:     Config{Organization: "my-org", Projects: nil, PollingInterval: 60, Theme: "dark", GitHub: GitHubConfig{Repos: []string{"owner/repo"}}},
+			wantErr: nil,
+		},
+		{
+			name:    "half Azure (projects set) tolerated when GitHub present",
+			cfg:     Config{Organization: "", Projects: []string{"my-project"}, PollingInterval: 60, Theme: "dark", GitHub: GitHubConfig{Repos: []string{"owner/repo"}}},
+			wantErr: nil,
+		},
+		{
+			name:    "GitHub only is valid",
+			cfg:     Config{PollingInterval: 60, Theme: "dark", GitHub: GitHubConfig{Repos: []string{"owner/repo"}}},
+			wantErr: nil,
+		},
 	}
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil, want error when no backend configured")
-	}
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "backend") {
-		t.Errorf("error should mention 'backend', got: %s", errMsg)
-	}
-	if !strings.Contains(errMsg, "github.com/Elpulgo/azdo") {
-		t.Error("error should contain configuration guide URL")
-	}
-}
 
-func TestConfig_Validate_HalfAzure_OrgSet_ProjectsEmpty(t *testing.T) {
-	cfg := Config{
-		Organization:    "my-org",
-		Projects:        nil,
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil, want error for half-configured Azure (org set, projects empty)")
-	}
-	if !strings.Contains(err.Error(), "projects") {
-		t.Errorf("error should mention 'projects', got: %s", err.Error())
-	}
-}
-
-func TestConfig_Validate_HalfAzure_ProjectsSet_OrgEmpty(t *testing.T) {
-	cfg := Config{
-		Organization:    "",
-		Projects:        []string{"my-project"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil, want error for half-configured Azure (projects set, org empty)")
-	}
-	if !strings.Contains(err.Error(), "organization") {
-		t.Errorf("error should mention 'organization', got: %s", err.Error())
-	}
-}
-
-// TestConfig_Validate_HalfAzure_WithGitHub_NotFatal verifies CF3 (Decision D5):
-// a partial Azure stanza (org set, no projects) does NOT fail validation when a
-// valid GitHub config is also present. The Azure backend simply won't be built.
-func TestConfig_Validate_HalfAzure_WithGitHub_NotFatal(t *testing.T) {
-	cfg := Config{
-		Organization:    "my-org",
-		Projects:        nil, // half-Azure: org set but no projects
-		PollingInterval: 60,
-		Theme:           "dark",
-		GitHub:          GitHubConfig{Repos: []string{"owner/repo"}},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil (GitHub carries the config; partial Azure must not block)", err)
-	}
-}
-
-// TestConfig_Validate_HalfAzure_ProjectsSet_WithGitHub_NotFatal verifies the
-// inverse partial-Azure case (projects set, org empty) is also tolerated when
-// GitHub is present.
-func TestConfig_Validate_HalfAzure_ProjectsSet_WithGitHub_NotFatal(t *testing.T) {
-	cfg := Config{
-		Organization:    "", // half-Azure: projects set but no org
-		Projects:        []string{"my-project"},
-		PollingInterval: 60,
-		Theme:           "dark",
-		GitHub:          GitHubConfig{Repos: []string{"owner/repo"}},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil (GitHub carries the config; partial Azure must not block)", err)
-	}
-}
-
-func TestConfig_Validate_GitHubOnly_Valid(t *testing.T) {
-	cfg := Config{
-		PollingInterval: 60,
-		Theme:           "dark",
-		GitHub:          GitHubConfig{Repos: []string{"owner/repo"}},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil for GitHub-only config", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if len(tt.wantErr) == 0 {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error containing %v", tt.wantErr)
+			}
+			for _, want := range tt.wantErr {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error should contain %q, got: %s", want, err.Error())
+				}
+			}
+		})
 	}
 }
 
