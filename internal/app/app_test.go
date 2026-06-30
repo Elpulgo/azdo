@@ -1430,7 +1430,7 @@ func TestModel_DisabledPanes_EnabledTabs_AllEnabled(t *testing.T) {
 		Theme:           "dark",
 	}
 
-	tabs := buildEnabledTabs(cfg)
+	tabs := buildEnabledTabs(cfg, true)
 	if len(tabs) != 3 {
 		t.Fatalf("expected 3 enabled tabs, got %d", len(tabs))
 	}
@@ -1448,12 +1448,56 @@ func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
 		DisabledPanes:   []string{"pipelines", "workitems"},
 	}
 
-	tabs := buildEnabledTabs(cfg)
+	tabs := buildEnabledTabs(cfg, true)
 	if len(tabs) != 1 {
 		t.Fatalf("expected 1 enabled tab, got %d", len(tabs))
 	}
 	if tabs[0] != TabPullRequests {
 		t.Errorf("expected TabPullRequests, got %d", tabs[0])
+	}
+}
+
+// TestBuildEnabledTabs_MetricsGate tests the combined gate:
+// TabMetrics requires both cfg.Metrics.Enabled AND azurePresent.
+func TestBuildEnabledTabs_MetricsGate(t *testing.T) {
+	baseCfg := func(metricsEnabled bool) *config.Config {
+		return &config.Config{
+			Organization:    "testorg",
+			Projects:        []string{"testproject"},
+			PollingInterval: 60,
+			Theme:           "dark",
+			Metrics:         config.MetricsConfig{Enabled: metricsEnabled},
+		}
+	}
+
+	containsMetrics := func(tabs []Tab) bool {
+		for _, tab := range tabs {
+			if tab == TabMetrics {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No Azure backend + metrics enabled → no metrics tab.
+	tabs := buildEnabledTabs(baseCfg(true), false)
+	if containsMetrics(tabs) {
+		t.Error("expected no TabMetrics when azurePresent=false, even with metrics.enabled=true")
+	}
+
+	// Azure present + metrics enabled → metrics tab is present (regression guard).
+	tabs = buildEnabledTabs(baseCfg(true), true)
+	if !containsMetrics(tabs) {
+		t.Error("expected TabMetrics when azurePresent=true and metrics.enabled=true")
+	}
+	if tabs[len(tabs)-1] != TabMetrics {
+		t.Errorf("expected TabMetrics as last tab, got %v", tabs[len(tabs)-1])
+	}
+
+	// Azure present + metrics disabled → no metrics tab (confirms the AND).
+	tabs = buildEnabledTabs(baseCfg(false), true)
+	if containsMetrics(tabs) {
+		t.Error("expected no TabMetrics when metrics.enabled=false, even with azurePresent=true")
 	}
 }
 

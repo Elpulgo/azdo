@@ -235,7 +235,9 @@ func equalSlices(a, b []string) bool {
 }
 
 // buildEnabledTabs returns the list of enabled tabs based on config.
-func buildEnabledTabs(cfg *config.Config) []Tab {
+// azurePresent must be true when a live Azure MultiClient is available;
+// the metrics tab requires both cfg.Metrics.Enabled AND azurePresent.
+func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
 	tabs := []Tab{TabPullRequests} // always enabled
 	if cfg.IsPaneEnabled("workitems") {
 		tabs = append(tabs, TabWorkItems)
@@ -243,7 +245,7 @@ func buildEnabledTabs(cfg *config.Config) []Tab {
 	if cfg.IsPaneEnabled("pipelines") {
 		tabs = append(tabs, TabPipelines)
 	}
-	if cfg.Metrics.Enabled {
+	if cfg.Metrics.Enabled && azurePresent {
 		tabs = append(tabs, TabMetrics)
 	}
 	return tabs
@@ -321,6 +323,11 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	}
 	statusBar.SetScopes(scopes)
 
+	// Gate metrics on both the config flag and a live Azure backend.
+	// The metrics view uses Azure-specific APIs not available via provider.Provider,
+	// so it must only be enabled when a concrete MultiClient is present.
+	metricsEnabled := cfg.Metrics.Enabled && mc != nil
+
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
@@ -345,7 +352,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	if cfg.IsPaneEnabled("pipelines") {
 		enabledTabNames = append(enabledTabNames, cfg.TermFor("pipelines", "Pipelines"))
 	}
-	if cfg.Metrics.Enabled {
+	if metricsEnabled {
 		enabledTabNames = append(enabledTabNames, cfg.TermFor("metrics", "Metrics"))
 	}
 	// Rebuild the tabs help line whenever the set differs from the default
@@ -362,7 +369,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 			strings.Join(enabledTabNames, " / "),
 		)
 	}
-	if cfg.Metrics.Enabled {
+	if metricsEnabled {
 		helpModal.AddSection("Metrics tab", []components.HelpBinding{
 			{Key: "v", Description: "Toggle Live ↔ Trends sub-view"},
 			{Key: "Tab", Description: "Switch focus between stuck-items and per-user pane (Live)"},
@@ -408,21 +415,26 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		errorHandler.SetError(themeNotFoundErr)
 	}
 
-	enabledTabs := buildEnabledTabs(cfg)
+	enabledTabs := buildEnabledTabs(cfg, mc != nil)
+
+	var mv metrics.Model
+	if metricsEnabled {
+		mv = metrics.NewModelWithStyles(mc, cfg, appStyles)
+	}
 
 	return Model{
-		client:           p,
-		metricsClient:    mc,
-		config:           cfg,
-		styles:           appStyles,
-		activeTab:        TabPullRequests,
-		enabledTabs:      enabledTabs,
-		logo:             logo,
+		client:        p,
+		metricsClient: mc,
+		config:        cfg,
+		styles:        appStyles,
+		activeTab:     TabPullRequests,
+		enabledTabs:   enabledTabs,
+		logo:          logo,
 		// pullRequestsView, workItemsView, and pipelinesView all consume provider.Provider (tasks 7-9).
 		pipelinesView:    pipelines.NewModelWithStyles(p, appStyles),
 		pullRequestsView: pullrequests.NewModelWithStyles(p, appStyles),
 		workItemsView:    workitems.NewModelWithStyles(p, appStyles),
-		metricsView:      metrics.NewModelWithStyles(mc, cfg, appStyles),
+		metricsView:      mv,
 		statusBar:        statusBar,
 		helpModal:        helpModal,
 		errorModal:       errorModal,
