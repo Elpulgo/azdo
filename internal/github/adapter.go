@@ -41,6 +41,15 @@ func (a *Adapter) IsMultiProject() bool {
 	return a.mc.IsMultiProject()
 }
 
+// Scopes returns the GitHub "owner/repo" slugs this adapter spans, sorted.
+// Returns nil when no client is configured.
+func (a *Adapter) Scopes() []string {
+	if a.mc == nil {
+		return nil
+	}
+	return a.mc.Scopes()
+}
+
 // --------------------------------------------------------------------------
 // Pull-request list surface — delegates to MultiClient (already neutral)
 // --------------------------------------------------------------------------
