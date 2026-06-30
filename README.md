@@ -1,6 +1,8 @@
 # azdo
 
-A Terminal User Interface (TUI) for Azure DevOps - manage pull requests, work items, and pipelines directly from your terminal.
+A Terminal User Interface (TUI) for Azure DevOps and GitHub - manage pull requests, work items, and pipelines directly from your terminal.
+
+Point it at Azure DevOps projects, GitHub repositories, or both at once: lists fan out across every configured backend and detail actions route back to the right one. A small glyph (⬢ Azure, ⎇ GitHub) marks each row's origin only when a list mixes backends.
 
 ![Tests](https://img.shields.io/github/actions/workflow/status/Elpulgo/azdo/ci.yml?label=tests)
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
@@ -82,17 +84,23 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 
 ## Features
 
+### Backends
+- **Azure DevOps** — projects via WIQL queries and the REST v7.1 API
+- **GitHub** — repositories via REST + GraphQL; issues map to work items, labels map to item type / priority / tags, pull-request reviews map to votes, and GitHub Actions runs map to pipelines
+- **Mix freely** — configure Azure projects, GitHub repos, or both. Every list view fans out across all configured backends; the per-row origin glyph (⬢ / ⎇) appears only when a list actually mixes backends
+- See [Configuration](#configuration) for how to set up each backend
+
 ### Multi-Tab Interface
 - **Pull Requests** (Tab 1): View and track pull requests
-- **Work Items** (Tab 2): Browse and manage work items
-- **Pipelines** (Tab 3): Monitor and drill into pipeline runs
+- **Work Items** (Tab 2): Browse and manage work items (GitHub issues appear here too)
+- **Pipelines** (Tab 3): Monitor and drill into pipeline runs (GitHub Actions runs appear here too)
 - Switch between tabs using `1`, `2`, `3` keys or `←`/`→` arrow keys
 
 ### Pull Requests
 - List view of pull requests with status indicators
 - Filter to show only your created PRs (`m` key) or PRs where you're a reviewer (`A` key)
 - Detailed view showing PR information and metadata
-- Vote on PRs directly from the detail view (approve, reject, suggestions, wait, reset)
+- Vote on PRs directly from the detail view. The picker is backend-aware: Azure exposes the full five-level scale (approve, approve with suggestions, wait for author, reject, reset), while GitHub offers just Approve / Request changes to match its review model
 - **Code review**: Diff viewer with file-by-file navigation
 - Inline commenting, thread replies, and thread resolution
 - General (non-file-specific) comments
@@ -121,6 +129,8 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 
 A management view for team leads, **disabled by default**. Enable it via `metrics.enabled: true` in `config.yaml` and a fourth tab appears.
 
+> **Azure DevOps only.** Metrics relies on WIQL queries and work-item revision history (`/updates`), so it reads from your Azure projects directly and ignores any configured GitHub repos.
+
 Two sub-views, toggled with `v`:
 
 - **Live** — current-state dwell per work item, per-user roll-up (WIP, in-flight, oldest Active / Ready for Test, points closed in the configured interval), and a worst-first "stuck items" pane. Sourced from the live work-item fetch — no local state, on-demand refresh only.
@@ -140,17 +150,17 @@ On the next launch the tab walks every in-flight or recently-closed work item ac
 ### User Experience
 - **Setup wizard** on first run guides you through configuration
 - Help modal with all keyboard shortcuts (press `?`)
-- Secure PAT storage using system keyring
+- Secure token storage using system keyring (Azure PAT and GitHub token)
 - Context-aware keybinding hints
 - Graceful error handling with automatic retry
 - Eight built-in themes with true color support
 - **Theme switcher** modal (press `t`) to change themes on the fly
-- **Multi-project support** with display name customization
+- **Multi-project and multi-repo support** across Azure DevOps and GitHub, with display name customization
 - **State persistence** — remembers the last active tab and the last opened PR / work item detail across sessions, so you can pick up where you left off
 
 ## Demo Mode
 
-Want to try azdo without an Azure DevOps account? Run the demo — no configuration, no PAT, no setup required:
+Want to try azdo without an Azure DevOps or GitHub account? Run the demo — no configuration, no token, no setup required:
 
 ```bash
 azdo demo
@@ -171,7 +181,7 @@ azdo
 # Try it out with mock data (no setup needed)
 azdo demo
 
-# Set or update your Personal Access Token
+# Set or update credentials (prompts for the backend: Azure PAT or GitHub token)
 azdo auth
 
 # Show version
@@ -192,11 +202,14 @@ Create a configuration file at the following location:
 - **Linux/macOS**: `~/.config/azdo-tui/config.yaml`
 - **Windows**: `C:\Users\<username>\.config\azdo-tui\config.yaml`
 
+Configure at least one backend — Azure DevOps, GitHub, or both.
+
 ```yaml
-# Azure DevOps organization name (required)
+# ── Azure DevOps (optional; required only if you use Azure) ──────────────
+# Organization name. Required when any Azure projects are listed.
 organization: your-org-name
 
-# Azure DevOps project name(s) (required)
+# Azure DevOps project name(s).
 # Simple format:
 projects:
   - your-project-name
@@ -207,6 +220,20 @@ projects:
 #       display_name: My Project
 #     - name: ugly-api-project-name-2
 #       display_name: My Project 2
+
+# ── GitHub (optional; required only if you use GitHub) ───────────────────
+# One or more "owner/repo" slugs. Listing at least one enables the GitHub
+# backend. Issues become work items, PRs become pull requests, and Actions
+# runs become pipelines.
+# github:
+#   repos:
+#     - your-org/your-repo
+#     - your-org/another-repo
+#   # Label prefixes used to derive a work item's type and priority from
+#   # GitHub issue labels (case-insensitive). Defaults shown; omit to use them.
+#   type_prefix: "type:"        # e.g. "type:bug" → Bug, "type:feature" → Feature
+#   priority_prefix: "priority:" # e.g. "priority:p1" or "priority:1" → priority 1
+#   # Labels that match neither prefix are shown as tags.
 
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
@@ -248,8 +275,12 @@ theme: dark
 ```
 
 **Configuration Options:**
-- `organization`: Your Azure DevOps organization name (required)
-- `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
+- `organization`: Your Azure DevOps organization name. Required when `projects` is set.
+- `projects`: List of Azure DevOps project names. Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
+- `github.repos`: List of GitHub `owner/repo` slugs. Listing at least one enables the GitHub backend.
+- `github.type_prefix`: Label prefix used to derive a work item's type from GitHub issue labels (optional, default: `type:`). A label like `type:bug` maps to Bug; recognised values are bug, task, story / user story, feature, epic, issue. An unrecognised value (e.g. `type:chore`) is kept as a tag instead.
+- `github.priority_prefix`: Label prefix used to derive priority from GitHub issue labels (optional, default: `priority:`). Accepts `p1`–`p4` or bare `1`–`4`; anything else is kept as a tag.
+- **At least one backend is required** — set Azure (`organization` + `projects`), GitHub (`github.repos`), or both.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
 - `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
@@ -377,14 +408,16 @@ The application persists a small amount of navigation state between runs (last a
 
 The file is created lazily — no state file is required to run the app. Writes are debounced and flushed on clean exit (including SIGINT / SIGTERM / SIGHUP). Delete the file to reset the saved view.
 
-### 2. Azure DevOps Personal Access Token (PAT)
+### 2. Authentication
 
-On first run, the application will prompt you to enter your Azure DevOps PAT. The token is securely stored in your system's credential manager:
+Run `azdo auth` and pick the backend you want to set credentials for (Azure DevOps or GitHub) — the first run prompts automatically. Configure whichever backend(s) you use. Tokens are securely stored in your system's credential manager:
 - **Windows**: Windows Credential Manager
 - **macOS**: Keychain
 - **Linux**: Secret Service (gnome-keyring, KWallet, etc.)
 
-You can also set the `AZDO_PAT` environment variable as a fallback if your system doesn't support a keyring. To update your PAT at any time, run `azdo auth`.
+If your system doesn't support a keyring, you can fall back to environment variables: `AZDO_PAT` for Azure DevOps and `GITHUB_TOKEN` for GitHub. To update credentials at any time, run `azdo auth`.
+
+#### Azure DevOps — Personal Access Token (PAT)
 
 **Required PAT Scopes:**
 | Scope | Access | Used For |
@@ -398,6 +431,32 @@ To create a PAT:
 2. Click "New Token"
 3. Select the required scopes
 4. Copy the generated token
+
+#### GitHub — Personal Access Token
+
+A classic or fine-grained token works for most operations.
+
+**Classic PAT:**
+| Scope | Used For |
+|-------|----------|
+| `repo` | Private repos: issues, pull requests, reviews, and Actions |
+| `public_repo` | Public repos only (use instead of `repo`) |
+
+**Fine-grained token** — grant these repository permissions:
+| Permission | Access |
+|------------|--------|
+| Metadata | Read |
+| Contents | Read |
+| Issues | Read & write |
+| Pull requests | Read & write |
+| Actions | Read |
+
+> **Note:** resolving PR comment threads requires a classic `repo` PAT — fine-grained tokens are commonly rejected for that operation.
+
+To create a token:
+1. Go to GitHub → Settings → Developer settings → Personal access tokens
+2. Generate a classic or fine-grained token with the scopes above
+3. Copy the generated token
 
 ## Keyboard Shortcuts
 
@@ -445,9 +504,19 @@ To create a PAT:
 | `c` | Add a comment (opens form; `Ctrl+S` to send, `Esc` to cancel) |
 | `o` | Open work item in browser |
 
+### Pipeline Detail View
+| Key | Action |
+|-----|--------|
+| `↑/↓` or `pgup/pgdn` | Navigate stages / jobs / tasks |
+| `enter` | Expand / collapse a node, or view logs for a leaf task |
+| `o` | Open the pipeline run in browser |
+| `f` | Search / filter |
+| `r` | Refresh |
+
 ### Log Viewer
 | Key | Action |
 |-----|--------|
+| `r` | Refresh logs |
 | `g` | Jump to top |
 | `G` | Jump to bottom |
 
