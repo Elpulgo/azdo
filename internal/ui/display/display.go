@@ -128,9 +128,9 @@ func ItemTypeStyle(t provider.ItemType, s *styles.Styles) lipgloss.Style {
 func KindGlyph(k provider.Kind) string {
 	switch k {
 	case provider.KindAzure:
-		return "⬡"
+		return "⬢"
 	case provider.KindGitHub:
-		return "⑂"
+		return "⎇"
 	default: // KindUnknown (zero) and future/unrecognised values
 		return "?"
 	}
