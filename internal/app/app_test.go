@@ -266,6 +266,43 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 }
 
+// scopeStub embeds provider.Provider so only Scopes() needs an implementation;
+// the other methods are never called by displayScopes.
+type scopeStub struct {
+	provider.Provider
+	scopes []string
+}
+
+func (s scopeStub) Scopes() []string { return s.scopes }
+
+func TestDisplayScopes_UnionWithDisplayNames(t *testing.T) {
+	cfg := &config.Config{
+		Projects:     []string{"projA"},
+		DisplayNames: map[string]string{"projA": "Project A"},
+	}
+	// A mixed setup: one Azure project (display-name mapped) and one GitHub repo
+	// (passed through unchanged). Both must appear.
+	p := scopeStub{scopes: []string{"projA", "octo/repo"}}
+
+	got := displayScopes(p, cfg)
+	want := []string{"Project A", "octo/repo"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("displayScopes() = %v, want %v", got, want)
+	}
+}
+
+func TestDisplayScopes_NilProviderFallsBackToProjects(t *testing.T) {
+	cfg := &config.Config{
+		Projects:     []string{"projA", "projB"},
+		DisplayNames: map[string]string{"projA": "Project A"},
+	}
+	got := displayScopes(nil, cfg)
+	want := []string{"Project A", "projB"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("displayScopes(nil) = %v, want %v (legacy cfg.Projects behavior)", got, want)
+	}
+}
+
 func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",

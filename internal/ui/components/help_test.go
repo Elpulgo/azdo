@@ -75,6 +75,34 @@ func TestHelpModal_View_ContainsTitle(t *testing.T) {
 	}
 }
 
+func TestHelpModal_View_ContainsScopes(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.SetScopes([]string{"Project A", "octo/repo"})
+	h.Show()
+
+	view := h.View()
+
+	if !strings.Contains(view, "Scopes:") {
+		t.Error("view should contain a 'Scopes:' label in the Info section")
+	}
+	for _, s := range []string{"Project A", "octo/repo"} {
+		if !strings.Contains(view, s) {
+			t.Errorf("view should list configured scope %q", s)
+		}
+	}
+}
+
+func TestHelpModal_View_NoScopesLineWhenUnset(t *testing.T) {
+	h := NewHelpModal(styles.DefaultStyles())
+	h.SetSize(80, 60)
+	h.Show()
+
+	if strings.Contains(h.View(), "Scopes:") {
+		t.Error("view should not contain a 'Scopes:' label when no scopes are set")
+	}
+}
+
 func TestHelpModal_View_ContainsKeybindings(t *testing.T) {
 	h := NewHelpModal(styles.DefaultStyles())
 	h.SetSize(80, 60)

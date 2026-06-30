@@ -148,11 +148,20 @@ func TestClient_ListMyPullRequests_SearchEndpointAndQuery(t *testing.T) {
 
 	var capturedPath, capturedQ string
 
+	// The search path is issue-shaped and carries no head/base; enrichBranches
+	// then issues GET /pulls/{n} to backfill them. Route by path: capture the
+	// search request only, and serve a head/base-bearing PR on the enrich call.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedPath = r.URL.Path
-		capturedQ, _ = url.QueryUnescape(r.URL.Query().Get("q"))
+		if r.URL.Path == "/search/issues" {
+			capturedPath = r.URL.Path
+			capturedQ, _ = url.QueryUnescape(r.URL.Query().Get("q"))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(fixture))
+			return
+		}
+		// enrichBranches: GET /repos/o/r/pulls/11
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fixture))
+		w.Write([]byte(`{"number":11,"head":{"ref":"feature-x"},"base":{"ref":"main"}}`))
 	}))
 	defer srv.Close()
 
@@ -190,9 +199,12 @@ func TestClient_ListMyPullRequests_SearchEndpointAndQuery(t *testing.T) {
 	if !prs[0].MergedAt.Equal(mergedAt) {
 		t.Errorf("prs[0].MergedAt = %v, want %v", prs[0].MergedAt, mergedAt)
 	}
-	// Fidelity: Head/Base are zero for search results.
-	if prs[0].Head.Ref != "" {
-		t.Errorf("prs[0].Head.Ref = %q, want empty (search results are issue-shaped)", prs[0].Head.Ref)
+	// enrichBranches must backfill head/base from the GET /pulls/{n} call.
+	if prs[0].Head.Ref != "feature-x" {
+		t.Errorf("prs[0].Head.Ref = %q, want feature-x (enriched)", prs[0].Head.Ref)
+	}
+	if prs[0].Base.Ref != "main" {
+		t.Errorf("prs[0].Base.Ref = %q, want main (enriched)", prs[0].Base.Ref)
 	}
 }
 
@@ -254,6 +266,72 @@ func TestClient_ListMyPullRequests_NullMergedAt(t *testing.T) {
 	}
 	if prs[0].MergedAt != nil {
 		t.Errorf("prs[0].MergedAt = %v, want nil for open PR", prs[0].MergedAt)
+	}
+}
+
+func TestClient_GetPullRequest_FetchesAndMaps(t *testing.T) {
+	var capturedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"number":42,"title":"T","head":{"ref":"topic"},"base":{"ref":"main"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	pr, err := c.GetPullRequest(42)
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v", err)
+	}
+	if capturedPath != "/repos/o/r/pulls/42" {
+		t.Errorf("path = %q, want /repos/o/r/pulls/42", capturedPath)
+	}
+	if pr.Head.Ref != "topic" || pr.Base.Ref != "main" {
+		t.Errorf("head/base = %q/%q, want topic/main", pr.Head.Ref, pr.Base.Ref)
+	}
+}
+
+func TestClient_GetPullRequest_RejectsNonPositive(t *testing.T) {
+	c := NewClient("o", "r", "tok")
+	for _, n := range []int{0, -1} {
+		if _, err := c.GetPullRequest(n); err == nil {
+			t.Errorf("GetPullRequest(%d) error = nil, want non-nil", n)
+		}
+	}
+}
+
+// enrichBranches is best-effort: when the per-PR GET /pulls/{n} fails, the PR is
+// still returned with empty head/base rather than failing the whole list.
+func TestClient_ListMyPullRequests_EnrichBestEffortOnError(t *testing.T) {
+	fixture := `{"total_count":1,"items":[{"number":7,"title":"X","state":"open",
+		"user":{"login":"a","id":1},"created_at":"2024-05-01T00:00:00Z",
+		"html_url":"https://github.com/o/r/pull/7","pull_request":{"merged_at":null}}]}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/search/issues" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(fixture))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound) // enrich call fails
+		w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	prs, err := c.ListMyPullRequests(10, provider.ListOpts{})
+	if err != nil {
+		t.Fatalf("ListMyPullRequests() error = %v, want nil (enrichment is best-effort)", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("len(prs) = %d, want 1", len(prs))
+	}
+	if prs[0].Head.Ref != "" || prs[0].Base.Ref != "" {
+		t.Errorf("head/base = %q/%q, want empty after failed enrichment", prs[0].Head.Ref, prs[0].Base.Ref)
 	}
 }
 

@@ -274,6 +274,29 @@ func formatVersionInfo(version, commit string) string {
 	return version
 }
 
+// displayScopes returns the human-readable scope labels for the status bar,
+// drawn from the provider's full scope union (every configured Azure project and
+// GitHub repo) rather than just cfg.Projects — so a mixed Azure+GitHub setup
+// shows all backends, not only the Azure ones. Each scope is mapped through
+// DisplayNameFor, which returns Azure projects' display names and passes GitHub
+// "owner/repo" scopes through unchanged.
+//
+// When p is nil (provider-backed features disabled, e.g. in tests) it falls back
+// to cfg.Projects, reproducing the original Azure-only output. For a real
+// Azure-only run the composite's Scopes() equals cfg.Projects, so the output is
+// identical either way — zero behavior change for today's Azure-only users.
+func displayScopes(p provider.Provider, cfg *config.Config) []string {
+	raw := cfg.Projects
+	if p != nil {
+		raw = p.Scopes()
+	}
+	scopes := make([]string, len(raw))
+	for i, s := range raw {
+		scopes[i] = cfg.DisplayNameFor(s)
+	}
+	return scopes
+}
+
 // NewModel creates a new application model.
 //
 // p is the backend-neutral provider used by the three main views. It is stored
@@ -317,11 +340,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// Create status bar with org/project info
 	statusBar := components.NewStatusBar(appStyles)
 	statusBar.SetOrganization(cfg.Organization)
-	scopes := make([]string, len(cfg.Projects))
-	for i, p := range cfg.Projects {
-		scopes[i] = cfg.DisplayNameFor(p)
-	}
-	statusBar.SetScopes(scopes)
+	statusBar.SetScopes(displayScopes(p, cfg))
 
 	// Gate metrics on both the config flag and a live Azure backend.
 	// The metrics view uses Azure-specific APIs not available via provider.Provider,
@@ -385,6 +404,9 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 
 	// Set version info in help modal
 	helpModal.SetVersionInfo(formatVersionInfo(currentVersion, commitHash))
+
+	// List every configured backend scope (Azure projects + GitHub repos).
+	helpModal.SetScopes(displayScopes(p, cfg))
 
 	// Set config path in help modal
 	if configPath, err := config.GetPath(); err == nil {
@@ -634,17 +656,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetWarningMessage(previousWarning)
 		}
 		m.statusBar.SetOrganization(m.config.Organization)
-		scopes := make([]string, len(m.config.Projects))
-		for i, p := range m.config.Projects {
-			scopes[i] = m.config.DisplayNameFor(p)
-		}
-		m.statusBar.SetScopes(scopes)
+		m.statusBar.SetScopes(displayScopes(m.client, m.config))
 		m.statusBar.SetWidth(m.width)
 
 		m.logo = components.NewLogo(m.styles)
 
 		m.helpModal = components.NewHelpModal(m.styles)
 		m.helpModal.SetVersionInfo(formatVersionInfo(m.currentVersion, m.commitHash))
+		m.helpModal.SetScopes(displayScopes(m.client, m.config))
 		if configPath, err := config.GetPath(); err == nil {
 			m.helpModal.SetConfigPath(configPath)
 		}

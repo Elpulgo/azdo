@@ -31,6 +31,7 @@ type HelpModal struct {
 	sections     []HelpSection
 	configPath   string
 	versionInfo  string
+	scopes       []string
 	scrollOffset int
 }
 
@@ -136,6 +137,12 @@ func (h *HelpModal) SetConfigPath(path string) {
 // SetVersionInfo sets the version info string to display in the help modal.
 func (h *HelpModal) SetVersionInfo(info string) {
 	h.versionInfo = info
+}
+
+// SetScopes sets the configured backend scopes (Azure project display names and
+// GitHub "owner/repo" repos) listed in the Info section of the help modal.
+func (h *HelpModal) SetScopes(scopes []string) {
+	h.scopes = scopes
 }
 
 // AddSection adds a custom section to the help modal.
@@ -353,7 +360,7 @@ func (h *HelpModal) bodyLines(contentWidth int) []string {
 		}
 	}
 
-	if h.versionInfo != "" || h.configPath != "" {
+	if h.versionInfo != "" || h.configPath != "" || len(h.scopes) > 0 {
 		infoValueStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
 			Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
@@ -361,6 +368,9 @@ func (h *HelpModal) bodyLines(contentWidth int) []string {
 
 		lines = append(lines, blankLine)
 		lines = append(lines, helpSectionStyle.Render("Info"))
+		if len(h.scopes) > 0 {
+			lines = append(lines, infoValueStyle.Render("Scopes: "+strings.Join(h.scopes, ", ")))
+		}
 		if h.versionInfo != "" {
 			lines = append(lines, infoValueStyle.Render("Version: "+h.versionInfo))
 		}

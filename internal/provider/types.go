@@ -180,6 +180,11 @@ type IterationChange struct {
 	GitObjectType string // "blob" for files, "tree" for folders
 	ChangeType    string // "add", "edit", "delete", "rename"
 	OriginalPath  string // non-empty on renames
+	// Patch holds a ready-made unified-diff for this file when the backend can
+	// supply one (GitHub's PR files API). When non-empty the diff view renders
+	// it directly instead of fetching file content at branch refs. Azure leaves
+	// this empty and the view computes the diff from fetched content as before.
+	Patch string
 }
 
 // WorkItemTypeState is the neutral representation of a state that is valid for

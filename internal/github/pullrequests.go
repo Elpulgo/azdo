@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
@@ -16,6 +17,10 @@ import (
 type prSearchNestedPR struct {
 	MergedAt *time.Time `json:"merged_at"`
 }
+
+// prEnrichConcurrency bounds the number of concurrent GET /pulls/{n} requests
+// used by enrichBranches to backfill head/base for search-sourced PRs.
+const prEnrichConcurrency = 8
 
 // prSearchItem is the per-item wire type for GET /search/issues results filtered
 // to pull requests via the "is:pr" qualifier. The top-level shape is issue-like;
@@ -154,7 +159,55 @@ func (c *Client) searchPullRequests(top int, opts provider.ListOpts, qualifier s
 	for i, item := range envelope.Items {
 		prs[i] = item.toPullRequest()
 	}
+	c.enrichBranches(prs)
 	return prs, nil
+}
+
+// enrichBranches fills in Head/Base (source/target branches) for search-sourced
+// PRs, which GET /search/issues does not return. Without this the PR list rows
+// and detail header render an empty "→" for the my-PRs and reviewer tabs.
+//
+// This is a bounded-concurrency N+1 over the search result (each PR fetched via
+// GET /pulls/{n}); the spec originally deferred this enrichment, but the empty
+// branch display reads as a bug. The result set is capped at issuePerPageCap and
+// concurrency at prEnrichConcurrency. It is best-effort: a per-PR fetch error
+// leaves that PR's branches empty rather than failing the whole list.
+func (c *Client) enrichBranches(prs []PullRequest) {
+	sem := make(chan struct{}, prEnrichConcurrency)
+	var wg sync.WaitGroup
+	for i := range prs {
+		if prs[i].Head.Ref != "" && prs[i].Base.Ref != "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			full, err := c.GetPullRequest(prs[idx].Number)
+			if err != nil {
+				return // best-effort: leave branches empty on failure
+			}
+			prs[idx].Head = full.Head
+			prs[idx].Base = full.Base
+		}(i)
+	}
+	wg.Wait()
+}
+
+// GetPullRequest fetches a single pull request via
+// GET /repos/{owner}/{repo}/pulls/{number}. Used to enrich search-sourced PRs
+// (which lack head/base) with their source and target branches.
+func (c *Client) GetPullRequest(number int) (PullRequest, error) {
+	if number <= 0 {
+		return PullRequest{}, fmt.Errorf("github: get pull request: invalid number %d", number)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", c.owner, c.repo, number)
+	var pr PullRequest
+	if err := c.getJSON(path, &pr); err != nil {
+		return PullRequest{}, fmt.Errorf("github: get pull request #%d: %w", number, err)
+	}
+	return pr, nil
 }
 
 // GetPRThreads returns the flat list of review comments for the given pull
@@ -501,7 +554,16 @@ func (c *Client) UpdateThreadStatus(number int, rootCommentID int, status string
 		return fmt.Errorf("github: update thread status (mutation): %w", err)
 	}
 	if len(mutResp.Errors) > 0 {
-		return fmt.Errorf("github: update thread status: graphql mutation error: %s", mutResp.Errors[0].Message)
+		msg := mutResp.Errors[0].Message
+		// resolveReviewThread/unresolveReviewThread are commonly rejected for
+		// fine-grained PATs even with PR write access. Point the user at the fix
+		// rather than surfacing GitHub's opaque "Resource not accessible" text.
+		if strings.Contains(strings.ToLower(msg), "not accessible") {
+			return fmt.Errorf("github: cannot resolve review thread: %s "+
+				"(resolving threads needs a classic PAT with the 'repo' scope; "+
+				"fine-grained tokens are often rejected for this GraphQL mutation)", msg)
+		}
+		return fmt.Errorf("github: update thread status: graphql mutation error: %s", msg)
 	}
 
 	return nil

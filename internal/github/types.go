@@ -194,4 +194,8 @@ type PRFile struct {
 	Status           string `json:"status"` // "added", "removed", "modified", "renamed", "copied", "changed", "unchanged"
 	PreviousFilename string `json:"previous_filename,omitempty"`
 	Changes          int    `json:"changes"`
+	// Patch is GitHub's ready-made unified-diff hunk text for this file. It is
+	// absent for binary files and for diffs GitHub deems too large; in those
+	// cases the diff view falls back to fetching file content at branch refs.
+	Patch string `json:"patch,omitempty"`
 }
