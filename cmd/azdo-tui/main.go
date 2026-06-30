@@ -389,6 +389,14 @@ func runSetupWizard() (*config.Config, error) {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
 
+	// Persist the GitHub token to the keyring when the wizard collected one.
+	if tok := finalModel.GitHubToken(); tok != "" {
+		ks := config.NewKeyringStore()
+		if err := ks.SetGitHubToken(tok); err != nil {
+			return nil, fmt.Errorf("failed to store GitHub token: %w", err)
+		}
+	}
+
 	fmt.Println("\nConfiguration saved successfully!")
 	return cfg, nil
 }
