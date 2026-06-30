@@ -85,6 +85,11 @@ Smoketest fixes and small enhancements landed after the 8 tasks, same zero-Azure
   `PipelineRun.WebURL` (populated by both mappers), falls back to `Provider.PipelineURL`; mirrors
   the PR/work-item detail seam (`openURL`/`openURLResultMsg`). Transient "Opened in browser" status
   clears on navigation. `--help` and the help overlay updated. (blocked by: 4)
+- [x] F4. Pipelines fan out on startup and every tick, not just on `r`. The poller now fetches
+  through the composite provider (neutral `provider.PipelineRun`) instead of the Azure `MultiClient`,
+  so GitHub runs load by default. Azure-only output is unchanged: a single-backend composite's
+  adapter does the identical `MapPipelineRun`, and merge/sort is idempotent for one backend. The
+  whole polling path (poller, error handler, events) moved to neutral types. (blocked by: 4)
 
 ## Unknowns
 

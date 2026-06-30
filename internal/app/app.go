@@ -420,20 +420,14 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	availableThemes := styles.ListAvailableThemes()
 	themePicker := components.NewThemePicker(appStyles, availableThemes, cfg.GetTheme())
 
-	// Create poller with configured interval.
-	// When mc is nil (GitHub-only user) we must pass an untyped-nil PipelineClient
-	// rather than mc directly. Passing mc (a typed *azdevops.MultiClient nil) would
-	// box it into a non-nil interface value, defeating the p.client == nil guards in
-	// the poller and causing a nil-deref panic on the first fetch.
+	// Create poller with configured interval. The poller fetches through the
+	// composite provider p, so initial load and every periodic tick fan out to
+	// all configured backends (Azure DevOps and/or GitHub) — not just Azure.
 	interval := time.Duration(cfg.PollingInterval) * time.Second
 	if interval <= 0 {
 		interval = polling.DefaultInterval
 	}
-	var pc polling.PipelineClient
-	if mc != nil {
-		pc = mc
-	}
-	poller := polling.NewPoller(pc, interval)
+	poller := polling.NewPoller(p, interval)
 
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
@@ -773,13 +767,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Update pipelines view with the runs, mapping wire types to neutral types.
+		// Update pipelines view with the runs. The poller already returns neutral
+		// provider.PipelineRun values fanned out across all backends.
 		if runs != nil {
-			providerRuns := make([]provider.PipelineRun, len(runs))
-			for i, r := range runs {
-				providerRuns[i] = azdevops.MapPipelineRun(r, r.ProjectName, r.ProjectDisplayName)
-			}
-			pipelineMsg := pipelines.SetRunsMsg{Runs: providerRuns}
+			pipelineMsg := pipelines.SetRunsMsg{Runs: runs}
 			var cmd tea.Cmd
 			m.pipelinesView, cmd = m.pipelinesView.Update(pipelineMsg)
 			cmds = append(cmds, cmd)

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -18,13 +18,15 @@ const (
 	DefaultRunCount = 30
 )
 
-// PipelineClient defines the interface for fetching pipeline data.
-// This allows for easy testing with mock clients.
+// PipelineClient defines the interface for fetching pipeline data. It mirrors
+// the provider.Provider list method so the poller fans out across every
+// configured backend (Azure DevOps and/or GitHub). A narrow interface keeps it
+// easy to substitute mock clients in tests.
 type PipelineClient interface {
-	ListPipelineRuns(top int) ([]azdevops.PipelineRun, error)
+	ListPipelineRuns(top int, opts provider.ListOpts) ([]provider.PipelineRun, error)
 }
 
-// Poller manages background polling of Azure DevOps pipeline data.
+// Poller manages background polling of pipeline data across all backends.
 type Poller struct {
 	client   PipelineClient
 	interval time.Duration
@@ -87,9 +89,9 @@ func (p *Poller) IsStopped() bool {
 	return p.stopped
 }
 
-// FetchPipelineRuns returns a tea.Cmd that fetches pipeline runs from the API.
-// Returns nil if the poller has been stopped or if no client is configured
-// (e.g. GitHub-only users for whom Azure pipeline polling is not applicable).
+// FetchPipelineRuns returns a tea.Cmd that fetches pipeline runs across all
+// configured backends. Returns nil if the poller has been stopped or if no
+// client is configured (a defensive guard; callers always pass the composite).
 func (p *Poller) FetchPipelineRuns() tea.Cmd {
 	if p.client == nil {
 		return nil
@@ -103,7 +105,7 @@ func (p *Poller) FetchPipelineRuns() tea.Cmd {
 	p.mu.RUnlock()
 
 	return func() tea.Msg {
-		runs, err := p.client.ListPipelineRuns(runCount)
+		runs, err := p.client.ListPipelineRuns(runCount, provider.ListOpts{})
 		return PipelineRunsUpdated{
 			Runs: runs,
 			Err:  err,
@@ -129,7 +131,8 @@ func (p *Poller) StartPolling() tea.Cmd {
 
 // OnTick handles a tick event by fetching data and scheduling the next tick.
 // Returns a batch command that fetches pipeline runs and schedules the next poll.
-// Returns nil when no client is configured (GitHub-only; no Azure pipelines).
+// Returns nil when no client is configured (a defensive guard; callers always
+// pass the composite provider).
 func (p *Poller) OnTick() tea.Cmd {
 	if p.client == nil {
 		return nil

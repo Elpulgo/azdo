@@ -5,25 +5,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 )
 
 // MockClient implements a minimal interface for testing
 type MockClient struct {
-	Runs         []azdevops.PipelineRun
+	Runs         []provider.PipelineRun
 	Err          error
 	CallCount    int
 	RequestedTop int
 }
 
-func (m *MockClient) ListPipelineRuns(top int) ([]azdevops.PipelineRun, error) {
+func (m *MockClient) ListPipelineRuns(top int, _ provider.ListOpts) ([]provider.PipelineRun, error) {
 	m.CallCount++
 	m.RequestedTop = top
 	return m.Runs, m.Err
 }
 
-// Compile-time check: MultiClient must satisfy PipelineClient interface.
-var _ PipelineClient = (*azdevops.MultiClient)(nil)
+// Compile-time check: the composite provider must satisfy PipelineClient.
+var _ PipelineClient = (*provider.CompositeProvider)(nil)
 
 func TestPoller_DefaultInterval(t *testing.T) {
 	client := &MockClient{}
@@ -44,9 +44,9 @@ func TestPoller_MinimumInterval(t *testing.T) {
 }
 
 func TestPoller_FetchPipelineRuns_Success(t *testing.T) {
-	expectedRuns := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1"},
-		{ID: 2, BuildNumber: "2024.2"},
+	expectedRuns := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1"},
+		{Identity: provider.Identity{ID: "2"}, BuildNumber: "2024.2"},
 	}
 	client := &MockClient{Runs: expectedRuns}
 	p := NewPoller(client, 30*time.Second)

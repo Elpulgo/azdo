@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 )
 
 func TestErrorHandler_SetError(t *testing.T) {
@@ -66,9 +66,9 @@ func TestErrorHandler_LastKnownGoodData(t *testing.T) {
 	}
 
 	// Set good data
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1"},
-		{ID: 2, BuildNumber: "2024.2"},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1"},
+		{Identity: provider.Identity{ID: "2"}, BuildNumber: "2024.2"},
 	}
 	eh.SetLastKnownGoodData(runs)
 
@@ -80,8 +80,8 @@ func TestErrorHandler_LastKnownGoodData(t *testing.T) {
 
 func TestErrorHandler_ProcessUpdate_Success(t *testing.T) {
 	eh := NewErrorHandler()
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1"},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1"},
 	}
 
 	msg := PipelineRunsUpdated{Runs: runs, Err: nil}
@@ -102,8 +102,8 @@ func TestErrorHandler_ProcessUpdate_Error_ReturnsLastGood(t *testing.T) {
 	eh := NewErrorHandler()
 
 	// First, set some good data
-	goodRuns := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1"},
+	goodRuns := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1"},
 	}
 	eh.SetLastKnownGoodData(goodRuns)
 
@@ -225,10 +225,10 @@ func TestErrorHandler_RecoveryMessage(t *testing.T) {
 func TestErrorHandler_ProcessUpdate_PartialError_ReturnsDataAndWarning(t *testing.T) {
 	eh := NewErrorHandler()
 
-	runs := []azdevops.PipelineRun{
-		{ID: 1},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}},
 	}
-	partialErr := &azdevops.PartialError{Failed: 1, Total: 2}
+	partialErr := &provider.PartialError{Failed: 1, Total: 2}
 	msg := PipelineRunsUpdated{Runs: runs, Err: partialErr}
 
 	result, hasError := eh.ProcessUpdate(msg)
@@ -259,9 +259,9 @@ func TestErrorHandler_ProcessUpdate_Success_ClearsPartialWarning(t *testing.T) {
 	eh := NewErrorHandler()
 
 	// First, trigger a partial error
-	partialErr := &azdevops.PartialError{Failed: 1, Total: 2}
+	partialErr := &provider.PartialError{Failed: 1, Total: 2}
 	eh.ProcessUpdate(PipelineRunsUpdated{
-		Runs: []azdevops.PipelineRun{{ID: 1}},
+		Runs: []provider.PipelineRun{{Identity: provider.Identity{ID: "1"}}},
 		Err:  partialErr,
 	})
 
@@ -271,7 +271,7 @@ func TestErrorHandler_ProcessUpdate_Success_ClearsPartialWarning(t *testing.T) {
 
 	// Now a full success should clear the warning
 	eh.ProcessUpdate(PipelineRunsUpdated{
-		Runs: []azdevops.PipelineRun{{ID: 1}, {ID: 2}},
+		Runs: []provider.PipelineRun{{Identity: provider.Identity{ID: "1"}}, {Identity: provider.Identity{ID: "2"}}},
 		Err:  nil,
 	})
 

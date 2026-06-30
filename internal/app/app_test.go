@@ -97,8 +97,8 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	m.height = 30
 
 	// Simulate successful data fetch
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
 	}
 	msg := polling.PipelineRunsUpdated{Runs: runs, Err: nil}
 
@@ -490,14 +490,13 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate pipeline data arriving (like from polling)
-	runs := make([]azdevops.PipelineRun, 30)
+	runs := make([]provider.PipelineRun, 30)
 	for i := range runs {
-		runs[i] = azdevops.PipelineRun{
-			ID:          i + 1,
-			BuildNumber: fmt.Sprintf("2024.%d", i+1),
-			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
-			Status:      "completed",
-			Result:      "succeeded",
+		runs[i] = provider.PipelineRun{
+			Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
+			BuildNumber:    fmt.Sprintf("2024.%d", i+1),
+			DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
+			RunStatus:      provider.RunStatusSucceeded,
 		}
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -559,14 +558,13 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	m = updated.(Model)
 
 	// Load enough data to fill the table
-	runs := make([]azdevops.PipelineRun, 50)
+	runs := make([]provider.PipelineRun, 50)
 	for i := range runs {
-		runs[i] = azdevops.PipelineRun{
-			ID:          i + 1,
-			BuildNumber: fmt.Sprintf("2024.%d", i+1),
-			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
-			Status:      "completed",
-			Result:      "succeeded",
+		runs[i] = provider.PipelineRun{
+			Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
+			BuildNumber:    fmt.Sprintf("2024.%d", i+1),
+			DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
+			RunStatus:      provider.RunStatusSucceeded,
 		}
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -645,14 +643,13 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 			m = updated.(Model)
 
 			// Load data so content fills
-			runs := make([]azdevops.PipelineRun, 50)
+			runs := make([]provider.PipelineRun, 50)
 			for i := range runs {
-				runs[i] = azdevops.PipelineRun{
-					ID:          i + 1,
-					BuildNumber: fmt.Sprintf("2024.%d", i+1),
-					Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
-					Status:      "completed",
-					Result:      "succeeded",
+				runs[i] = provider.PipelineRun{
+					Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
+					BuildNumber:    fmt.Sprintf("2024.%d", i+1),
+					DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
+					RunStatus:      provider.RunStatusSucceeded,
 				}
 			}
 			updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -695,8 +692,8 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	m = updated.(Model)
 
 	// Load some pipeline data
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
 	m = updated.(Model)
@@ -1052,8 +1049,8 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate successful data fetch to set status to "connected"
-	runs := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
+	runs := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
 	m = updated.(Model)
