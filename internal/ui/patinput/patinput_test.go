@@ -145,4 +145,32 @@ func TestView_ShowsUpdateTitle(t *testing.T) {
 	}
 }
 
+func TestNewGitHubModel_HasGitHubWording(t *testing.T) {
+	model := NewGitHubModel()
+	view := model.View()
 
+	if strings.Contains(view, "Azure DevOps") {
+		t.Error("GitHub model view should not contain 'Azure DevOps'")
+	}
+	if !strings.Contains(view, "GitHub") {
+		t.Error("GitHub model view should contain 'GitHub'")
+	}
+	if model.textInput.EchoMode != textinput.EchoPassword {
+		t.Error("GitHub model should use password echo mode")
+	}
+}
+
+func TestNewGitHubModelForUpdate_HasGitHubWording(t *testing.T) {
+	model := NewGitHubModelForUpdate()
+	view := model.View()
+
+	if strings.Contains(view, "Azure DevOps") {
+		t.Error("GitHub update model view should not contain 'Azure DevOps'")
+	}
+	if !strings.Contains(view, "GitHub") {
+		t.Error("GitHub update model view should contain 'GitHub'")
+	}
+	if model.textInput.EchoMode != textinput.EchoPassword {
+		t.Error("GitHub update model should use password echo mode")
+	}
+}

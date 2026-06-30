@@ -18,6 +18,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
+	"github.com/Elpulgo/azdo/internal/ui/providerselect"
 	"github.com/Elpulgo/azdo/internal/ui/setupwizard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -69,7 +70,7 @@ func runHelp() error {
 
 Usage:
   azdo              Start the TUI application
-  azdo auth         Set or update your Personal Access Token (PAT)
+  azdo auth         Set or update credentials for Azure DevOps (PAT) or GitHub
   azdo demo         Launch with mock data (for screenshots/demos)
   azdo --help       Show this help message
   azdo --version    Show version information
@@ -134,15 +135,43 @@ func runVersion() error {
 func runAuth() error {
 	store := config.NewKeyringStore()
 
-	// Check if PAT already exists to show appropriate message
-	_, err := store.GetPAT()
-	isUpdate := err == nil
-
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("99"))
 	fmt.Println(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
 	fmt.Println()
+
+	// Prompt the user to pick a provider.
+	selModel := providerselect.NewModel()
+	selProg := tea.NewProgram(selModel)
+	selResult, err := selProg.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run provider selection: %w", err)
+	}
+	finalSel, ok := selResult.(providerselect.Model)
+	if !ok {
+		return fmt.Errorf("unexpected model type from provider selection")
+	}
+	if finalSel.Cancelled() {
+		return nil
+	}
+
+	switch finalSel.Selected() {
+	case providerselect.ProviderAzure:
+		return runAuthAzure(store)
+	case providerselect.ProviderGitHub:
+		return runAuthGitHub(store)
+	default:
+		return fmt.Errorf("unknown provider selected")
+	}
+}
+
+// runAuthAzure is the Azure DevOps PAT auth flow — byte-for-byte identical to
+// the behaviour before the provider prompt was added.
+func runAuthAzure(store *config.KeyringStore) error {
+	_, err := store.GetPAT()
+	isUpdate := err == nil
+
 	if isUpdate {
 		fmt.Println("Azure DevOps PAT Update")
 		fmt.Println("This will replace your existing Personal Access Token in the system keyring.")
@@ -163,6 +192,56 @@ func runAuth() error {
 		fmt.Println("\nPAT saved successfully to system keyring.")
 	}
 
+	return nil
+}
+
+// runAuthGitHub is the GitHub token auth flow.
+func runAuthGitHub(store *config.KeyringStore) error {
+	_, err := store.GetGitHubToken()
+	isUpdate := err == nil
+
+	if isUpdate {
+		fmt.Println("GitHub Token Update")
+		fmt.Println("This will replace your existing GitHub token in the system keyring (service: azdo-tui).")
+	} else {
+		fmt.Println("GitHub Token Setup")
+		fmt.Println("This will store your GitHub token in the system keyring (service: azdo-tui).")
+		fmt.Println("Tip: GITHUB_TOKEN environment variable is also accepted as a fallback.")
+	}
+	fmt.Println()
+	fmt.Println(`Required token scopes:
+  Classic PAT: repo (read), pull_requests/issues (write)
+  Fine-grained: contents (read), pull_requests (write), issues (write)`)
+	fmt.Println()
+
+	var model patinput.Model
+	if isUpdate {
+		model = patinput.NewGitHubModelForUpdate()
+	} else {
+		model = patinput.NewGitHubModel()
+	}
+	p := tea.NewProgram(model)
+
+	m, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("failed to run GitHub token input: %w", err)
+	}
+
+	finalModel, ok := m.(patinput.Model)
+	if !ok {
+		return fmt.Errorf("unexpected model type from GitHub token input")
+	}
+
+	token := finalModel.GetPAT()
+	if token == "" {
+		return nil
+	}
+
+	if err := store.SetGitHubToken(token); err != nil {
+		return fmt.Errorf("failed to save GitHub token: %w", err)
+	}
+
+	fmt.Println("\nGitHub token saved successfully to system keyring.")
 	return nil
 }
 
