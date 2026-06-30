@@ -33,13 +33,13 @@ type Identity struct {
 // WorkItem is the neutral representation of an Azure DevOps work item (or its
 // equivalent in another backend).
 type WorkItem struct {
-	Identity      Identity
-	Title         string
-	State         string
-	WorkItemType  string
+	Identity     Identity
+	Title        string
+	State        string
+	WorkItemType string
 	// StateCategory is the neutral semantic bucket for the work item's state.
 	// Populated by the adapter at mapping time via azdevops.MapStateCategory.
-	StateCategory   StateCategory
+	StateCategory StateCategory
 	// ItemKind is the neutral semantic type enum for the work item.
 	// Populated by the adapter at mapping time via azdevops.MapItemType.
 	ItemKind        ItemType
