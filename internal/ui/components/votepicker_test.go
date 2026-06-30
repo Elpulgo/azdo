@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -66,6 +67,28 @@ func TestVotePickerHasFiveOptions(t *testing.T) {
 		if picker.options[i].Vote != expected {
 			t.Errorf("Option %d vote = %d, want %d", i, picker.options[i].Vote, expected)
 		}
+	}
+}
+
+func TestVotePickerGitHubHasApproveAndRequestChanges(t *testing.T) {
+	theme := styles.GetDefaultTheme()
+	appStyles := styles.NewStyles(theme)
+	picker := NewVotePickerForKind(appStyles, provider.KindGitHub)
+
+	// GitHub reviews only distinguish approve from request-changes; the
+	// Azure-only levels must not be offered.
+	if len(picker.options) != 2 {
+		t.Fatalf("Expected 2 GitHub vote options, got %d", len(picker.options))
+	}
+
+	if picker.options[0].Label != "Approve" || picker.options[0].Vote != azdevops.VoteApprove {
+		t.Errorf("Option 0 = %q (%d), want Approve (%d)", picker.options[0].Label, picker.options[0].Vote, azdevops.VoteApprove)
+	}
+
+	// The GitHub adapter maps by sign, so any negative vote becomes
+	// REQUEST_CHANGES; assert the value stays negative.
+	if picker.options[1].Label != "Request changes" || picker.options[1].Vote >= 0 {
+		t.Errorf("Option 1 = %q (%d), want Request changes with negative vote", picker.options[1].Label, picker.options[1].Vote)
 	}
 }
 

@@ -65,7 +65,7 @@ func NewDetailModelWithStyles(client provider.Provider, pr provider.PullRequest,
 		fileIndex:     0,
 		spinner:       spinner,
 		styles:        s,
-		votePicker:    components.NewVotePicker(s),
+		votePicker:    components.NewVotePickerForKind(s, pr.Identity.Kind),
 	}
 }
 
