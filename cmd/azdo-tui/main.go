@@ -66,7 +66,7 @@ func runHelp() error {
 		Foreground(lipgloss.Color("99"))
 	fmt.Println(titleStyle.Render(strings.Join(components.LogoArt, "\n")))
 
-	fmt.Printf(`azdo - A TUI for Azure DevOps (%s)
+	fmt.Printf(`azdo - A TUI for Azure DevOps and GitHub (%s)
 
 Usage:
   azdo              Start the TUI application
@@ -76,14 +76,25 @@ Usage:
   azdo --version    Show version information
 
 Configuration:
-  Config file: %s
-  PAT storage: System keyring (service: azdo-tui)
-  PAT fallback: AZDO_PAT environment variable
+  Config file:     %s
+  Token storage:   System keyring (service: azdo-tui)
+  Azure fallback:  AZDO_PAT environment variable
+  GitHub fallback: GITHUB_TOKEN environment variable
 
-Required PAT permissions:
+Required Azure DevOps PAT scopes:
   Build        (Read)         - pipelines, build logs
   Code         (Read & Write) - pull requests, voting, comments
   Work Items   (Read & Write) - queries, comments, state changes
+
+Required GitHub token scopes:
+  Classic PAT:   repo          (private repos) or public_repo (public only)
+  Fine-grained:  Metadata      (read)
+                 Contents      (read)
+                 Issues        (read & write)
+                 Pull requests (read & write)
+                 Actions       (read)
+  Note: resolving PR comment threads requires a classic 'repo' PAT;
+        fine-grained tokens are commonly rejected for that operation.
 
 Keyboard shortcuts (in TUI):
   Navigation:
