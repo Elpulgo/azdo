@@ -26,10 +26,16 @@ promote them — move a line up into Active to accept it, delete it to reject.
 
 9. **Config map keys arrive lowercased — look them up in lowercase snake_case.** viper lowercases all config keys on load, so `Terms` (and any future `map[string]string` config) only matches lowercase keys like `work_items`/`pull_requests`. A capitalized lookup key silently never matches the override. _(approved 2026-06-29)_
 
+10. **Run `gofmt -l` before every commit; a non-empty result blocks the commit.** Hand-written Go (especially multi-line struct literals and table-test rows) drifts from gofmt, and the build/vet/test gates do NOT catch it, so it reaches the reviewer as a 🟡 every time. Make `gofmt -l <pkg>` printing nothing part of the commit checklist, not a post-hoc fix. _(approved 2026-06-29; Phase 3, Tasks 8 & 11 reviewer 🟡 — gofmt bounced twice.)_
+
+11. **Guard positive-identifier inputs with `<= 0`, never `== 0`.** URL/path builders and any function keyed on a database id, issue/PR number, or thread id must reject `<= 0` — a `== 0` guard lets a negative id through and produces a malformed-but-non-empty result (e.g. `#discussion_r-5`). Test a negative input row alongside the zero row. _(approved 2026-06-29; Phase 3, Task 11 reviewer 🟡 — `PRThreadWebURL` guarded `== 0`, emitted `#discussion_r-5` for negatives.)_
+
+12. **`.gitignore` patterns must match the exact paths the tooling writes — verify, don't assume.** A near-miss (ignoring `.go-cache/`/`.go-tmp/` while the build actually writes `.gocache/`/`.gotmp/`) silently commits thousands of cache blobs into every subsequent commit, invisibly bloating each diff. When tooling writes a build/cache dir, confirm the ignore pattern matches the literal path (`git check-ignore <path>`) rather than trusting a similar-looking entry. _(approved 2026-06-29; Phase 3 — `GOCACHE=$PWD/.gocache` mismatch committed 2927 blobs before it was caught.)_
+
 ## Proposed — awaiting approval
 
 <!-- afk appends candidates here -->
 
-10. **Truncation/cap rendering needs a boundary test at exactly the cap.** When a renderer shows the first N items then `+M more`, add a case at `n == cap` (all shown, no suffix) — that's the off-by-one site; testing only well-below and well-above the cap leaves it unpinned. _(Phase 2, Task 6 reviewer nit.)_
+13. **Truncation/cap rendering needs a boundary test at exactly the cap.** When a renderer shows the first N items then `+M more`, add a case at `n == cap` (all shown, no suffix) — that's the off-by-one site; testing only well-below and well-above the cap leaves it unpinned. _(Phase 2, Task 6 reviewer nit.)_
 
-11. **Test the dynamic-column collapse path, not just the expand path.** When filtering/search can narrow a list so its column set shrinks mid-session (e.g. a mixed-Kind list filtered down to one Kind drops the glyph column), assert that transition and that the cursor/selection survives the column-count change — the expand direction passing does not prove the shrink direction. _(Phase 2, Task 3 reviewer 🟡 — filter-collapse path left unasserted.)_
+14. **Test the dynamic-column collapse path, not just the expand path.** When filtering/search can narrow a list so its column set shrinks mid-session (e.g. a mixed-Kind list filtered down to one Kind drops the glyph column), assert that transition and that the cursor/selection survives the column-count change — the expand direction passing does not prove the shrink direction. _(Phase 2, Task 3 reviewer 🟡 — filter-collapse path left unasserted.)_

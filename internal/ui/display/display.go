@@ -125,12 +125,12 @@ func ItemTypeStyle(t provider.ItemType, s *styles.Styles) lipgloss.Style {
 // KindGlyph returns the provider-origin icon for a backend Kind.
 // Used when a list mixes entities from different backends and a per-row marker
 // is needed. Returns "?" for the zero/unknown Kind and any unrecognised value.
-//
-// Phase 3 note: when KindGitHub is added, map it here (e.g. "⑂" or similar).
 func KindGlyph(k provider.Kind) string {
 	switch k {
 	case provider.KindAzure:
 		return "⬡"
+	case provider.KindGitHub:
+		return "⑂"
 	default: // KindUnknown (zero) and future/unrecognised values
 		return "?"
 	}
@@ -153,14 +153,13 @@ func MixedKinds(kinds []provider.Kind) bool {
 }
 
 // KindStyle returns the lipgloss style for a provider-kind glyph cell.
-// All kinds — including KindAzure — use a muted/neutral style so the glyph
-// reads as secondary metadata rather than a status indicator.
-//
-// Phase 3 note: when KindGitHub is added, it can keep the same Muted style
-// or be given a distinct colour (e.g. Info) to differentiate origins visually.
+// All kinds — including KindAzure and KindGitHub — use a muted/neutral style
+// so the glyph reads as secondary metadata rather than a status indicator.
 func KindStyle(k provider.Kind, s *styles.Styles) lipgloss.Style {
 	switch k {
 	case provider.KindAzure:
+		return s.Muted
+	case provider.KindGitHub:
 		return s.Muted
 	default: // KindUnknown (zero) and future/unrecognised values
 		return s.Muted
@@ -169,12 +168,12 @@ func KindStyle(k provider.Kind, s *styles.Styles) lipgloss.Style {
 
 // KindLabel returns the human-readable provider name for a backend Kind.
 // Returns "" for the zero/unknown Kind so callers can apply their own fallback.
-//
-// Phase 3 note: when KindGitHub is added, map it here (e.g. "GitHub").
 func KindLabel(k provider.Kind) string {
 	switch k {
 	case provider.KindAzure:
 		return "Azure"
+	case provider.KindGitHub:
+		return "GitHub"
 	default: // KindUnknown (zero) and future/unrecognised values
 		return ""
 	}
