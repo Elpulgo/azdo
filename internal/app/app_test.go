@@ -63,7 +63,9 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 }
 
-func TestModel_HandlesPollingTick(t *testing.T) {
+func TestModel_HandlesPollingTick_NilClient_NoCmd(t *testing.T) {
+	// When mc is nil (GitHub-only), a TickMsg must produce no command —
+	// the poller no-ops rather than panicking on the nil Azure backend.
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -74,12 +76,10 @@ func TestModel_HandlesPollingTick(t *testing.T) {
 
 	m := NewModel(nil, client, cfg, "dev", "")
 
-	// Send a tick message
+	// Send a tick message — must not panic, cmd must be nil (no Azure polling).
 	_, cmd := m.Update(polling.TickMsg{})
-
-	// Should return a command (to fetch data)
-	if cmd == nil {
-		t.Error("expected a command after tick message")
+	if cmd != nil {
+		t.Error("expected no command after tick message when Azure backend is nil")
 	}
 }
 
@@ -1533,6 +1533,44 @@ func openTagPickerOnWorkItemsTab(t *testing.T) Model {
 		t.Fatal("precondition failed: tag picker should be visible")
 	}
 	return m
+}
+
+// TestNewModel_NilAzureBackend_NoInitPanic is a smoke test for the GitHub-only
+// path (mc == nil). It verifies that constructing the model, calling Init(), and
+// processing a WindowSizeMsg through Update() all complete without panicking.
+// Before the fix, NewModel passed the typed-nil *azdevops.MultiClient directly
+// into NewPoller, boxing it into a non-nil PipelineClient interface value. The
+// first FetchPipelineRuns call would then dispatch through the interface to a nil
+// MultiClient, dereferencing mc.clients and panicking at startup.
+func TestNewModel_NilAzureBackend_NoInitPanic(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "githubuser",
+		Projects:        []string{},
+		PollingInterval: 30,
+		Theme:           "dark",
+	}
+
+	// Explicitly typed nil — no Azure backend (GitHub-only user).
+	var mc *azdevops.MultiClient
+
+	// Must not panic during construction.
+	m := NewModel(nil, mc, cfg, "dev", "")
+
+	// Init() must not panic (previously panicked via FetchPipelineRuns → nil deref).
+	cmd := m.Init()
+
+	// Drive the command tree to confirm no command panics when executed.
+	// Use the helper already present in this file.
+	_ = collectMsgTypes(cmd)
+
+	// WindowSizeMsg through Update must also be panic-free.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	// Basic sanity: model is usable.
+	if m.activeTab != TabPullRequests {
+		t.Errorf("expected default tab to be TabPullRequests, got %d", m.activeTab)
+	}
 }
 
 func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {

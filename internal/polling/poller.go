@@ -88,8 +88,12 @@ func (p *Poller) IsStopped() bool {
 }
 
 // FetchPipelineRuns returns a tea.Cmd that fetches pipeline runs from the API.
-// Returns nil if the poller has been stopped.
+// Returns nil if the poller has been stopped or if no client is configured
+// (e.g. GitHub-only users for whom Azure pipeline polling is not applicable).
 func (p *Poller) FetchPipelineRuns() tea.Cmd {
+	if p.client == nil {
+		return nil
+	}
 	if p.IsStopped() {
 		return nil
 	}
@@ -125,7 +129,11 @@ func (p *Poller) StartPolling() tea.Cmd {
 
 // OnTick handles a tick event by fetching data and scheduling the next tick.
 // Returns a batch command that fetches pipeline runs and schedules the next poll.
+// Returns nil when no client is configured (GitHub-only; no Azure pipelines).
 func (p *Poller) OnTick() tea.Cmd {
+	if p.client == nil {
+		return nil
+	}
 	if p.IsStopped() {
 		return nil
 	}

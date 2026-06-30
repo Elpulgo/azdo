@@ -198,3 +198,39 @@ func TestPoller_CustomRunCount(t *testing.T) {
 		t.Errorf("expected to request 50 runs, got %d", client.RequestedTop)
 	}
 }
+
+// TestPoller_NilClient_* guards against the typed-nil boxed-interface panic that
+// occurs when a GitHub-only user has no Azure backend. The poller must no-op
+// (return nil / skip fetch) rather than panic when client == nil.
+
+func TestPoller_NilClient_FetchPipelineRuns_ReturnsNil(t *testing.T) {
+	var pc PipelineClient // untyped nil — interface value is genuinely nil
+	p := NewPoller(pc, 30*time.Second)
+
+	cmd := p.FetchPipelineRuns()
+	if cmd != nil {
+		t.Error("FetchPipelineRuns should return nil when client is nil")
+	}
+}
+
+func TestPoller_NilClient_OnTick_ReturnsNil(t *testing.T) {
+	var pc PipelineClient
+	p := NewPoller(pc, 30*time.Second)
+
+	cmd := p.OnTick()
+	if cmd != nil {
+		t.Error("OnTick should return nil when client is nil")
+	}
+}
+
+func TestPoller_NilClient_StartPolling_StillWorks(t *testing.T) {
+	// StartPolling only sets a timer; it does not touch client.
+	// It must still return a non-nil cmd when the poller is not stopped.
+	var pc PipelineClient
+	p := NewPoller(pc, 30*time.Second)
+
+	cmd := p.StartPolling()
+	if cmd == nil {
+		t.Error("StartPolling should return a timer command even when client is nil")
+	}
+}

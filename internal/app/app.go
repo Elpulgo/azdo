@@ -398,12 +398,20 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	availableThemes := styles.ListAvailableThemes()
 	themePicker := components.NewThemePicker(appStyles, availableThemes, cfg.GetTheme())
 
-	// Create poller with configured interval
+	// Create poller with configured interval.
+	// When mc is nil (GitHub-only user) we must pass an untyped-nil PipelineClient
+	// rather than mc directly. Passing mc (a typed *azdevops.MultiClient nil) would
+	// box it into a non-nil interface value, defeating the p.client == nil guards in
+	// the poller and causing a nil-deref panic on the first fetch.
 	interval := time.Duration(cfg.PollingInterval) * time.Second
 	if interval <= 0 {
 		interval = polling.DefaultInterval
 	}
-	poller := polling.NewPoller(mc, interval)
+	var pc polling.PipelineClient
+	if mc != nil {
+		pc = mc
+	}
+	poller := polling.NewPoller(pc, interval)
 
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
