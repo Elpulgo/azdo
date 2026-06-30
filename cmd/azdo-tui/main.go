@@ -210,8 +210,12 @@ func runAuthGitHub(store *config.KeyringStore) error {
 	}
 	fmt.Println()
 	fmt.Println(`Required token scopes:
-  Classic PAT: repo (read), pull_requests/issues (write)
-  Fine-grained: contents (read), pull_requests (write), issues (write)`)
+  Classic PAT:  repo            (private repos) or public_repo (public only)
+  Fine-grained: Metadata        (read)
+                Contents        (read)
+                Issues          (read & write)
+                Pull requests   (read & write)
+                Actions         (read)`)
 	fmt.Println()
 
 	var model patinput.Model
