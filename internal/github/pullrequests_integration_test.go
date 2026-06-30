@@ -25,8 +25,8 @@ func integrationPRClient(t *testing.T) *Client {
 	if token == "" {
 		t.Skip("GITHUB_TOKEN not set — skipping integration test")
 	}
-	// torvalds/linux is a public repo with many open PRs suitable for read-only testing.
-	return NewClient("torvalds", "linux", token)
+	// golang/go is a public repo with many open PRs suitable for read-only testing.
+	return NewClient("golang", "go", token)
 }
 
 func TestIntegrationPR_ListPullRequests(t *testing.T) {
