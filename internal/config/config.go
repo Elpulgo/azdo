@@ -333,7 +333,10 @@ func (c *Config) Validate() error {
 	azurePartial := azureHasOrg != azureHasProjects // XOR: one set, other not
 
 	// Half-configured Azure: only one of org/projects is present.
-	if azurePartial {
+	// This is only a fatal error when GitHub is NOT configured — per Decision D5,
+	// a partial Azure stanza is silently skipped when GitHub carries the config
+	// (HasAzure() returns false so the Azure backend won't be built).
+	if azurePartial && !c.HasGitHub() {
 		if !azureHasOrg {
 			return fmt.Errorf(
 				"'organization' is not set in config.yaml\n\n"+

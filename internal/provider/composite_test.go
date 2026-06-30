@@ -398,6 +398,10 @@ func TestCompositeProvider_AllFail(t *testing.T) {
 		if err == nil {
 			t.Fatal("want error, got nil")
 		}
+		var pe *provider.PartialError
+		if errors.As(err, &pe) {
+			t.Fatal("want plain error, got *PartialError")
+		}
 		if runs != nil {
 			t.Errorf("want nil results, got %v", runs)
 		}

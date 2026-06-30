@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"strings"
+	"syscall"
 
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/cli"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/demo"
+	"github.com/Elpulgo/azdo/internal/github"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/patinput"
@@ -179,26 +180,61 @@ func runTUI() error {
 		}
 	}
 
-	// Get PAT from keyring
+	// Build the configured backends and assemble a CompositeProvider.
 	store := config.NewKeyringStore()
-	pat, err := store.GetPAT()
-	if err != nil {
-		// If PAT not found, prompt user to enter it
-		if errors.Is(err, config.ErrNotFound) {
-			pat, err = promptForPAT(store)
-			if err != nil {
-				return fmt.Errorf("failed to set PAT: %w", err)
+
+	var backends []provider.Provider
+	var azureMC *azdevops.MultiClient
+
+	// --- Azure backend (only when fully configured) ---
+	if cfg.HasAzure() {
+		pat, err := store.GetPAT()
+		if err != nil {
+			if errors.Is(err, config.ErrNotFound) {
+				pat, err = promptForPAT(store)
+				if err != nil {
+					return fmt.Errorf("failed to set PAT: %w", err)
+				}
+			} else {
+				return fmt.Errorf("failed to get PAT: %w", err)
 			}
-		} else {
-			return fmt.Errorf("failed to get PAT: %w", err)
 		}
+
+		client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat, cfg.DisplayNames)
+		if err != nil {
+			return fmt.Errorf("failed to create Azure DevOps client: %w", err)
+		}
+		azureMC = client
+		backends = append(backends, azdevops.NewAdapter(client))
 	}
 
-	// Create multi-project Azure DevOps client
-	client, err := azdevops.NewMultiClient(cfg.Organization, cfg.Projects, pat, cfg.DisplayNames)
-	if err != nil {
-		return fmt.Errorf("failed to create Azure DevOps client: %w", err)
+	// --- GitHub backend (only when at least one repo is configured) ---
+	if cfg.HasGitHub() {
+		token, err := store.GetGitHubToken()
+		if err != nil {
+			return fmt.Errorf(
+				"GitHub token not found: run 'azdo auth' or set the GITHUB_TOKEN environment variable: %w", err)
+		}
+
+		conv := github.LabelConvention{
+			TypePrefix:     cfg.GitHub.TypePrefix,
+			PriorityPrefix: cfg.GitHub.PriorityPrefix,
+		}
+		ghMC, err := github.NewMultiClient(cfg.GitHub.Repos, token, conv, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create GitHub client: %w", err)
+		}
+		backends = append(backends, github.NewAdapter(ghMC))
 	}
+
+	// Defense-in-depth: config.Validate() already requires ≥1 backend, but guard
+	// here as well so a future caller of runTUI without a prior Validate does not
+	// silently produce a zero-backend composite.
+	if len(backends) <= 0 {
+		return fmt.Errorf("no provider configured: set up Azure DevOps or GitHub (run the setup wizard)")
+	}
+
+	composite := provider.NewCompositeProvider(backends...)
 
 	// Load persisted state (last active tab, last-viewed PR/work item).
 	// A missing file is treated as a clean slate — not an error.
@@ -212,8 +248,7 @@ func runTUI() error {
 	}
 
 	// Create and run the TUI application.
-	adapter := azdevops.NewAdapter(client)
-	model := app.NewModel(adapter, client, cfg, version, commit)
+	model := app.NewModel(composite, azureMC, cfg, version, commit)
 	model.SetStateStore(stateStore)
 	model.ApplyState(stateStore.State())
 	p := tea.NewProgram(model, tea.WithAltScreen())
