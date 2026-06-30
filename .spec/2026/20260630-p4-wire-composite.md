@@ -73,6 +73,19 @@ provider choice so a GitHub-only user can complete first-run setup.
 
 The Task-5 opus review APPROVED the metrics-gating diff (4f4fb22) — all four gate sites consistent, zero Azure-only regression, no nil-deref into the zero-value `metricsView`. It surfaced one 🔴 that is **cross-task** (not in the 4f4fb22 diff): Task 4+5 together first make a GitHub-only run reachable, and the Azure-only pipeline poller panics on a nil `*azdevops.MultiClient` at startup. Task 5 stays closed; the fix is tracked as **Task 8** above (per reviewer recommendation, rather than bouncing 4f4fb22).
 
+## Follow-ups (post-loop)
+
+Smoketest fixes and small enhancements landed after the 8 tasks, same zero-Azure-change bar:
+
+- [x] F1. Fix 5 smoketest bugs: GitHub diff via per-file `patch` (kills the deleted-file 404 and
+  empty fork/search-sourced diffs), search-path PR head/base backfill (bounded N+1 enrichment),
+  clearer resolve-thread token error, and footer/help scopes from the `Scopes()` union.
+- [x] F2. Provider glyph refresh in `display.KindGlyph`: Azure `⬢` (U+2B22), GitHub `⎇` (U+2387).
+- [x] F3. Open-in-browser (`o`) on the pipeline detail view, for both Azure and GitHub. Prefers
+  `PipelineRun.WebURL` (populated by both mappers), falls back to `Provider.PipelineURL`; mirrors
+  the PR/work-item detail seam (`openURL`/`openURLResultMsg`). Transient "Opened in browser" status
+  clears on navigation. `--help` and the help overlay updated. (blocked by: 4)
+
 ## Unknowns
 
 - Whether `Scopes()` should also surface display names, or stay API-name-only (lean: API-name-only;

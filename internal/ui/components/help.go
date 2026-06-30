@@ -71,7 +71,7 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 					{Key: "v", Description: "Vote on PR (detail view)"},
 					{Key: "w", Description: "Change work item state (detail view)"},
 					{Key: "c", Description: "Add comment (work item detail)"},
-					{Key: "o", Description: "Open in browser (PR / work item detail)"},
+					{Key: "o", Description: "Open in browser (PR / work item / pipeline detail)"},
 					{Key: "t", Description: "Select theme"},
 					{Key: "?", Description: "Toggle help"},
 					{Key: "q", Description: "Quit application"},

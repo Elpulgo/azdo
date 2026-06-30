@@ -117,7 +117,7 @@ Keyboard shortcuts (in TUI):
     v            Vote on PR (detail view)
     s            Change work item state (detail view)
     c            Add comment (work item detail)
-    o            Open in browser (PR / work item detail)
+    o            Open in browser (PR / work item / pipeline detail)
     t            Select theme
     ?            Toggle help overlay
     q            Quit
