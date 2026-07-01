@@ -142,12 +142,23 @@ func (m *Model) ApplyState(s state.State) {
 	if t, ok := tabFromID(s.ActiveTab); ok && m.isTabEnabled(t) {
 		m.activeTab = t
 	}
-	if id := s.Tabs.PullRequests.LastDetailID; id != 0 {
-		m.pullRequestsView = m.pullRequestsView.WithPendingDetailRestore(id)
+	if ref := s.Tabs.PullRequests.LastDetail; !ref.IsZero() {
+		m.pullRequestsView = m.pullRequestsView.WithPendingDetailRestore(identityFromRef(ref))
 	}
-	if id := s.Tabs.WorkItems.LastDetailID; id != 0 {
-		m.workItemsView = m.workItemsView.WithPendingDetailRestore(id)
+	if ref := s.Tabs.WorkItems.LastDetail; !ref.IsZero() {
+		m.workItemsView = m.workItemsView.WithPendingDetailRestore(identityFromRef(ref))
 	}
+}
+
+// refFromIdentity converts a neutral provider identity into its serializable
+// state form (stable Kind string + scope + id).
+func refFromIdentity(id provider.Identity) state.DetailRef {
+	return state.DetailRef{Kind: id.Kind.String(), Scope: id.Scope, ID: id.ID}
+}
+
+// identityFromRef is the inverse of refFromIdentity.
+func identityFromRef(ref state.DetailRef) provider.Identity {
+	return provider.Identity{Kind: provider.ParseKind(ref.Kind), Scope: ref.Scope, ID: ref.ID}
 }
 
 // recordActiveTab is a no-op when no store is attached.
@@ -173,18 +184,27 @@ func (m Model) recordDetailState() {
 	}
 	switch m.activeTab {
 	case TabPullRequests:
-		id := m.pullRequestsView.DetailItemID()
+		ref, ok := m.pullRequestsView.DetailRef()
 		m.stateStore.Apply(func(s *state.State) {
 			s.Version = state.CurrentVersion
-			s.Tabs.PullRequests.LastDetailID = id
+			s.Tabs.PullRequests.LastDetail = detailRefOrEmpty(ref, ok)
 		})
 	case TabWorkItems:
-		id := m.workItemsView.DetailItemID()
+		ref, ok := m.workItemsView.DetailRef()
 		m.stateStore.Apply(func(s *state.State) {
 			s.Version = state.CurrentVersion
-			s.Tabs.WorkItems.LastDetailID = id
+			s.Tabs.WorkItems.LastDetail = detailRefOrEmpty(ref, ok)
 		})
 	}
+}
+
+// detailRefOrEmpty serializes an open detail identity, or returns the zero
+// DetailRef (meaning "no detail open") when the user is on the list.
+func detailRefOrEmpty(id provider.Identity, open bool) state.DetailRef {
+	if !open {
+		return state.DetailRef{}
+	}
+	return refFromIdentity(id)
 }
 
 // isTabEnabled returns true if the given tab is in the enabledTabs list.

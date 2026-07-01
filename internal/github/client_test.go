@@ -442,6 +442,141 @@ func TestClient_Get_403_PlainStillMentionsScopes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Link-header pagination
+// ---------------------------------------------------------------------------
+
+func TestNextPageURL(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{
+			name:   "empty",
+			header: "",
+			want:   "",
+		},
+		{
+			name:   "next and last",
+			header: `<https://api.github.com/repos/o/r/issues?page=2>; rel="next", <https://api.github.com/repos/o/r/issues?page=9>; rel="last"`,
+			want:   "https://api.github.com/repos/o/r/issues?page=2",
+		},
+		{
+			name:   "prev and next (middle page)",
+			header: `<https://api.github.com/x?page=1>; rel="prev", <https://api.github.com/x?page=3>; rel="next", <https://api.github.com/x?page=9>; rel="last", <https://api.github.com/x?page=1>; rel="first"`,
+			want:   "https://api.github.com/x?page=3",
+		},
+		{
+			name:   "no next (last page)",
+			header: `<https://api.github.com/x?page=1>; rel="prev", <https://api.github.com/x?page=1>; rel="first"`,
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{}
+			if tc.header != "" {
+				h.Set("Link", tc.header)
+			}
+			if got := nextPageURL(h); got != tc.want {
+				t.Errorf("nextPageURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGetAllPages_FollowsLinkHeader(t *testing.T) {
+	var srv *httptest.Server
+	var requestedPages []string
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		if page == "" {
+			page = "1"
+		}
+		requestedPages = append(requestedPages, page)
+		switch page {
+		case "1":
+			w.Header().Set("Link", `<`+srv.URL+`/items?page=2>; rel="next"`)
+			w.Write([]byte(`[1,2,3]`))
+		case "2":
+			w.Header().Set("Link", `<`+srv.URL+`/items?page=3>; rel="next"`)
+			w.Write([]byte(`[4,5,6]`))
+		default:
+			// last page, no Link header
+			w.Write([]byte(`[7,8]`))
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	got, err := getAllPages(c, "/items?page=1", 0, extractArray[int])
+	if err != nil {
+		t.Fatalf("getAllPages() error = %v", err)
+	}
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("item[%d] = %d, want %d", i, got[i], want[i])
+		}
+	}
+	if len(requestedPages) != 3 {
+		t.Errorf("requested %d pages, want 3: %v", len(requestedPages), requestedPages)
+	}
+}
+
+func TestGetAllPages_TrimsToLimitAndStopsEarly(t *testing.T) {
+	var srv *httptest.Server
+	var pagesServed int
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pagesServed++
+		// Every page advertises a next page, so only the limit stops the loop.
+		w.Header().Set("Link", `<`+srv.URL+`/items?page=next>; rel="next"`)
+		w.Write([]byte(`[1,1,1,1,1]`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	got, err := getAllPages(c, "/items", 7, extractArray[int])
+	if err != nil {
+		t.Fatalf("getAllPages() error = %v", err)
+	}
+	if len(got) != 7 {
+		t.Errorf("len = %d, want 7 (trimmed to limit)", len(got))
+	}
+	// 5 per page: page 1 → 5 items (< 7, continue), page 2 → 10 items (>= 7, stop).
+	if pagesServed != 2 {
+		t.Errorf("pagesServed = %d, want 2 (should stop once limit reached)", pagesServed)
+	}
+}
+
+func TestGetAllPages_PropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := getAllPages(c, "/items", 0, extractArray[int])
+	if err == nil {
+		t.Fatal("expected error from first page, got nil")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention 500: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // apiError direct tests
 // ---------------------------------------------------------------------------
 

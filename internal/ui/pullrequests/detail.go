@@ -223,7 +223,7 @@ func (m *DetailModel) View() string {
 	sb.WriteString("\n")
 
 	// Branch info
-	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s → %s", branchShortName(m.pr.SourceRefName), branchShortName(m.pr.TargetRefName))))
+	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s → %s", m.pr.SourceRefName, m.pr.TargetRefName)))
 	sb.WriteString("\n")
 	separatorWidth := min(m.width-2, 60)
 	if separatorWidth < 1 {
@@ -616,6 +616,12 @@ func (m *DetailModel) GetPR() provider.PullRequest {
 // GetPRID returns the numeric ID of the pull request.
 func (m *DetailModel) GetPRID() int {
 	return prNumericID(m.pr)
+}
+
+// Identity returns the cross-backend identity of the pull request, used to
+// persist and restore the open detail without colliding across providers.
+func (m *DetailModel) Identity() provider.Identity {
+	return m.pr.Identity
 }
 
 // Helper functions

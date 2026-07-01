@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -36,11 +37,14 @@ func TestNewStore_MissingFileStartsEmpty(t *testing.T) {
 func TestNewStore_LoadsExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.yaml")
-	contents := `version: 1
+	contents := `version: 2
 active_tab: work_items
 tabs:
   work_items:
-    last_detail_id: 99
+    last_detail:
+      kind: azure
+      scope: proj
+      id: "99"
 `
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -53,8 +57,8 @@ tabs:
 	if store.State().ActiveTab != TabWorkItems {
 		t.Errorf("ActiveTab = %v, want %v", store.State().ActiveTab, TabWorkItems)
 	}
-	if store.State().Tabs.WorkItems.LastDetailID != 99 {
-		t.Errorf("LastDetailID = %d, want 99", store.State().Tabs.WorkItems.LastDetailID)
+	if store.State().Tabs.WorkItems.LastDetail.ID != "99" {
+		t.Errorf("LastDetail.ID = %q, want \"99\"", store.State().Tabs.WorkItems.LastDetail.ID)
 	}
 }
 
@@ -69,7 +73,7 @@ func TestStore_ApplyAndFlushPersistsToDisk(t *testing.T) {
 	store.Apply(func(s *State) {
 		s.Version = CurrentVersion
 		s.ActiveTab = TabPullRequests
-		s.Tabs.PullRequests.LastDetailID = 7
+		s.Tabs.PullRequests.LastDetail = DetailRef{Kind: "azure", Scope: "proj", ID: "7"}
 	})
 
 	if err := store.Flush(); err != nil {
@@ -83,8 +87,8 @@ func TestStore_ApplyAndFlushPersistsToDisk(t *testing.T) {
 	if reloaded.ActiveTab != TabPullRequests {
 		t.Errorf("reloaded ActiveTab = %v, want %v", reloaded.ActiveTab, TabPullRequests)
 	}
-	if reloaded.Tabs.PullRequests.LastDetailID != 7 {
-		t.Errorf("reloaded LastDetailID = %d, want 7", reloaded.Tabs.PullRequests.LastDetailID)
+	if reloaded.Tabs.PullRequests.LastDetail.ID != "7" {
+		t.Errorf("reloaded LastDetail.ID = %q, want \"7\"", reloaded.Tabs.PullRequests.LastDetail.ID)
 	}
 }
 
@@ -124,7 +128,7 @@ func TestStore_RapidAppliesCoalesce(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		i := i
 		store.Apply(func(s *State) {
-			s.Tabs.PullRequests.LastDetailID = i
+			s.Tabs.PullRequests.LastDetail = DetailRef{Kind: "azure", Scope: "proj", ID: strconv.Itoa(i)}
 		})
 	}
 
@@ -138,9 +142,9 @@ func TestStore_RapidAppliesCoalesce(t *testing.T) {
 	}
 
 	reloaded, _ := Load(path)
-	if reloaded.Tabs.PullRequests.LastDetailID != 20 {
-		t.Errorf("reloaded LastDetailID = %d, want 20 (latest Apply wins)",
-			reloaded.Tabs.PullRequests.LastDetailID)
+	if reloaded.Tabs.PullRequests.LastDetail.ID != "20" {
+		t.Errorf("reloaded LastDetail.ID = %q, want \"20\" (latest Apply wins)",
+			reloaded.Tabs.PullRequests.LastDetail.ID)
 	}
 }
 
@@ -174,7 +178,7 @@ func TestStore_ConcurrentApplyIsSafe(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			store.Apply(func(s *State) {
-				s.Tabs.PullRequests.LastDetailID = i + 1
+				s.Tabs.PullRequests.LastDetail = DetailRef{Kind: "azure", Scope: "proj", ID: strconv.Itoa(i + 1)}
 			})
 		}(i)
 	}
@@ -185,9 +189,8 @@ func TestStore_ConcurrentApplyIsSafe(t *testing.T) {
 	}
 
 	reloaded, _ := Load(path)
-	if reloaded.Tabs.PullRequests.LastDetailID < 1 {
-		t.Errorf("expected some LastDetailID written, got %d",
-			reloaded.Tabs.PullRequests.LastDetailID)
+	if reloaded.Tabs.PullRequests.LastDetail.IsZero() {
+		t.Errorf("expected some LastDetail written, got zero ref")
 	}
 }
 
@@ -237,8 +240,8 @@ func TestStore_StateRoundTripsAcrossSessions(t *testing.T) {
 	first.Apply(func(s *State) {
 		s.Version = CurrentVersion
 		s.ActiveTab = TabWorkItems
-		s.Tabs.PullRequests.LastDetailID = 7
-		s.Tabs.WorkItems.LastDetailID = 42
+		s.Tabs.PullRequests.LastDetail = DetailRef{Kind: "azure", Scope: "proj", ID: "7"}
+		s.Tabs.WorkItems.LastDetail = DetailRef{Kind: "github", Scope: "owner/repo", ID: "42"}
 	})
 	if err := first.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -253,8 +256,8 @@ func TestStore_StateRoundTripsAcrossSessions(t *testing.T) {
 		Version:   CurrentVersion,
 		ActiveTab: TabWorkItems,
 		Tabs: TabsState{
-			PullRequests: TabMemory{LastDetailID: 7},
-			WorkItems:    TabMemory{LastDetailID: 42},
+			PullRequests: TabMemory{LastDetail: DetailRef{Kind: "azure", Scope: "proj", ID: "7"}},
+			WorkItems:    TabMemory{LastDetail: DetailRef{Kind: "github", Scope: "owner/repo", ID: "42"}},
 		},
 	}
 	if got != want {

@@ -11,11 +11,11 @@ import (
 // to the same value via YAML — the on-disk format must survive a round trip.
 func TestState_YAMLRoundTrip(t *testing.T) {
 	original := State{
-		Version:   1,
+		Version:   CurrentVersion,
 		ActiveTab: TabPullRequests,
 		Tabs: TabsState{
-			PullRequests: TabMemory{LastDetailID: 7},
-			WorkItems:    TabMemory{LastDetailID: 42},
+			PullRequests: TabMemory{LastDetail: DetailRef{Kind: "azure", Scope: "proj", ID: "7"}},
+			WorkItems:    TabMemory{LastDetail: DetailRef{Kind: "github", Scope: "owner/repo", ID: "42"}},
 		},
 	}
 
@@ -44,8 +44,8 @@ func TestState_EmptyMarshalOmitsZeroValues(t *testing.T) {
 	}
 
 	got := string(data)
-	if strings.Contains(got, "last_detail_id") {
-		t.Errorf("empty state should not emit last_detail_id, got:\n%s", got)
+	if strings.Contains(got, "last_detail") {
+		t.Errorf("empty state should not emit last_detail, got:\n%s", got)
 	}
 }
 
@@ -96,13 +96,19 @@ func TestLoad_MissingFileReturnsEmptyStateNoError(t *testing.T) {
 func TestLoad_ParsesExistingFile(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "state.yaml")
-	contents := `version: 1
+	contents := `version: 2
 active_tab: work_items
 tabs:
   pull_requests:
-    last_detail_id: 7
+    last_detail:
+      kind: azure
+      scope: proj
+      id: "7"
   work_items:
-    last_detail_id: 42
+    last_detail:
+      kind: github
+      scope: owner/repo
+      id: "42"
 `
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("write state: %v", err)
@@ -113,11 +119,11 @@ tabs:
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := State{
-		Version:   1,
+		Version:   2,
 		ActiveTab: TabWorkItems,
 		Tabs: TabsState{
-			PullRequests: TabMemory{LastDetailID: 7},
-			WorkItems:    TabMemory{LastDetailID: 42},
+			PullRequests: TabMemory{LastDetail: DetailRef{Kind: "azure", Scope: "proj", ID: "7"}},
+			WorkItems:    TabMemory{LastDetail: DetailRef{Kind: "github", Scope: "owner/repo", ID: "42"}},
 		},
 	}
 	if got != want {
@@ -143,13 +149,16 @@ func TestLoad_MalformedFileReturnsError(t *testing.T) {
 func TestLoad_UnknownFieldsTolerated(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "state.yaml")
-	contents := `version: 1
+	contents := `version: 2
 active_tab: pull_requests
 future_field: surprise
 tabs:
   pull_requests:
-    last_detail_id: 3
-    future_nested: x
+    last_detail:
+      kind: azure
+      scope: proj
+      id: "3"
+      future_nested: x
 `
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("write state: %v", err)
@@ -162,7 +171,33 @@ tabs:
 	if got.ActiveTab != TabPullRequests {
 		t.Errorf("ActiveTab = %v, want TabPullRequests", got.ActiveTab)
 	}
-	if got.Tabs.PullRequests.LastDetailID != 3 {
-		t.Errorf("PullRequests.LastDetailID = %d, want 3", got.Tabs.PullRequests.LastDetailID)
+	if got.Tabs.PullRequests.LastDetail.ID != "3" {
+		t.Errorf("PullRequests.LastDetail.ID = %q, want \"3\"", got.Tabs.PullRequests.LastDetail.ID)
+	}
+}
+
+// TestLoad_V1FileDoesNotRestoreDetail confirms an old v1 file (bare
+// last_detail_id) loads without error and simply carries no restorable
+// detail — the graceful-degradation contract of the v2 schema bump.
+func TestLoad_V1FileDoesNotRestoreDetail(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "state.yaml")
+	contents := `version: 1
+active_tab: pull_requests
+tabs:
+  pull_requests:
+    last_detail_id: 7
+`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !got.Tabs.PullRequests.LastDetail.IsZero() {
+		t.Errorf("v1 last_detail_id should not populate v2 DetailRef, got %+v",
+			got.Tabs.PullRequests.LastDetail)
 	}
 }

@@ -19,7 +19,13 @@ const (
 
 	// CurrentVersion is the on-disk schema version. Bump when introducing
 	// a breaking change to the YAML shape.
-	CurrentVersion = 1
+	//
+	// v2 replaced the bare integer LastDetailID with a DetailRef keyed on
+	// (Kind, Scope, ID). A bare ID collides across backends once a merged
+	// Azure + GitHub list is in play (GitHub issue #42 and Azure work item
+	// 42 coexist). Old v1 files simply fail to restore a detail and land the
+	// user on the list — the restore path already no-ops on a miss.
+	CurrentVersion = 2
 )
 
 // TabID identifies a top-level tab in the persisted state. The string
@@ -47,9 +53,25 @@ type TabsState struct {
 }
 
 // TabMemory captures the per-tab navigation state to restore on next launch.
-// LastDetailID == 0 means "no detail open".
+// A zero-value LastDetail (empty ID) means "no detail open".
 type TabMemory struct {
-	LastDetailID int `yaml:"last_detail_id,omitempty"`
+	LastDetail DetailRef `yaml:"last_detail,omitempty"`
+}
+
+// DetailRef identifies a detail item across backends. A bare numeric ID is
+// not unique once Azure and GitHub items are merged into one list, so the
+// persisted key carries the origin Kind and Scope alongside the ID. Kind is
+// the stable string form of provider.Kind ("azure"/"github"); Scope is the
+// project/repo API name; ID is the backend's string ID.
+type DetailRef struct {
+	Kind  string `yaml:"kind,omitempty"`
+	Scope string `yaml:"scope,omitempty"`
+	ID    string `yaml:"id,omitempty"`
+}
+
+// IsZero reports whether the ref points at no detail (nothing to restore).
+func (r DetailRef) IsZero() bool {
+	return r.ID == ""
 }
 
 // Marshal encodes the state as YAML.

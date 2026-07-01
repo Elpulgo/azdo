@@ -89,6 +89,50 @@ func TestClient_ListWorkItems_FiltersPRs(t *testing.T) {
 	}
 }
 
+func TestClient_ListWorkItems_PaginatesViaLinkHeader(t *testing.T) {
+	// Two pages of issues; the first advertises a "next" Link relation.
+	page1 := `[
+		{"number": 1, "title": "one", "state": "open", "user": {"login": "a", "id": 1}},
+		{"number": 2, "title": "two", "state": "open", "user": {"login": "a", "id": 1}}
+	]`
+	page2 := `[
+		{"number": 3, "title": "three", "state": "open", "user": {"login": "a", "id": 1}}
+	]`
+
+	var srv *httptest.Server
+	var perPageSeen string
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if pp := r.URL.Query().Get("per_page"); pp != "" {
+			perPageSeen = pp
+		}
+		if r.URL.Query().Get("page") == "2" {
+			w.Write([]byte(page2))
+			return
+		}
+		w.Header().Set("Link", `<`+srv.URL+`/repos/o/r/issues?page=2>; rel="next"`)
+		w.Write([]byte(page1))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	issues, err := c.ListWorkItems(100, provider.ListOpts{})
+	if err != nil {
+		t.Fatalf("ListWorkItems() error = %v", err)
+	}
+	if len(issues) != 3 {
+		t.Fatalf("len(issues) = %d, want 3 (both pages collected)", len(issues))
+	}
+	if issues[0].Number != 1 || issues[2].Number != 3 {
+		t.Errorf("unexpected issue order: %d..%d", issues[0].Number, issues[2].Number)
+	}
+	// The first page must request the max page size, not the caller's top.
+	if perPageSeen != "100" {
+		t.Errorf("per_page = %q, want %q (issuePerPageCap)", perPageSeen, "100")
+	}
+}
+
 func TestClient_ListWorkItems_AllClosedStates(t *testing.T) {
 	var capturedState string
 
