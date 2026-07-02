@@ -392,7 +392,7 @@ func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
 		cells := table.Row{
 			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
-			branchShortName(run.SourceBranch),
+			run.SourceBranch,
 			run.BuildNumber,
 			runTimestamp(run.QueueTime),
 			runDuration(run.StartTime, run.FinishTime),
@@ -437,7 +437,7 @@ func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row
 			run.Identity.ScopeDisplay,
 			statusIconWithStyles(run.RunStatus, s),
 			run.DefinitionName,
-			branchShortName(run.SourceBranch),
+			run.SourceBranch,
 			run.BuildNumber,
 			runTimestamp(run.QueueTime),
 			runDuration(run.StartTime, run.FinishTime),
@@ -555,20 +555,6 @@ func fetchPipelineRuns(client provider.Provider) tea.Cmd {
 func parseBuildID(id string) int {
 	n, _ := strconv.Atoi(id)
 	return n
-}
-
-// branchShortName strips the refs/heads/ or refs/tags/ prefix from a branch ref.
-func branchShortName(ref string) string {
-	if ref == "" {
-		return ""
-	}
-	if strings.HasPrefix(ref, "refs/heads/") {
-		return strings.TrimPrefix(ref, "refs/heads/")
-	}
-	if strings.HasPrefix(ref, "refs/tags/") {
-		return strings.TrimPrefix(ref, "refs/tags/")
-	}
-	return ref
 }
 
 // runTimestamp formats a queue time for display in the pipeline table.

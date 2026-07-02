@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -81,21 +82,20 @@ type prSearchResponse struct {
 // by most recently updated. opts.States is translated to the GitHub state
 // parameter (open/closed/all) via mapStateParam.
 //
-// top is capped at issuePerPageCap (100); pagination is not yet implemented.
+// The endpoint is paginated via the Link header: pages of issuePerPageCap (100)
+// are followed until top pull requests are collected or the pages run out. A
+// top <= 0 defaults to a single page (issuePerPageCap).
 func (c *Client) ListPullRequests(top int, opts provider.ListOpts) ([]PullRequest, error) {
 	if top <= 0 {
-		top = issuePerPageCap
-	}
-	if top > issuePerPageCap {
 		top = issuePerPageCap
 	}
 
 	state := mapStateParam(opts.States)
 	path := fmt.Sprintf("/repos/%s/%s/pulls?state=%s&per_page=%d&sort=updated&direction=desc",
-		c.owner, c.repo, state, top)
+		c.owner, c.repo, state, issuePerPageCap)
 
-	var prs []PullRequest
-	if err := c.getJSON(path, &prs); err != nil {
+	prs, err := getAllPages(c, path, top, extractArray[PullRequest])
+	if err != nil {
 		return nil, fmt.Errorf("github: list pull requests: %w", err)
 	}
 	return prs, nil
@@ -132,9 +132,6 @@ func (c *Client) searchPullRequests(top int, opts provider.ListOpts, qualifier s
 	if top <= 0 {
 		top = issuePerPageCap
 	}
-	if top > issuePerPageCap {
-		top = issuePerPageCap
-	}
 
 	// "is:pr" is required — /search/issues returns both issues and PRs by default.
 	q := fmt.Sprintf("repo:%s/%s is:pr %s", c.owner, c.repo, qualifier)
@@ -146,19 +143,25 @@ func (c *Client) searchPullRequests(top int, opts provider.ListOpts, qualifier s
 
 	params := url.Values{}
 	params.Set("q", q)
-	params.Set("per_page", fmt.Sprintf("%d", top))
+	params.Set("per_page", fmt.Sprintf("%d", issuePerPageCap))
 
 	path := "/search/issues?" + params.Encode()
 
-	var envelope prSearchResponse
-	if err := c.getJSON(path, &envelope); err != nil {
+	prs, err := getAllPages(c, path, top, func(body []byte) ([]PullRequest, error) {
+		var envelope prSearchResponse
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return nil, fmt.Errorf("github: decode response: %w", err)
+		}
+		out := make([]PullRequest, len(envelope.Items))
+		for i, item := range envelope.Items {
+			out[i] = item.toPullRequest()
+		}
+		return out, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("github: search pull requests (%s): %w", qualifier, err)
 	}
 
-	prs := make([]PullRequest, len(envelope.Items))
-	for i, item := range envelope.Items {
-		prs[i] = item.toPullRequest()
-	}
 	c.enrichBranches(prs)
 	return prs, nil
 }
@@ -217,13 +220,14 @@ func (c *Client) GetPullRequest(number int) (PullRequest, error) {
 // The adapter groups comments into provider.Thread values via MapReviewThreads.
 // Grouping is intentionally NOT done here, keeping this method thin.
 //
-// per_page is capped at issuePerPageCap (100); pagination is not implemented.
+// All review comments are collected by following the Link header across pages of
+// issuePerPageCap (100).
 func (c *Client) GetPRThreads(number int) ([]ReviewComment, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=%d",
 		c.owner, c.repo, number, issuePerPageCap)
 
-	var comments []ReviewComment
-	if err := c.getJSON(path, &comments); err != nil {
+	comments, err := getAllPages(c, path, 0, extractArray[ReviewComment])
+	if err != nil {
 		return nil, fmt.Errorf("github: get PR threads: %w", err)
 	}
 	return comments, nil
@@ -235,13 +239,14 @@ func (c *Client) GetPRThreads(number int) ([]ReviewComment, error) {
 // Per spec Decision #5, one synthetic iteration covers the whole PR; this method
 // provides the file list for that synthetic iteration.
 //
-// per_page is capped at issuePerPageCap (100); pagination is not implemented.
+// All changed files are collected by following the Link header across pages of
+// issuePerPageCap (100).
 func (c *Client) GetPRFiles(number int) ([]PRFile, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/files?per_page=%d",
 		c.owner, c.repo, number, issuePerPageCap)
 
-	var files []PRFile
-	if err := c.getJSON(path, &files); err != nil {
+	files, err := getAllPages(c, path, 0, extractArray[PRFile])
+	if err != nil {
 		return nil, fmt.Errorf("github: get PR files: %w", err)
 	}
 	return files, nil

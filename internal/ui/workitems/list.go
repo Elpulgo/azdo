@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -42,9 +41,11 @@ type Model struct {
 	tagPicker   components.TagPicker
 	statePicker components.ListPicker
 
-	// pendingDetailID is the work-item ID requested by startup state
-	// restore. Cleared on first populate so polling can't re-trigger it.
-	pendingDetailID       int
+	// pendingRef is the work-item identity requested by startup state
+	// restore. Keyed on (Kind, Scope, ID) so a merged list can't restore the
+	// wrong backend's item. Cleared on first populate so polling can't
+	// re-trigger it.
+	pendingRef            provider.Identity
 	pendingRestoreHandled bool
 }
 
@@ -347,40 +348,40 @@ func (m Model) IsCommentFormVisible() bool {
 	return false
 }
 
-// DetailItemID returns the ID of the work item whose detail view is
-// currently open, or 0 when the user is on the list. Used by the state
-// store to persist the last-viewed item across sessions.
-func (m Model) DetailItemID() int {
+// DetailRef returns the cross-backend identity of the work item whose detail
+// view is currently open, and ok=false when the user is on the list. Used by
+// the state store to persist the last-viewed item across sessions without
+// colliding across providers.
+func (m Model) DetailRef() (provider.Identity, bool) {
 	if m.GetViewMode() != ViewDetail {
-		return 0
+		return provider.Identity{}, false
 	}
 	adapter, ok := m.list.Detail().(*detailAdapter)
 	if !ok || adapter == nil {
-		return 0
+		return provider.Identity{}, false
 	}
-	return adapter.model.GetWorkItemID()
+	return adapter.model.Identity(), true
 }
 
-// WithPendingDetailRestore queues a one-shot request to open the work
-// item with this ID in detail view once the list is populated.
-func (m Model) WithPendingDetailRestore(id int) Model {
-	m.pendingDetailID = id
+// WithPendingDetailRestore queues a one-shot request to open the work item
+// with this identity in detail view once the list is populated.
+func (m Model) WithPendingDetailRestore(ref provider.Identity) Model {
+	m.pendingRef = ref
 	m.pendingRestoreHandled = false
 	return m
 }
 
 // tryRestoreDetail attempts to open detail for the pending ID, if any.
 func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
-	if m.pendingRestoreHandled || m.pendingDetailID == 0 {
+	if m.pendingRestoreHandled || m.pendingRef.IsZero() {
 		return m, nil
 	}
-	target := m.pendingDetailID
-	m.pendingDetailID = 0
+	target := m.pendingRef
+	m.pendingRef = provider.Identity{}
 	m.pendingRestoreHandled = true
 
 	idx := m.list.FindIndex(func(wi provider.WorkItem) bool {
-		id, _ := strconv.Atoi(wi.Identity.ID)
-		return id == target
+		return wi.Identity.SameItem(target)
 	})
 	if idx < 0 {
 		return m, nil

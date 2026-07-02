@@ -39,10 +39,11 @@ type Model struct {
 	myPRs          []provider.PullRequest
 	asReviewerPRs  []provider.PullRequest
 
-	// pendingDetailID is the PR ID requested by startup state restore.
-	// Cleared on the first populate (whether or not the lookup succeeded)
-	// so subsequent polls cannot hijack the user back into detail view.
-	pendingDetailID       int
+	// pendingRef is the PR identity requested by startup state restore.
+	// Keyed on (Kind, Scope, ID) so it can't match the wrong backend's PR in
+	// a merged list. Cleared on the first populate (whether or not the lookup
+	// succeeded) so subsequent polls cannot hijack the user back into detail.
+	pendingRef            provider.Identity
 	pendingRestoreHandled bool
 }
 
@@ -412,26 +413,27 @@ func (m Model) IsMyPRsActive() bool {
 	return m.myPRsOnly
 }
 
-// DetailItemID returns the ID of the PR whose detail view is currently
-// open, or 0 when the user is on the list. Used by the state store to
-// persist the last-viewed PR across sessions.
-func (m Model) DetailItemID() int {
+// DetailRef returns the cross-backend identity of the PR whose detail view is
+// currently open, and ok=false when the user is on the list. Used by the state
+// store to persist the last-viewed PR across sessions without colliding across
+// providers.
+func (m Model) DetailRef() (provider.Identity, bool) {
 	if m.viewMode != ViewDetail {
-		return 0
+		return provider.Identity{}, false
 	}
 	adapter, ok := m.list.Detail().(*detailAdapter)
 	if !ok || adapter == nil {
-		return 0
+		return provider.Identity{}, false
 	}
-	return adapter.model.GetPRID()
+	return adapter.model.Identity(), true
 }
 
-// WithPendingDetailRestore queues a request to open the PR with this ID in
-// detail view as soon as the list is populated. The pending intent is
+// WithPendingDetailRestore queues a request to open the PR with this identity
+// in detail view as soon as the list is populated. The pending intent is
 // consumed by the first populate event — found or not — so polling
 // refreshes cannot re-trigger it.
-func (m Model) WithPendingDetailRestore(id int) Model {
-	m.pendingDetailID = id
+func (m Model) WithPendingDetailRestore(ref provider.Identity) Model {
+	m.pendingRef = ref
 	m.pendingRestoreHandled = false
 	return m
 }
@@ -440,15 +442,15 @@ func (m Model) WithPendingDetailRestore(id int) Model {
 // Returns the (possibly updated) model and the detail's Init cmd. Always
 // marks the intent as handled on the first call.
 func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
-	if m.pendingRestoreHandled || m.pendingDetailID == 0 {
+	if m.pendingRestoreHandled || m.pendingRef.IsZero() {
 		return m, nil
 	}
-	target := m.pendingDetailID
-	m.pendingDetailID = 0
+	target := m.pendingRef
+	m.pendingRef = provider.Identity{}
 	m.pendingRestoreHandled = true
 
 	idx := m.list.FindIndex(func(pr provider.PullRequest) bool {
-		return prNumericID(pr) == target
+		return pr.Identity.SameItem(target)
 	})
 	if idx < 0 {
 		return m, nil
@@ -510,11 +512,6 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// branchShortName strips the refs/heads/ prefix from a ref name.
-func branchShortName(ref string) string {
-	return strings.TrimPrefix(ref, "refs/heads/")
-}
-
 // prsToRows converts pull requests to table rows.
 // When the items span more than one distinct provider Kind (detected via
 // display.MixedKinds), a leading glyph cell is prepended to each row so the
@@ -528,7 +525,7 @@ func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
 
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
-		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
+		branchInfo := fmt.Sprintf("%s → %s", pr.SourceRefName, pr.TargetRefName)
 		cells := table.Row{
 			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
@@ -631,7 +628,7 @@ func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row 
 
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
-		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
+		branchInfo := fmt.Sprintf("%s → %s", pr.SourceRefName, pr.TargetRefName)
 		cells := table.Row{
 			pr.Identity.ScopeDisplay,
 			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),

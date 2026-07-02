@@ -181,6 +181,14 @@ func TestMapPullRequest(t *testing.T) {
 	if got.Reviewers[0].Kind != provider.VoteKindApproved {
 		t.Errorf("expected reviewer Kind VoteKindApproved for vote 10, got %v", got.Reviewers[0].Kind)
 	}
+	// The refs/heads/ prefix must be sealed at the adapter boundary: the
+	// neutral type carries plain branch names so the UI never sees the leak.
+	if got.SourceRefName != "feature/x" {
+		t.Errorf("expected SourceRefName %q (prefix stripped), got %q", "feature/x", got.SourceRefName)
+	}
+	if got.TargetRefName != "main" {
+		t.Errorf("expected TargetRefName %q (prefix stripped), got %q", "main", got.TargetRefName)
+	}
 }
 
 func TestMapPullRequest_StatusCategoryAndVoteKind_AllVariants(t *testing.T) {
@@ -264,6 +272,10 @@ func TestMapPipelineRun(t *testing.T) {
 	// RunStatus field must be populated from MapRunStatus(Status, Result).
 	if got.RunStatus != provider.RunStatusSucceeded {
 		t.Errorf("expected RunStatus RunStatusSucceeded, got %v", got.RunStatus)
+	}
+	// refs/heads/ must be sealed at the adapter boundary.
+	if got.SourceBranch != "main" {
+		t.Errorf("expected SourceBranch %q (prefix stripped), got %q", "main", got.SourceBranch)
 	}
 }
 

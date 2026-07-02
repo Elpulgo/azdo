@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,19 +33,47 @@ type VotePicker struct {
 	cursor  int
 }
 
-// NewVotePicker creates a new vote picker
+// NewVotePicker creates a new vote picker with the Azure DevOps vote scale.
+// Prefer NewVotePickerForKind so the options match the PR's backend; this
+// constructor is retained for the Azure-only default and existing callers.
 func NewVotePicker(s *styles.Styles) VotePicker {
+	return NewVotePickerForKind(s, provider.KindAzure)
+}
+
+// NewVotePickerForKind creates a vote picker whose options match the backend
+// that produced the pull request. Azure DevOps exposes its five-level review
+// scale; GitHub reviews only distinguish approve from request-changes, so the
+// Azure-only levels (approve-with-suggestions, wait-for-author, reset) are
+// omitted — submitting them on GitHub would either collapse onto another option
+// or be rejected by the API (a reset maps to a COMMENT event, which requires a
+// body).
+func NewVotePickerForKind(s *styles.Styles, kind provider.Kind) VotePicker {
 	return VotePicker{
 		styles:  s,
 		visible: false,
-		options: []VoteOption{
+		options: voteOptionsForKind(kind),
+		cursor:  0,
+	}
+}
+
+// voteOptionsForKind returns the vote options appropriate for the backend.
+// The Vote integers are interpreted by sign on the GitHub adapter
+// (>0 → APPROVE, <0 → REQUEST_CHANGES), so the Azure constants carry over.
+func voteOptionsForKind(kind provider.Kind) []VoteOption {
+	switch kind {
+	case provider.KindGitHub:
+		return []VoteOption{
+			{Label: "Approve", Icon: "✓", Vote: azdevops.VoteApprove},
+			{Label: "Request changes", Icon: "✗", Vote: azdevops.VoteReject},
+		}
+	default:
+		return []VoteOption{
 			{Label: "Approve", Icon: "✓", Vote: azdevops.VoteApprove},
 			{Label: "Approve with suggestions", Icon: "~", Vote: azdevops.VoteApproveWithSuggestions},
 			{Label: "Wait for author", Icon: "◐", Vote: azdevops.VoteWaitForAuthor},
 			{Label: "Reject", Icon: "✗", Vote: azdevops.VoteReject},
 			{Label: "Reset feedback", Icon: "○", Vote: azdevops.VoteNoVote},
-		},
-		cursor: 0,
+		}
 	}
 }
 

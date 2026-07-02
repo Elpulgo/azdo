@@ -15,6 +15,33 @@ const (
 	KindGitHub
 )
 
+// String returns a stable, lowercase identifier for the Kind, suitable for
+// on-disk serialization (state persistence). Unknown kinds return "".
+// This is distinct from display.KindLabel, which returns a human-facing name.
+func (k Kind) String() string {
+	switch k {
+	case KindAzure:
+		return "azure"
+	case KindGitHub:
+		return "github"
+	default:
+		return ""
+	}
+}
+
+// ParseKind maps a stable string identifier (see Kind.String) back to a Kind.
+// Unrecognized input returns the zero Kind.
+func ParseKind(s string) Kind {
+	switch s {
+	case "azure":
+		return KindAzure
+	case "github":
+		return KindGitHub
+	default:
+		return 0
+	}
+}
+
 // Identity stamps every neutral entity with its origin.
 // Kind identifies the backend, Scope is the project API name (ProjectName from
 // the wire layer), ScopeDisplay is the human-readable project display name
@@ -28,6 +55,19 @@ type Identity struct {
 	Scope        string // project API name (ProjectName from the wire layer)
 	ScopeDisplay string // human-readable project display name (ProjectDisplayName)
 	ID           string // wire ID converted to string
+}
+
+// IsZero reports whether the identity is unset (no backend ID).
+func (i Identity) IsZero() bool {
+	return i.ID == ""
+}
+
+// SameItem reports whether two identities refer to the same entity across
+// backends. It compares Kind, Scope, and ID — the fields that make an item
+// unique in a merged Azure + GitHub list — and deliberately ignores
+// ScopeDisplay, which is a presentation detail that can vary by config.
+func (i Identity) SameItem(other Identity) bool {
+	return i.Kind == other.Kind && i.Scope == other.Scope && i.ID == other.ID
 }
 
 // WorkItem is the neutral representation of an Azure DevOps work item (or its
@@ -66,9 +106,12 @@ type PullRequest struct {
 	Status         string
 	StatusCategory StateCategory // neutral semantic bucket derived from Status
 	CreationDate   time.Time
-	SourceRefName  string
-	TargetRefName  string
-	IsDraft        bool
+	// SourceRefName and TargetRefName are plain branch names (e.g. "main"),
+	// already stripped of any backend ref prefix (Azure's refs/heads/) at the
+	// adapter boundary. The UI renders them verbatim.
+	SourceRefName string
+	TargetRefName string
+	IsDraft       bool
 	CreatedByName  string
 	CreatedByID    string
 	RepositoryID   string
@@ -92,6 +135,8 @@ type PipelineRun struct {
 	Status         string
 	Result         string
 	RunStatus      RunStatus // neutral enum; populated by MapRunStatus at the adapter boundary
+	// SourceBranch is a plain branch name, stripped of any backend ref prefix
+	// (Azure's refs/heads/) at the adapter boundary.
 	SourceBranch   string
 	SourceVersion  string
 	QueueTime      time.Time

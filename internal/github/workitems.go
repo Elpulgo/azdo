@@ -1,6 +1,7 @@
 package github
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -9,10 +10,9 @@ import (
 )
 
 // issuePerPageCap is the maximum page size accepted by GET /repos/.../issues
-// and GET /search/issues. The GitHub REST API hard-caps per_page at 100.
-// Callers that need more than 100 items must paginate via the Link header —
-// pagination is noted as an Unknown in the Phase 3 spec and is not implemented
-// here; requests with top > 100 are silently capped at 100.
+// and GET /search/issues. The GitHub REST API hard-caps per_page at 100. List
+// endpoints request this page size and follow the Link header (see getAllPages)
+// to collect up to the caller's requested top across multiple pages.
 const issuePerPageCap = 100
 
 // issueSearchResponse is the envelope returned by GET /search/issues.
@@ -67,8 +67,10 @@ func mapStateParam(states []provider.StateCategory) string {
 // ListWorkItems returns up to top real issues for the repository, sorted by
 // most recently updated. Pull requests are filtered out (see Issue.PullRequest).
 //
-// top is capped at issuePerPageCap (100); pagination is not yet implemented
-// (noted as an Unknown in the Phase 3 spec).
+// The endpoint is paginated via the Link header: pages of issuePerPageCap (100)
+// are followed until top raw items are collected or the pages run out. top is
+// the raw item budget (before PR filtering), matching the pre-pagination
+// behaviour; a top <= 0 defaults to a single page (issuePerPageCap).
 //
 // opts.States is mapped to the GitHub state query parameter:
 //   - All-open categories  → state=open
@@ -78,16 +80,13 @@ func (c *Client) ListWorkItems(top int, opts provider.ListOpts) ([]Issue, error)
 	if top <= 0 {
 		top = issuePerPageCap
 	}
-	if top > issuePerPageCap {
-		top = issuePerPageCap
-	}
 
 	state := mapStateParam(opts.States)
 	path := fmt.Sprintf("/repos/%s/%s/issues?state=%s&per_page=%d&sort=updated&direction=desc",
-		c.owner, c.repo, state, top)
+		c.owner, c.repo, state, issuePerPageCap)
 
-	var raw []Issue
-	if err := c.getJSON(path, &raw); err != nil {
+	raw, err := getAllPages(c, path, top, extractArray[Issue])
+	if err != nil {
 		return nil, fmt.Errorf("github: list work items: %w", err)
 	}
 
@@ -114,13 +113,11 @@ func (c *Client) ListWorkItems(top int, opts provider.ListOpts) ([]Issue, error)
 // That fallback is not implemented here; use the token user's actual login
 // as a workaround if needed.
 //
-// top is capped at issuePerPageCap (100). /search/issues has a rate limit of
-// 30 requests/minute (authenticated), noted as an Unknown in the Phase 3 spec.
+// top items are collected by following the Link header across pages of
+// issuePerPageCap (100). /search/issues has a rate limit of 30 requests/minute
+// (authenticated) and caps total results at 1000.
 func (c *Client) ListMyWorkItems(top int, opts provider.ListOpts) ([]Issue, error) {
 	if top <= 0 {
-		top = issuePerPageCap
-	}
-	if top > issuePerPageCap {
 		top = issuePerPageCap
 	}
 
@@ -135,15 +132,21 @@ func (c *Client) ListMyWorkItems(top int, opts provider.ListOpts) ([]Issue, erro
 
 	params := url.Values{}
 	params.Set("q", q)
-	params.Set("per_page", fmt.Sprintf("%d", top))
+	params.Set("per_page", fmt.Sprintf("%d", issuePerPageCap))
 
 	path := "/search/issues?" + params.Encode()
 
-	var envelope issueSearchResponse
-	if err := c.getJSON(path, &envelope); err != nil {
+	items, err := getAllPages(c, path, top, func(body []byte) ([]Issue, error) {
+		var envelope issueSearchResponse
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return nil, fmt.Errorf("github: decode response: %w", err)
+		}
+		return envelope.Items, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("github: list my work items: %w", err)
 	}
-	return envelope.Items, nil
+	return items, nil
 }
 
 // GetWorkItemTypeStates returns the two static states that GitHub issues support:
@@ -212,13 +215,14 @@ func (c *Client) UpdateWorkItemState(number int, state string) error {
 // GetWorkItemComments returns the comments for a given issue, in the order
 // returned by GitHub (chronological, oldest first).
 //
-// per_page is capped at issuePerPageCap (100); pagination is not implemented.
+// All comments are collected by following the Link header across pages of
+// issuePerPageCap (100).
 func (c *Client) GetWorkItemComments(number int) ([]IssueComment, error) {
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=%d",
 		c.owner, c.repo, number, issuePerPageCap)
 
-	var comments []IssueComment
-	if err := c.getJSON(path, &comments); err != nil {
+	comments, err := getAllPages(c, path, 0, extractArray[IssueComment])
+	if err != nil {
 		return nil, fmt.Errorf("github: get work item comments: %w", err)
 	}
 	return comments, nil

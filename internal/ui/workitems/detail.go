@@ -544,6 +544,12 @@ func (m *DetailModel) GetWorkItemID() int {
 	return workItemNumericID(m.workItem)
 }
 
+// Identity returns the cross-backend identity of the work item, used to
+// persist and restore the open detail without colliding across providers.
+func (m *DetailModel) Identity() provider.Identity {
+	return m.workItem.Identity
+}
+
 // Helper functions
 
 // workItemNumericID converts the string Identity.ID to an int.

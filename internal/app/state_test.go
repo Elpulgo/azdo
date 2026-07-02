@@ -97,15 +97,15 @@ func TestModel_CapturesPRDetailOnEnterAndEsc(t *testing.T) {
 	// Enter → opens detail for PR #77.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if got := store.State().Tabs.PullRequests.LastDetailID; got != 77 {
-		t.Errorf("after enter, PR LastDetailID = %d, want 77", got)
+	if got := store.State().Tabs.PullRequests.LastDetail; got.ID != "77" || got.Kind != "azure" {
+		t.Errorf("after enter, PR LastDetail = %+v, want Azure ID 77", got)
 	}
 
-	// Esc → leaves detail; the captured ID should be cleared.
+	// Esc → leaves detail; the captured ref should be cleared.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	_ = updated.(Model)
-	if got := store.State().Tabs.PullRequests.LastDetailID; got != 0 {
-		t.Errorf("after esc, PR LastDetailID = %d, want 0", got)
+	if got := store.State().Tabs.PullRequests.LastDetail; !got.IsZero() {
+		t.Errorf("after esc, PR LastDetail = %+v, want zero ref", got)
 	}
 }
 
@@ -118,22 +118,22 @@ func TestModel_CapturesWorkItemDetailOnEnterAndEsc(t *testing.T) {
 
 	// Seed work items.
 	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: []provider.WorkItem{
-		{Identity: provider.Identity{ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
 	}})
 	m = updated.(Model)
 
 	// Enter → opens detail for #4242.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if got := store.State().Tabs.WorkItems.LastDetailID; got != 4242 {
-		t.Errorf("after enter, WI LastDetailID = %d, want 4242", got)
+	if got := store.State().Tabs.WorkItems.LastDetail; got.ID != "4242" || got.Kind != "azure" {
+		t.Errorf("after enter, WI LastDetail = %+v, want Azure ID 4242", got)
 	}
 
 	// Esc → cleared.
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	_ = updated.(Model)
-	if got := store.State().Tabs.WorkItems.LastDetailID; got != 0 {
-		t.Errorf("after esc, WI LastDetailID = %d, want 0", got)
+	if got := store.State().Tabs.WorkItems.LastDetail; !got.IsZero() {
+		t.Errorf("after esc, WI LastDetail = %+v, want zero ref", got)
 	}
 }
 
@@ -193,7 +193,7 @@ func TestApplyState_RestoresPRDetailOnFirstPopulate(t *testing.T) {
 	m, _ := newTestModelWithStore(t)
 	m.ApplyState(state.State{
 		ActiveTab: state.TabPullRequests,
-		Tabs:      state.TabsState{PullRequests: state.TabMemory{LastDetailID: 7}},
+		Tabs:      state.TabsState{PullRequests: state.TabMemory{LastDetail: state.DetailRef{Kind: "azure", Scope: "proj", ID: "7"}}},
 	})
 
 	updated, _ := m.Update(pullrequests.SetPRsMsg{PRs: []provider.PullRequest{
@@ -207,8 +207,8 @@ func TestApplyState_RestoresPRDetailOnFirstPopulate(t *testing.T) {
 	}})
 	m = updated.(Model)
 
-	if got := m.pullRequestsView.DetailItemID(); got != 7 {
-		t.Errorf("PR DetailItemID after first populate = %d, want 7", got)
+	if ref, ok := m.pullRequestsView.DetailRef(); !ok || ref.ID != "7" {
+		t.Errorf("PR DetailRef after first populate = %+v (ok=%v), want ID 7", ref, ok)
 	}
 }
 
@@ -217,16 +217,16 @@ func TestApplyState_RestoresWIDetailOnFirstPopulate(t *testing.T) {
 	m, _ := newTestModelWithStore(t)
 	m.ApplyState(state.State{
 		ActiveTab: state.TabWorkItems,
-		Tabs:      state.TabsState{WorkItems: state.TabMemory{LastDetailID: 4242}},
+		Tabs:      state.TabsState{WorkItems: state.TabMemory{LastDetail: state.DetailRef{Kind: "azure", Scope: "proj", ID: "4242"}}},
 	})
 
 	updated, _ := m.Update(workitems.SetWorkItemsMsg{WorkItems: []provider.WorkItem{
-		{Identity: provider.Identity{ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
 	}})
 	m = updated.(Model)
 
-	if got := m.workItemsView.DetailItemID(); got != 4242 {
-		t.Errorf("WI DetailItemID after first populate = %d, want 4242", got)
+	if ref, ok := m.workItemsView.DetailRef(); !ok || ref.ID != "4242" {
+		t.Errorf("WI DetailRef after first populate = %+v (ok=%v), want ID 4242", ref, ok)
 	}
 }
 
@@ -237,7 +237,7 @@ func TestApplyState_MissingItemDoesNotEnterDetail(t *testing.T) {
 	m, _ := newTestModelWithStore(t)
 	m.ApplyState(state.State{
 		ActiveTab: state.TabPullRequests,
-		Tabs:      state.TabsState{PullRequests: state.TabMemory{LastDetailID: 999}},
+		Tabs:      state.TabsState{PullRequests: state.TabMemory{LastDetail: state.DetailRef{Kind: "azure", Scope: "proj", ID: "999"}}},
 	})
 
 	updated, _ := m.Update(pullrequests.SetPRsMsg{PRs: []provider.PullRequest{
@@ -245,8 +245,8 @@ func TestApplyState_MissingItemDoesNotEnterDetail(t *testing.T) {
 	}})
 	m = updated.(Model)
 
-	if got := m.pullRequestsView.DetailItemID(); got != 0 {
-		t.Errorf("DetailItemID = %d, want 0 (target PR not present)", got)
+	if _, ok := m.pullRequestsView.DetailRef(); ok {
+		t.Errorf("DetailRef ok = true, want false (target PR not present)")
 	}
 }
 

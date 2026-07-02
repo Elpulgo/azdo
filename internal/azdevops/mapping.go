@@ -2,9 +2,24 @@ package azdevops
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Elpulgo/azdo/internal/provider"
 )
+
+// shortBranch strips Azure ref prefixes (refs/heads/, refs/tags/) so the
+// neutral domain type carries a plain branch name. This is where the
+// refs/heads/ leak is sealed: the provider-neutral types (and therefore the
+// whole UI) never see the Azure ref-prefix convention.
+func shortBranch(ref string) string {
+	if s, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return s
+	}
+	if s, ok := strings.CutPrefix(ref, "refs/tags/"); ok {
+		return s
+	}
+	return ref
+}
 
 // MapWorkItem maps an azdevops wire WorkItem to a provider.WorkItem.
 // scope is the project API name (ProjectName) and scopeDisplay is its human-readable
@@ -65,8 +80,8 @@ func MapPullRequest(pr PullRequest, scope, scopeDisplay string) provider.PullReq
 		Status:         pr.Status,
 		StatusCategory: MapStateCategory(pr.Status),
 		CreationDate:   pr.CreationDate,
-		SourceRefName:  pr.SourceRefName,
-		TargetRefName:  pr.TargetRefName,
+		SourceRefName:  shortBranch(pr.SourceRefName),
+		TargetRefName:  shortBranch(pr.TargetRefName),
 		IsDraft:        pr.IsDraft,
 		CreatedByName:  pr.CreatedBy.DisplayName,
 		CreatedByID:    pr.CreatedBy.ID,
@@ -89,7 +104,7 @@ func MapPipelineRun(p PipelineRun, scope, scopeDisplay string) provider.Pipeline
 		Status:         p.Status,
 		Result:         p.Result,
 		RunStatus:      MapRunStatus(p.Status, p.Result),
-		SourceBranch:   p.SourceBranch,
+		SourceBranch:   shortBranch(p.SourceBranch),
 		SourceVersion:  p.SourceVersion,
 		QueueTime:      p.QueueTime,
 		StartTime:      p.StartTime,

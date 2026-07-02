@@ -1,6 +1,7 @@
 package github
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/Elpulgo/azdo/internal/provider"
@@ -8,9 +9,9 @@ import (
 
 // pipelinePerPageCap is the maximum page size accepted by
 // GET /repos/.../actions/runs and GET /repos/.../actions/runs/{id}/jobs.
-// The GitHub REST API hard-caps per_page at 100. Callers that need more than
-// 100 items must paginate via the Link header — pagination is not implemented
-// here; requests with top > 100 are silently capped at 100.
+// The GitHub REST API hard-caps per_page at 100. ListPipelineRuns requests this
+// page size and follows the Link header (see getAllPages) to collect up to the
+// caller's requested top across multiple pages.
 const pipelinePerPageCap = 100
 
 // workflowRunsResponse is the envelope returned by
@@ -63,7 +64,9 @@ func mapRunStatusParam(s provider.RunStatus) string {
 // ListPipelineRuns returns up to top Actions workflow runs for the repository,
 // ordered by most recently created (GitHub default).
 //
-// top is capped at pipelinePerPageCap (100); pagination is not implemented.
+// The runs endpoint is paginated via the Link header: pages of pipelinePerPageCap
+// (100) are followed until top runs are collected or the pages run out. A
+// top <= 0 defaults to a single page (pipelinePerPageCap).
 //
 // opts.Statuses is mapped to the GitHub ?status= query parameter. Because the
 // runs endpoint only accepts a single status value, the param is added only when
@@ -74,11 +77,8 @@ func (c *Client) ListPipelineRuns(top int, opts provider.ListOpts) ([]WorkflowRu
 	if top <= 0 {
 		top = pipelinePerPageCap
 	}
-	if top > pipelinePerPageCap {
-		top = pipelinePerPageCap
-	}
 
-	path := fmt.Sprintf("/repos/%s/%s/actions/runs?per_page=%d", c.owner, c.repo, top)
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs?per_page=%d", c.owner, c.repo, pipelinePerPageCap)
 
 	// Add ?status= only when a single RunStatus with a clean mapping is requested.
 	// Multiple statuses cannot be expressed in one status= param, so they are
@@ -89,11 +89,17 @@ func (c *Client) ListPipelineRuns(top int, opts provider.ListOpts) ([]WorkflowRu
 		}
 	}
 
-	var envelope workflowRunsResponse
-	if err := c.getJSON(path, &envelope); err != nil {
+	runs, err := getAllPages(c, path, top, func(body []byte) ([]WorkflowRun, error) {
+		var envelope workflowRunsResponse
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return nil, fmt.Errorf("github: decode response: %w", err)
+		}
+		return envelope.WorkflowRuns, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("github: list pipeline runs: %w", err)
 	}
-	return envelope.WorkflowRuns, nil
+	return runs, nil
 }
 
 // GetBuildTimeline fetches both the workflow run and its jobs from GitHub

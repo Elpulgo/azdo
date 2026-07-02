@@ -972,8 +972,8 @@ func (m *DiffModel) fetchFileDiff(change provider.IterationChange) tea.Cmd {
 
 		scope := m.pr.Identity.Scope
 		repoID := m.pr.RepositoryID
-		targetBranch := branchShortName(m.pr.TargetRefName)
-		sourceBranch := branchShortName(m.pr.SourceRefName)
+		targetBranch := m.pr.TargetRefName
+		sourceBranch := m.pr.SourceRefName
 
 		var oldContent, newContent string
 		var err error

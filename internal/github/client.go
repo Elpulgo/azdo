@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -127,6 +128,112 @@ func (c *Client) getJSON(path string, dst any) error {
 		return fmt.Errorf("github: decode response: %w", err)
 	}
 	return nil
+}
+
+// getPage performs an authenticated GET and returns both the raw response body
+// and the response headers. The headers are required to read the RFC 5988 Link
+// header that drives GitHub's pagination (see nextPageURL and getAllPages).
+//
+// rawURL may be a leading-slash path (joined to baseURL) or an absolute URL.
+// The absolute form is used when following a Link "next" relation, which GitHub
+// returns as a fully-qualified URL.
+func (c *Client) getPage(rawURL string) ([]byte, http.Header, error) {
+	fullURL := rawURL
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		fullURL = c.baseURL + rawURL
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("github: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("github: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("github: read response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil, newAPIError(resp.StatusCode, resp.Header, body)
+	}
+	return body, resp.Header, nil
+}
+
+// nextPageURL extracts the URL of the rel="next" relation from an RFC 5988 Link
+// header, as emitted by GitHub's paginated endpoints. It returns "" when the
+// header is absent or carries no "next" relation (i.e. the last page). Example:
+//
+//	<https://api.github.com/...?page=2>; rel="next", <...?page=9>; rel="last"
+func nextPageURL(header http.Header) string {
+	link := header.Get("Link")
+	if link == "" {
+		return ""
+	}
+	for _, part := range strings.Split(link, ",") {
+		segments := strings.Split(part, ";")
+		if len(segments) < 2 {
+			continue
+		}
+		urlPart := strings.TrimSpace(segments[0])
+		if !strings.HasPrefix(urlPart, "<") || !strings.HasSuffix(urlPart, ">") {
+			continue
+		}
+		for _, seg := range segments[1:] {
+			if strings.TrimSpace(seg) == `rel="next"` {
+				return urlPart[1 : len(urlPart)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// getAllPages follows GitHub's Link-header pagination starting at firstPath,
+// accumulating items until limit have been collected or the pages are exhausted.
+// Each page body is handed to extract, which knows how to pull the item slice
+// out of that endpoint's response shape — a bare array (/issues, /pulls) or an
+// envelope (/search/issues, /actions/runs). firstPath should already request the
+// maximum page size (per_page=100). limit trims the accumulated slice; a limit
+// <= 0 is treated as no limit and follows every page.
+//
+// It is a free function rather than a method because Go methods cannot declare
+// their own type parameters.
+func getAllPages[T any](c *Client, firstPath string, limit int, extract func([]byte) ([]T, error)) ([]T, error) {
+	var out []T
+	next := firstPath
+	for next != "" {
+		body, header, err := c.getPage(next)
+		if err != nil {
+			return nil, err
+		}
+		items, err := extract(body)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if limit > 0 && len(out) >= limit {
+			return out[:limit], nil
+		}
+		next = nextPageURL(header)
+	}
+	return out, nil
+}
+
+// extractArray is the getAllPages extractor for endpoints that return a bare
+// JSON array page body (e.g. /issues, /pulls).
+func extractArray[T any](body []byte) ([]T, error) {
+	var page []T
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("github: decode response: %w", err)
+	}
+	return page, nil
 }
 
 // APIError is the typed error returned for every non-2xx GitHub response.
