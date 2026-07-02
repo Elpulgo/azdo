@@ -1,6 +1,6 @@
 # azdo
 
-A Terminal User Interface (TUI) for Azure DevOps and GitHub - manage pull requests, work items, and pipelines directly from your terminal.
+A Terminal User Interface (TUI) for Azure DevOps and GitHub (beta) - manage pull requests, work items, and pipelines directly from your terminal.
 
 Point it at Azure DevOps projects, GitHub repositories, or both at once: lists fan out across every configured backend and detail actions route back to the right one. A small glyph (⬢ Azure, ⎇ GitHub) marks each row's origin only when a list mixes backends.
 
@@ -26,6 +26,8 @@ Point it at Azure DevOps projects, GitHub repositories, or both at once: lists f
 ## Installation
 
 ### Quick Install (Recommended)
+
+Agnostic provider support for GitHub is in **beta** right now. Install with ```curl -fsSL https://raw.githubusercontent.com/Elpulgo/azdo/main/install.sh | sh -s -- --version v0.7.1-beta```
 
 **Linux / macOS:**
 ```bash
