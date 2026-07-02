@@ -1501,7 +1501,7 @@ func TestModel_DisabledPanes_PullRequestsDisabled_TabBarHidesPullRequests(t *tes
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev", "")
+	m := NewModel(nil, client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1528,7 +1528,7 @@ func TestModel_DisabledPanes_PullRequestsDisabled_DefaultTabIsWorkItems(t *testi
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(client, cfg, "dev", "")
+	m := NewModel(nil, client, cfg, "dev", "")
 
 	if m.activeTab != TabWorkItems {
 		t.Errorf("with pullrequests disabled, expected default activeTab to be TabWorkItems (first enabled), got %d", m.activeTab)
@@ -1544,7 +1544,7 @@ func TestModel_DisabledPanes_EnabledTabs_PullRequestsDisabled(t *testing.T) {
 		DisabledPanes:   []string{"pullrequests"},
 	}
 
-	tabs := buildEnabledTabs(cfg)
+	tabs := buildEnabledTabs(cfg, false)
 	if len(tabs) != 2 {
 		t.Fatalf("expected 2 enabled tabs, got %d", len(tabs))
 	}
