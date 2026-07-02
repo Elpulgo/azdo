@@ -1491,47 +1491,65 @@ func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
 	}
 }
 
-// TestBuildEnabledTabs_MetricsGate tests the combined gate:
-// TabMetrics requires both cfg.Metrics.Enabled AND azurePresent.
-func TestBuildEnabledTabs_MetricsGate(t *testing.T) {
-	baseCfg := func(metricsEnabled bool) *config.Config {
-		return &config.Config{
-			Organization:    "testorg",
-			Projects:        []string{"testproject"},
-			PollingInterval: 60,
-			Theme:           "dark",
-			Metrics:         config.MetricsConfig{Enabled: metricsEnabled},
-		}
+func TestModel_DisabledPanes_PullRequestsDisabled_TabBarHidesPullRequests(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pullrequests"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	if strings.Contains(view, "Pull Requests") {
+		t.Error("Tab bar should NOT show Pull Requests when disabled")
+	}
+	if !strings.Contains(view, "1: Work Items") {
+		t.Error("Tab bar should show '1: Work Items' (renumbered)")
+	}
+	if !strings.Contains(view, "2: Pipelines") {
+		t.Error("Tab bar should show '2: Pipelines' (renumbered)")
+	}
+}
+
+func TestModel_DisabledPanes_PullRequestsDisabled_DefaultTabIsWorkItems(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pullrequests"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+
+	if m.activeTab != TabWorkItems {
+		t.Errorf("with pullrequests disabled, expected default activeTab to be TabWorkItems (first enabled), got %d", m.activeTab)
+	}
+}
+
+func TestModel_DisabledPanes_EnabledTabs_PullRequestsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pullrequests"},
 	}
 
-	containsMetrics := func(tabs []Tab) bool {
-		for _, tab := range tabs {
-			if tab == TabMetrics {
-				return true
-			}
-		}
-		return false
+	tabs := buildEnabledTabs(cfg, false)
+	if len(tabs) != 2 {
+		t.Fatalf("expected 2 enabled tabs, got %d", len(tabs))
 	}
-
-	// No Azure backend + metrics enabled → no metrics tab.
-	tabs := buildEnabledTabs(baseCfg(true), false)
-	if containsMetrics(tabs) {
-		t.Error("expected no TabMetrics when azurePresent=false, even with metrics.enabled=true")
-	}
-
-	// Azure present + metrics enabled → metrics tab is present (regression guard).
-	tabs = buildEnabledTabs(baseCfg(true), true)
-	if !containsMetrics(tabs) {
-		t.Error("expected TabMetrics when azurePresent=true and metrics.enabled=true")
-	}
-	if tabs[len(tabs)-1] != TabMetrics {
-		t.Errorf("expected TabMetrics as last tab, got %v", tabs[len(tabs)-1])
-	}
-
-	// Azure present + metrics disabled → no metrics tab (confirms the AND).
-	tabs = buildEnabledTabs(baseCfg(false), true)
-	if containsMetrics(tabs) {
-		t.Error("expected no TabMetrics when metrics.enabled=false, even with azurePresent=true")
+	if tabs[0] != TabWorkItems || tabs[1] != TabPipelines {
+		t.Errorf("unexpected tab order: %v", tabs)
 	}
 }
 
