@@ -5,11 +5,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// newWI is a test helper that constructs a provider.WorkItem with the given ID
+// and optional field overrides. The Identity.ID is set from id.
+func newWI(id int, title, state, workItemType string) provider.WorkItem {
+	return provider.WorkItem{
+		Identity:     provider.Identity{ID: fmt.Sprintf("%d", id), Scope: "testproject", ScopeDisplay: "testproject"},
+		Title:        title,
+		State:        state,
+		WorkItemType: workItemType,
+	}
+}
 
 func TestTypeIconWithStyles(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
@@ -19,20 +31,20 @@ func TestTypeIconWithStyles(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			tests := []struct {
-				workItemType string
+				kind         provider.ItemType
 				wantContains string
 			}{
-				{"Bug", "Bug"},
-				{"Task", "Task"},
-				{"User Story", "Story"},
-				{"Feature", "Feature"},
+				{provider.ItemTypeBug, "Bug"},
+				{provider.ItemTypeTask, "Task"},
+				{provider.ItemTypeUserStory, "Story"},
+				{provider.ItemTypeFeature, "Feature"},
 			}
 
 			for _, tt := range tests {
-				got := typeIconWithStyles(tt.workItemType, s)
+				got := typeIconWithStyles(tt.kind, s)
 				if !strings.Contains(got, tt.wantContains) {
-					t.Errorf("typeIconWithStyles(%q) with theme %s = %q, want to contain %q",
-						tt.workItemType, themeName, got, tt.wantContains)
+					t.Errorf("typeIconWithStyles(%v) with theme %s = %q, want to contain %q",
+						tt.kind, themeName, got, tt.wantContains)
 				}
 			}
 		})
@@ -47,19 +59,20 @@ func TestStateTextWithStyles(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			tests := []struct {
+				cat          provider.StateCategory
 				state        string
 				wantContains string
 			}{
-				{"New", "New"},
-				{"Active", "Active"},
-				{"Closed", "Closed"},
+				{provider.StateCategoryNew, "New", "New"},
+				{provider.StateCategoryActive, "Active", "Active"},
+				{provider.StateCategoryClosedDone, "Closed", "Closed"},
 			}
 
 			for _, tt := range tests {
-				got := stateTextWithStyles(tt.state, s)
+				got := stateTextWithStyles(tt.cat, tt.state, s)
 				if !strings.Contains(got, tt.wantContains) {
-					t.Errorf("stateTextWithStyles(%q) with theme %s = %q, want to contain %q",
-						tt.state, themeName, got, tt.wantContains)
+					t.Errorf("stateTextWithStyles(%v, %q) with theme %s = %q, want to contain %q",
+						tt.cat, tt.state, themeName, got, tt.wantContains)
 				}
 			}
 		})
@@ -94,20 +107,53 @@ func TestPriorityTextWithStyles(t *testing.T) {
 	}
 }
 
+func TestPriorityTextWithStyles_ZeroRenderesDash(t *testing.T) {
+	s := styles.DefaultStyles()
+	got := priorityTextWithStyles(0, s)
+	if !strings.Contains(got, "-") {
+		t.Errorf("priorityTextWithStyles(0) = %q, want to contain '-'", got)
+	}
+	if strings.Contains(got, "P0") {
+		t.Errorf("priorityTextWithStyles(0) = %q, must not contain 'P0'", got)
+	}
+}
+
+func TestStateTextWithStyles_UsesDisplayMap(t *testing.T) {
+	s := styles.DefaultStyles()
+	tests := []struct {
+		cat          provider.StateCategory
+		state        string
+		wantContains string
+	}{
+		{provider.StateCategoryNew, "New", "New"},
+		{provider.StateCategoryActive, "Active", "Active"},
+		{provider.StateCategoryResolved, "Resolved", "Resolved"},
+		{provider.StateCategoryClosedDone, "Closed", "Closed"},
+		{provider.StateCategoryRemoved, "Removed", "Removed"},
+		// Ready-for-test: label falls back to raw state string
+		{provider.StateCategoryReadyForTest, "Ready for Test", "Ready for Test"},
+		// Unknown: falls back to raw state string
+		{provider.StateCategoryUnknown, "Custom", "Custom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			got := stateTextWithStyles(tt.cat, tt.state, s)
+			if !strings.Contains(got, tt.wantContains) {
+				t.Errorf("stateTextWithStyles(%v, %q) = %q, want to contain %q", tt.cat, tt.state, got, tt.wantContains)
+			}
+		})
+	}
+}
+
 func TestUpdate_SetWorkItemsMsg(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Simulate receiving work items
-	workItems := []azdevops.WorkItem{
-		{
-			ID:     123,
-			Fields: azdevops.WorkItemFields{Title: "Fix bug", State: "Active", WorkItemType: "Bug"},
-		},
-		{
-			ID:     456,
-			Fields: azdevops.WorkItemFields{Title: "Add feature", State: "New", WorkItemType: "Task"},
-		},
+	workItems := []provider.WorkItem{
+		newWI(123, "Fix bug", "Active", "Bug"),
+		newWI(456, "Add feature", "New", "Task"),
 	}
 
 	msg := SetWorkItemsMsg{WorkItems: workItems}
@@ -116,8 +162,8 @@ func TestUpdate_SetWorkItemsMsg(t *testing.T) {
 	if len(m.list.Items()) != 2 {
 		t.Errorf("Expected 2 work items, got %d", len(m.list.Items()))
 	}
-	if m.list.Items()[0].ID != 123 {
-		t.Errorf("Expected first work item ID to be 123, got %d", m.list.Items()[0].ID)
+	if m.list.Items()[0].Identity.ID != "123" {
+		t.Errorf("Expected first work item ID to be '123', got %q", m.list.Items()[0].Identity.ID)
 	}
 }
 
@@ -126,11 +172,8 @@ func TestViewMode_Navigation(t *testing.T) {
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Add some work items via SetItems
-	workItems := []azdevops.WorkItem{
-		{
-			ID:     123,
-			Fields: azdevops.WorkItemFields{Title: "Fix bug", State: "Active", WorkItemType: "Bug"},
-		},
+	workItems := []provider.WorkItem{
+		newWI(123, "Fix bug", "Active", "Bug"),
 	}
 	m.list = m.list.SetItems(workItems)
 
@@ -180,7 +223,7 @@ func TestView_Error(t *testing.T) {
 
 func TestView_Empty(t *testing.T) {
 	m := NewModel(nil)
-	m.list = m.list.SetItems([]azdevops.WorkItem{})
+	m.list = m.list.SetItems([]provider.WorkItem{})
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	view := m.View()
@@ -191,26 +234,22 @@ func TestView_Empty(t *testing.T) {
 
 func TestWorkItemsToRows(t *testing.T) {
 	s := styles.DefaultStyles()
-	items := []azdevops.WorkItem{
+	items := []provider.WorkItem{
 		{
-			ID: 123,
-			Fields: azdevops.WorkItemFields{
-				Title:        "Fix critical bug",
-				State:        "Active",
-				WorkItemType: "Bug",
-				Priority:     1,
-				AssignedTo:   &azdevops.Identity{DisplayName: "John Doe"},
-			},
+			Identity:       provider.Identity{ID: "123", Scope: "proj"},
+			Title:          "Fix critical bug",
+			State:          "Active",
+			WorkItemType:   "Bug",
+			Priority:       1,
+			AssignedToName: "John Doe",
 		},
 		{
-			ID: 456,
-			Fields: azdevops.WorkItemFields{
-				Title:        "Add new feature",
-				State:        "New",
-				WorkItemType: "Task",
-				Priority:     2,
-				AssignedTo:   nil,
-			},
+			Identity:       provider.Identity{ID: "456", Scope: "proj"},
+			Title:          "Add new feature",
+			State:          "New",
+			WorkItemType:   "Task",
+			Priority:       2,
+			AssignedToName: "",
 		},
 	}
 
@@ -232,10 +271,10 @@ func TestWorkItemsToRows(t *testing.T) {
 		t.Errorf("Expected assigned to 'John Doe', got '%s'", row[5])
 	}
 
-	// Check second row - nil assignee should show "-"
+	// Check second row - empty assignee should show "-"
 	row2 := rows[1]
 	if row2[5] != "-" {
-		t.Errorf("Expected assigned to '-' for nil, got '%s'", row2[5])
+		t.Errorf("Expected assigned to '-' for empty, got '%s'", row2[5])
 	}
 }
 
@@ -249,14 +288,12 @@ func TestListModel_GetContextItems_ListMode(t *testing.T) {
 }
 
 func TestFilterWorkItem(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 42,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Fix critical login bug",
-			State:        "Active",
-			WorkItemType: "Bug",
-			AssignedTo:   &azdevops.Identity{DisplayName: "Jane Smith"},
-		},
+	wi := provider.WorkItem{
+		Identity:       provider.Identity{ID: "42", Scope: "proj"},
+		Title:          "Fix critical login bug",
+		State:          "Active",
+		WorkItemType:   "Bug",
+		AssignedToName: "Jane Smith",
 	}
 
 	tests := []struct {
@@ -284,14 +321,12 @@ func TestFilterWorkItem(t *testing.T) {
 }
 
 func TestFilterWorkItem_MatchesTags(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 42,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Fix login bug",
-			State:        "Active",
-			WorkItemType: "Bug",
-			Tags:         "Sprint 1; Backend; Urgent",
-		},
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "42", Scope: "proj"},
+		Title:        "Fix login bug",
+		State:        "Active",
+		WorkItemType: "Bug",
+		Tags:         "Sprint 1; Backend; Urgent",
 	}
 
 	tests := []struct {
@@ -316,10 +351,11 @@ func TestFilterWorkItem_MatchesTags(t *testing.T) {
 }
 
 func TestFilterWorkItemMulti_MatchesTags(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID:          42,
-		Fields:      azdevops.WorkItemFields{Title: "Test", WorkItemType: "Task", Tags: "Sprint 1; Backend"},
-		ProjectName: "alpha",
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "42", Scope: "alpha", ScopeDisplay: "alpha"},
+		Title:        "Test",
+		WorkItemType: "Task",
+		Tags:         "Sprint 1; Backend",
 	}
 
 	if !filterWorkItemMulti(wi, "backend") {
@@ -327,18 +363,16 @@ func TestFilterWorkItemMulti_MatchesTags(t *testing.T) {
 	}
 }
 
-func TestFilterWorkItem_NilAssignedTo(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID: 10,
-		Fields: azdevops.WorkItemFields{
-			Title:        "Unassigned task",
-			State:        "New",
-			WorkItemType: "Task",
-			AssignedTo:   nil,
-		},
+func TestFilterWorkItem_EmptyAssignedTo(t *testing.T) {
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "10", Scope: "proj"},
+		Title:        "Unassigned task",
+		State:        "New",
+		WorkItemType: "Task",
+		// AssignedToName is empty string
 	}
 
-	// Should match on title but not crash on nil AssignedTo
+	// Should match on title but not crash on empty AssignedToName
 	if !filterWorkItem(wi, "unassigned") {
 		t.Error("Expected match on title")
 	}
@@ -349,12 +383,13 @@ func TestFilterWorkItem_NilAssignedTo(t *testing.T) {
 
 func TestWorkItemsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
-	items := []azdevops.WorkItem{
+	items := []provider.WorkItem{
 		{
-			ID:                 100,
-			Fields:             azdevops.WorkItemFields{Title: "Test Item", WorkItemType: "Task", State: "Active", Priority: 2},
-			ProjectName:        "alpha",
-			ProjectDisplayName: "alpha",
+			Identity:     provider.Identity{ID: "100", Scope: "alpha", ScopeDisplay: "alpha"},
+			Title:        "Test Item",
+			WorkItemType: "Task",
+			State:        "Active",
+			Priority:     2,
 		},
 	}
 
@@ -373,10 +408,10 @@ func TestWorkItemsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 }
 
 func TestFilterWorkItemMulti_MatchesProjectName(t *testing.T) {
-	wi := azdevops.WorkItem{
-		ID:          100,
-		Fields:      azdevops.WorkItemFields{Title: "Test", WorkItemType: "Task"},
-		ProjectName: "alpha",
+	wi := provider.WorkItem{
+		Identity:     provider.Identity{ID: "100", Scope: "alpha", ScopeDisplay: "alpha"},
+		Title:        "Test",
+		WorkItemType: "Task",
 	}
 
 	if !filterWorkItemMulti(wi, "alpha") {
@@ -401,9 +436,9 @@ func TestMyItems_Toggle(t *testing.T) {
 	}
 
 	// Add items
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Other task"}},
+	items := []provider.WorkItem{
+		newWI(1, "My task", "", ""),
+		newWI(2, "Other task", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -421,8 +456,8 @@ func TestMyItems_Toggle(t *testing.T) {
 	}
 
 	// Simulate @Me results arriving
-	myItems := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task"}},
+	myItems := []provider.WorkItem{
+		newWI(1, "My task", "", ""),
 	}
 	m, _ = m.Update(myWorkItemsMsg{workItems: myItems})
 
@@ -447,8 +482,8 @@ func TestMyItems_ToggleIgnoredDuringSearch(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item"}},
+	items := []provider.WorkItem{
+		newWI(1, "Item", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -471,8 +506,8 @@ func TestMyItems_ToggleIgnoredInDetailView(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item", WorkItemType: "Task"}},
+	items := []provider.WorkItem{
+		newWI(1, "Item", "", "Task"),
 	}
 	m.list = m.list.SetItems(items)
 
@@ -495,9 +530,9 @@ func TestMyItems_EscTogglesOff(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	items := []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
+		newWI(2, "Theirs", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -506,8 +541,8 @@ func TestMyItems_EscTogglesOff(t *testing.T) {
 	if !m.IsMyItemsActive() {
 		t.Fatal("myItemsOnly should be true after pressing m")
 	}
-	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+	m, _ = m.Update(myWorkItemsMsg{workItems: []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
 	}})
 
 	// esc should toggle it back off and restore all items
@@ -524,9 +559,9 @@ func TestMyItems_EscDoesNotTurnOn(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	items := []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
+		newWI(2, "Theirs", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -544,8 +579,8 @@ func TestMyItems_EscInSearchExitsSearchNotFilter(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+	items := []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -571,9 +606,9 @@ func TestMyItems_PollingWhileFilterActive_DoesNotChangeVisible(t *testing.T) {
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Set initial items
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	items := []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
+		newWI(2, "Theirs", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -581,8 +616,8 @@ func TestMyItems_PollingWhileFilterActive_DoesNotChangeVisible(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 
 	// Simulate @Me results
-	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
+	m, _ = m.Update(myWorkItemsMsg{workItems: []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
 	}})
 
 	if len(m.list.Items()) != 1 {
@@ -590,10 +625,10 @@ func TestMyItems_PollingWhileFilterActive_DoesNotChangeVisible(t *testing.T) {
 	}
 
 	// New items arrive via polling while filter is active
-	newItems := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Title: "New item"}},
-		{ID: 4, Fields: azdevops.WorkItemFields{Title: "Another new"}},
+	newItems := []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
+		newWI(3, "New item", "", ""),
+		newWI(4, "Another new", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: newItems})
 
@@ -621,8 +656,8 @@ func TestMyItems_FetchError_FallsBack(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item"}},
+	items := []provider.WorkItem{
+		newWI(1, "Item", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -643,13 +678,13 @@ func TestRefresh_WhileMyItemsActive_ClearsLoading(t *testing.T) {
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Set initial items and toggle my-items filter on
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
+	items := []provider.WorkItem{
+		newWI(1, "Mine", "", ""),
+		newWI(2, "Theirs", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{items[0]}})
+	m, _ = m.Update(myWorkItemsMsg{workItems: []provider.WorkItem{items[0]}})
 
 	if !m.myItemsOnly {
 		t.Fatal("myItemsOnly should be true")
@@ -659,10 +694,10 @@ func TestRefresh_WhileMyItemsActive_ClearsLoading(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 
 	// Simulate the all-items fetch returning (workItemsMsg)
-	newItems := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Mine (updated)"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Theirs"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Title: "New item"}},
+	newItems := []provider.WorkItem{
+		newWI(1, "Mine (updated)", "", ""),
+		newWI(2, "Theirs", "", ""),
+		newWI(3, "New item", "", ""),
 	}
 	m, cmd := m.Update(workItemsMsg{workItems: newItems})
 
@@ -677,7 +712,7 @@ func TestRefresh_WhileMyItemsActive_ClearsLoading(t *testing.T) {
 	}
 
 	// Simulate my-items fetch returning
-	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{newItems[0]}})
+	m, _ = m.Update(myWorkItemsMsg{workItems: []provider.WorkItem{newItems[0]}})
 
 	// View should NOT be stuck on "Loading work items..."
 	view := m.View()
@@ -690,8 +725,8 @@ func TestRefresh_AfterStateChange_UpdatesList(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Bug", State: "Active", WorkItemType: "Bug"}},
+	items := []provider.WorkItem{
+		newWI(1, "Bug", "Active", "Bug"),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -714,15 +749,15 @@ func TestRefresh_AfterStateChange_WithMyItems_UpdatesList(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Bug", State: "Active", WorkItemType: "Bug"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Task", State: "New", WorkItemType: "Task"}},
+	items := []provider.WorkItem{
+		newWI(1, "Bug", "Active", "Bug"),
+		newWI(2, "Task", "New", "Task"),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
 	// Toggle my-items on
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	m, _ = m.Update(myWorkItemsMsg{workItems: []azdevops.WorkItem{items[0]}})
+	m, _ = m.Update(myWorkItemsMsg{workItems: []provider.WorkItem{items[0]}})
 
 	// Enter detail view
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -740,8 +775,8 @@ func TestMyItems_FetchError_ClearsLoading(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item"}},
+	items := []provider.WorkItem{
+		newWI(1, "Item", "", ""),
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -770,15 +805,8 @@ func TestStatePickerEscClosesPickerNotDetailView(t *testing.T) {
 	m := NewModel(nil)
 
 	// Set up work items
-	m.list = m.list.SetItems([]azdevops.WorkItem{
-		{
-			ID: 123,
-			Fields: azdevops.WorkItemFields{
-				Title:        "Test WI",
-				State:        "Active",
-				WorkItemType: "Bug",
-			},
-		},
+	m.list = m.list.SetItems([]provider.WorkItem{
+		newWI(123, "Test WI", "Active", "Bug"),
 	})
 
 	// Enter detail view
@@ -790,7 +818,7 @@ func TestStatePickerEscClosesPickerNotDetailView(t *testing.T) {
 	// Simulate states loaded (which opens the state picker)
 	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
 		adapter.model, _ = adapter.model.Update(statesLoadedMsg{
-			states: []azdevops.WorkItemTypeState{
+			states: []provider.WorkItemTypeState{
 				{Name: "New", Color: "b2b2b2", Category: "Proposed"},
 				{Name: "Active", Color: "007acc", Category: "InProgress"},
 				{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},
@@ -833,8 +861,8 @@ func TestHasContextBar_DetailView(t *testing.T) {
 	}
 
 	// Set up items and enter detail
-	m.list = m.list.SetItems([]azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Test", WorkItemType: "Bug"}},
+	m.list = m.list.SetItems([]provider.WorkItem{
+		newWI(1, "Test", "New", "Bug"),
 	})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -850,10 +878,10 @@ func TestTagFilter_ApplyAndClear(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item 1", Tags: "Sprint 1; Backend"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Item 2", Tags: "Sprint 1; Frontend"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Title: "Item 3", Tags: "Sprint 2; Backend"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "Item 1", Tags: "Sprint 1; Backend"},
+		{Identity: provider.Identity{ID: "2"}, Title: "Item 2", Tags: "Sprint 1; Frontend"},
+		{Identity: provider.Identity{ID: "3"}, Title: "Item 3", Tags: "Sprint 2; Backend"},
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -889,10 +917,10 @@ func TestTagFilter_ComposesWithMyItems(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My Backend", Tags: "Backend"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "My Frontend", Tags: "Frontend"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Title: "Other Backend", Tags: "Backend"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "My Backend", Tags: "Backend"},
+		{Identity: provider.Identity{ID: "2"}, Title: "My Frontend", Tags: "Frontend"},
+		{Identity: provider.Identity{ID: "3"}, Title: "Other Backend", Tags: "Backend"},
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -900,7 +928,7 @@ func TestTagFilter_ComposesWithMyItems(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 
 	// Simulate @Me results (items 1 and 2 are mine)
-	myItems := []azdevops.WorkItem{items[0], items[1]}
+	myItems := []provider.WorkItem{items[0], items[1]}
 	m, _ = m.Update(myWorkItemsMsg{workItems: myItems})
 
 	if len(m.list.Items()) != 2 {
@@ -913,8 +941,8 @@ func TestTagFilter_ComposesWithMyItems(t *testing.T) {
 	if len(m.list.Items()) != 1 {
 		t.Errorf("expected 1 item (my + backend), got %d", len(m.list.Items()))
 	}
-	if m.list.Items()[0].ID != 1 {
-		t.Errorf("expected item ID 1, got %d", m.list.Items()[0].ID)
+	if m.list.Items()[0].Identity.ID != "1" {
+		t.Errorf("expected item ID '1', got %q", m.list.Items()[0].Identity.ID)
 	}
 }
 
@@ -922,9 +950,9 @@ func TestTagFilter_PollingRespectsActiveFilter(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item 1", Tags: "Sprint 1"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Item 2", Tags: "Sprint 2"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "Item 1", Tags: "Sprint 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "Item 2", Tags: "Sprint 2"},
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -936,10 +964,10 @@ func TestTagFilter_PollingRespectsActiveFilter(t *testing.T) {
 	}
 
 	// Polling arrives with new items
-	newItems := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item 1", Tags: "Sprint 1"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Item 2", Tags: "Sprint 2"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Title: "Item 3", Tags: "Sprint 1"}},
+	newItems := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "Item 1", Tags: "Sprint 1"},
+		{Identity: provider.Identity{ID: "2"}, Title: "Item 2", Tags: "Sprint 2"},
+		{Identity: provider.Identity{ID: "3"}, Title: "Item 3", Tags: "Sprint 1"},
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: newItems})
 
@@ -956,8 +984,8 @@ func TestTagFilter_IgnoredDuringSearch(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item", Tags: "Sprint 1"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "Item", Tags: "Sprint 1"},
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -980,8 +1008,8 @@ func TestTagFilter_IgnoredInDetailView(t *testing.T) {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "Item", Tags: "Sprint 1", WorkItemType: "Task"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "Item", Tags: "Sprint 1", WorkItemType: "Task"},
 	}
 	m.list = m.list.SetItems(items)
 
@@ -1001,11 +1029,11 @@ func TestTagFilter_IgnoredInDetailView(t *testing.T) {
 }
 
 func TestCollectUniqueTags(t *testing.T) {
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Backend"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Frontend"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Tags: "Sprint 2; Backend"}},
-		{ID: 4, Fields: azdevops.WorkItemFields{Tags: ""}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Tags: "Sprint 1; Backend"},
+		{Identity: provider.Identity{ID: "2"}, Tags: "Sprint 1; Frontend"},
+		{Identity: provider.Identity{ID: "3"}, Tags: "Sprint 2; Backend"},
+		{Identity: provider.Identity{ID: "4"}, Tags: ""},
 	}
 
 	tags := collectUniqueTags(items)
@@ -1028,8 +1056,8 @@ func TestCollectUniqueTags(t *testing.T) {
 }
 
 func TestCollectUniqueTags_Sorted(t *testing.T) {
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Tags: "Zebra; Alpha; Middle"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Tags: "Zebra; Alpha; Middle"},
 	}
 
 	tags := collectUniqueTags(items)
@@ -1043,10 +1071,10 @@ func TestCollectUniqueTags_Sorted(t *testing.T) {
 }
 
 func TestApplyTagFilter(t *testing.T) {
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Backend"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Tags: "Sprint 1; Frontend"}},
-		{ID: 3, Fields: azdevops.WorkItemFields{Tags: "Sprint 2; Backend"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Tags: "Sprint 1; Backend"},
+		{Identity: provider.Identity{ID: "2"}, Tags: "Sprint 1; Frontend"},
+		{Identity: provider.Identity{ID: "3"}, Tags: "Sprint 2; Backend"},
 	}
 
 	filtered := applyTagFilter(items, "Backend")
@@ -1081,9 +1109,9 @@ func newModelWithTagPickerOpen(t *testing.T) Model {
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	items := []azdevops.WorkItem{
-		{ID: 1, Fields: azdevops.WorkItemFields{Title: "A", Tags: "Spring; Summer"}},
-		{ID: 2, Fields: azdevops.WorkItemFields{Title: "B", Tags: "Monday"}},
+	items := []provider.WorkItem{
+		{Identity: provider.Identity{ID: "1"}, Title: "A", Tags: "Spring; Summer"},
+		{Identity: provider.Identity{ID: "2"}, Title: "B", Tags: "Monday"},
 	}
 	m, _ = m.Update(SetWorkItemsMsg{WorkItems: items})
 
@@ -1156,8 +1184,8 @@ func openDetailWithItem(t *testing.T) Model {
 	t.Helper()
 	m := NewModel(nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m.list = m.list.SetItems([]azdevops.WorkItem{
-		{ID: 123, Fields: azdevops.WorkItemFields{Title: "Fix bug", State: "Active", WorkItemType: "Bug"}},
+	m.list = m.list.SetItems([]provider.WorkItem{
+		newWI(123, "Fix bug", "Active", "Bug"),
 	})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.GetViewMode() != ViewDetail {
@@ -1203,5 +1231,245 @@ func TestModel_EscWithCommentFormOpenStaysInDetail(t *testing.T) {
 	}
 	if m.IsCommentFormVisible() {
 		t.Error("expected comment form to be closed after Esc")
+	}
+}
+
+// ─── Mixed-kind glyph column tests ───────────────────────────────────────────
+// These tests use a synthetic provider.Kind(2) to simulate a second backend
+// (e.g. a future GitHub provider) without adding any KindGitHub constant.
+// In production, all items are KindAzure so the glyph column never appears.
+
+// TestWorkItemsToRows_MixedKinds_GlyphColumnFirst verifies that when items span
+// more than one distinct Kind, workItemsToRows prepends a glyph cell at pos 0.
+// Convention #6: assert the full glyph token AND the KindStyle foreground.
+func TestWorkItemsToRows_MixedKinds_GlyphColumnFirst(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	items := []provider.WorkItem{
+		{
+			Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ScopeDisplay: "proj", ID: "1"},
+			Title:        "Item One",
+			State:        "Active",
+			WorkItemType: "Task",
+		},
+		{
+			Identity:     provider.Identity{Kind: provider.Kind(2), Scope: "proj", ScopeDisplay: "proj", ID: "2"},
+			Title:        "Item Two",
+			State:        "New",
+			WorkItemType: "Bug",
+		},
+	}
+
+	rows := workItemsToRows(items, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Mixed kinds: 6 normal + 1 leading glyph = 7 cells per row.
+	const wantCells = 7
+	if len(rows[0]) != wantCells {
+		t.Fatalf("Mixed-kind row[0] has %d cells, want %d (glyph + 6 normal)", len(rows[0]), wantCells)
+	}
+	if len(rows[1]) != wantCells {
+		t.Fatalf("Mixed-kind row[1] has %d cells, want %d", len(rows[1]), wantCells)
+	}
+
+	// Row 0 (KindAzure): glyph cell must contain the Azure glyph "⬡".
+	wantGlyph0 := display.KindGlyph(provider.KindAzure)
+	if !strings.Contains(rows[0][0], wantGlyph0) {
+		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph0)
+	}
+
+	// Row 1 (Kind(2)): glyph cell must contain the unknown-kind fallback "?".
+	wantGlyph1 := display.KindGlyph(provider.Kind(2))
+	if !strings.Contains(rows[1][0], wantGlyph1) {
+		t.Errorf("Row 1 glyph cell = %q, want to contain %q", rows[1][0], wantGlyph1)
+	}
+
+	// Style assertion: KindStyle(KindAzure) must use the Muted foreground.
+	wantFg := s.Theme.ForegroundMuted
+	gotFg := display.KindStyle(provider.KindAzure, s).GetForeground()
+	if gotFg != wantFg {
+		t.Errorf("KindStyle(KindAzure) foreground = %v, want %v (Muted)", gotFg, wantFg)
+	}
+}
+
+// TestWorkItemsToRows_AzureOnly_NoGlyphColumn verifies that Azure-only items
+// produce the standard 6-cell layout without a leading glyph cell.
+func TestWorkItemsToRows_AzureOnly_NoGlyphColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	items := []provider.WorkItem{
+		{
+			Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
+			Title:        "Item One",
+			State:        "Active",
+			WorkItemType: "Task",
+		},
+		{
+			Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "2"},
+			Title:        "Item Two",
+			State:        "New",
+			WorkItemType: "Bug",
+		},
+	}
+
+	rows := workItemsToRows(items, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Azure-only: must produce exactly 6 cells (no glyph column prepended).
+	const wantCells = 6
+	if len(rows[0]) != wantCells {
+		t.Errorf("Azure-only row[0] has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
+	}
+}
+
+// TestWorkItemsToRowsMulti_MixedKinds_GlyphColumnFirst verifies the
+// multi-project variant: [glyph] [project] [type] [id] … (8 cells) when mixed.
+func TestWorkItemsToRowsMulti_MixedKinds_GlyphColumnFirst(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	items := []provider.WorkItem{
+		{
+			Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
+			Title:        "Item One",
+			State:        "Active",
+			WorkItemType: "Task",
+		},
+		{
+			Identity:     provider.Identity{Kind: provider.Kind(2), Scope: "beta", ScopeDisplay: "Beta", ID: "2"},
+			Title:        "Item Two",
+			State:        "New",
+			WorkItemType: "Bug",
+		},
+	}
+
+	rows := workItemsToRowsMulti(items, s)
+
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+	// Mixed + multi: 7 normal (project + 6) + 1 glyph = 8 cells.
+	const wantCells = 8
+	if len(rows[0]) != wantCells {
+		t.Fatalf("Mixed-kind multi row[0] has %d cells, want %d", len(rows[0]), wantCells)
+	}
+
+	// Glyph is at position 0; project is at position 1.
+	wantGlyph := display.KindGlyph(provider.KindAzure)
+	if !strings.Contains(rows[0][0], wantGlyph) {
+		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph)
+	}
+	if rows[0][1] != "Alpha" {
+		t.Errorf("Row 0 project cell = %q, want %q", rows[0][1], "Alpha")
+	}
+}
+
+// TestWorkItemsToRowsMulti_AzureOnly_NoGlyphColumn verifies the multi-project
+// variant produces the standard 7-cell layout when all items are KindAzure.
+func TestWorkItemsToRowsMulti_AzureOnly_NoGlyphColumn(t *testing.T) {
+	s := styles.DefaultStyles()
+
+	items := []provider.WorkItem{
+		{
+			Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
+			Title:        "Item One",
+			State:        "Active",
+			WorkItemType: "Task",
+		},
+	}
+
+	rows := workItemsToRowsMulti(items, s)
+
+	if len(rows) != 1 {
+		t.Fatalf("Expected 1 row, got %d", len(rows))
+	}
+	// Azure-only multi: must be exactly 7 cells (project + 6 normal, no glyph).
+	const wantCells = 7
+	if len(rows[0]) != wantCells {
+		t.Errorf("Azure-only multi row has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
+	}
+}
+
+// ─── Column / cell count parity tests ────────────────────────────────────────
+// These tests prove that after SetItems the column headers derived by ToColumns
+// always equal the cell count produced by ToRows — the invariant that prevents
+// the index-out-of-range panic in table.renderRow.
+
+func makeWI(kind provider.Kind, id int) provider.WorkItem {
+	return provider.WorkItem{
+		Identity:     provider.Identity{Kind: kind, Scope: "proj", ScopeDisplay: "proj", ID: fmt.Sprintf("%d", id)},
+		Title:        fmt.Sprintf("Work item %d", id),
+		State:        "Active",
+		WorkItemType: "Task",
+	}
+}
+
+// TestWI_ColumnCellParity_AzureOnly checks single-project Azure-only layout:
+// 6 columns, 6 cells per row — unchanged from before this task.
+func TestWI_ColumnCellParity_AzureOnly(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s) // nil client → isMulti = false
+
+	items := []provider.WorkItem{makeWI(provider.KindAzure, 1), makeWI(provider.KindAzure, 2)}
+	m.list = m.list.SetItems(items)
+
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("Azure-only: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+	if len(cols) != 6 {
+		t.Errorf("Azure-only single: want 6 columns, got %d", len(cols))
+	}
+}
+
+// TestWI_ColumnCellParity_MixedKinds checks single-project mixed-kind layout:
+// 7 columns and 7 cells per row (glyph prepended to both).
+func TestWI_ColumnCellParity_MixedKinds(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+
+	items := []provider.WorkItem{makeWI(provider.KindAzure, 1), makeWI(provider.Kind(2), 2)}
+	m.list = m.list.SetItems(items)
+
+	cols := m.list.Table().Columns()
+	rows := m.list.Table().Rows()
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows, got 0")
+	}
+	if len(cols) != len(rows[0]) {
+		t.Errorf("Mixed-kinds: column count %d != cell count %d", len(cols), len(rows[0]))
+	}
+	if len(cols) != 7 {
+		t.Errorf("Mixed single: want 7 columns (glyph + 6), got %d", len(cols))
+	}
+	// Glyph column has empty title.
+	if cols[0].Title != "" {
+		t.Errorf("Glyph column title = %q, want empty string", cols[0].Title)
+	}
+}
+
+// TestWI_ColumnCellParity_MixedKinds_View renders through the table to prove
+// no index-out-of-range panic occurs.
+func TestWI_ColumnCellParity_MixedKinds_View(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := NewModelWithStyles(nil, s)
+
+	items := []provider.WorkItem{makeWI(provider.KindAzure, 1), makeWI(provider.Kind(2), 2)}
+	m.list = m.list.SetItems(items)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	// Must not panic.
+	view := m.View()
+	if view == "" {
+		t.Error("View() returned empty string")
 	}
 }

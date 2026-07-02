@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 )
 
 // MaxRecoverableErrors is the threshold after which errors are considered non-recoverable.
@@ -18,7 +18,7 @@ type ErrorHandler struct {
 	currentError      error
 	consecutiveErrors int
 	lastErrorTime     time.Time
-	lastKnownGoodData []azdevops.PipelineRun
+	lastKnownGoodData []provider.PipelineRun
 	partialWarning    string
 	mu                sync.RWMutex
 }
@@ -72,17 +72,17 @@ func (h *ErrorHandler) ConsecutiveErrors() int {
 }
 
 // SetLastKnownGoodData stores the last successful data fetch.
-func (h *ErrorHandler) SetLastKnownGoodData(runs []azdevops.PipelineRun) {
+func (h *ErrorHandler) SetLastKnownGoodData(runs []provider.PipelineRun) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	// Make a copy to avoid mutation
-	h.lastKnownGoodData = make([]azdevops.PipelineRun, len(runs))
+	h.lastKnownGoodData = make([]provider.PipelineRun, len(runs))
 	copy(h.lastKnownGoodData, runs)
 }
 
 // GetLastKnownGoodData returns the last successful data fetch.
-func (h *ErrorHandler) GetLastKnownGoodData() []azdevops.PipelineRun {
+func (h *ErrorHandler) GetLastKnownGoodData() []provider.PipelineRun {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -91,7 +91,7 @@ func (h *ErrorHandler) GetLastKnownGoodData() []azdevops.PipelineRun {
 	}
 
 	// Return a copy to avoid mutation
-	result := make([]azdevops.PipelineRun, len(h.lastKnownGoodData))
+	result := make([]provider.PipelineRun, len(h.lastKnownGoodData))
 	copy(result, h.lastKnownGoodData)
 	return result
 }
@@ -101,10 +101,10 @@ func (h *ErrorHandler) GetLastKnownGoodData() []azdevops.PipelineRun {
 // On partial error (PartialError), it treats data as valid but stores a warning.
 // On full error, it sets the error and returns last known good data.
 // Returns the data to display and whether there was a full error.
-func (h *ErrorHandler) ProcessUpdate(msg PipelineRunsUpdated) ([]azdevops.PipelineRun, bool) {
+func (h *ErrorHandler) ProcessUpdate(msg PipelineRunsUpdated) ([]provider.PipelineRun, bool) {
 	if msg.Err != nil {
-		// Check if this is a partial error (some projects succeeded)
-		var partialErr *azdevops.PartialError
+		// Check if this is a partial error (some backends/projects succeeded)
+		var partialErr *provider.PartialError
 		if errors.As(msg.Err, &partialErr) {
 			// Partial success: treat data as valid, set warning
 			h.SetLastKnownGoodData(msg.Runs)

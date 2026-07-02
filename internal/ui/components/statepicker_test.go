@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -15,8 +15,8 @@ func newTestStatePicker() StatePicker {
 	return NewStatePicker(appStyles)
 }
 
-func testStates() []azdevops.WorkItemTypeState {
-	return []azdevops.WorkItemTypeState{
+func testStates() []provider.WorkItemTypeState {
+	return []provider.WorkItemTypeState{
 		{Name: "New", Color: "b2b2b2", Category: "Proposed"},
 		{Name: "Active", Color: "007acc", Category: "InProgress"},
 		{Name: "Resolved", Color: "ff9d00", Category: "Resolved"},

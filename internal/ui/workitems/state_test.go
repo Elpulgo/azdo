@@ -3,7 +3,7 @@ package workitems
 import (
 	"testing"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -15,9 +15,9 @@ func TestPendingDetailRestore_OpensDetailWhenItemAppears(t *testing.T) {
 		t.Fatalf("precondition: expected ViewList, got %d", model.GetViewMode())
 	}
 
-	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
-		{ID: 12, Fields: azdevops.WorkItemFields{Title: "Other", WorkItemType: "Task"}},
-		{ID: 99, Fields: azdevops.WorkItemFields{Title: "Target", WorkItemType: "Task", State: "Active"}},
+	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []provider.WorkItem{
+		{Identity: provider.Identity{ID: "12"}, Title: "Other", WorkItemType: "Task"},
+		{Identity: provider.Identity{ID: "99"}, Title: "Target", WorkItemType: "Task", State: "Active"},
 	}})
 
 	if model.GetViewMode() != ViewDetail {
@@ -32,8 +32,8 @@ func TestPendingDetailRestore_NoMatchStaysOnList(t *testing.T) {
 	model := NewModel(nil)
 	model = model.WithPendingDetailRestore(99)
 
-	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
-		{ID: 12, Fields: azdevops.WorkItemFields{Title: "Only", WorkItemType: "Task"}},
+	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []provider.WorkItem{
+		{Identity: provider.Identity{ID: "12"}, Title: "Only", WorkItemType: "Task"},
 	}})
 
 	if model.GetViewMode() != ViewList {
@@ -46,15 +46,15 @@ func TestPendingDetailRestore_IsOneShot(t *testing.T) {
 	model := NewModel(nil)
 	model = model.WithPendingDetailRestore(99)
 
-	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
-		{ID: 12, Fields: azdevops.WorkItemFields{Title: "A", WorkItemType: "Task"}},
+	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []provider.WorkItem{
+		{Identity: provider.Identity{ID: "12"}, Title: "A", WorkItemType: "Task"},
 	}})
 	if model.GetViewMode() != ViewList {
 		t.Fatalf("precondition: ViewMode = %d, want ViewList", model.GetViewMode())
 	}
 
-	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
-		{ID: 99, Fields: azdevops.WorkItemFields{Title: "Target", WorkItemType: "Task"}},
+	model, _ = model.Update(SetWorkItemsMsg{WorkItems: []provider.WorkItem{
+		{Identity: provider.Identity{ID: "99"}, Title: "Target", WorkItemType: "Task"},
 	}})
 	if model.GetViewMode() != ViewList {
 		t.Errorf("second populate triggered restore unexpectedly (ViewMode = %d)",
@@ -71,8 +71,8 @@ func TestDetailItemID_TracksOpenAndClose(t *testing.T) {
 		t.Errorf("initial DetailItemID = %d, want 0", got)
 	}
 
-	model.list = model.list.SetItems([]azdevops.WorkItem{
-		{ID: 1337, Fields: azdevops.WorkItemFields{Title: "Test", WorkItemType: "Task", State: "Active"}},
+	model.list = model.list.SetItems([]provider.WorkItem{
+		{Identity: provider.Identity{ID: "1337"}, Title: "Test", WorkItemType: "Task", State: "Active"},
 	})
 
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})

@@ -5,9 +5,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/browser"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -31,26 +32,26 @@ type stateUpdateResultMsg struct {
 
 // statesLoadedMsg is sent when work item type states have been fetched
 type statesLoadedMsg struct {
-	states []azdevops.WorkItemTypeState
+	states []provider.WorkItemTypeState
 	err    error
 }
 
 // commentsLoadedMsg is sent when work item comments have been fetched
 type commentsLoadedMsg struct {
-	comments []azdevops.WorkItemComment
+	comments []provider.WorkItemComment
 	err      error
 }
 
 // commentPostedMsg is sent when a new comment has been posted
 type commentPostedMsg struct {
-	comment *azdevops.WorkItemComment
+	comment *provider.WorkItemComment
 	err     error
 }
 
 // DetailModel represents the work item detail view
 type DetailModel struct {
-	client        *azdevops.Client
-	workItem      azdevops.WorkItem
+	client        provider.Provider
+	workItem      provider.WorkItem
 	width         int
 	height        int
 	viewport      viewport.Model
@@ -61,7 +62,7 @@ type DetailModel struct {
 	spinner       *components.LoadingIndicator
 	statusMessage string
 
-	comments        []azdevops.WorkItemComment
+	comments        []provider.WorkItemComment
 	commentsLoading bool
 	commentsErr     error
 	commentForm     components.CommentForm
@@ -70,12 +71,12 @@ type DetailModel struct {
 }
 
 // NewDetailModel creates a new work item detail model with default styles
-func NewDetailModel(client *azdevops.Client, wi azdevops.WorkItem) *DetailModel {
+func NewDetailModel(client provider.Provider, wi provider.WorkItem) *DetailModel {
 	return NewDetailModelWithStyles(client, wi, styles.DefaultStyles())
 }
 
 // NewDetailModelWithStyles creates a new work item detail model with custom styles
-func NewDetailModelWithStyles(client *azdevops.Client, wi azdevops.WorkItem, s *styles.Styles) *DetailModel {
+func NewDetailModelWithStyles(client provider.Provider, wi provider.WorkItem, s *styles.Styles) *DetailModel {
 	spinner := components.NewLoadingIndicator(s)
 	return &DetailModel{
 		client:      client,
@@ -171,7 +172,7 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.statusMessage = fmt.Sprintf("Error: %v", msg.err)
 			return m, nil
 		}
-		m.workItem.Fields.State = msg.newState
+		m.workItem.State = msg.newState
 		m.statusMessage = fmt.Sprintf("State changed to %s", msg.newState)
 		m.updateViewportContent()
 		// Signal the list to refresh so the new state is visible
@@ -192,7 +193,7 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.statusMessage = fmt.Sprintf("Error: %v", msg.err)
 			return m, nil
 		}
-		m.statePicker.SetStates(msg.states, m.workItem.Fields.State)
+		m.statePicker.SetStates(msg.states, m.workItem.State)
 		m.statePicker.SetSize(m.width, m.height)
 		m.statePicker.Show()
 		return m, nil
@@ -249,7 +250,8 @@ func (m *DetailModel) openInBrowser() tea.Cmd {
 		m.statusMessage = "Cannot open: no Azure DevOps client"
 		return nil
 	}
-	url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), m.workItem.ID)
+	wi := m.workItem
+	url := m.client.WorkItemURL(wi.Identity.Scope, workItemNumericID(wi))
 	if url == "" {
 		m.statusMessage = "Cannot open: missing organization or project"
 		return nil
@@ -261,48 +263,53 @@ func (m *DetailModel) openInBrowser() tea.Cmd {
 
 // fetchStates fetches available states for the work item type
 func (m *DetailModel) fetchStates() tea.Cmd {
+	client := m.client
+	scope := m.workItem.Identity.Scope
+	workItemType := m.workItem.WorkItemType
 	return func() tea.Msg {
-		if m.client == nil {
+		if client == nil {
 			return statesLoadedMsg{err: fmt.Errorf("no client available")}
 		}
-		states, err := m.client.GetWorkItemTypeStates(m.workItem.Fields.WorkItemType)
+		states, err := client.GetWorkItemTypeStates(scope, workItemType)
 		return statesLoadedMsg{states: states, err: err}
 	}
 }
 
 // fetchComments fetches the work item's discussion comments (newest first).
 func (m *DetailModel) fetchComments() tea.Cmd {
-	id := m.workItem.ID
 	client := m.client
+	wi := m.workItem
 	return func() tea.Msg {
 		if client == nil {
 			return commentsLoadedMsg{err: fmt.Errorf("no client available")}
 		}
-		comments, err := client.GetWorkItemComments(id)
+		comments, err := client.GetWorkItemComments(wi.Identity.Scope, workItemNumericID(wi))
 		return commentsLoadedMsg{comments: comments, err: err}
 	}
 }
 
 // postComment sends a new comment to the API.
 func (m *DetailModel) postComment(text string) tea.Cmd {
-	id := m.workItem.ID
 	client := m.client
+	wi := m.workItem
 	return func() tea.Msg {
 		if client == nil {
 			return commentPostedMsg{err: fmt.Errorf("no client available")}
 		}
-		comment, err := client.AddWorkItemComment(id, text)
+		comment, err := client.AddWorkItemComment(wi.Identity.Scope, workItemNumericID(wi), text)
 		return commentPostedMsg{comment: comment, err: err}
 	}
 }
 
 // updateState sends the state update to the API
 func (m *DetailModel) updateState(state string) tea.Cmd {
+	client := m.client
+	wi := m.workItem
 	return func() tea.Msg {
-		if m.client == nil {
+		if client == nil {
 			return stateUpdateResultMsg{err: fmt.Errorf("no client available")}
 		}
-		err := m.client.UpdateWorkItemState(m.workItem.ID, state)
+		err := client.UpdateWorkItemState(wi.Identity.Scope, workItemNumericID(wi), state)
 		if err != nil {
 			return stateUpdateResultMsg{err: err}
 		}
@@ -322,13 +329,18 @@ func (m *DetailModel) View() string {
 	wi := m.workItem
 
 	// Fixed header with ID and title (no type icon)
-	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("#%d: %s", wi.ID, wi.Fields.Title)))
+	id := workItemNumericID(wi)
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("#%d: %s", id, wi.Title)))
 	sb.WriteString("\n")
 
 	// Type, state and priority
 	metadataStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.styles.Theme.Secondary))
-	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  P%d", wi.Fields.WorkItemType, wi.StateIcon(), wi.Fields.State, wi.Fields.Priority)))
+	prioLabel := fmt.Sprintf("P%d", wi.Priority)
+	if wi.Priority == 0 {
+		prioLabel = "-"
+	}
+	sb.WriteString(metadataStyle.Render(fmt.Sprintf("%s  |  %s %s  |  %s", wi.WorkItemType, display.StateGlyph(wi.StateCategory), wi.State, prioLabel)))
 	sb.WriteString("\n")
 
 	// Separator
@@ -362,9 +374,9 @@ func (m *DetailModel) updateViewportContent() {
 	wi := m.workItem
 
 	// Assigned To
-	if wi.Fields.AssignedTo != nil {
+	if wi.AssignedToName != "" {
 		sb.WriteString(m.styles.Label.Render("Assigned To: "))
-		sb.WriteString(wi.Fields.AssignedTo.DisplayName)
+		sb.WriteString(wi.AssignedToName)
 		sb.WriteString("\n\n")
 	} else {
 		sb.WriteString(m.styles.Label.Render("Assigned To: "))
@@ -373,21 +385,21 @@ func (m *DetailModel) updateViewportContent() {
 	}
 
 	// Iteration Path
-	if wi.Fields.IterationPath != "" {
+	if wi.IterationPath != "" {
 		sb.WriteString(m.styles.Label.Render("Iteration: "))
-		sb.WriteString(shortenIterationPath(wi.Fields.IterationPath))
+		sb.WriteString(shortenIterationPath(wi.IterationPath))
 		sb.WriteString("\n\n")
 	}
 
 	// Last changed timestamp
-	if !wi.Fields.ChangedDate.IsZero() {
+	if !wi.ChangedDate.IsZero() {
 		sb.WriteString(m.styles.Label.Render("Last changed: "))
-		sb.WriteString(wi.Fields.ChangedDate.Format("2006-01-02 15:04"))
+		sb.WriteString(wi.ChangedDate.Format("2006-01-02 15:04"))
 		sb.WriteString("\n\n")
 	}
 
 	// Tags
-	if tags := wi.TagList(); len(tags) > 0 {
+	if tags := tagList(wi.Tags); len(tags) > 0 {
 		sb.WriteString(m.styles.Label.Render("Tags: "))
 		sb.WriteString(strings.Join(tags, ", "))
 		sb.WriteString("\n\n")
@@ -395,7 +407,7 @@ func (m *DetailModel) updateViewportContent() {
 
 	// Link to work item (shown before description for quick access)
 	if m.client != nil {
-		url := buildWorkItemURL(m.client.GetOrg(), m.client.GetProject(), wi.ID)
+		url := m.client.WorkItemURL(wi.Identity.Scope, workItemNumericID(wi))
 		if url != "" {
 			sb.WriteString(hyperlink(m.styles.Link.Render("Open in browser"), url))
 			sb.WriteString("\n\n")
@@ -404,7 +416,7 @@ func (m *DetailModel) updateViewportContent() {
 
 	// Description (with HTML stripped)
 	// Bugs use ReproSteps field; other types use Description
-	effectiveDesc := wi.EffectiveDescription()
+	effectiveDesc := wiEffectiveDescription(wi)
 	if effectiveDesc != "" {
 		sb.WriteString(m.styles.Label.Render("Description"))
 		sb.WriteString("\n")
@@ -447,7 +459,7 @@ func (m *DetailModel) writeDiscussion(sb *strings.Builder) {
 	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.styles.Theme.Secondary))
 	bodyStyle := m.styles.Value.Width(m.width)
 	for _, c := range m.comments {
-		author := c.CreatedBy.DisplayName
+		author := c.AuthorName
 		if author == "" {
 			author = "Unknown"
 		}
@@ -527,12 +539,37 @@ func (m *DetailModel) GetStatusMessage() string {
 	return m.statusMessage
 }
 
-// GetWorkItem returns the work item
-func (m *DetailModel) GetWorkItem() azdevops.WorkItem {
-	return m.workItem
+// GetWorkItemID returns the numeric ID of the work item.
+func (m *DetailModel) GetWorkItemID() int {
+	return workItemNumericID(m.workItem)
 }
 
 // Helper functions
+
+// workItemNumericID converts the string Identity.ID to an int.
+// Returns 0 for unset or non-numeric IDs.
+func workItemNumericID(wi provider.WorkItem) int {
+	if wi.Identity.ID == "" {
+		return 0
+	}
+	n := 0
+	for _, ch := range wi.Identity.ID {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n
+}
+
+// wiEffectiveDescription returns the appropriate description text for the work item.
+// Bugs use ReproSteps when available; all other types use Description.
+func wiEffectiveDescription(wi provider.WorkItem) string {
+	if wi.WorkItemType == "Bug" && wi.ReproSteps != "" {
+		return wi.ReproSteps
+	}
+	return wi.Description
+}
 
 // stripHTMLTags removes HTML tags from a string and converts to plain text
 func stripHTMLTags(s string) string {
@@ -589,10 +626,3 @@ func hyperlink(text, url string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
-// buildWorkItemURL constructs the Azure DevOps URL to view a work item
-func buildWorkItemURL(org, project string, id int) string {
-	if org == "" || project == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d", org, project, id)
-}

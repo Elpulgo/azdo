@@ -16,7 +16,7 @@ import (
 type StatusBar struct {
 	styles         *styles.Styles
 	organization   string
-	project        string
+	scopes         []string
 	state          polling.ConnectionState
 	keybindings    string
 	scrollPercent  float64
@@ -44,9 +44,10 @@ func (s *StatusBar) SetOrganization(org string) {
 	s.organization = org
 }
 
-// SetProject sets the project name to display.
-func (s *StatusBar) SetProject(project string) {
-	s.project = project
+// SetScopes sets the active scope names (e.g. project display names) shown
+// in the status bar. Rendered joined and truncated to keep the bar single-line.
+func (s *StatusBar) SetScopes(scopes []string) {
+	s.scopes = scopes
 }
 
 // GetState returns the current connection state.
@@ -203,7 +204,7 @@ func (s *StatusBar) View() string {
 		parts = append(parts, updateStyle.Render(s.updateMessage))
 	}
 
-	if orgProj := s.renderOrgProject(); orgProj != "" {
+	if orgProj := s.renderOrgScopes(); orgProj != "" {
 		parts = append(parts, orgProj)
 	}
 
@@ -284,30 +285,49 @@ func (s *StatusBar) renderContextKeybindings() string {
 	return strings.Join(parts, sep)
 }
 
-// renderOrgProject renders the organization and project section.
-func (s *StatusBar) renderOrgProject() string {
-	if s.organization == "" && s.project == "" {
+// scopesDisplayCap is the maximum number of scope names shown before
+// truncating with "+N more". Separator between names is ", ".
+const scopesDisplayCap = 3
+
+// renderOrgScopes renders the organization (once) and the active scopes
+// joined and truncated to keep the status bar single-line.
+func (s *StatusBar) renderOrgScopes() string {
+	scopesStr := s.formatScopes()
+	if s.organization == "" && scopesStr == "" {
 		return ""
 	}
 
 	sepStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(s.styles.Theme.Border))
 
-	orgProjectStyle := lipgloss.NewStyle().
+	orgScopeStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(s.styles.Theme.Secondary)).
 		Bold(true)
 
 	sep := sepStyle.Render("/")
 
-	if s.organization != "" && s.project != "" {
-		return orgProjectStyle.Render(s.organization) + sep + orgProjectStyle.Render(s.project)
+	if s.organization != "" && scopesStr != "" {
+		return orgScopeStyle.Render(s.organization) + sep + orgScopeStyle.Render(scopesStr)
 	}
 
 	if s.organization != "" {
-		return orgProjectStyle.Render(s.organization)
+		return orgScopeStyle.Render(s.organization)
 	}
 
-	return orgProjectStyle.Render(s.project)
+	return orgScopeStyle.Render(scopesStr)
+}
+
+// formatScopes joins scope names, truncating past scopesDisplayCap with "+N more".
+func (s *StatusBar) formatScopes() string {
+	if len(s.scopes) == 0 {
+		return ""
+	}
+	if len(s.scopes) <= scopesDisplayCap {
+		return strings.Join(s.scopes, ", ")
+	}
+	visible := strings.Join(s.scopes[:scopesDisplayCap], ", ")
+	extra := len(s.scopes) - scopesDisplayCap
+	return fmt.Sprintf("%s +%d more", visible, extra)
 }
 
 // renderScrollPercent renders the scroll percentage indicator.

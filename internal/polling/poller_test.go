@@ -5,25 +5,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 )
 
 // MockClient implements a minimal interface for testing
 type MockClient struct {
-	Runs         []azdevops.PipelineRun
+	Runs         []provider.PipelineRun
 	Err          error
 	CallCount    int
 	RequestedTop int
 }
 
-func (m *MockClient) ListPipelineRuns(top int) ([]azdevops.PipelineRun, error) {
+func (m *MockClient) ListPipelineRuns(top int, _ provider.ListOpts) ([]provider.PipelineRun, error) {
 	m.CallCount++
 	m.RequestedTop = top
 	return m.Runs, m.Err
 }
 
-// Compile-time check: MultiClient must satisfy PipelineClient interface.
-var _ PipelineClient = (*azdevops.MultiClient)(nil)
+// Compile-time check: the composite provider must satisfy PipelineClient.
+var _ PipelineClient = (*provider.CompositeProvider)(nil)
 
 func TestPoller_DefaultInterval(t *testing.T) {
 	client := &MockClient{}
@@ -44,9 +44,9 @@ func TestPoller_MinimumInterval(t *testing.T) {
 }
 
 func TestPoller_FetchPipelineRuns_Success(t *testing.T) {
-	expectedRuns := []azdevops.PipelineRun{
-		{ID: 1, BuildNumber: "2024.1"},
-		{ID: 2, BuildNumber: "2024.2"},
+	expectedRuns := []provider.PipelineRun{
+		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1"},
+		{Identity: provider.Identity{ID: "2"}, BuildNumber: "2024.2"},
 	}
 	client := &MockClient{Runs: expectedRuns}
 	p := NewPoller(client, 30*time.Second)
@@ -196,5 +196,41 @@ func TestPoller_CustomRunCount(t *testing.T) {
 
 	if client.RequestedTop != 50 {
 		t.Errorf("expected to request 50 runs, got %d", client.RequestedTop)
+	}
+}
+
+// TestPoller_NilClient_* guards against the typed-nil boxed-interface panic that
+// occurs when a GitHub-only user has no Azure backend. The poller must no-op
+// (return nil / skip fetch) rather than panic when client == nil.
+
+func TestPoller_NilClient_FetchPipelineRuns_ReturnsNil(t *testing.T) {
+	var pc PipelineClient // untyped nil — interface value is genuinely nil
+	p := NewPoller(pc, 30*time.Second)
+
+	cmd := p.FetchPipelineRuns()
+	if cmd != nil {
+		t.Error("FetchPipelineRuns should return nil when client is nil")
+	}
+}
+
+func TestPoller_NilClient_OnTick_ReturnsNil(t *testing.T) {
+	var pc PipelineClient
+	p := NewPoller(pc, 30*time.Second)
+
+	cmd := p.OnTick()
+	if cmd != nil {
+		t.Error("OnTick should return nil when client is nil")
+	}
+}
+
+func TestPoller_NilClient_StartPolling_StillWorks(t *testing.T) {
+	// StartPolling only sets a timer; it does not touch client.
+	// It must still return a non-nil cmd when the poller is not stopped.
+	var pc PipelineClient
+	p := NewPoller(pc, 30*time.Second)
+
+	cmd := p.StartPolling()
+	if cmd == nil {
+		t.Error("StartPolling should return a timer command even when client is nil")
 	}
 }

@@ -2,13 +2,16 @@ package pipelines
 
 import (
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -24,8 +27,8 @@ const (
 
 // Model represents the pipeline list view with sub-views
 type Model struct {
-	list         listview.Model[azdevops.PipelineRun]
-	client       *azdevops.MultiClient
+	list         listview.Model[provider.PipelineRun]
+	client       provider.Provider
 	logViewer    *LogViewerModel
 	viewMode     ViewMode
 	width        int
@@ -33,35 +36,52 @@ type Model struct {
 	styles       *styles.Styles
 	activeStatus string
 	statusPicker components.ListPicker
-	allRuns      []azdevops.PipelineRun
+	allRuns      []provider.PipelineRun
 }
 
 // NewModel creates a new pipeline list model with default styles
-func NewModel(client *azdevops.MultiClient) Model {
+func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// runBaseColumns are the per-row column specs for the pipeline run list,
+// excluding the optional project and glyph columns.
+var runBaseColumns = []listview.ColumnSpec{
+	{Title: "Status", WidthPct: 10, MinWidth: 10},
+	{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
+	{Title: "Branch", WidthPct: 20, MinWidth: 10},
+	{Title: "Build", WidthPct: 24, MinWidth: 8},
+	{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
+	{Title: "Duration", WidthPct: 10, MinWidth: 8},
+}
+
 // NewModelWithStyles creates a new pipeline list model with custom styles
-func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
+func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Status", WidthPct: 10, MinWidth: 10},
-		{Title: "Pipeline", WidthPct: 12, MinWidth: 15},
-		{Title: "Branch", WidthPct: 20, MinWidth: 10},
-		{Title: "Build", WidthPct: 24, MinWidth: 8},
-		{Title: "Timestamp", WidthPct: 15, MinWidth: 16},
-		{Title: "Duration", WidthPct: 10, MinWidth: 8},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in runsToRows / runsToRowsMulti exactly:
+	//   [glyph?] [project?] [status] [pipeline] [branch] [build] [timestamp] [duration]
+	toColumns := func(items []provider.PipelineRun) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, run := range items {
+			kinds[i] = run.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(runBaseColumns))
+		copy(cols, runBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 12, MinWidth: 10}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := runsToRows
 	if isMulti {
@@ -73,21 +93,17 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		filterFunc = filterPipelineRunMulti
 	}
 
-	cfg := listview.Config[azdevops.PipelineRun]{
-		Columns:        columns,
+	cfg := listview.Config[provider.PipelineRun]{
 		LoadingMessage: "Loading pipeline runs...",
 		EntityName:     "pipeline runs",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
-			return fetchPipelineRunsMulti(client)
+			return fetchPipelineRuns(client)
 		},
-		EnterDetail: func(item azdevops.PipelineRun, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			var projectClient *azdevops.Client
-			if client != nil {
-				projectClient = client.ClientFor(item.ProjectName)
-			}
-			d := NewDetailModelWithStyles(projectClient, item, st)
+		EnterDetail: func(item provider.PipelineRun, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
+			d := NewDetailModelWithStyles(client, item, st)
 			d.SetSize(w, h)
 			return &detailAdapter{d}, d.Init()
 		},
@@ -142,6 +158,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.allRuns = msg.Runs
 		m.list = m.list.SetItems(m.applyStatusFilter(msg.Runs))
 		return m, nil
+
 	case components.ListPickerSelectedMsg:
 		m.activeStatus = msg.Value
 		m.statusPicker.Hide()
@@ -254,19 +271,16 @@ func (m Model) updateLogViewer(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) enterLogView(adapter *detailAdapter) (Model, tea.Cmd) {
 	detail := adapter.model
 	selected := detail.SelectedItem()
-	if selected == nil || selected.Record.Log == nil {
+	if selected == nil || selected.Record.LogID == 0 {
 		return m, nil
 	}
 
 	run := detail.GetRun()
-	var projectClient *azdevops.Client
-	if m.client != nil {
-		projectClient = m.client.ClientFor(run.ProjectName)
-	}
 	m.logViewer = NewLogViewerModelWithStyles(
-		projectClient,
-		run.ID,
-		selected.Record.Log.ID,
+		m.client,
+		run.Identity.Scope,
+		parseBuildID(run.Identity.ID),
+		selected.Record.LogID,
 		selected.Record.Name,
 		m.styles,
 	)
@@ -362,84 +376,100 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// runsToRows converts pipeline runs to table rows
-func runsToRows(items []azdevops.PipelineRun, s *styles.Styles) []table.Row {
+// runsToRows converts pipeline runs to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
+func runsToRows(items []provider.PipelineRun, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, run := range items {
+		kinds[i] = run.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
-		rows[i] = table.Row{
-			statusIconWithStyles(run.Status, run.Result, s),
-			run.Definition.Name,
-			run.BranchShortName(),
+		cells := table.Row{
+			statusIconWithStyles(run.RunStatus, s),
+			run.DefinitionName,
+			branchShortName(run.SourceBranch),
 			run.BuildNumber,
-			run.Timestamp(),
-			run.Duration(),
+			runTimestamp(run.QueueTime),
+			runDuration(run.StartTime, run.FinishTime),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(run.Identity.Kind, s).Render(display.KindGlyph(run.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
 
-// statusIconWithStyles returns a colored status icon using the provided styles
-func statusIconWithStyles(status, result string, s *styles.Styles) string {
-	statusLower := strings.ToLower(status)
-	resultLower := strings.ToLower(result)
-
-	switch {
-	case statusLower == "inprogress":
-		return s.Info.Render("● Running")
-	case statusLower == "notstarted":
-		return s.Info.Render("○ Queued")
-	case statusLower == "canceling":
-		return s.Warning.Render("⊘ Cancel")
-	case resultLower == "succeeded":
-		return s.Success.Render("✓ Success")
-	case resultLower == "failed":
-		return s.Error.Render("✗ Failed")
-	case resultLower == "canceled":
-		return s.Muted.Render("○ Cancel")
-	case resultLower == "partiallysucceeded":
-		return s.Warning.Render("◐ Partial")
-	default:
-		return s.Muted.Render(fmt.Sprintf("%s/%s", status, result))
+// statusIconWithStyles returns a colored status icon using the provided styles.
+// It uses the neutral RunStatus enum and the display map so theming is
+// centralised in internal/ui/display.
+func statusIconWithStyles(runStatus provider.RunStatus, s *styles.Styles) string {
+	glyph := display.RunStatusGlyph(runStatus)
+	label := display.RunStatusLabel(runStatus)
+	style := display.RunStatusStyle(runStatus, s)
+	if label == "" {
+		// RunStatusUnknown (and detail-only statuses) have no list label;
+		// render just the glyph to avoid showing an empty string.
+		return style.Render(glyph)
 	}
+	return style.Render(glyph + " " + label)
 }
 
 // runsToRowsMulti converts pipeline runs to table rows with a Project column.
-func runsToRowsMulti(items []azdevops.PipelineRun, s *styles.Styles) []table.Row {
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [status] [pipeline] …
+func runsToRowsMulti(items []provider.PipelineRun, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, run := range items {
+		kinds[i] = run.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, run := range items {
-		rows[i] = table.Row{
-			run.ProjectDisplayName,
-			statusIconWithStyles(run.Status, run.Result, s),
-			run.Definition.Name,
-			run.BranchShortName(),
+		cells := table.Row{
+			run.Identity.ScopeDisplay,
+			statusIconWithStyles(run.RunStatus, s),
+			run.DefinitionName,
+			branchShortName(run.SourceBranch),
 			run.BuildNumber,
-			run.Timestamp(),
-			run.Duration(),
+			runTimestamp(run.QueueTime),
+			runDuration(run.StartTime, run.FinishTime),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(run.Identity.Kind, s).Render(display.KindGlyph(run.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
 
 // filterPipelineRun returns true if the pipeline run matches the search query.
-func filterPipelineRun(run azdevops.PipelineRun, query string) bool {
+func filterPipelineRun(run provider.PipelineRun, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	return strings.Contains(strings.ToLower(run.Definition.Name), q) ||
+	return strings.Contains(strings.ToLower(run.DefinitionName), q) ||
 		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
 		strings.Contains(strings.ToLower(run.BuildNumber), q)
 }
 
 // filterPipelineRunMulti matches pipeline run fields including project name.
-func filterPipelineRunMulti(run azdevops.PipelineRun, query string) bool {
+func filterPipelineRunMulti(run provider.PipelineRun, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	return strings.Contains(strings.ToLower(run.ProjectDisplayName), q) ||
-		strings.Contains(strings.ToLower(run.Project.Name), q) ||
-		strings.Contains(strings.ToLower(run.Definition.Name), q) ||
+	return strings.Contains(strings.ToLower(run.Identity.ScopeDisplay), q) ||
+		strings.Contains(strings.ToLower(run.Identity.Scope), q) ||
+		strings.Contains(strings.ToLower(run.DefinitionName), q) ||
 		strings.Contains(strings.ToLower(run.SourceBranch), q) ||
 		strings.Contains(strings.ToLower(run.BuildNumber), q)
 }
@@ -460,35 +490,17 @@ func getPipelineStatuses() []pipelineStatus {
 	}
 }
 
-func getStatusKey(status, result string) string {
-	statusLower := strings.ToLower(status)
-	resultLower := strings.ToLower(result)
-
-	switch {
-	case statusLower == "inprogress":
-		return "Running"
-	case statusLower == "notstarted":
-		return "Queued"
-	case resultLower == "succeeded":
-		return "Success"
-	case resultLower == "failed":
-		return "Failed"
-	case resultLower == "canceled":
-		return "Cancel"
-	case resultLower == "partiallysucceeded":
-		return "Partial"
-	default:
-		return ""
-	}
+func getStatusKey(runStatus provider.RunStatus) string {
+	return display.RunStatusLabel(runStatus)
 }
 
-func (m Model) applyStatusFilter(runs []azdevops.PipelineRun) []azdevops.PipelineRun {
+func (m Model) applyStatusFilter(runs []provider.PipelineRun) []provider.PipelineRun {
 	if m.activeStatus == "" {
 		return runs
 	}
-	var filtered []azdevops.PipelineRun
+	var filtered []provider.PipelineRun
 	for _, run := range runs {
-		if getStatusKey(run.Status, run.Result) == m.activeStatus {
+		if getStatusKey(run.RunStatus) == m.activeStatus {
 			filtered = append(filtered, run)
 		}
 	}
@@ -518,22 +530,57 @@ func (m *Model) SetStatusPickerSize(width, height int) {
 // Messages
 
 type pipelineRunsMsg struct {
-	runs []azdevops.PipelineRun
+	runs []provider.PipelineRun
 	err  error
 }
 
 // SetRunsMsg is a message to directly set the pipeline runs (from polling)
 type SetRunsMsg struct {
-	Runs []azdevops.PipelineRun
+	Runs []provider.PipelineRun
 }
 
-// fetchPipelineRunsMulti fetches pipeline runs from all projects via MultiClient.
-func fetchPipelineRunsMulti(client *azdevops.MultiClient) tea.Cmd {
+// fetchPipelineRuns fetches pipeline runs via the provider.
+func fetchPipelineRuns(client provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return pipelineRunsMsg{runs: nil, err: nil}
 		}
-		runs, err := client.ListPipelineRuns(30)
+		runs, err := client.ListPipelineRuns(30, provider.ListOpts{})
 		return pipelineRunsMsg{runs: runs, err: err}
 	}
+}
+
+// parseBuildID parses the numeric build ID from the Identity.ID string.
+// Returns 0 if the string cannot be parsed.
+func parseBuildID(id string) int {
+	n, _ := strconv.Atoi(id)
+	return n
+}
+
+// branchShortName strips the refs/heads/ or refs/tags/ prefix from a branch ref.
+func branchShortName(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return strings.TrimPrefix(ref, "refs/heads/")
+	}
+	if strings.HasPrefix(ref, "refs/tags/") {
+		return strings.TrimPrefix(ref, "refs/tags/")
+	}
+	return ref
+}
+
+// runTimestamp formats a queue time for display in the pipeline table.
+func runTimestamp(t time.Time) string {
+	return t.Format("2006-01-02 15:04")
+}
+
+// runDuration returns a human-readable duration for a pipeline run.
+func runDuration(startTime, finishTime *time.Time) string {
+	if startTime == nil || finishTime == nil {
+		return "-"
+	}
+	d := finishTime.Sub(*startTime)
+	return formatDuration(d)
 }

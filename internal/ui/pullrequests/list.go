@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
+	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -24,8 +26,8 @@ const (
 
 // Model represents the pull request list view with sub-views
 type Model struct {
-	list           listview.Model[azdevops.PullRequest]
-	client         *azdevops.MultiClient
+	list           listview.Model[provider.PullRequest]
+	client         provider.Provider
 	diffView       *DiffModel
 	viewMode       ViewMode
 	width          int
@@ -33,9 +35,9 @@ type Model struct {
 	styles         *styles.Styles
 	myPRsOnly      bool
 	asReviewerOnly bool
-	allPRs         []azdevops.PullRequest
-	myPRs          []azdevops.PullRequest
-	asReviewerPRs  []azdevops.PullRequest
+	allPRs         []provider.PullRequest
+	myPRs          []provider.PullRequest
+	asReviewerPRs  []provider.PullRequest
 
 	// pendingDetailID is the PR ID requested by startup state restore.
 	// Cleared on the first populate (whether or not the lookup succeeded)
@@ -45,31 +47,49 @@ type Model struct {
 }
 
 // NewModel creates a new pull request list model with default styles
-func NewModel(client *azdevops.MultiClient) Model {
+func NewModel(client provider.Provider) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
+// prBaseColumns are the per-row column specs for the pull request list,
+// excluding the optional project and glyph columns. They are defined once
+// and copied inside ToColumns to avoid mutating the package-level slice.
+var prBaseColumns = []listview.ColumnSpec{
+	{Title: "Status", WidthPct: 10, MinWidth: 8},
+	{Title: "Title", WidthPct: 30, MinWidth: 15},
+	{Title: "Branches", WidthPct: 20, MinWidth: 12},
+	{Title: "Author", WidthPct: 15, MinWidth: 10},
+	{Title: "Repo", WidthPct: 15, MinWidth: 10},
+	{Title: "Reviews", WidthPct: 10, MinWidth: 6},
+}
+
 // NewModelWithStyles creates a new pull request list model with custom styles
-func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
+func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	columns := []listview.ColumnSpec{
-		{Title: "Status", WidthPct: 10, MinWidth: 8},
-		{Title: "Title", WidthPct: 30, MinWidth: 15},
-		{Title: "Branches", WidthPct: 20, MinWidth: 12},
-		{Title: "Author", WidthPct: 15, MinWidth: 10},
-		{Title: "Repo", WidthPct: 15, MinWidth: 10},
-		{Title: "Reviews", WidthPct: 10, MinWidth: 6},
-	}
+	// toColumns derives column specs from the current items, mirroring the
+	// cell gating in prsToRows / prsToRowsMulti exactly:
+	//   [glyph?] [project?] [status] [title] [branches] [author] [repo] [reviews]
+	toColumns := func(items []provider.PullRequest) []listview.ColumnSpec {
+		kinds := make([]provider.Kind, len(items))
+		for i, pr := range items {
+			kinds[i] = pr.Identity.Kind
+		}
+		mixed := display.MixedKinds(kinds)
 
-	if isMulti {
-		columns = append(
-			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}},
-			columns...,
-		)
-	}
+		cols := make([]listview.ColumnSpec, len(prBaseColumns))
+		copy(cols, prBaseColumns)
 
-	listview.NormalizeWidths(columns)
+		if isMulti {
+			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 10}}, cols...)
+		}
+		if mixed {
+			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
+		}
+
+		listview.NormalizeWidths(cols)
+		return cols
+	}
 
 	toRows := prsToRows
 	if isMulti {
@@ -81,21 +101,17 @@ func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 		filterFunc = filterPRMulti
 	}
 
-	cfg := listview.Config[azdevops.PullRequest]{
-		Columns:        columns,
+	cfg := listview.Config[provider.PullRequest]{
 		LoadingMessage: "Loading pull requests...",
 		EntityName:     "pull requests",
 		MinWidth:       50,
 		ToRows:         toRows,
+		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
 			return fetchPullRequestsMulti(client)
 		},
-		EnterDetail: func(item azdevops.PullRequest, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			var projectClient *azdevops.Client
-			if client != nil {
-				projectClient = client.ClientFor(item.ProjectName)
-			}
-			d := NewDetailModelWithStyles(projectClient, item, st)
+		EnterDetail: func(item provider.PullRequest, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
+			d := NewDetailModelWithStyles(client, item, st)
 			d.SetSize(w, h)
 			return &detailAdapter{d}, d.Init()
 		},
@@ -266,11 +282,7 @@ func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 			detail := adapter.model
 			pr := detail.GetPR()
 			threads := detail.GetThreads()
-			var projectClient *azdevops.Client
-			if m.client != nil {
-				projectClient = m.client.ClientFor(pr.ProjectName)
-			}
-			m.diffView = NewDiffModel(projectClient, pr, threads, m.styles)
+			m.diffView = NewDiffModel(m.client, pr, threads, m.styles)
 			m.diffView.SetSize(m.width, m.height)
 			m.viewMode = ViewDiff
 			// Open directly into general comments view
@@ -284,11 +296,7 @@ func (m Model) updateDetail(msg tea.Msg) (Model, tea.Cmd) {
 			detail := adapter.model
 			pr := detail.GetPR()
 			threads := detail.GetThreads()
-			var projectClient *azdevops.Client
-			if m.client != nil {
-				projectClient = m.client.ClientFor(pr.ProjectName)
-			}
-			m.diffView = NewDiffModel(projectClient, pr, threads, m.styles)
+			m.diffView = NewDiffModel(m.client, pr, threads, m.styles)
 			m.diffView.SetSize(m.width, m.height)
 			m.viewMode = ViewDiff
 			// Initialize and immediately open the selected file
@@ -415,7 +423,7 @@ func (m Model) DetailItemID() int {
 	if !ok || adapter == nil {
 		return 0
 	}
-	return adapter.model.GetPR().ID
+	return adapter.model.GetPRID()
 }
 
 // WithPendingDetailRestore queues a request to open the PR with this ID in
@@ -439,8 +447,8 @@ func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
 	m.pendingDetailID = 0
 	m.pendingRestoreHandled = true
 
-	idx := m.list.FindIndex(func(pr azdevops.PullRequest) bool {
-		return pr.ID == target
+	idx := m.list.FindIndex(func(pr provider.PullRequest) bool {
+		return prNumericID(pr) == target
 	})
 	if idx < 0 {
 		return m, nil
@@ -502,45 +510,71 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// prsToRows converts pull requests to table rows
-func prsToRows(items []azdevops.PullRequest, s *styles.Styles) []table.Row {
+// branchShortName strips the refs/heads/ prefix from a ref name.
+func branchShortName(ref string) string {
+	return strings.TrimPrefix(ref, "refs/heads/")
+}
+
+// prsToRows converts pull requests to table rows.
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended to each row so the
+// user can tell which backend each entry originates from.
+func prsToRows(items []provider.PullRequest, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, pr := range items {
+		kinds[i] = pr.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
-		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
-		rows[i] = table.Row{
-			statusIconWithStyles(pr.Status, pr.IsDraft, s),
+		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
+		cells := table.Row{
+			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
-			pr.CreatedBy.DisplayName,
-			pr.Repository.Name,
+			pr.CreatedByName,
+			pr.RepositoryName,
 			voteIconWithStyles(pr.Reviewers, s),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(pr.Identity.Kind, s).Render(display.KindGlyph(pr.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
 
-// statusIconWithStyles returns a colored status icon using the provided styles
-func statusIconWithStyles(status string, isDraft bool, s *styles.Styles) string {
-	statusLower := strings.ToLower(status)
-
+// statusIconWithStyles returns a colored status icon using the provided styles.
+// isDraft takes precedence over StatusCategory. For the "completed" (merged) status,
+// the label "Merged" is used. For unknown/unmapped statuses the raw status string is
+// used as fallback via a separate path in the caller.
+func statusIconWithStyles(statusCat provider.StateCategory, isDraft bool, s *styles.Styles) string {
 	if isDraft {
 		return s.Warning.Render("◐ Draft")
 	}
 
-	switch statusLower {
-	case "active":
+	switch statusCat {
+	case provider.StateCategoryActive:
+		// PR active uses filled circle, not the work-item half-circle glyph.
 		return s.Info.Render("● Active")
-	case "completed":
-		return s.Success.Render("✓ Merged")
-	case "abandoned":
+	case provider.StateCategoryClosedDone:
+		// PR "completed" renders as "Merged", not "Closed".
+		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat) + " Merged")
+	case provider.StateCategoryRemoved:
+		// PR "abandoned" renders as "○ Closed" with Muted style, not the work-item ✗/Error.
 		return s.Muted.Render("○ Closed")
 	default:
-		return s.Muted.Render(status)
+		// Unknown/custom: the raw status string is unavailable at this point
+		// so fall back to the glyph-only rendering from the display map.
+		return display.StateStyle(statusCat, s).Render(display.StateGlyph(statusCat))
 	}
 }
 
-// voteIconWithStyles returns a summary icon for reviewer votes using provided styles
-func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string {
+// voteIconWithStyles returns a summary icon for reviewer votes using provided styles.
+// Priority order (most significant wins): Rejected > WaitingForAuthor >
+// ApprovedWithSuggestions > Approved > NoVote.
+func voteIconWithStyles(reviewers []provider.Reviewer, s *styles.Styles) string {
 	if len(reviewers) == 0 {
 		return s.Muted.Render("-")
 	}
@@ -552,16 +586,16 @@ func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string 
 	hasNoVote := false
 
 	for _, r := range reviewers {
-		switch r.Vote {
-		case -10:
+		switch r.Kind {
+		case provider.VoteKindRejected:
 			hasRejected = true
-		case -5:
+		case provider.VoteKindWaitingForAuthor:
 			hasWaiting = true
-		case 5:
+		case provider.VoteKindApprovedWithSuggestions:
 			hasApprovedWithSuggestions = true
-		case 10:
+		case provider.VoteKindApproved:
 			hasApproved = true
-		case 0:
+		case provider.VoteKindNoVote:
 			hasNoVote = true
 		}
 	}
@@ -570,117 +604,138 @@ func voteIconWithStyles(reviewers []azdevops.Reviewer, s *styles.Styles) string 
 
 	switch {
 	case hasRejected:
-		return s.Error.Render(fmt.Sprintf("✗ %d", count))
+		return display.VoteStyle(provider.VoteKindRejected, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindRejected), count))
 	case hasWaiting:
-		return s.Warning.Render(fmt.Sprintf("◐ %d", count))
+		return display.VoteStyle(provider.VoteKindWaitingForAuthor, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindWaitingForAuthor), count))
 	case hasApprovedWithSuggestions:
-		return s.Warning.Render(fmt.Sprintf("~ %d", count))
+		return display.VoteStyle(provider.VoteKindApprovedWithSuggestions, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindApprovedWithSuggestions), count))
 	case hasApproved:
-		return s.Success.Render(fmt.Sprintf("✓ %d", count))
+		return display.VoteStyle(provider.VoteKindApproved, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindApproved), count))
 	case hasNoVote:
-		return s.Muted.Render(fmt.Sprintf("○ %d", count))
+		return display.VoteStyle(provider.VoteKindNoVote, s).Render(fmt.Sprintf("%s %d", display.VoteGlyph(provider.VoteKindNoVote), count))
 	default:
 		return s.Muted.Render(fmt.Sprintf("- %d", count))
 	}
 }
 
 // prsToRowsMulti converts pull requests to table rows with a Project column.
-func prsToRowsMulti(items []azdevops.PullRequest, s *styles.Styles) []table.Row {
+// When the items span more than one distinct provider Kind (detected via
+// display.MixedKinds), a leading glyph cell is prepended before the Project
+// column so the layout is: [glyph?] [project] [status] [title] …
+func prsToRowsMulti(items []provider.PullRequest, s *styles.Styles) []table.Row {
+	kinds := make([]provider.Kind, len(items))
+	for i, pr := range items {
+		kinds[i] = pr.Identity.Kind
+	}
+	mixed := display.MixedKinds(kinds)
+
 	rows := make([]table.Row, len(items))
 	for i, pr := range items {
-		branchInfo := fmt.Sprintf("%s → %s", pr.SourceBranchShortName(), pr.TargetBranchShortName())
-		rows[i] = table.Row{
-			pr.ProjectDisplayName,
-			statusIconWithStyles(pr.Status, pr.IsDraft, s),
+		branchInfo := fmt.Sprintf("%s → %s", branchShortName(pr.SourceRefName), branchShortName(pr.TargetRefName))
+		cells := table.Row{
+			pr.Identity.ScopeDisplay,
+			statusIconWithStyles(pr.StatusCategory, pr.IsDraft, s),
 			pr.Title,
 			branchInfo,
-			pr.CreatedBy.DisplayName,
-			pr.Repository.Name,
+			pr.CreatedByName,
+			pr.RepositoryName,
 			voteIconWithStyles(pr.Reviewers, s),
 		}
+		if mixed {
+			cells = append(table.Row{display.KindStyle(pr.Identity.Kind, s).Render(display.KindGlyph(pr.Identity.Kind))}, cells...)
+		}
+		rows[i] = cells
 	}
 	return rows
 }
 
 // filterPR returns true if the pull request matches the search query.
-func filterPR(pr azdevops.PullRequest, query string) bool {
+func filterPR(pr provider.PullRequest, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
 	return strings.Contains(strings.ToLower(pr.Title), q) ||
-		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
-		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||
+		strings.Contains(strings.ToLower(pr.CreatedByName), q) ||
+		strings.Contains(strings.ToLower(pr.RepositoryName), q) ||
 		strings.Contains(strings.ToLower(pr.SourceRefName), q) ||
 		strings.Contains(strings.ToLower(pr.TargetRefName), q)
 }
 
 // filterPRMulti matches PR fields including project name.
-func filterPRMulti(pr azdevops.PullRequest, query string) bool {
+func filterPRMulti(pr provider.PullRequest, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	return strings.Contains(strings.ToLower(pr.ProjectDisplayName), q) ||
-		strings.Contains(strings.ToLower(pr.ProjectName), q) ||
+	return strings.Contains(strings.ToLower(pr.Identity.ScopeDisplay), q) ||
+		strings.Contains(strings.ToLower(pr.Identity.Scope), q) ||
 		strings.Contains(strings.ToLower(pr.Title), q) ||
-		strings.Contains(strings.ToLower(pr.CreatedBy.DisplayName), q) ||
-		strings.Contains(strings.ToLower(pr.Repository.Name), q) ||
+		strings.Contains(strings.ToLower(pr.CreatedByName), q) ||
+		strings.Contains(strings.ToLower(pr.RepositoryName), q) ||
 		strings.Contains(strings.ToLower(pr.SourceRefName), q) ||
 		strings.Contains(strings.ToLower(pr.TargetRefName), q)
+}
+
+// prNumericID parses the numeric PR ID from Identity.ID.
+// Returns 0 if the ID cannot be parsed.
+func prNumericID(pr provider.PullRequest) int {
+	id := 0
+	fmt.Sscanf(pr.Identity.ID, "%d", &id)
+	return id
 }
 
 // Messages
 
 type pullRequestsMsg struct {
-	prs []azdevops.PullRequest
+	prs []provider.PullRequest
 	err error
 }
 
 type myPullRequestsMsg struct {
-	prs []azdevops.PullRequest
+	prs []provider.PullRequest
 	err error
 }
 
 type asReviewerPullRequestsMsg struct {
-	prs []azdevops.PullRequest
+	prs []provider.PullRequest
 	err error
 }
 
 // SetPRsMsg is a message to directly set the pull requests (from polling)
 type SetPRsMsg struct {
-	PRs []azdevops.PullRequest
+	PRs []provider.PullRequest
 }
 
-// fetchPullRequestsMulti fetches pull requests from all projects via MultiClient.
-func fetchPullRequestsMulti(client *azdevops.MultiClient) tea.Cmd {
+// fetchPullRequestsMulti fetches pull requests from all projects via the provider.
+func fetchPullRequestsMulti(client provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return pullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListPullRequests(25)
+		prs, err := client.ListPullRequests(25, provider.ListOpts{})
 		return pullRequestsMsg{prs: prs, err: err}
 	}
 }
 
 // fetchMyPullRequestsMulti fetches pull requests created by the authenticated user.
-func fetchMyPullRequestsMulti(client *azdevops.MultiClient) tea.Cmd {
+func fetchMyPullRequestsMulti(client provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return myPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListMyPullRequests(25)
+		prs, err := client.ListMyPullRequests(25, provider.ListOpts{Mine: true})
 		return myPullRequestsMsg{prs: prs, err: err}
 	}
 }
 
 // fetchPullRequestsAsReviewerMulti fetches pull requests where the authenticated user is a reviewer.
-func fetchPullRequestsAsReviewerMulti(client *azdevops.MultiClient) tea.Cmd {
+func fetchPullRequestsAsReviewerMulti(client provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return asReviewerPullRequestsMsg{prs: nil, err: nil}
 		}
-		prs, err := client.ListPullRequestsAsReviewer(25)
+		prs, err := client.ListPullRequestsAsReviewer(25, provider.ListOpts{})
 		return asReviewerPullRequestsMsg{prs: prs, err: err}
 	}
 }
