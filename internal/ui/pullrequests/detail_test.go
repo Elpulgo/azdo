@@ -7,19 +7,30 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
+// newTestProvider creates an azdevops.Adapter wrapping a real MultiClient for tests
+// that need a live URL-generating provider.
+func newTestProvider(org, project, pat string) provider.Provider {
+	mc, err := azdevops.NewMultiClient(org, []string{project}, pat, nil)
+	if err != nil {
+		panic(fmt.Sprintf("newTestProvider: %v", err))
+	}
+	return azdevops.NewAdapter(mc)
+}
+
 func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:            101,
+	pr := provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
 		Title:         "Test PR",
 		SourceRefName: "refs/heads/feature/test",
 		TargetRefName: "refs/heads/main",
-		Repository:    azdevops.Repository{ID: "repo-123"},
+		RepositoryID:  "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 
@@ -27,11 +38,11 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 	model.SetSize(80, height)
 
 	// Create enough files to fill viewport
-	files := make([]azdevops.IterationChange, 30)
+	files := make([]provider.IterationChange, 30)
 	for i := range files {
-		files[i] = azdevops.IterationChange{
+		files[i] = provider.IterationChange{
 			ChangeID:   i + 1,
-			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			Path:       fmt.Sprintf("/src/file%d.go", i),
 			ChangeType: "edit",
 		}
 	}
@@ -46,7 +57,7 @@ func TestDetailModel_ViewportUsesFullAvailableHeight(t *testing.T) {
 }
 
 func TestDetailModel_WithStyles(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 123, Title: "Test"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "123"}, Title: "Test"}
 	customStyles := styles.NewStyles(styles.GetThemeByNameWithFallback("nord"))
 	m := NewDetailModelWithStyles(nil, pr, customStyles)
 
@@ -58,10 +69,14 @@ func TestDetailModel_WithStyles(t *testing.T) {
 func TestIconRendering_AllThemes_NoPanic(t *testing.T) {
 	themes := []string{"dark", "gruvbox", "nord", "dracula"}
 	votes := []struct {
-		vote int
+		kind provider.VoteKind
 		icon string
 	}{
-		{10, "✓"}, {5, "~"}, {0, "○"}, {-5, "◐"}, {-10, "✗"},
+		{provider.VoteKindApproved, "✓"},
+		{provider.VoteKindApprovedWithSuggestions, "~"},
+		{provider.VoteKindNoVote, "○"},
+		{provider.VoteKindWaitingForAuthor, "◐"},
+		{provider.VoteKindRejected, "✗"},
 	}
 	statuses := []struct {
 		status string
@@ -75,9 +90,9 @@ func TestIconRendering_AllThemes_NoPanic(t *testing.T) {
 			s := styles.NewStyles(styles.GetThemeByNameWithFallback(themeName))
 
 			for _, tt := range votes {
-				got := reviewerVoteIconWithStyles(tt.vote, s)
+				got := reviewerVoteIconWithStyles(tt.kind, s)
 				if !strings.Contains(got, tt.icon) {
-					t.Errorf("vote %d: got %q, want icon %q", tt.vote, got, tt.icon)
+					t.Errorf("VoteKind %v: got %q, want icon %q", tt.kind, got, tt.icon)
 				}
 			}
 
@@ -92,36 +107,37 @@ func TestIconRendering_AllThemes_NoPanic(t *testing.T) {
 }
 
 func TestNewDetailModel(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:            101,
-		Title:         "Test PR",
-		Description:   "Test description",
-		Status:        "active",
-		SourceRefName: "refs/heads/feature/test",
-		TargetRefName: "refs/heads/main",
-		CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
-		Repository:    azdevops.Repository{ID: "repo-123", Name: "my-repo"},
+	pr := provider.PullRequest{
+		Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:          "Test PR",
+		Description:    "Test description",
+		Status:         "active",
+		SourceRefName:  "refs/heads/feature/test",
+		TargetRefName:  "refs/heads/main",
+		CreatedByName:  "John Doe",
+		RepositoryID:   "repo-123",
+		RepositoryName: "my-repo",
 	}
 
 	model := NewDetailModel(nil, pr)
 
-	if model.GetPR().ID != 101 {
-		t.Errorf("Model PR ID = %d, want 101", model.GetPR().ID)
+	if model.GetPRID() != 101 {
+		t.Errorf("Model PR ID = %d, want 101", model.GetPRID())
 	}
 }
 
 func TestDetailModel_SetChangedFiles(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/new.go"}, ChangeType: "add"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/new.go", ChangeType: "add"},
 	}
 
 	model.SetChangedFiles(files)
@@ -132,18 +148,18 @@ func TestDetailModel_SetChangedFiles(t *testing.T) {
 }
 
 func TestDetailModel_SetChangedFiles_FiltersTreeEntries(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/", GitObjectType: "tree"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go", GitObjectType: "blob"}, ChangeType: "edit"},
-		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src", GitObjectType: "tree"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/", GitObjectType: "tree", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/main.go", GitObjectType: "blob", ChangeType: "edit"},
+		{ChangeID: 3, Path: "/src", GitObjectType: "tree", ChangeType: "edit"},
 	}
 
 	model.SetChangedFiles(files)
@@ -154,18 +170,18 @@ func TestDetailModel_SetChangedFiles_FiltersTreeEntries(t *testing.T) {
 }
 
 func TestDetailModel_FileNavigation(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/a.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/b.go"}, ChangeType: "add"},
-		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src/c.go"}, ChangeType: "delete"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/a.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/b.go", ChangeType: "add"},
+		{ChangeID: 3, Path: "/src/c.go", ChangeType: "delete"},
 	}
 	model.SetChangedFiles(files)
 
@@ -194,13 +210,13 @@ func TestDetailModel_FileNavigation(t *testing.T) {
 }
 
 func TestDetailModel_FileNavigation_JK(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/a.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/b.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
@@ -216,13 +232,13 @@ func TestDetailModel_FileNavigation_JK(t *testing.T) {
 }
 
 func TestDetailModel_SelectedFile(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/new.go"}, ChangeType: "add"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/new.go", ChangeType: "add"},
 	}
 	model.SetChangedFiles(files)
 
@@ -230,8 +246,8 @@ func TestDetailModel_SelectedFile(t *testing.T) {
 	if selected == nil {
 		t.Fatal("SelectedFile should not be nil")
 	}
-	if selected.Item.Path != "/src/main.go" {
-		t.Errorf("SelectedFile path = %q, want /src/main.go", selected.Item.Path)
+	if selected.Path != "/src/main.go" {
+		t.Errorf("SelectedFile path = %q, want /src/main.go", selected.Path)
 	}
 
 	model.MoveDown()
@@ -239,17 +255,17 @@ func TestDetailModel_SelectedFile(t *testing.T) {
 	if selected == nil {
 		t.Fatal("SelectedFile should not be nil after move")
 	}
-	if selected.Item.Path != "/src/new.go" {
-		t.Errorf("SelectedFile path = %q, want /src/new.go", selected.Item.Path)
+	if selected.Path != "/src/new.go" {
+		t.Errorf("SelectedFile path = %q, want /src/new.go", selected.Path)
 	}
 }
 
 func TestDetailModel_EmptyFiles(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	model.SetChangedFiles([]azdevops.IterationChange{})
+	model.SetChangedFiles([]provider.IterationChange{})
 
 	selected := model.SelectedFile()
 	if selected != nil {
@@ -258,7 +274,7 @@ func TestDetailModel_EmptyFiles(t *testing.T) {
 }
 
 func TestDetailModel_View_Loading(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.loading = true
 	model.spinner.SetVisible(true)
@@ -273,7 +289,7 @@ func TestDetailModel_View_Loading(t *testing.T) {
 var errMockDetail = fmt.Errorf("mock error")
 
 func TestDetailModel_View_Error(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.err = errMockDetail
 
@@ -285,17 +301,18 @@ func TestDetailModel_View_Error(t *testing.T) {
 }
 
 func TestDetailModel_View_WithContent(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:            101,
-		Title:         "Add new feature",
-		Description:   "This is a test description",
-		Status:        "active",
-		SourceRefName: "refs/heads/feature/test",
-		TargetRefName: "refs/heads/main",
-		CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
-		Repository:    azdevops.Repository{ID: "repo-123", Name: "my-repo"},
-		Reviewers: []azdevops.Reviewer{
-			{ID: "1", DisplayName: "Jane Smith", Vote: 10},
+	pr := provider.PullRequest{
+		Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:          "Add new feature",
+		Description:    "This is a test description",
+		Status:         "active",
+		SourceRefName:  "refs/heads/feature/test",
+		TargetRefName:  "refs/heads/main",
+		CreatedByName:  "John Doe",
+		RepositoryID:   "repo-123",
+		RepositoryName: "my-repo",
+		Reviewers: []provider.Reviewer{
+			{ID: "1", DisplayName: "Jane Smith", Vote: 10, Kind: provider.VoteKindApproved},
 		},
 	}
 	model := NewDetailModel(nil, pr)
@@ -318,17 +335,17 @@ func TestDetailModel_View_WithContent(t *testing.T) {
 }
 
 func TestDetailModel_View_ShowsChangedFiles(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/new.go"}, ChangeType: "add"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/new.go", ChangeType: "add"},
 	}
 	model.SetChangedFiles(files)
 
@@ -346,42 +363,38 @@ func TestDetailModel_View_ShowsChangedFiles(t *testing.T) {
 }
 
 func TestDetailModel_View_ShowsCommentCounts(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/new.go"}, ChangeType: "add"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/new.go", ChangeType: "add"},
 	}
 	model.SetChangedFiles(files)
 
-	threads := []azdevops.Thread{
+	threads := []provider.Thread{
 		{
-			ID:     1,
-			Status: "active",
-			ThreadContext: &azdevops.ThreadContext{
-				FilePath:       "/src/main.go",
-				RightFileStart: &azdevops.FilePosition{Line: 10},
-			},
-			Comments: []azdevops.Comment{
-				{ID: 1, Content: "Fix this"},
-				{ID: 2, Content: "Will do", ParentCommentID: 1},
+			Identity: provider.Identity{ID: "1"},
+			Status:   "active",
+			FilePath: "/src/main.go",
+			Line:     10,
+			Comments: []provider.Comment{
+				{Identity: provider.Identity{ID: "1"}, Content: "Fix this"},
+				{Identity: provider.Identity{ID: "2"}, Content: "Will do", ParentCommentID: 1},
 			},
 		},
 		{
-			ID:     2,
-			Status: "active",
-			ThreadContext: &azdevops.ThreadContext{
-				FilePath:       "/src/main.go",
-				RightFileStart: &azdevops.FilePosition{Line: 25},
-			},
-			Comments: []azdevops.Comment{
-				{ID: 3, Content: "Also fix this"},
+			Identity: provider.Identity{ID: "2"},
+			Status:   "active",
+			FilePath: "/src/main.go",
+			Line:     25,
+			Comments: []provider.Comment{
+				{Identity: provider.Identity{ID: "3"}, Content: "Also fix this"},
 			},
 		},
 	}
@@ -396,36 +409,35 @@ func TestDetailModel_View_ShowsCommentCounts(t *testing.T) {
 }
 
 func TestDetailModel_View_NoCommentCountForZero(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/clean.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/clean.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
 	view := model.View()
 
 	// Should not show a comment count indicator when there are no comments
-	// The file line should be just the icon and path, no "(0)"
 	if strings.Contains(view, "(0)") {
 		t.Error("View should NOT show (0) comment count for files with no comments")
 	}
 }
 
 func TestDetailModel_EnterEmitsOpenFileDiffMsg(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/new.go"}, ChangeType: "add"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/src/new.go", ChangeType: "add"},
 	}
 	model.SetChangedFiles(files)
 
@@ -443,16 +455,16 @@ func TestDetailModel_EnterEmitsOpenFileDiffMsg(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected openFileDiffMsg, got %T", msg)
 	}
-	if openMsg.file.Item.Path != "/src/new.go" {
-		t.Errorf("openFileDiffMsg file path = %q, want /src/new.go", openMsg.file.Item.Path)
+	if openMsg.file.Path != "/src/new.go" {
+		t.Errorf("openFileDiffMsg file path = %q, want /src/new.go", openMsg.file.Path)
 	}
 }
 
 func TestDetailModel_EnterDoesNothingWithNoFiles(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
-	model.SetChangedFiles([]azdevops.IterationChange{})
+	model.SetChangedFiles([]provider.IterationChange{})
 
 	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
@@ -461,17 +473,17 @@ func TestDetailModel_EnterDoesNothingWithNoFiles(t *testing.T) {
 }
 
 func TestDetailModel_View_ShowsGoToPRLink(t *testing.T) {
-	client, _ := azdevops.NewClient("myorg", "myproject", "test-pat")
+	p := newTestProvider("myorg", "myproject", "test-pat")
 
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
-		Reviewers: []azdevops.Reviewer{
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "myproject", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
+		Reviewers: []provider.Reviewer{
 			{ID: "1", DisplayName: "Reviewer 1", Vote: 10},
 		},
 	}
-	model := NewDetailModel(client, pr)
+	model := NewDetailModel(p, pr)
 	model.SetSize(100, 40)
 
 	view := model.View()
@@ -482,10 +494,10 @@ func TestDetailModel_View_ShowsGoToPRLink(t *testing.T) {
 }
 
 func TestDetailModel_View_ShowsNoChangedFilesMessage(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
@@ -498,20 +510,20 @@ func TestDetailModel_View_ShowsNoChangedFilesMessage(t *testing.T) {
 }
 
 func TestDetailModel_GetScrollPercent(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:          101,
-		Title:       "Test PR",
-		Description: "A description",
-		Repository:  azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		Description:  "A description",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 10) // small viewport
 
-	files := make([]azdevops.IterationChange, 30)
+	files := make([]provider.IterationChange, 30)
 	for i := range files {
-		files[i] = azdevops.IterationChange{
+		files[i] = provider.IterationChange{
 			ChangeID:   i + 1,
-			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			Path:       fmt.Sprintf("/src/file%d.go", i),
 			ChangeType: "edit",
 		}
 	}
@@ -533,19 +545,19 @@ func TestDetailModel_GetScrollPercent(t *testing.T) {
 }
 
 func TestDetailModel_FileListScrolling(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 15) // small viewport
 
-	files := make([]azdevops.IterationChange, 20)
+	files := make([]provider.IterationChange, 20)
 	for i := range files {
-		files[i] = azdevops.IterationChange{
+		files[i] = provider.IterationChange{
 			ChangeID:   i + 1,
-			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			Path:       fmt.Sprintf("/src/file%d.go", i),
 			ChangeType: "edit",
 		}
 	}
@@ -575,23 +587,24 @@ func TestDetailModel_FileListScrolling(t *testing.T) {
 }
 
 func TestDetailModel_LargeFileList_Scrolling(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:          101,
-		Title:       "Test PR with many files",
-		Description: "A test description",
-		Repository:  azdevops.Repository{ID: "repo-123"},
-		Reviewers: []azdevops.Reviewer{
+	pr := provider.PullRequest{
+		Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:          "Test PR with many files",
+		Description:    "A test description",
+		RepositoryID:   "repo-123",
+		RepositoryName: "my-repo",
+		Reviewers: []provider.Reviewer{
 			{ID: "1", DisplayName: "Reviewer 1", Vote: 10},
 		},
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 30)
 
-	files := make([]azdevops.IterationChange, 100)
+	files := make([]provider.IterationChange, 100)
 	for i := range files {
-		files[i] = azdevops.IterationChange{
+		files[i] = provider.IterationChange{
 			ChangeID:   i + 1,
-			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			Path:       fmt.Sprintf("/src/file%d.go", i),
 			ChangeType: []string{"edit", "add", "delete"}[i%3],
 		}
 	}
@@ -627,19 +640,19 @@ func TestDetailModel_LargeFileList_Scrolling(t *testing.T) {
 }
 
 func TestDetailModel_PageUpDown(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 12)
 
-	files := make([]azdevops.IterationChange, 30)
+	files := make([]provider.IterationChange, 30)
 	for i := range files {
-		files[i] = azdevops.IterationChange{
+		files[i] = provider.IterationChange{
 			ChangeID:   i + 1,
-			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
+			Path:       fmt.Sprintf("/src/file%d.go", i),
 			ChangeType: "edit",
 		}
 	}
@@ -674,19 +687,19 @@ func TestDetailModel_PageUpDown(t *testing.T) {
 }
 
 func TestDetailModel_View_ShowsChangeTypeIcons(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/added.go"}, ChangeType: "add"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/edited.go"}, ChangeType: "edit"},
-		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src/deleted.go"}, ChangeType: "delete"},
-		{ChangeID: 4, Item: azdevops.ChangeItem{Path: "/src/renamed.go"}, ChangeType: "rename", OriginalPath: "/src/old_name.go"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/added.go", ChangeType: "add"},
+		{ChangeID: 2, Path: "/src/edited.go", ChangeType: "edit"},
+		{ChangeID: 3, Path: "/src/deleted.go", ChangeType: "delete"},
+		{ChangeID: 4, Path: "/src/renamed.go", ChangeType: "rename", OriginalPath: "/src/old_name.go"},
 	}
 	model.SetChangedFiles(files)
 
@@ -707,16 +720,16 @@ func TestDetailModel_View_ShowsChangeTypeIcons(t *testing.T) {
 }
 
 func TestDetailModel_View_RenamedShowsBothPaths(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/new_name.go"}, ChangeType: "rename", OriginalPath: "/src/old_name.go"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/new_name.go", ChangeType: "rename", OriginalPath: "/src/old_name.go"},
 	}
 	model.SetChangedFiles(files)
 
@@ -735,21 +748,21 @@ func TestDetailModel_View_RenamedShowsBothPaths(t *testing.T) {
 func TestReviewerVoteIcon(t *testing.T) {
 	tests := []struct {
 		name         string
-		vote         int
+		kind         provider.VoteKind
 		wantContains string
 	}{
-		{name: "approved", vote: 10, wantContains: "✓"},
-		{name: "approved with suggestions", vote: 5, wantContains: "~"},
-		{name: "no vote", vote: 0, wantContains: "○"},
-		{name: "waiting", vote: -5, wantContains: "◐"},
-		{name: "rejected", vote: -10, wantContains: "✗"},
+		{name: "approved", kind: provider.VoteKindApproved, wantContains: "✓"},
+		{name: "approved with suggestions", kind: provider.VoteKindApprovedWithSuggestions, wantContains: "~"},
+		{name: "no vote", kind: provider.VoteKindNoVote, wantContains: "○"},
+		{name: "waiting", kind: provider.VoteKindWaitingForAuthor, wantContains: "◐"},
+		{name: "rejected", kind: provider.VoteKindRejected, wantContains: "✗"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewerVoteIconWithStyles(tt.vote, styles.DefaultStyles())
+			got := reviewerVoteIconWithStyles(tt.kind, styles.DefaultStyles())
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("reviewerVoteIconWithStyles(%d) = %q, want to contain %q", tt.vote, got, tt.wantContains)
+				t.Errorf("reviewerVoteIconWithStyles(%v) = %q, want to contain %q", tt.kind, got, tt.wantContains)
 			}
 		})
 	}
@@ -758,22 +771,22 @@ func TestReviewerVoteIcon(t *testing.T) {
 func TestReviewerVoteDescription(t *testing.T) {
 	tests := []struct {
 		name     string
-		vote     int
+		kind     provider.VoteKind
 		expected string
 	}{
-		{name: "approved", vote: 10, expected: "Approved"},
-		{name: "approved with suggestions", vote: 5, expected: "Approved with suggestions"},
-		{name: "no vote", vote: 0, expected: "No vote"},
-		{name: "waiting for author", vote: -5, expected: "Waiting for author"},
-		{name: "rejected", vote: -10, expected: "Rejected"},
-		{name: "unknown vote", vote: 99, expected: "Unknown"},
+		{name: "approved", kind: provider.VoteKindApproved, expected: "Approved"},
+		{name: "approved with suggestions", kind: provider.VoteKindApprovedWithSuggestions, expected: "Approved with suggestions"},
+		{name: "no vote", kind: provider.VoteKindNoVote, expected: "No vote"},
+		{name: "waiting for author", kind: provider.VoteKindWaitingForAuthor, expected: "Waiting for author"},
+		{name: "rejected", kind: provider.VoteKindRejected, expected: "Rejected"},
+		{name: "unknown (zero VoteKindNoVote) is No vote", kind: provider.VoteKind(99), expected: "Unknown"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewerVoteDescription(tt.vote)
+			got := reviewerVoteDescription(tt.kind)
 			if got != tt.expected {
-				t.Errorf("reviewerVoteDescription(%d) = %q, want %q", tt.vote, got, tt.expected)
+				t.Errorf("reviewerVoteDescription(%v) = %q, want %q", tt.kind, got, tt.expected)
 			}
 		})
 	}
@@ -833,73 +846,6 @@ func TestHyperlink(t *testing.T) {
 	}
 }
 
-func TestBuildPROverviewURL(t *testing.T) {
-	tests := []struct {
-		name     string
-		org      string
-		project  string
-		repoID   string
-		prID     int
-		expected string
-	}{
-		{
-			name:     "builds complete PR overview URL",
-			org:      "myorg",
-			project:  "myproject",
-			repoID:   "repo-guid-123",
-			prID:     123,
-			expected: "https://dev.azure.com/myorg/myproject/_git/repo-guid-123/pullrequest/123",
-		},
-		{name: "returns empty when org is missing", org: "", project: "myproject", repoID: "repo-guid", prID: 123, expected: ""},
-		{name: "returns empty when project is missing", org: "myorg", project: "", repoID: "repo-guid", prID: 123, expected: ""},
-		{name: "returns empty when repoID is missing", org: "myorg", project: "myproject", repoID: "", prID: 123, expected: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildPROverviewURL(tt.org, tt.project, tt.repoID, tt.prID)
-			if got != tt.expected {
-				t.Errorf("buildPROverviewURL() = %q, want %q", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestBuildPRThreadURL(t *testing.T) {
-	tests := []struct {
-		name     string
-		org      string
-		project  string
-		repoID   string
-		prID     int
-		threadID int
-		expected string
-	}{
-		{
-			name:     "builds complete URL with discussionId",
-			org:      "myorg",
-			project:  "myproject",
-			repoID:   "repo-guid-123",
-			prID:     123,
-			threadID: 456,
-			expected: "https://dev.azure.com/myorg/myproject/_git/repo-guid-123/pullrequest/123?discussionId=456",
-		},
-		{name: "returns empty when org is missing", org: "", project: "myproject", repoID: "repo-guid", prID: 123, threadID: 456, expected: ""},
-		{name: "returns empty when project is missing", org: "myorg", project: "", repoID: "repo-guid", prID: 123, threadID: 456, expected: ""},
-		{name: "returns empty when repoID is missing", org: "myorg", project: "myproject", repoID: "", prID: 123, threadID: 456, expected: ""},
-		{name: "returns empty when threadID is zero", org: "myorg", project: "myproject", repoID: "repo-guid", prID: 123, threadID: 0, expected: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildPRThreadURL(tt.org, tt.project, tt.repoID, tt.prID, tt.threadID)
-			if got != tt.expected {
-				t.Errorf("buildPRThreadURL() = %q, want %q", got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestTruncateString(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -952,45 +898,43 @@ func TestShortenFilePath(t *testing.T) {
 }
 
 func TestDetailModel_View_ShowsGeneralComments(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
-	threads := []azdevops.Thread{
+	threads := []provider.Thread{
 		{
-			ID:            1,
-			Status:        "active",
-			ThreadContext: nil, // general comment
-			Comments: []azdevops.Comment{
-				{ID: 1, Content: "Looks good overall", Author: azdevops.Identity{DisplayName: "Bob"}},
+			Identity: provider.Identity{ID: "1"},
+			Status:   "active",
+			FilePath: "", // general comment
+			Comments: []provider.Comment{
+				{Identity: provider.Identity{ID: "1"}, Content: "Looks good overall", AuthorName: "Bob"},
 			},
 		},
 		{
-			ID:     2,
-			Status: "active",
-			ThreadContext: &azdevops.ThreadContext{
-				FilePath:       "/src/main.go",
-				RightFileStart: &azdevops.FilePosition{Line: 10},
-			},
-			Comments: []azdevops.Comment{
-				{ID: 3, Content: "Fix this"},
+			Identity: provider.Identity{ID: "2"},
+			Status:   "active",
+			FilePath: "/src/main.go",
+			Line:     10,
+			Comments: []provider.Comment{
+				{Identity: provider.Identity{ID: "3"}, Content: "Fix this"},
 			},
 		},
 		{
-			ID:            3,
-			Status:        "fixed",
-			ThreadContext: nil, // resolved general comment
-			Comments: []azdevops.Comment{
-				{ID: 4, Content: "Add docs?", Author: azdevops.Identity{DisplayName: "Charlie"}},
+			Identity: provider.Identity{ID: "3"},
+			Status:   "fixed",
+			FilePath: "", // resolved general comment
+			Comments: []provider.Comment{
+				{Identity: provider.Identity{ID: "4"}, Content: "Add docs?", AuthorName: "Charlie"},
 			},
 		},
 	}
@@ -1005,30 +949,28 @@ func TestDetailModel_View_ShowsGeneralComments(t *testing.T) {
 }
 
 func TestDetailModel_View_NoGeneralCommentsSection(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:         101,
-		Title:      "Test PR",
-		Repository: azdevops.Repository{ID: "repo-123"},
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+		Title:        "Test PR",
+		RepositoryID: "repo-123",
 	}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(100, 40)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
 	// Only code comments, no general comments
-	threads := []azdevops.Thread{
+	threads := []provider.Thread{
 		{
-			ID:     1,
-			Status: "active",
-			ThreadContext: &azdevops.ThreadContext{
-				FilePath:       "/src/main.go",
-				RightFileStart: &azdevops.FilePosition{Line: 10},
-			},
-			Comments: []azdevops.Comment{
-				{ID: 1, Content: "Fix this"},
+			Identity: provider.Identity{ID: "1"},
+			Status:   "active",
+			FilePath: "/src/main.go",
+			Line:     10,
+			Comments: []provider.Comment{
+				{Identity: provider.Identity{ID: "1"}, Content: "Fix this"},
 			},
 		},
 	}
@@ -1043,21 +985,21 @@ func TestDetailModel_View_NoGeneralCommentsSection(t *testing.T) {
 }
 
 func TestDetailModel_EnterOnGeneralCommentsEmitsMsg(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
-	threads := []azdevops.Thread{
+	threads := []provider.Thread{
 		{
-			ID:            1,
-			Status:        "active",
-			ThreadContext: nil,
-			Comments:      []azdevops.Comment{{ID: 1, Content: "General comment"}},
+			Identity: provider.Identity{ID: "1"},
+			Status:   "active",
+			FilePath: "",
+			Comments: []provider.Comment{{Identity: provider.Identity{ID: "1"}, Content: "General comment"}},
 		},
 	}
 	model.SetThreads(threads)
@@ -1080,18 +1022,18 @@ func TestDetailModel_EnterOnGeneralCommentsEmitsMsg(t *testing.T) {
 }
 
 func TestDetailModel_NavigationWithGeneralComments(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
-		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/a.go", ChangeType: "edit"},
+		{ChangeID: 2, Path: "/b.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
-	threads := []azdevops.Thread{
-		{ID: 1, ThreadContext: nil, Comments: []azdevops.Comment{{ID: 1, Content: "General"}}},
+	threads := []provider.Thread{
+		{Identity: provider.Identity{ID: "1"}, FilePath: "", Comments: []provider.Comment{{Identity: provider.Identity{ID: "1"}, Content: "General"}}},
 	}
 	model.SetThreads(threads)
 
@@ -1121,12 +1063,12 @@ func TestDetailModel_NavigationWithGeneralComments(t *testing.T) {
 }
 
 func TestDetailModel_VKeyOpensVotePicker(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
@@ -1147,12 +1089,12 @@ func TestDetailModel_VKeyOpensVotePicker(t *testing.T) {
 }
 
 func TestDetailModel_VotePickerRoutesInput(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
@@ -1170,7 +1112,7 @@ func TestDetailModel_VotePickerRoutesInput(t *testing.T) {
 }
 
 func TestDetailModel_VotePickerEscCloses(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
@@ -1189,7 +1131,7 @@ func TestDetailModel_VotePickerEscCloses(t *testing.T) {
 }
 
 func TestDetailModel_VoteSelectedMsgTriggersVote(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
@@ -1230,12 +1172,12 @@ func TestDetailModel_VotePRAllVoteTypes(t *testing.T) {
 }
 
 func TestDetailModel_ViewShowsVotePicker(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 101, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "101"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 	model.SetSize(80, 24)
 
-	files := []azdevops.IterationChange{
-		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+	files := []provider.IterationChange{
+		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
 	}
 	model.SetChangedFiles(files)
 
@@ -1258,7 +1200,7 @@ func TestDetailModel_ViewShowsVotePicker(t *testing.T) {
 }
 
 func TestDetailModel_GetContextItems(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 123, Title: "Test PR"}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "123"}, Title: "Test PR"}
 	model := NewDetailModel(nil, pr)
 
 	items := model.GetContextItems()
@@ -1341,16 +1283,17 @@ func TestChangeTypeDisplay(t *testing.T) {
 func TestDetailView_ShowsCreationTimestamp(t *testing.T) {
 	createdAt := time.Date(2026, 2, 15, 10, 30, 0, 0, time.UTC)
 
-	pr := azdevops.PullRequest{
-		ID:            200,
-		Title:         "Feature with timestamp",
-		Description:   "Some description",
-		Status:        "active",
-		CreationDate:  createdAt,
-		SourceRefName: "refs/heads/feature/ts",
-		TargetRefName: "refs/heads/main",
-		CreatedBy:     azdevops.Identity{DisplayName: "Alice"},
-		Repository:    azdevops.Repository{ID: "repo-1", Name: "my-repo"},
+	pr := provider.PullRequest{
+		Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "200"},
+		Title:          "Feature with timestamp",
+		Description:    "Some description",
+		Status:         "active",
+		CreationDate:   createdAt,
+		SourceRefName:  "refs/heads/feature/ts",
+		TargetRefName:  "refs/heads/main",
+		CreatedByName:  "Alice",
+		RepositoryID:   "repo-1",
+		RepositoryName: "my-repo",
 	}
 
 	model := NewDetailModel(nil, pr)
@@ -1369,14 +1312,14 @@ func TestDetailView_ShowsCreationTimestamp(t *testing.T) {
 func TestDetailView_CreationTimestampShowsAuthor(t *testing.T) {
 	createdAt := time.Date(2026, 1, 20, 8, 0, 0, 0, time.UTC)
 
-	pr := azdevops.PullRequest{
-		ID:            201,
+	pr := provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "201"},
 		Title:         "PR by Bob",
 		CreationDate:  createdAt,
 		SourceRefName: "refs/heads/feature/x",
 		TargetRefName: "refs/heads/main",
-		CreatedBy:     azdevops.Identity{DisplayName: "Bob Builder"},
-		Repository:    azdevops.Repository{ID: "repo-1"},
+		CreatedByName: "Bob Builder",
+		RepositoryID:  "repo-1",
 	}
 
 	model := NewDetailModel(nil, pr)
@@ -1391,13 +1334,13 @@ func TestDetailView_CreationTimestampShowsAuthor(t *testing.T) {
 }
 
 func TestDetailView_ZeroCreationDateIsHidden(t *testing.T) {
-	pr := azdevops.PullRequest{
-		ID:            202,
+	pr := provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "202"},
 		Title:         "PR without date",
 		SourceRefName: "refs/heads/feature/y",
 		TargetRefName: "refs/heads/main",
-		CreatedBy:     azdevops.Identity{DisplayName: "Charlie"},
-		Repository:    azdevops.Repository{ID: "repo-1"},
+		CreatedByName: "Charlie",
+		RepositoryID:  "repo-1",
 		// CreationDate is zero value — not set
 	}
 
@@ -1414,16 +1357,16 @@ func TestDetailView_ZeroCreationDateIsHidden(t *testing.T) {
 func TestDetailView_CreationTimestampAppearsBeforeReviewers(t *testing.T) {
 	createdAt := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
-	pr := azdevops.PullRequest{
-		ID:            203,
+	pr := provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "203"},
 		Title:         "Ordering test PR",
 		Description:   "Desc",
 		CreationDate:  createdAt,
 		SourceRefName: "refs/heads/feature/order",
 		TargetRefName: "refs/heads/main",
-		CreatedBy:     azdevops.Identity{DisplayName: "Dave"},
-		Repository:    azdevops.Repository{ID: "repo-1"},
-		Reviewers: []azdevops.Reviewer{
+		CreatedByName: "Dave",
+		RepositoryID:  "repo-1",
+		Reviewers: []provider.Reviewer{
 			{ID: "r1", DisplayName: "Eve Reviewer", Vote: 0},
 		},
 	}
@@ -1450,13 +1393,13 @@ func TestDetailView_CreationTimestampAppearsBeforeReviewers(t *testing.T) {
 func TestDetailView_LongPRDescriptionWrapsWithinViewWidth(t *testing.T) {
 	// PR descriptions can be long markdown/plain text that overflows the terminal.
 	longDesc := strings.Repeat("This PR refactors the authentication module to support OAuth2 tokens. ", 10)
-	pr := azdevops.PullRequest{
-		ID:            300,
+	pr := provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "300"},
 		Title:         "Refactor auth",
 		Description:   longDesc,
 		SourceRefName: "refs/heads/feature/auth",
 		TargetRefName: "refs/heads/main",
-		Repository:    azdevops.Repository{ID: "repo-123"},
+		RepositoryID:  "repo-123",
 	}
 
 	viewWidth := 70
@@ -1481,13 +1424,13 @@ func TestDetailView_LongPRDescriptionWrapsWithinViewWidth(t *testing.T) {
 
 func TestDetailView_WrappedPRDescriptionPreservesContent(t *testing.T) {
 	description := "Implements the new caching layer with Redis integration for session management and rate limiting"
-	pr := azdevops.PullRequest{
-		ID:            301,
+	pr := provider.PullRequest{
+		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "301"},
 		Title:         "Add caching",
 		Description:   description,
 		SourceRefName: "refs/heads/feature/cache",
 		TargetRefName: "refs/heads/main",
-		Repository:    azdevops.Repository{ID: "repo-123"},
+		RepositoryID:  "repo-123",
 	}
 
 	// Narrow width forces wrapping
@@ -1504,7 +1447,7 @@ func TestDetailView_WrappedPRDescriptionPreservesContent(t *testing.T) {
 }
 
 func TestDetailModel_GetContextItemsIncludesOpenInBrowser(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 1}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "1"}}
 	m := NewDetailModel(nil, pr)
 
 	items := m.GetContextItems()
@@ -1530,13 +1473,13 @@ func TestDetailModel_OKeyOpensBrowser(t *testing.T) {
 		return nil
 	}
 
-	pr := azdevops.PullRequest{
-		ID:         42,
-		Title:      "Add feature",
-		Repository: azdevops.Repository{ID: "repo-xyz"},
+	p := newTestProvider("myorg", "myproject", "fake-pat")
+	pr := provider.PullRequest{
+		Identity:     provider.Identity{Kind: provider.KindAzure, Scope: "myproject", ID: "42"},
+		Title:        "Add feature",
+		RepositoryID: "repo-xyz",
 	}
-	client, _ := azdevops.NewClient("myorg", "myproject", "fake-pat")
-	m := NewDetailModel(client, pr)
+	m := NewDetailModel(p, pr)
 	m.SetSize(80, 30)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
@@ -1563,7 +1506,7 @@ func TestDetailModel_OKeyNoClientSetsStatusMessage(t *testing.T) {
 		return nil
 	}
 
-	pr := azdevops.PullRequest{ID: 1}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "1"}}
 	m := NewDetailModel(nil, pr)
 	m.SetSize(80, 30)
 
@@ -1577,7 +1520,7 @@ func TestDetailModel_OKeyNoClientSetsStatusMessage(t *testing.T) {
 }
 
 func TestDetailModel_OpenURLResultSuccessSetsStatusMessage(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 1}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "1"}}
 	m := NewDetailModel(nil, pr)
 	m.SetSize(80, 30)
 
@@ -1589,7 +1532,7 @@ func TestDetailModel_OpenURLResultSuccessSetsStatusMessage(t *testing.T) {
 }
 
 func TestDetailModel_OpenURLResultErrorSetsStatusMessage(t *testing.T) {
-	pr := azdevops.PullRequest{ID: 1}
+	pr := provider.PullRequest{Identity: provider.Identity{ID: "1"}}
 	m := NewDetailModel(nil, pr)
 	m.SetSize(80, 30)
 

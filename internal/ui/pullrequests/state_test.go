@@ -3,7 +3,7 @@ package pullrequests
 import (
 	"testing"
 
-	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -19,11 +19,15 @@ func TestPendingDetailRestore_OpensDetailWhenItemAppears(t *testing.T) {
 		t.Fatalf("precondition: expected ViewList, got %d", model.GetViewMode())
 	}
 
-	model, _ = model.Update(SetPRsMsg{PRs: []azdevops.PullRequest{
-		{ID: 12, Title: "Other"},
-		{ID: 99, Title: "Target", Status: "active",
-			CreatedBy:  azdevops.Identity{DisplayName: "X"},
-			Repository: azdevops.Repository{Name: "r"}},
+	model, _ = model.Update(SetPRsMsg{PRs: []provider.PullRequest{
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "12"}, Title: "Other"},
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "99"},
+			Title:          "Target",
+			Status:         "active",
+			CreatedByName:  "X",
+			RepositoryName: "r",
+		},
 	}})
 
 	if model.GetViewMode() != ViewDetail {
@@ -40,8 +44,8 @@ func TestPendingDetailRestore_NoMatchStaysOnList(t *testing.T) {
 	model := NewModel(nil)
 	model = model.WithPendingDetailRestore(99)
 
-	model, _ = model.Update(SetPRsMsg{PRs: []azdevops.PullRequest{
-		{ID: 12, Title: "Only this one"},
+	model, _ = model.Update(SetPRsMsg{PRs: []provider.PullRequest{
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "12"}, Title: "Only this one"},
 	}})
 
 	if model.GetViewMode() != ViewList {
@@ -58,14 +62,18 @@ func TestPendingDetailRestore_IsOneShot(t *testing.T) {
 	model = model.WithPendingDetailRestore(99)
 
 	// First populate without the target — pending intent should be consumed.
-	model, _ = model.Update(SetPRsMsg{PRs: []azdevops.PullRequest{{ID: 12}}})
+	model, _ = model.Update(SetPRsMsg{PRs: []provider.PullRequest{
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "12"}},
+	}})
 	if model.GetViewMode() != ViewList {
 		t.Fatalf("precondition: ViewMode = %d, want ViewList", model.GetViewMode())
 	}
 
 	// Second populate now contains the target — but the user already saw
 	// the list; we must NOT now hijack them into detail.
-	model, _ = model.Update(SetPRsMsg{PRs: []azdevops.PullRequest{{ID: 99, Title: "T"}}})
+	model, _ = model.Update(SetPRsMsg{PRs: []provider.PullRequest{
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "99"}, Title: "T"},
+	}})
 	if model.GetViewMode() != ViewList {
 		t.Errorf("second populate triggered restore unexpectedly (ViewMode = %d)",
 			model.GetViewMode())
@@ -81,10 +89,14 @@ func TestDetailItemID_TracksOpenAndClose(t *testing.T) {
 		t.Errorf("initial DetailItemID = %d, want 0", got)
 	}
 
-	model.list = model.list.SetItems([]azdevops.PullRequest{
-		{ID: 42, Title: "Test PR", Status: "active",
-			CreatedBy:  azdevops.Identity{DisplayName: "Test"},
-			Repository: azdevops.Repository{Name: "repo"}},
+	model.list = model.list.SetItems([]provider.PullRequest{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "42"},
+			Title:          "Test PR",
+			Status:         "active",
+			CreatedByName:  "Test",
+			RepositoryName: "repo",
+		},
 	})
 
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})

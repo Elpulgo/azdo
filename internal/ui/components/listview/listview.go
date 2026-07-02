@@ -45,6 +45,11 @@ type Config[T any] struct {
 	EntityName     string // e.g. "pipeline runs" — used in error/empty messages
 	MinWidth       int    // minimum usable width for columns (default 70)
 	ToRows         func(items []T, s *styles.Styles) []table.Row
+	// ToColumns, when non-nil, is called with the current items to derive the
+	// effective column specs. This lets callers vary column count (e.g. a glyph
+	// column) in lock-step with the rows produced by ToRows. When nil, the
+	// static Columns field is used instead, preserving backward compatibility.
+	ToColumns      func(items []T) []ColumnSpec
 	Fetch          func() tea.Cmd
 	EnterDetail    func(item T, s *styles.Styles, w, h int) (DetailView, tea.Cmd)
 	HasContextBar  func(mode ViewMode) bool // nil = always false
@@ -100,7 +105,17 @@ func New[T any](cfg Config[T], s *styles.Styles) Model[T] {
 		minW = 70
 	}
 
-	columns := makeColumns(cfg.Columns, 80, minW)
+	// Determine initial column specs. With an empty item set, ToColumns (when
+	// set) returns the same base layout as the static Columns field would
+	// because MixedKinds([]) == false — no glyph column is prepended.
+	var initialSpecs []ColumnSpec
+	if cfg.ToColumns != nil {
+		initialSpecs = cfg.ToColumns(nil)
+	} else {
+		initialSpecs = cfg.Columns
+	}
+
+	columns := makeColumns(initialSpecs, 80, minW)
 
 	t := table.New(
 		table.WithColumns(columns),
@@ -163,11 +178,13 @@ func (m Model[T]) updateList(msg tea.Msg) (Model[T], tea.Cmd) {
 			tableHeight -= searchBarHeight
 		}
 		m.table.SetHeight(tableHeight)
-		minW := m.config.MinWidth
-		if minW == 0 {
-			minW = 70
+		// Use the items currently shown in the table as the basis for column
+		// recomputation, so the glyph column (when mixed) stays in sync.
+		itemBasis := m.items
+		if m.searching && m.searchQuery != "" && m.filteredItems != nil {
+			itemBasis = m.filteredItems
 		}
-		m.table.SetColumns(makeColumns(m.config.Columns, msg.Width, minW))
+		m.table.SetColumns(makeColumns(m.effectiveColumnSpecs(itemBasis), msg.Width, m.minWidth()))
 
 	case spinner.TickMsg:
 		if m.loading {
@@ -217,8 +234,8 @@ func (m Model[T]) exitSearch() (Model[T], tea.Cmd) {
 	m.searchInput.Blur()
 	m.filteredItems = nil
 
-	// Restore full items in table
-	m.table.SetRows(m.config.ToRows(m.items, m.styles))
+	// Restore full items in table; use setColumnsAndRows for safe atomic update.
+	m.setColumnsAndRows(m.effectiveColumnSpecs(m.items), m.config.ToRows(m.items, m.styles))
 
 	// Restore table height
 	m.table.SetHeight(m.height - 1)
@@ -255,7 +272,7 @@ func (m Model[T]) updateSearch(msg tea.KeyMsg) (Model[T], tea.Cmd) {
 func (m *Model[T]) applyFilter() {
 	if m.searchQuery == "" {
 		m.filteredItems = nil
-		m.table.SetRows(m.config.ToRows(m.items, m.styles))
+		m.setColumnsAndRows(m.effectiveColumnSpecs(m.items), m.config.ToRows(m.items, m.styles))
 		return
 	}
 
@@ -265,7 +282,7 @@ func (m *Model[T]) applyFilter() {
 			m.filteredItems = append(m.filteredItems, item)
 		}
 	}
-	m.table.SetRows(m.config.ToRows(m.filteredItems, m.styles))
+	m.setColumnsAndRows(m.effectiveColumnSpecs(m.filteredItems), m.config.ToRows(m.filteredItems, m.styles))
 }
 
 func (m Model[T]) updateDetail(msg tea.Msg) (Model[T], tea.Cmd) {
@@ -362,7 +379,7 @@ func (m Model[T]) SetItems(items []T) Model[T] {
 	if m.searching && m.searchQuery != "" && m.config.FilterFunc != nil {
 		m.applyFilter()
 	} else {
-		m.table.SetRows(m.config.ToRows(items, m.styles))
+		m.setColumnsAndRows(m.effectiveColumnSpecs(items), m.config.ToRows(items, m.styles))
 	}
 	return m
 }
@@ -380,7 +397,7 @@ func (m Model[T]) HandleFetchResult(items []T, err error) Model[T] {
 	if m.searching && m.searchQuery != "" && m.config.FilterFunc != nil {
 		m.applyFilter()
 	} else {
-		m.table.SetRows(m.config.ToRows(items, m.styles))
+		m.setColumnsAndRows(m.effectiveColumnSpecs(items), m.config.ToRows(items, m.styles))
 	}
 	return m
 }
@@ -478,6 +495,64 @@ func (m *Model[T]) SetCursor(idx int) {
 // the cursor, returning the detail's Init command (may be nil).
 func (m Model[T]) OpenSelectedDetail() (Model[T], tea.Cmd) {
 	return m.enterDetailView()
+}
+
+// effectiveColumnSpecs returns the column specs for the given items.
+// When config.ToColumns is non-nil it is called with the items; otherwise the
+// static config.Columns slice is returned unchanged.
+func (m Model[T]) effectiveColumnSpecs(items []T) []ColumnSpec {
+	if m.config.ToColumns != nil {
+		return m.config.ToColumns(items)
+	}
+	return m.config.Columns
+}
+
+// minWidth returns the configured minimum table width, defaulting to 70.
+func (m Model[T]) minWidth() int {
+	if m.config.MinWidth != 0 {
+		return m.config.MinWidth
+	}
+	return 70
+}
+
+// setColumnsAndRows updates the table's columns and rows atomically.
+//
+// Both table.SetColumns and table.SetRows call UpdateViewport, which
+// immediately re-renders all existing rows. A naive SetColumns followed by
+// SetRows — or vice versa — leaves a transient state where the cell count
+// and column count differ, causing table.renderRow to panic with an
+// index-out-of-range error.
+//
+// The safe sequence is:
+//  1. Clear rows → UpdateViewport renders zero rows (no renderRow calls).
+//  2. Set columns → UpdateViewport renders zero rows (still safe).
+//  3. Set rows → UpdateViewport renders new rows against new columns (matches).
+//
+// Clearing rows in step 1 resets the cursor to -1 (table.SetRows clamps it).
+// The cursor is saved before and restored after so selection is preserved
+// across updates (e.g. polling refreshes that replace the item set).
+func (m *Model[T]) setColumnsAndRows(specs []ColumnSpec, rows []table.Row) {
+	savedCursor := m.table.Cursor()
+	m.table.SetRows(nil) // clears rows; cursor clamped to -1 by table.SetRows
+	m.table.SetColumns(makeColumns(specs, m.tableWidth(), m.minWidth()))
+	m.table.SetRows(rows)
+	// Restore the cursor, clamping to the new row count. Skip when rows is
+	// empty or the saved cursor was already invalid (< 0).
+	if savedCursor >= 0 && len(rows) > 0 {
+		if savedCursor >= len(rows) {
+			savedCursor = len(rows) - 1
+		}
+		m.table.SetCursor(savedCursor)
+	}
+}
+
+// tableWidth returns the current terminal width used for column sizing,
+// falling back to 80 when no WindowSizeMsg has been received yet.
+func (m Model[T]) tableWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 80
 }
 
 // cellPadding is the horizontal space added by each table cell's Padding(0, 1) style.

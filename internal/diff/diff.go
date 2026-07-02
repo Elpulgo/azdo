@@ -1,9 +1,11 @@
 package diff
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/provider"
 )
 
 // LineType represents the type of a diff line
@@ -51,6 +53,105 @@ func ComputeDiff(oldContent, newContent string, contextLines int) []Hunk {
 
 	// Group into hunks with context
 	return buildHunks(ops, contextLines)
+}
+
+// ParseUnifiedDiff parses a unified-diff patch — as returned in the per-file
+// "patch" field of GitHub's pull-request files API — into []Hunk, reusing the
+// same Line/Hunk shape ComputeDiff produces so the diff view renders both
+// identically.
+//
+// The patch contains hunk headers ("@@ -a,b +c,d @@ [section]") followed by
+// body lines prefixed with ' ' (context), '+' (added), or '-' (removed). Lines
+// beginning with '\' (e.g. "\ No newline at end of file") are metadata and are
+// skipped. Counts default to 1 when omitted ("@@ -1 +1 @@"). Input with no
+// valid hunk header (empty string, or a "Binary files differ" notice) yields nil.
+func ParseUnifiedDiff(patch string) []Hunk {
+	if patch == "" {
+		return nil
+	}
+
+	var hunks []Hunk
+	var cur *Hunk
+	var oldNum, newNum int
+
+	for _, raw := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(raw, "@@") {
+			h, oStart, nStart, ok := parseHunkHeader(raw)
+			if !ok {
+				continue
+			}
+			if cur != nil {
+				hunks = append(hunks, *cur)
+			}
+			hc := h
+			cur = &hc
+			oldNum, newNum = oStart, nStart
+			continue
+		}
+		if cur == nil || raw == "" {
+			// Skip preamble before the first hunk and any trailing empty split
+			// element. Genuine blank context lines carry a leading space.
+			continue
+		}
+		switch raw[0] {
+		case ' ':
+			cur.Lines = append(cur.Lines, Line{Type: Context, Content: raw[1:], OldNum: oldNum, NewNum: newNum})
+			oldNum++
+			newNum++
+		case '+':
+			cur.Lines = append(cur.Lines, Line{Type: Added, Content: raw[1:], OldNum: 0, NewNum: newNum})
+			newNum++
+		case '-':
+			cur.Lines = append(cur.Lines, Line{Type: Removed, Content: raw[1:], OldNum: oldNum, NewNum: 0})
+			oldNum++
+		case '\\':
+			// "\ No newline at end of file" — metadata, not a content line.
+		}
+	}
+	if cur != nil {
+		hunks = append(hunks, *cur)
+	}
+	return hunks
+}
+
+// parseHunkHeader parses an "@@ -oldStart[,oldCount] +newStart[,newCount] @@"
+// line. It returns the Hunk with its header counts filled in plus the starting
+// old/new line numbers, or ok=false if the line is not a well-formed header.
+func parseHunkHeader(line string) (h Hunk, oldStart, newStart int, ok bool) {
+	rest := line[2:] // drop leading "@@"
+	end := strings.Index(rest, "@@")
+	if end < 0 {
+		return Hunk{}, 0, 0, false
+	}
+	parts := strings.Fields(strings.TrimSpace(rest[:end])) // ["-a,b", "+c,d"]
+	if len(parts) != 2 || !strings.HasPrefix(parts[0], "-") || !strings.HasPrefix(parts[1], "+") {
+		return Hunk{}, 0, 0, false
+	}
+	oStart, oCount, ok1 := parseHunkRange(parts[0][1:])
+	nStart, nCount, ok2 := parseHunkRange(parts[1][1:])
+	if !ok1 || !ok2 {
+		return Hunk{}, 0, 0, false
+	}
+	return Hunk{OldStart: oStart, OldCount: oCount, NewStart: nStart, NewCount: nCount}, oStart, nStart, true
+}
+
+// parseHunkRange parses a "start[,count]" range fragment. count defaults to 1
+// when the comma form is absent (unified-diff shorthand for a single line).
+func parseHunkRange(s string) (start, count int, ok bool) {
+	count = 1
+	if comma := strings.IndexByte(s, ','); comma >= 0 {
+		c, err := strconv.Atoi(s[comma+1:])
+		if err != nil {
+			return 0, 0, false
+		}
+		count = c
+		s = s[:comma]
+	}
+	start, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, 0, false
+	}
+	return start, count, true
 }
 
 // editOp represents an edit operation
@@ -269,4 +370,99 @@ func MapThreadsToLines(threads []azdevops.Thread, filePath string) map[int][]azd
 		result[line] = append(result[line], thread)
 	}
 	return result
+}
+
+// --- provider.Thread variants ---
+// The following functions mirror the azdevops.Thread helpers above but operate
+// on the neutral provider.Thread type. They are used by the PR views after the
+// migration to provider.Provider (task 7).
+
+// CountCommentsPerFileP counts the total number of comments per file path
+// across all provider threads. General comment threads (FilePath == "") are excluded.
+func CountCommentsPerFileP(threads []provider.Thread) map[string]int {
+	result := make(map[string]int)
+	for _, thread := range threads {
+		if thread.FilePath == "" {
+			continue
+		}
+		result[thread.FilePath] += len(thread.Comments)
+	}
+	return result
+}
+
+// FilterGeneralThreadsP returns only provider threads without a file context
+// (i.e. FilePath == ""), which are general PR comment threads.
+func FilterGeneralThreadsP(threads []provider.Thread) []provider.Thread {
+	var result []provider.Thread
+	for _, thread := range threads {
+		if thread.FilePath == "" {
+			result = append(result, thread)
+		}
+	}
+	return result
+}
+
+// MapThreadsToLinesP maps provider threads to line numbers for a specific file.
+// Returns a map from new-file line number to provider threads at that line.
+func MapThreadsToLinesP(threads []provider.Thread, filePath string) map[int][]provider.Thread {
+	result := make(map[int][]provider.Thread)
+	for _, thread := range threads {
+		if thread.FilePath != filePath {
+			continue
+		}
+		if thread.Line == 0 {
+			continue
+		}
+		result[thread.Line] = append(result[thread.Line], thread)
+	}
+	return result
+}
+
+// FilterSystemThreadsP filters out system-generated provider threads
+// (e.g. Microsoft.VisualStudio service comments, vote notifications, policy updates).
+func FilterSystemThreadsP(threads []provider.Thread) []provider.Thread {
+	filtered := make([]provider.Thread, 0, len(threads))
+	for _, thread := range threads {
+		if !isSystemThreadP(thread) {
+			filtered = append(filtered, thread)
+		}
+	}
+	return filtered
+}
+
+// isVotedCommentP checks whether a comment content is a vote notification
+// (e.g. "John Doe voted 10", "Jane Smith voted -5").
+// Duplicated from azdevops.isVotedComment to avoid a cross-package dependency.
+func isVotedCommentP(content string) bool {
+	idx := strings.Index(content, "voted")
+	if idx == -1 {
+		return false
+	}
+	after := strings.TrimSpace(content[idx+5:])
+	if len(after) == 0 {
+		return false
+	}
+	if after[0] == '-' && len(after) > 1 {
+		after = after[1:]
+	}
+	return len(after) > 0 && after[0] >= '0' && after[0] <= '9'
+}
+
+func isSystemThreadP(thread provider.Thread) bool {
+	for _, comment := range thread.Comments {
+		if strings.HasPrefix(comment.AuthorName, "Microsoft.VisualStudio") {
+			return true
+		}
+		content := strings.TrimSpace(comment.Content)
+		if strings.HasPrefix(content, "Microsoft.VisualStudio") {
+			return true
+		}
+		if strings.Contains(content, "Policy status has been updated") {
+			return true
+		}
+		if isVotedCommentP(content) {
+			return true
+		}
+	}
+	return false
 }

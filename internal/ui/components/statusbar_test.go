@@ -29,12 +29,15 @@ func TestStatusBar_SetOrganization(t *testing.T) {
 	}
 }
 
-func TestStatusBar_SetProject(t *testing.T) {
+func TestStatusBar_SetScopes(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
-	sb.SetProject("myproject")
+	sb.SetScopes([]string{"ProjA", "ProjB"})
 
-	if sb.project != "myproject" {
-		t.Errorf("expected project 'myproject', got '%s'", sb.project)
+	if len(sb.scopes) != 2 {
+		t.Fatalf("expected 2 scopes, got %d", len(sb.scopes))
+	}
+	if sb.scopes[0] != "ProjA" || sb.scopes[1] != "ProjB" {
+		t.Errorf("scopes not stored correctly: %v", sb.scopes)
 	}
 }
 
@@ -59,7 +62,7 @@ func TestStatusBar_SetWidth(t *testing.T) {
 func TestStatusBar_View_ContainsOrganization(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("testorg")
-	sb.SetProject("testproject")
+	sb.SetScopes([]string{"testproject"})
 	sb.SetWidth(120)
 
 	view := sb.View()
@@ -72,7 +75,7 @@ func TestStatusBar_View_ContainsOrganization(t *testing.T) {
 func TestStatusBar_View_ContainsProject(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("testorg")
-	sb.SetProject("testproject")
+	sb.SetScopes([]string{"testproject"})
 	sb.SetWidth(120)
 
 	view := sb.View()
@@ -193,7 +196,7 @@ func TestStatusBar_StateIcons(t *testing.T) {
 func TestStatusBar_View_MinimumWidth(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("org")
-	sb.SetProject("project")
+	sb.SetScopes([]string{"project"})
 	sb.SetState(polling.StateConnected)
 	sb.SetWidth(20)
 
@@ -227,7 +230,7 @@ func TestStatusBar_Init_ReturnsNil(t *testing.T) {
 func TestStatusBar_OrgProjectSeparator(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetOrganization("myorg")
-	sb.SetProject("myproject")
+	sb.SetScopes([]string{"myproject"})
 	sb.SetWidth(120)
 
 	view := sb.View()
@@ -590,6 +593,84 @@ func TestStatusBar_View_NoContextItems_ShowsDefault(t *testing.T) {
 	}
 	if !strings.Contains(view, "quit") {
 		t.Error("view should contain 'quit' when no context items set")
+	}
+}
+
+// --- SetScopes rendering tests ---
+
+// TestStatusBar_SetScopes_SingleScope checks that a single scope is shown
+// alongside the org with no "+N more" suffix.
+func TestStatusBar_SetScopes_SingleScope(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetOrganization("org")
+	sb.SetScopes([]string{"ProjA"})
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "org") {
+		t.Error("view should contain organization name")
+	}
+	if !strings.Contains(view, "ProjA") {
+		t.Error("view should contain single scope name 'ProjA'")
+	}
+	if strings.Contains(view, "+") {
+		t.Error("single scope should not produce a '+N more' suffix")
+	}
+}
+
+// TestStatusBar_SetScopes_MultiScopeWithinCap checks that all scopes are shown
+// joined when the count is within the cap.
+func TestStatusBar_SetScopes_MultiScopeWithinCap(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetScopes([]string{"A", "B"})
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "A") {
+		t.Error("view should contain scope 'A'")
+	}
+	if !strings.Contains(view, "B") {
+		t.Error("view should contain scope 'B'")
+	}
+	if strings.Contains(view, "+") {
+		t.Error("scopes within cap should not produce a '+N more' suffix")
+	}
+}
+
+// TestStatusBar_SetScopes_Truncation checks that scopes beyond the cap are
+// truncated and a "+N more" suffix is shown.
+func TestStatusBar_SetScopes_Truncation(t *testing.T) {
+	// scopesDisplayCap is 3; supply cap+2 = 5 scopes.
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetScopes([]string{"Alpha", "Beta", "Gamma", "Delta", "Epsilon"})
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	// First cap scopes must be visible.
+	if !strings.Contains(view, "Alpha") {
+		t.Error("view should contain first scope 'Alpha'")
+	}
+	if !strings.Contains(view, "Beta") {
+		t.Error("view should contain second scope 'Beta'")
+	}
+	if !strings.Contains(view, "Gamma") {
+		t.Error("view should contain third scope 'Gamma'")
+	}
+
+	// Truncated-away scopes must NOT appear.
+	if strings.Contains(view, "Delta") {
+		t.Error("view should NOT contain truncated scope 'Delta'")
+	}
+	if strings.Contains(view, "Epsilon") {
+		t.Error("view should NOT contain truncated scope 'Epsilon'")
+	}
+
+	// Exact "+2 more" suffix must appear (5 scopes - cap 3 = 2 extra).
+	if !strings.Contains(view, "+2 more") {
+		t.Error("view should contain '+2 more' truncation suffix")
 	}
 }
 
