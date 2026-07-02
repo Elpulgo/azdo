@@ -225,7 +225,10 @@ func equalSlices(a, b []string) bool {
 
 // buildEnabledTabs returns the list of enabled tabs based on config.
 func buildEnabledTabs(cfg *config.Config) []Tab {
-	tabs := []Tab{TabPullRequests} // always enabled
+	var tabs []Tab
+	if cfg.IsPaneEnabled("pullrequests") {
+		tabs = append(tabs, TabPullRequests)
+	}
 	if cfg.IsPaneEnabled("workitems") {
 		tabs = append(tabs, TabWorkItems)
 	}
@@ -305,6 +308,11 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	helpModal := components.NewHelpModal(appStyles)
 
 	// Configure help modal based on disabled panes
+	if !cfg.IsPaneEnabled("pullrequests") {
+		helpModal.RemoveSection("Code Review (PR diff)")
+		helpModal.RemoveBindingsByDescription("reviewer")
+		helpModal.RemoveBindingsByDescription("Vote on PR")
+	}
 	if !cfg.IsPaneEnabled("workitems") {
 		helpModal.RemoveBindingsByDescription("work items")
 		helpModal.RemoveBindingsByDescription("work item")
@@ -315,7 +323,10 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 	}
 
 	// Update tab description in help modal based on enabled tabs
-	enabledTabNames := []string{"PR"}
+	enabledTabNames := []string{}
+	if cfg.IsPaneEnabled("pullrequests") {
+		enabledTabNames = append(enabledTabNames, "PR")
+	}
 	if cfg.IsPaneEnabled("workitems") {
 		enabledTabNames = append(enabledTabNames, "Work Items")
 	}
@@ -391,7 +402,7 @@ func NewModel(client *azdevops.MultiClient, cfg *config.Config, currentVersion s
 		client:           client,
 		config:           cfg,
 		styles:           appStyles,
-		activeTab:        TabPullRequests,
+		activeTab:        enabledTabs[0],
 		enabledTabs:      enabledTabs,
 		logo:             logo,
 		pipelinesView:    pipelines.NewModelWithStyles(client, appStyles),
@@ -429,8 +440,9 @@ func (m Model) Init() tea.Cmd {
 		initCmds = append(initCmds, cmd)
 	}
 	// PR is the canonical default; ensure its data is preloaded even when
-	// state restored a different tab so switching back is instant.
-	if m.activeTab != TabPullRequests {
+	// state restored a different tab so switching back is instant. Skipped
+	// entirely when the PR pane is disabled.
+	if m.isTabEnabled(TabPullRequests) && m.activeTab != TabPullRequests {
 		initCmds = append(initCmds, m.pullRequestsView.Init())
 	}
 

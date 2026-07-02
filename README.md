@@ -216,7 +216,8 @@ polling_interval: 60
 theme: dark
 
 # Disable specific panes (optional, comma-separated)
-# Valid values: pipelines, workitems
+# Valid values: pullrequests, pipelines, workitems
+# At least one pane must remain enabled.
 # disabled_panes: pipelines,workitems
 
 # Metrics dashboard (opt-in, management feature). Hidden unless enabled.
@@ -243,7 +244,7 @@ theme: dark
 - `projects`: List of Azure DevOps project names (required). Each entry can be a plain string or an object with `name` and `display_name` fields. The `display_name` is shown in the TUI while the `name` is used for API calls.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
-- `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed. Pull Requests cannot be disabled.
+- `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pullrequests`, `pipelines`, `workitems`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed, and remaining tabs are renumbered. At least one pane must remain enabled.
 - `metrics`: Opt-in management dashboard. See [Metrics Configuration](#metrics-configuration) below for the full reference, and [Features → Metrics Dashboard](#metrics-dashboard-opt-in) for what it does.
 
 **Available Themes:**

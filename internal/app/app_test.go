@@ -1363,6 +1363,68 @@ func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
 	}
 }
 
+func TestModel_DisabledPanes_PullRequestsDisabled_TabBarHidesPullRequests(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pullrequests"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+
+	if strings.Contains(view, "Pull Requests") {
+		t.Error("Tab bar should NOT show Pull Requests when disabled")
+	}
+	if !strings.Contains(view, "1: Work Items") {
+		t.Error("Tab bar should show '1: Work Items' (renumbered)")
+	}
+	if !strings.Contains(view, "2: Pipelines") {
+		t.Error("Tab bar should show '2: Pipelines' (renumbered)")
+	}
+}
+
+func TestModel_DisabledPanes_PullRequestsDisabled_DefaultTabIsWorkItems(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pullrequests"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(client, cfg, "dev", "")
+
+	if m.activeTab != TabWorkItems {
+		t.Errorf("with pullrequests disabled, expected default activeTab to be TabWorkItems (first enabled), got %d", m.activeTab)
+	}
+}
+
+func TestModel_DisabledPanes_EnabledTabs_PullRequestsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pullrequests"},
+	}
+
+	tabs := buildEnabledTabs(cfg)
+	if len(tabs) != 2 {
+		t.Fatalf("expected 2 enabled tabs, got %d", len(tabs))
+	}
+	if tabs[0] != TabWorkItems || tabs[1] != TabPipelines {
+		t.Errorf("unexpected tab order: %v", tabs)
+	}
+}
+
 // openTagPickerOnWorkItemsTab returns a Model with the work items tab active
 // and the tag picker open, ready for keypress tests.
 func openTagPickerOnWorkItemsTab(t *testing.T) Model {
