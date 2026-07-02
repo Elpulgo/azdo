@@ -235,7 +235,9 @@ func equalSlices(a, b []string) bool {
 }
 
 // buildEnabledTabs returns the list of enabled tabs based on config.
-func buildEnabledTabs(cfg *config.Config) []Tab {
+// azurePresent must be true when a live Azure MultiClient is available;
+// the metrics tab requires both cfg.Metrics.Enabled AND azurePresent.
+func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
 	var tabs []Tab
 	if cfg.IsPaneEnabled("pullrequests") {
 		tabs = append(tabs, TabPullRequests)
