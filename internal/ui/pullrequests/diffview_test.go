@@ -6,66 +6,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/diff"
-	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func newTestDiffModel() *DiffModel {
-	pr := provider.PullRequest{
-		Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
-		Title:          "Test PR",
-		SourceRefName:  "refs/heads/feature/test",
-		TargetRefName:  "refs/heads/main",
-		RepositoryID:   "repo-123",
-		RepositoryName: "test-repo",
+	pr := azdevops.PullRequest{
+		ID:            101,
+		Title:         "Test PR",
+		SourceRefName: "refs/heads/feature/test",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123", Name: "test-repo"},
 	}
-	threads := []provider.Thread{
+	threads := []azdevops.Thread{
 		{
-			Identity: provider.Identity{ID: "1"},
-			Status:   "active",
-			FilePath: "/src/main.go",
-			Line:     10,
-			Comments: []provider.Comment{
-				{Identity: provider.Identity{ID: "1"}, Content: "Fix this", AuthorName: "Alice"},
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}},
 			},
 		},
 	}
 	s := styles.DefaultStyles()
 	return NewDiffModel(nil, pr, threads, s)
-}
-
-// When an IterationChange carries a unified-diff patch (GitHub), fetchFileDiff
-// must parse it directly — no client, no content fetch — so deleted files and
-// search-sourced PRs (whose branch refs may be unavailable) still render. Uses
-// the nil-client model from newTestDiffModel to prove the client is not touched.
-func TestDiffModel_FetchFileDiff_UsesPatchWithoutClient(t *testing.T) {
-	m := newTestDiffModel() // client is nil
-
-	change := provider.IterationChange{
-		Path:       "deleted.txt",
-		ChangeType: "delete",
-		Patch:      "@@ -1,2 +0,0 @@\n-line one\n-line two",
-	}
-
-	cmd := m.fetchFileDiff(change)
-	if cmd == nil {
-		t.Fatal("fetchFileDiff returned nil cmd")
-	}
-	msg, ok := cmd().(fileDiffMsg)
-	if !ok {
-		t.Fatalf("msg type = %T, want fileDiffMsg", cmd())
-	}
-	if msg.err != nil {
-		t.Fatalf("err = %v, want nil (patch path needs no client)", msg.err)
-	}
-	if msg.diff == nil || len(msg.diff.Hunks) != 1 {
-		t.Fatalf("diff = %+v, want one hunk parsed from the patch", msg.diff)
-	}
-	if msg.diff.ChangeType != "delete" {
-		t.Errorf("ChangeType = %q, want delete", msg.diff.ChangeType)
-	}
 }
 
 func TestNewDiffModel(t *testing.T) {
@@ -87,10 +56,10 @@ func TestDiffModel_FileListNavigation(t *testing.T) {
 	m.SetSize(80, 24)
 
 	// Simulate receiving changed files
-	m.changedFiles = []provider.IterationChange{
-		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/src/new.go", ChangeType: "add"},
-		{ChangeID: 3, Path: "/src/old.go", ChangeType: "delete"},
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/new.go"}, ChangeType: "add"},
+		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src/old.go"}, ChangeType: "delete"},
 	}
 	m.updateFileListViewport()
 
@@ -132,9 +101,9 @@ func TestDiffModel_FileListNavigation_UpDown(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 24)
 
-	m.changedFiles = []provider.IterationChange{
-		{ChangeID: 1, Path: "/a.go", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/b.go", ChangeType: "edit"},
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
 	}
 	m.updateFileListViewport()
 
@@ -177,7 +146,7 @@ func TestDiffModel_BuildDiffLines(t *testing.T) {
 			},
 		},
 	}
-	m.fileThreads = make(map[int][]provider.Thread)
+	m.fileThreads = make(map[int][]azdevops.Thread)
 
 	m.buildDiffLines()
 
@@ -219,14 +188,14 @@ func TestDiffModel_BuildDiffLines_WithComments(t *testing.T) {
 			},
 		},
 	}
-	m.fileThreads = map[int][]provider.Thread{
+	m.fileThreads = map[int][]azdevops.Thread{
 		10: {
 			{
-				Identity: provider.Identity{ID: "1"},
-				Status:   "active",
-				Comments: []provider.Comment{
-					{Identity: provider.Identity{ID: "1"}, Content: "Fix this", AuthorName: "Alice"},
-					{Identity: provider.Identity{ID: "2"}, Content: "Will do", AuthorName: "Bob", ParentCommentID: 1},
+				ID:     1,
+				Status: "active",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}},
+					{ID: 2, Content: "Will do", Author: azdevops.Identity{DisplayName: "Bob"}, ParentCommentID: 1},
 				},
 			},
 		},
@@ -276,14 +245,14 @@ func TestDiffModel_BuildDiffLines_CommentTimestamps(t *testing.T) {
 			},
 		},
 	}
-	m.fileThreads = map[int][]provider.Thread{
+	m.fileThreads = map[int][]azdevops.Thread{
 		10: {
 			{
-				Identity: provider.Identity{ID: "1"},
-				Status:   "active",
-				Comments: []provider.Comment{
-					{Identity: provider.Identity{ID: "1"}, Content: "Fix this", AuthorName: "Alice", PublishedDate: commentTime},
-					{Identity: provider.Identity{ID: "2"}, Content: "Will do", AuthorName: "Bob", ParentCommentID: 1, PublishedDate: replyTime},
+				ID:     1,
+				Status: "active",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}, PublishedDate: commentTime},
+					{ID: 2, Content: "Will do", Author: azdevops.Identity{DisplayName: "Bob"}, ParentCommentID: 1, PublishedDate: replyTime},
 				},
 			},
 		},
@@ -333,22 +302,22 @@ func TestDiffModel_BuildDiffLines_ThreadResolvedStatus(t *testing.T) {
 			},
 		},
 	}
-	m.fileThreads = map[int][]provider.Thread{
+	m.fileThreads = map[int][]azdevops.Thread{
 		10: {
 			{
-				Identity: provider.Identity{ID: "1"},
-				Status:   "fixed",
-				Comments: []provider.Comment{
-					{Identity: provider.Identity{ID: "1"}, Content: "Fix this", AuthorName: "Alice", PublishedDate: commentTime},
+				ID:     1,
+				Status: "fixed",
+				Comments: []azdevops.Comment{
+					{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}, PublishedDate: commentTime},
 				},
 			},
 		},
 		12: {
 			{
-				Identity: provider.Identity{ID: "2"},
-				Status:   "active",
-				Comments: []provider.Comment{
-					{Identity: provider.Identity{ID: "3"}, Content: "Looks good", AuthorName: "Bob", PublishedDate: commentTime},
+				ID:     2,
+				Status: "active",
+				Comments: []azdevops.Comment{
+					{ID: 3, Content: "Looks good", Author: azdevops.Identity{DisplayName: "Bob"}, PublishedDate: commentTime},
 				},
 			},
 		},
@@ -610,8 +579,7 @@ func TestDiffModel_EscFromDiffView(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 24)
 	m.viewMode = DiffFileView
-	change := provider.IterationChange{Path: "/test.go"}
-	m.currentFile = &change
+	m.currentFile = &azdevops.IterationChange{Item: azdevops.ChangeItem{Path: "/test.go"}}
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
@@ -675,9 +643,9 @@ func TestDiffModel_ChangedFilesMsg(t *testing.T) {
 	m.SetSize(80, 24)
 	m.loading = true
 
-	changes := []provider.IterationChange{
-		{ChangeID: 1, Path: "/a.go", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/b.go", ChangeType: "add"},
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "add"},
 	}
 
 	m.Update(changedFilesMsg{changes: changes})
@@ -714,11 +682,11 @@ func TestDiffModel_FileListScrollsToKeepSelectionVisible(t *testing.T) {
 	m.SetSize(80, 6) // 6 - 1 header = 5 viewport lines
 
 	// Create 10 files, more than fit in the viewport
-	files := make([]provider.IterationChange, 10)
+	files := make([]azdevops.IterationChange, 10)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -748,11 +716,11 @@ func TestDiffModel_FileListScrollsBackUp(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6) // 5 viewport lines
 
-	files := make([]provider.IterationChange, 10)
+	files := make([]azdevops.IterationChange, 10)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -785,11 +753,11 @@ func TestDiffModel_FiltersFolderEntries(t *testing.T) {
 	m.loading = true
 
 	// Simulate API response with folder/tree entries mixed in
-	changes := []provider.IterationChange{
-		{ChangeID: 1, Path: "/", GitObjectType: "tree", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/src/main.go", GitObjectType: "blob", ChangeType: "edit"},
-		{ChangeID: 3, Path: "/src", GitObjectType: "tree", ChangeType: "edit"},
-		{ChangeID: 4, Path: "/src/utils.go", GitObjectType: "blob", ChangeType: "add"},
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/", GitObjectType: "tree"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go", GitObjectType: "blob"}, ChangeType: "edit"},
+		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src", GitObjectType: "tree"}, ChangeType: "edit"},
+		{ChangeID: 4, Item: azdevops.ChangeItem{Path: "/src/utils.go", GitObjectType: "blob"}, ChangeType: "add"},
 	}
 
 	m.Update(changedFilesMsg{changes: changes})
@@ -798,18 +766,18 @@ func TestDiffModel_FiltersFolderEntries(t *testing.T) {
 	if len(m.changedFiles) != 2 {
 		t.Errorf("Expected 2 file entries after filtering, got %d", len(m.changedFiles))
 		for i, f := range m.changedFiles {
-			t.Logf("  [%d] path=%q type=%q", i, f.Path, f.GitObjectType)
+			t.Logf("  [%d] path=%q type=%q", i, f.Item.Path, f.Item.GitObjectType)
 		}
 	}
 }
 
 func TestFilterFileChanges(t *testing.T) {
-	changes := []provider.IterationChange{
-		{ChangeID: 1, Path: "/", GitObjectType: "tree"},
-		{ChangeID: 2, Path: "/src/main.go", GitObjectType: "blob", ChangeType: "edit"},
-		{ChangeID: 3, Path: "/src", GitObjectType: "tree"},
-		{ChangeID: 4, Path: "/src/utils.go", ChangeType: "add"},
-		{ChangeID: 5, Path: ""},
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/", GitObjectType: "tree"}},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go", GitObjectType: "blob"}, ChangeType: "edit"},
+		{ChangeID: 3, Item: azdevops.ChangeItem{Path: "/src", GitObjectType: "tree"}},
+		{ChangeID: 4, Item: azdevops.ChangeItem{Path: "/src/utils.go"}, ChangeType: "add"},
+		{ChangeID: 5, Item: azdevops.ChangeItem{Path: ""}},
 	}
 
 	filtered := filterFileChanges(changes)
@@ -817,11 +785,11 @@ func TestFilterFileChanges(t *testing.T) {
 	if len(filtered) != 2 {
 		t.Fatalf("Expected 2 entries, got %d", len(filtered))
 	}
-	if filtered[0].Path != "/src/main.go" {
-		t.Errorf("filtered[0].Path = %q, want /src/main.go", filtered[0].Path)
+	if filtered[0].Item.Path != "/src/main.go" {
+		t.Errorf("filtered[0].Path = %q, want /src/main.go", filtered[0].Item.Path)
 	}
-	if filtered[1].Path != "/src/utils.go" {
-		t.Errorf("filtered[1].Path = %q, want /src/utils.go", filtered[1].Path)
+	if filtered[1].Item.Path != "/src/utils.go" {
+		t.Errorf("filtered[1].Path = %q, want /src/utils.go", filtered[1].Item.Path)
 	}
 }
 
@@ -829,11 +797,11 @@ func TestDiffModel_FileListPageDown(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6) // 5 viewport lines
 
-	files := make([]provider.IterationChange, 20)
+	files := make([]azdevops.IterationChange, 20)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -860,11 +828,11 @@ func TestDiffModel_FileListPageUp(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6) // 5 viewport lines
 
-	files := make([]provider.IterationChange, 20)
+	files := make([]azdevops.IterationChange, 20)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -884,11 +852,11 @@ func TestDiffModel_FileListPageDown_ClampsAtEnd(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6)
 
-	files := make([]provider.IterationChange, 8)
+	files := make([]azdevops.IterationChange, 8)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -908,11 +876,11 @@ func TestDiffModel_FileListPageUp_ClampsAtStart(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6)
 
-	files := make([]provider.IterationChange, 10)
+	files := make([]azdevops.IterationChange, 10)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -931,11 +899,11 @@ func TestDiffModel_FileListScrollPercent(t *testing.T) {
 	m := newTestDiffModel()
 	m.SetSize(80, 6) // 5 viewport lines
 
-	files := make([]provider.IterationChange, 20)
+	files := make([]azdevops.IterationChange, 20)
 	for i := range files {
-		files[i] = provider.IterationChange{
+		files[i] = azdevops.IterationChange{
 			ChangeID:   i + 1,
-			Path:       fmt.Sprintf("/src/file%d.go", i),
+			Item:       azdevops.ChangeItem{Path: fmt.Sprintf("/src/file%d.go", i)},
 			ChangeType: "edit",
 		}
 	}
@@ -966,9 +934,9 @@ func TestDiffModel_FiltersEmptyPathEntries(t *testing.T) {
 	m.SetSize(80, 24)
 	m.loading = true
 
-	changes := []provider.IterationChange{
-		{ChangeID: 1, Path: "", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/src/main.go", ChangeType: "edit"},
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: ""}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
 	}
 
 	m.Update(changedFilesMsg{changes: changes})
@@ -976,8 +944,8 @@ func TestDiffModel_FiltersEmptyPathEntries(t *testing.T) {
 	if len(m.changedFiles) != 1 {
 		t.Errorf("Expected 1 file entry after filtering empty paths, got %d", len(m.changedFiles))
 	}
-	if len(m.changedFiles) > 0 && m.changedFiles[0].Path != "/src/main.go" {
-		t.Errorf("Expected /src/main.go, got %q", m.changedFiles[0].Path)
+	if len(m.changedFiles) > 0 && m.changedFiles[0].Item.Path != "/src/main.go" {
+		t.Errorf("Expected /src/main.go, got %q", m.changedFiles[0].Item.Path)
 	}
 }
 
@@ -1003,7 +971,7 @@ func TestDiffModel_ChangedFilesMsgDoesNotOverwriteDiffViewport(t *testing.T) {
 			},
 		},
 	}
-	m.Update(fileDiffMsg{diff: testDiff, fileThreads: make(map[int][]provider.Thread)})
+	m.Update(fileDiffMsg{diff: testDiff, fileThreads: make(map[int][]azdevops.Thread)})
 
 	if m.viewMode != DiffFileView {
 		t.Fatalf("viewMode = %d after fileDiffMsg, want DiffFileView", m.viewMode)
@@ -1013,9 +981,9 @@ func TestDiffModel_ChangedFilesMsgDoesNotOverwriteDiffViewport(t *testing.T) {
 	diffContent := m.viewport.View()
 
 	// 2. Simulate changedFilesMsg arriving second (the late response)
-	changes := []provider.IterationChange{
-		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/src/other.go", ChangeType: "add"},
+	changes := []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/src/other.go"}, ChangeType: "add"},
 	}
 	m.Update(changedFilesMsg{changes: changes})
 
@@ -1216,39 +1184,40 @@ func TestDiffModel_ResolveKey_NoopWithoutThread(t *testing.T) {
 // --- General comments tests ---
 
 func newTestDiffModelWithGeneralComments() *DiffModel {
-	pr := provider.PullRequest{
-		Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
-		Title:          "Test PR",
-		SourceRefName:  "refs/heads/feature/test",
-		TargetRefName:  "refs/heads/main",
-		RepositoryID:   "repo-123",
-		RepositoryName: "test-repo",
+	pr := azdevops.PullRequest{
+		ID:            101,
+		Title:         "Test PR",
+		SourceRefName: "refs/heads/feature/test",
+		TargetRefName: "refs/heads/main",
+		Repository:    azdevops.Repository{ID: "repo-123", Name: "test-repo"},
 	}
-	threads := []provider.Thread{
+	threads := []azdevops.Thread{
 		{
-			Identity: provider.Identity{ID: "1"},
-			Status:   "active",
-			FilePath: "/src/main.go",
-			Line:     10,
-			Comments: []provider.Comment{
-				{Identity: provider.Identity{ID: "1"}, Content: "Fix this", AuthorName: "Alice"},
+			ID:     1,
+			Status: "active",
+			ThreadContext: &azdevops.ThreadContext{
+				FilePath:       "/src/main.go",
+				RightFileStart: &azdevops.FilePosition{Line: 10},
+			},
+			Comments: []azdevops.Comment{
+				{ID: 1, Content: "Fix this", Author: azdevops.Identity{DisplayName: "Alice"}},
 			},
 		},
 		{
-			Identity: provider.Identity{ID: "2"},
-			Status:   "active",
-			FilePath: "", // general comment
-			Comments: []provider.Comment{
-				{Identity: provider.Identity{ID: "2"}, Content: "Looks good overall", AuthorName: "Bob"},
-				{Identity: provider.Identity{ID: "3"}, Content: "Thanks!", AuthorName: "Alice", ParentCommentID: 2},
+			ID:            2,
+			Status:        "active",
+			ThreadContext: nil, // general comment
+			Comments: []azdevops.Comment{
+				{ID: 2, Content: "Looks good overall", Author: azdevops.Identity{DisplayName: "Bob"}},
+				{ID: 3, Content: "Thanks!", Author: azdevops.Identity{DisplayName: "Alice"}, ParentCommentID: 2},
 			},
 		},
 		{
-			Identity: provider.Identity{ID: "3"},
-			Status:   "fixed",
-			FilePath: "", // resolved general comment
-			Comments: []provider.Comment{
-				{Identity: provider.Identity{ID: "4"}, Content: "Add docs?", AuthorName: "Charlie"},
+			ID:            3,
+			Status:        "fixed",
+			ThreadContext: nil, // resolved general comment
+			Comments: []azdevops.Comment{
+				{ID: 4, Content: "Add docs?", Author: azdevops.Identity{DisplayName: "Charlie"}},
 			},
 		},
 	}
@@ -1262,11 +1231,11 @@ func TestDiffModel_GeneralThreadsComputed(t *testing.T) {
 	if len(m.generalThreads) != 2 {
 		t.Errorf("Expected 2 general threads, got %d", len(m.generalThreads))
 	}
-	if parseThreadID(m.generalThreads[0].Identity.ID) != 2 {
-		t.Errorf("First general thread ID = %q, want '2'", m.generalThreads[0].Identity.ID)
+	if m.generalThreads[0].ID != 2 {
+		t.Errorf("First general thread ID = %d, want 2", m.generalThreads[0].ID)
 	}
-	if parseThreadID(m.generalThreads[1].Identity.ID) != 3 {
-		t.Errorf("Second general thread ID = %q, want '3'", m.generalThreads[1].Identity.ID)
+	if m.generalThreads[1].ID != 3 {
+		t.Errorf("Second general thread ID = %d, want 3", m.generalThreads[1].ID)
 	}
 }
 
@@ -1274,8 +1243,8 @@ func TestDiffModel_FileListAlwaysShowsGeneralComments(t *testing.T) {
 	// Even with no general comments, the entry should appear
 	m := newTestDiffModel() // has no general comments
 	m.SetSize(80, 24)
-	m.changedFiles = []provider.IterationChange{
-		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
 	}
 	m.updateFileListViewport()
 
@@ -1288,8 +1257,8 @@ func TestDiffModel_FileListAlwaysShowsGeneralComments(t *testing.T) {
 func TestDiffModel_FileListShowsGeneralCommentCount(t *testing.T) {
 	m := newTestDiffModelWithGeneralComments()
 	m.SetSize(80, 24)
-	m.changedFiles = []provider.IterationChange{
-		{ChangeID: 1, Path: "/src/main.go", ChangeType: "edit"},
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/src/main.go"}, ChangeType: "edit"},
 	}
 	m.updateFileListViewport()
 
@@ -1303,9 +1272,9 @@ func TestDiffModel_FileListShowsGeneralCommentCount(t *testing.T) {
 func TestDiffModel_FileListIndexOffset(t *testing.T) {
 	m := newTestDiffModelWithGeneralComments()
 	m.SetSize(80, 24)
-	m.changedFiles = []provider.IterationChange{
-		{ChangeID: 1, Path: "/a.go", ChangeType: "edit"},
-		{ChangeID: 2, Path: "/b.go", ChangeType: "edit"},
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
+		{ChangeID: 2, Item: azdevops.ChangeItem{Path: "/b.go"}, ChangeType: "edit"},
 	}
 	m.updateFileListViewport()
 
@@ -1342,8 +1311,8 @@ func TestDiffModel_FileListIndexOffset(t *testing.T) {
 func TestDiffModel_EnterGeneralComments(t *testing.T) {
 	m := newTestDiffModelWithGeneralComments()
 	m.SetSize(80, 24)
-	m.changedFiles = []provider.IterationChange{
-		{ChangeID: 1, Path: "/a.go", ChangeType: "edit"},
+	m.changedFiles = []azdevops.IterationChange{
+		{ChangeID: 1, Item: azdevops.ChangeItem{Path: "/a.go"}, ChangeType: "edit"},
 	}
 	m.updateFileListViewport()
 
@@ -1490,11 +1459,11 @@ func TestDiffModel_ThreadsRefresh_UpdatesGeneralThreads(t *testing.T) {
 	}
 
 	// Simulate threads refresh with an additional general thread
-	newThreads := append(m.threads, provider.Thread{
-		Identity: provider.Identity{ID: "10"},
-		Status:   "active",
-		FilePath: "",
-		Comments: []provider.Comment{{Identity: provider.Identity{ID: "10"}, Content: "New general comment"}},
+	newThreads := append(m.threads, azdevops.Thread{
+		ID:            10,
+		Status:        "active",
+		ThreadContext: nil,
+		Comments:      []azdevops.Comment{{ID: 10, Content: "New general comment"}},
 	})
 
 	m.Update(threadsRefreshMsg{threads: newThreads})

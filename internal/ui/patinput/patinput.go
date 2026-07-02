@@ -38,7 +38,6 @@ func NewModel() Model {
 	return newModel(
 		"Azure DevOps PAT Setup",
 		"No PAT found in keyring. Please enter your Personal Access Token:",
-		"Enter your Azure DevOps Personal Access Token",
 	)
 }
 
@@ -47,31 +46,12 @@ func NewModelForUpdate() Model {
 	return newModel(
 		"Azure DevOps PAT Update",
 		"Enter your new Personal Access Token to replace the existing one:",
-		"Enter your Azure DevOps Personal Access Token",
 	)
 }
 
-// NewGitHubModel creates a new token input model for first-time GitHub setup.
-func NewGitHubModel() Model {
-	return newModel(
-		"GitHub Token Setup",
-		"No token found in keyring. Please enter your GitHub Personal Access Token:",
-		"Enter your GitHub token",
-	)
-}
-
-// NewGitHubModelForUpdate creates a new token input model for updating an existing GitHub token.
-func NewGitHubModelForUpdate() Model {
-	return newModel(
-		"GitHub Token Update",
-		"Enter your new GitHub Personal Access Token to replace the existing one:",
-		"Enter your GitHub token",
-	)
-}
-
-func newModel(title, prompt, placeholder string) Model {
+func newModel(title, prompt string) Model {
 	ti := textinput.New()
-	ti.Placeholder = placeholder
+	ti.Placeholder = "Enter your Azure DevOps Personal Access Token"
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Width = 60

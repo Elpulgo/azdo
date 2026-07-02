@@ -70,8 +70,7 @@ func Run(version, commit string) error {
 		return fmt.Errorf("failed to seed demo metrics: %w", err)
 	}
 
-	adapter := azdevops.NewAdapter(client)
-	model := app.NewModel(adapter, client, cfg, version+" (demo)", commit)
+	model := app.NewModel(client, cfg, version+" (demo)", commit)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

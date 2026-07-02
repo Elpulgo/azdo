@@ -187,3 +187,4 @@ func TestGetPAT_ErrorWhenNoFallback(t *testing.T) {
 		t.Errorf("Error message should mention AZDO_PAT env var: %s", errMsg)
 	}
 }
+

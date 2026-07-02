@@ -6,8 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/browser"
-	"github.com/Elpulgo/azdo/internal/provider"
+	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -17,17 +16,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// openURL is a package-level seam so tests can intercept browser launches.
-var openURL = browser.Open
-
-// openURLResultMsg is sent when an attempt to open a URL in the browser completes.
-type openURLResultMsg struct {
-	err error
-}
-
 // TimelineNode represents a node in the timeline tree with its children
 type TimelineNode struct {
-	Record      provider.TimelineRecord
+	Record      azdevops.TimelineRecord
 	Children    []*TimelineNode
 	VisualDepth int // depth in the displayed tree (skips filtered types)
 	Expanded    bool
@@ -55,9 +46,9 @@ func hasVisibleChildren(nodes []*TimelineNode) bool {
 
 // DetailModel represents the pipeline detail view showing timeline
 type DetailModel struct {
-	client        provider.Provider
-	run           provider.PipelineRun
-	timeline      *provider.Timeline
+	client        *azdevops.Client
+	run           azdevops.PipelineRun
+	timeline      *azdevops.Timeline
 	tree          []*TimelineNode
 	flatItems     []*TimelineNode
 	allFlatItems  []*TimelineNode // unfiltered items, set when searching
@@ -71,20 +62,19 @@ type DetailModel struct {
 	height        int
 	viewport      viewport.Model
 	ready         bool
-	statusMessage string
 	spinner       *components.LoadingIndicator
 	styles        *styles.Styles
 }
 
 // NewDetailModel creates a new detail model for a pipeline run with default styles
-func NewDetailModel(client provider.Provider, run provider.PipelineRun) *DetailModel {
+func NewDetailModel(client *azdevops.Client, run azdevops.PipelineRun) *DetailModel {
 	return NewDetailModelWithStyles(client, run, styles.DefaultStyles())
 }
 
 // NewDetailModelWithStyles creates a new detail model with custom styles
-func NewDetailModelWithStyles(client provider.Provider, run provider.PipelineRun, s *styles.Styles) *DetailModel {
+func NewDetailModelWithStyles(client *azdevops.Client, run azdevops.PipelineRun, s *styles.Styles) *DetailModel {
 	spinner := components.NewLoadingIndicator(s)
-	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.DefinitionName, run.BuildNumber))
+	spinner.SetMessage(fmt.Sprintf("Loading timeline for %s #%s...", run.Definition.Name, run.BuildNumber))
 
 	ti := textinput.New()
 	ti.Prompt = "/ "
@@ -108,7 +98,7 @@ func (m *DetailModel) Init() tea.Cmd {
 }
 
 // SetTimeline sets the timeline data (useful for testing)
-func (m *DetailModel) SetTimeline(timeline *provider.Timeline) {
+func (m *DetailModel) SetTimeline(timeline *azdevops.Timeline) {
 	m.timeline = timeline
 	m.tree = buildTimelineTree(timeline)
 	m.flatItems = flattenTree(m.tree)
@@ -199,8 +189,6 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.loading = true
 			m.spinner.SetVisible(true)
 			return m, tea.Batch(m.fetchTimeline(), m.spinner.Tick())
-		case "o":
-			return m, m.openInBrowser()
 		}
 
 	case timelineMsg:
@@ -211,14 +199,6 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			return m, nil
 		}
 		m.SetTimeline(msg.timeline)
-
-	case openURLResultMsg:
-		if msg.err != nil {
-			m.statusMessage = fmt.Sprintf("Failed to open browser: %v", msg.err)
-		} else {
-			m.statusMessage = "Opened in browser"
-		}
-		return m, nil
 	}
 
 	return m, nil
@@ -248,7 +228,7 @@ func (m *DetailModel) View() string {
 	var sb strings.Builder
 
 	// Header
-	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("%s #%s", m.run.DefinitionName, m.run.BuildNumber)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("%s #%s", m.run.Definition.Name, m.run.BuildNumber)))
 	sb.WriteString("\n")
 	sb.WriteString(strings.Repeat("─", min(m.width-2, 60)))
 	sb.WriteString("\n")
@@ -295,7 +275,7 @@ func (m *DetailModel) renderRecord(node *TimelineNode, selected bool) string {
 	}
 
 	// Add log indicator if available
-	if node.Record.LogID != 0 {
+	if node.Record.Log != nil {
 		line = fmt.Sprintf("%s 📄", line)
 	}
 
@@ -322,7 +302,6 @@ func (m *DetailModel) SelectedItem() *TimelineNode {
 // MoveUp moves selection up
 func (m *DetailModel) MoveUp() {
 	if m.selectedIndex > 0 {
-		m.statusMessage = ""
 		m.selectedIndex--
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
@@ -332,7 +311,6 @@ func (m *DetailModel) MoveUp() {
 // MoveDown moves selection down
 func (m *DetailModel) MoveDown() {
 	if m.selectedIndex < len(m.flatItems)-1 {
-		m.statusMessage = ""
 		m.selectedIndex++
 		m.updateViewportContent()
 		m.ensureSelectedVisible()
@@ -432,48 +410,25 @@ func (m *DetailModel) ensureSelectedVisible() {
 // CanViewLogs returns true if the selected item has logs that can be viewed
 func (m *DetailModel) CanViewLogs() bool {
 	selected := m.SelectedItem()
-	return selected != nil && selected.Record.LogID != 0
+	return selected != nil && selected.Record.Log != nil
 }
 
-// GetStatusMessage returns a status message based on the selected item.
-// A transient browser-open result takes precedence; it is cleared the next time
-// the selection moves so the per-record log hint resumes.
+// GetStatusMessage returns a status message based on the selected item
 func (m *DetailModel) GetStatusMessage() string {
-	if m.statusMessage != "" {
-		return m.statusMessage
-	}
 	selected := m.SelectedItem()
 	if selected == nil {
 		return ""
 	}
 
-	if selected.Record.LogID == 0 {
+	if selected.Record.Log == nil {
 		return fmt.Sprintf("%s has no logs", selected.Record.Type)
 	}
 	return ""
 }
 
 // GetRun returns the pipeline run
-func (m *DetailModel) GetRun() provider.PipelineRun {
+func (m *DetailModel) GetRun() azdevops.PipelineRun {
 	return m.run
-}
-
-// openInBrowser returns a command that opens the pipeline-run URL in the user's
-// default browser. It prefers the WebURL carried on the run (populated by both
-// the Azure and GitHub mappers) and falls back to the provider's PipelineURL
-// builder. If no URL can be produced it sets a status message and returns nil.
-func (m *DetailModel) openInBrowser() tea.Cmd {
-	url := m.run.WebURL
-	if url == "" && m.client != nil {
-		url = m.client.PipelineURL(m.run.Identity.Scope, parseBuildID(m.run.Identity.ID))
-	}
-	if url == "" {
-		m.statusMessage = "Cannot open: no pipeline URL available"
-		return nil
-	}
-	return func() tea.Msg {
-		return openURLResultMsg{err: openURL(url)}
-	}
 }
 
 // GetContextItems returns context bar items for this view
@@ -481,7 +436,6 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "↑↓/pgup/pgdn", Description: "navigate"},
 		{Key: "enter", Description: "expand/collapse or view logs"},
-		{Key: "o", Description: "open in browser"},
 	}
 }
 
@@ -613,16 +567,13 @@ func (m *DetailModel) applySearchFilter() {
 // Messages
 
 type timelineMsg struct {
-	timeline *provider.Timeline
+	timeline *azdevops.Timeline
 	err      error
 }
 
 func (m *DetailModel) fetchTimeline() tea.Cmd {
 	return func() tea.Msg {
-		if m.client == nil {
-			return timelineMsg{timeline: nil, err: nil}
-		}
-		timeline, err := m.client.GetBuildTimeline(m.run.Identity.Scope, parseBuildID(m.run.Identity.ID))
+		timeline, err := m.client.GetBuildTimeline(m.run.ID)
 		return timelineMsg{timeline: timeline, err: err}
 	}
 }
@@ -689,7 +640,7 @@ func isFilteredRecordType(recordType string) bool {
 }
 
 // buildTimelineTree builds a tree structure from flat timeline records
-func buildTimelineTree(timeline *provider.Timeline) []*TimelineNode {
+func buildTimelineTree(timeline *azdevops.Timeline) []*TimelineNode {
 	if timeline == nil || len(timeline.Records) == 0 {
 		return nil
 	}
@@ -707,10 +658,10 @@ func buildTimelineTree(timeline *provider.Timeline) []*TimelineNode {
 	// Build the tree by linking parents and children
 	var roots []*TimelineNode
 	for _, node := range nodeMap {
-		if node.Record.ParentID == "" {
+		if node.Record.ParentID == nil {
 			roots = append(roots, node)
 		} else {
-			parentNode, ok := nodeMap[node.Record.ParentID]
+			parentNode, ok := nodeMap[*node.Record.ParentID]
 			if ok {
 				parentNode.Children = append(parentNode.Children, node)
 			} else {

@@ -7,9 +7,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/diff"
-	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
-	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -27,10 +25,10 @@ type openURLResultMsg struct {
 
 // DetailModel represents the PR detail view showing description, reviewers, and changed files
 type DetailModel struct {
-	client        provider.Provider
-	pr            provider.PullRequest
-	threads       []provider.Thread
-	changedFiles  []provider.IterationChange
+	client        *azdevops.Client
+	pr            azdevops.PullRequest
+	threads       []azdevops.Thread
+	changedFiles  []azdevops.IterationChange
 	commentCounts map[string]int // filePath -> comment count
 	fileIndex     int
 	loading       bool
@@ -48,19 +46,19 @@ type DetailModel struct {
 }
 
 // NewDetailModel creates a new PR detail model with default styles
-func NewDetailModel(client provider.Provider, pr provider.PullRequest) *DetailModel {
+func NewDetailModel(client *azdevops.Client, pr azdevops.PullRequest) *DetailModel {
 	return NewDetailModelWithStyles(client, pr, styles.DefaultStyles())
 }
 
 // NewDetailModelWithStyles creates a new PR detail model with custom styles
-func NewDetailModelWithStyles(client provider.Provider, pr provider.PullRequest, s *styles.Styles) *DetailModel {
+func NewDetailModelWithStyles(client *azdevops.Client, pr azdevops.PullRequest, s *styles.Styles) *DetailModel {
 	spinner := components.NewLoadingIndicator(s)
-	spinner.SetMessage(fmt.Sprintf("Loading PR #%d...", prNumericID(pr)))
+	spinner.SetMessage(fmt.Sprintf("Loading PR #%d...", pr.ID))
 
 	return &DetailModel{
 		client:        client,
 		pr:            pr,
-		threads:       []provider.Thread{},
+		threads:       []azdevops.Thread{},
 		commentCounts: make(map[string]int),
 		fileIndex:     0,
 		spinner:       spinner,
@@ -147,7 +145,7 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.threads = diff.FilterSystemThreadsP(msg.threads)
+		m.threads = azdevops.FilterSystemThreads(msg.threads)
 		m.threadsLoaded = true
 		m.finishLoading()
 
@@ -190,7 +188,7 @@ func (m *DetailModel) finishLoading() {
 	}
 	m.loading = false
 	m.spinner.SetVisible(false)
-	m.commentCounts = diff.CountCommentsPerFileP(m.threads)
+	m.commentCounts = diff.CountCommentsPerFile(m.threads)
 	if m.ready {
 		m.updateViewportContent()
 	}
@@ -219,11 +217,11 @@ func (m *DetailModel) View() string {
 	var sb strings.Builder
 
 	// Header with PR title
-	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("PR #%d: %s", prNumericID(m.pr), m.pr.Title)))
+	sb.WriteString(m.styles.Header.Render(fmt.Sprintf("PR #%d: %s", m.pr.ID, m.pr.Title)))
 	sb.WriteString("\n")
 
 	// Branch info
-	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s → %s", branchShortName(m.pr.SourceRefName), branchShortName(m.pr.TargetRefName))))
+	sb.WriteString(m.styles.Muted.Render(fmt.Sprintf("%s → %s", m.pr.SourceBranchShortName(), m.pr.TargetBranchShortName())))
 	sb.WriteString("\n")
 	separatorWidth := min(m.width-2, 60)
 	if separatorWidth < 1 {
@@ -256,7 +254,12 @@ func (m *DetailModel) updateViewportContent() {
 
 	// "Go to PR" link
 	if m.client != nil {
-		prURL := m.client.PRURL(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr))
+		prURL := buildPROverviewURL(
+			m.client.GetOrg(),
+			m.client.GetProject(),
+			m.pr.Repository.ID,
+			m.pr.ID,
+		)
 		if prURL != "" {
 			sb.WriteString(hyperlink(m.styles.Link.Render("Go to PR"), prURL))
 			sb.WriteString("\n\n")
@@ -267,8 +270,8 @@ func (m *DetailModel) updateViewportContent() {
 	if !m.pr.CreationDate.IsZero() {
 		sb.WriteString(m.styles.Label.Render("Created: "))
 		sb.WriteString(m.pr.CreationDate.Format("2006-01-02 15:04"))
-		if m.pr.CreatedByName != "" {
-			sb.WriteString(" by " + m.pr.CreatedByName)
+		if m.pr.CreatedBy.DisplayName != "" {
+			sb.WriteString(" by " + m.pr.CreatedBy.DisplayName)
 		}
 		sb.WriteString("\n\n")
 	}
@@ -278,15 +281,15 @@ func (m *DetailModel) updateViewportContent() {
 		sb.WriteString(m.styles.Label.Render("Reviewers"))
 		sb.WriteString("\n")
 		for _, reviewer := range m.pr.Reviewers {
-			icon := reviewerVoteIconWithStyles(reviewer.Kind, m.styles)
-			voteDesc := reviewerVoteDescription(reviewer.Kind)
+			icon := reviewerVoteIconWithStyles(reviewer.Vote, m.styles)
+			voteDesc := reviewerVoteDescription(reviewer.Vote)
 			sb.WriteString(fmt.Sprintf("  %s %s (%s)\n", icon, reviewer.DisplayName, m.styles.Muted.Render(voteDesc)))
 		}
 		sb.WriteString("\n")
 	}
 
 	// General comments entry (selectable, navigable like files)
-	generalThreads := diff.FilterGeneralThreadsP(m.threads)
+	generalThreads := diff.FilterGeneralThreads(m.threads)
 	if len(generalThreads) > 0 {
 		generalLine := fmt.Sprintf("  💬 General comments (%d)", len(generalThreads))
 		if m.fileIndex == 0 {
@@ -316,18 +319,18 @@ func (m *DetailModel) updateViewportContent() {
 }
 
 // renderFileEntry renders a single file in the changed files list
-func (m *DetailModel) renderFileEntry(change provider.IterationChange, selected bool) string {
+func (m *DetailModel) renderFileEntry(change azdevops.IterationChange, selected bool) string {
 	icon, style := changeTypeDisplay(change.ChangeType, m.styles)
 
-	path := change.Path
+	path := change.Item.Path
 	if change.ChangeType == "rename" && change.OriginalPath != "" {
-		path = fmt.Sprintf("%s -> %s", change.OriginalPath, change.Path)
+		path = fmt.Sprintf("%s -> %s", change.OriginalPath, change.Item.Path)
 	}
 
 	line := fmt.Sprintf("  %s %s", icon, path)
 
 	// Add comment count if there are comments for this file
-	count := m.commentCounts[change.Path]
+	count := m.commentCounts[change.Item.Path]
 	if count > 0 {
 		line += " " + m.styles.DiffCommentCount.Render(fmt.Sprintf("(%d)", count))
 	}
@@ -393,17 +396,17 @@ func (m *DetailModel) ensureSelectedVisible() {
 
 // SetThreads sets the threads (useful for testing)
 // Filters out system-generated threads
-func (m *DetailModel) SetThreads(threads []provider.Thread) {
-	m.threads = diff.FilterSystemThreadsP(threads)
+func (m *DetailModel) SetThreads(threads []azdevops.Thread) {
+	m.threads = azdevops.FilterSystemThreads(threads)
 	m.threadsLoaded = true
-	m.commentCounts = diff.CountCommentsPerFileP(m.threads)
+	m.commentCounts = diff.CountCommentsPerFile(m.threads)
 	if m.ready {
 		m.updateViewportContent()
 	}
 }
 
 // SetChangedFiles sets the changed files (useful for testing)
-func (m *DetailModel) SetChangedFiles(files []provider.IterationChange) {
+func (m *DetailModel) SetChangedFiles(files []azdevops.IterationChange) {
 	m.changedFiles = filterFileChanges(files)
 	m.fileIndex = 0
 	m.filesLoaded = true
@@ -493,7 +496,7 @@ func (m *DetailModel) getSelectedItemLineOffset() int {
 	if m.pr.Description != "" {
 		lineOffset += strings.Count(m.pr.Description, "\n") + 2
 	}
-	if m.client != nil && m.pr.RepositoryID != "" {
+	if m.client != nil && m.pr.Repository.ID != "" {
 		lineOffset += 2
 	}
 	if !m.pr.CreationDate.IsZero() {
@@ -525,7 +528,7 @@ func (m *DetailModel) getSelectedItemLineOffset() int {
 
 // generalCommentsOffset returns 1 if there are general comments (taking index 0), 0 otherwise
 func (m *DetailModel) generalCommentsOffset() int {
-	generalThreads := diff.FilterGeneralThreadsP(m.threads)
+	generalThreads := diff.FilterGeneralThreads(m.threads)
 	if len(generalThreads) > 0 {
 		return 1
 	}
@@ -548,7 +551,7 @@ func (m *DetailModel) SelectedIndex() int {
 }
 
 // SelectedFile returns the currently selected changed file
-func (m *DetailModel) SelectedFile() *provider.IterationChange {
+func (m *DetailModel) SelectedFile() *azdevops.IterationChange {
 	fi := m.fileIndex - m.generalCommentsOffset()
 	if fi < 0 || fi >= len(m.changedFiles) {
 		return nil
@@ -575,7 +578,7 @@ func (m *DetailModel) openInBrowser() tea.Cmd {
 		m.statusMessage = "Cannot open: no Azure DevOps client"
 		return nil
 	}
-	url := m.client.PRURL(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr))
+	url := buildPROverviewURL(m.client.GetOrg(), m.client.GetProject(), m.pr.Repository.ID, m.pr.ID)
 	if url == "" {
 		m.statusMessage = "Cannot open: missing organization, project, or repository"
 		return nil
@@ -586,12 +589,12 @@ func (m *DetailModel) openInBrowser() tea.Cmd {
 }
 
 // GetThreads returns the current threads (for passing to DiffModel)
-func (m *DetailModel) GetThreads() []provider.Thread {
+func (m *DetailModel) GetThreads() []azdevops.Thread {
 	return m.threads
 }
 
 // GetChangedFiles returns the changed files
-func (m *DetailModel) GetChangedFiles() []provider.IterationChange {
+func (m *DetailModel) GetChangedFiles() []azdevops.IterationChange {
 	return m.changedFiles
 }
 
@@ -609,13 +612,8 @@ func (m *DetailModel) GetStatusMessage() string {
 }
 
 // GetPR returns the pull request
-func (m *DetailModel) GetPR() provider.PullRequest {
+func (m *DetailModel) GetPR() azdevops.PullRequest {
 	return m.pr
-}
-
-// GetPRID returns the numeric ID of the pull request.
-func (m *DetailModel) GetPRID() int {
-	return prNumericID(m.pr)
 }
 
 // Helper functions
@@ -626,6 +624,24 @@ func hyperlink(text, url string) string {
 		return text
 	}
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
+}
+
+// buildPRThreadURL constructs the Azure DevOps URL to view a specific comment thread in a PR
+func buildPRThreadURL(org, project, repoID string, prID int, threadID int) string {
+	if org == "" || project == "" || repoID == "" || threadID == 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d?discussionId=%d",
+		org, project, repoID, prID, threadID)
+}
+
+// buildPROverviewURL constructs the Azure DevOps URL to view the PR overview page
+func buildPROverviewURL(org, project, repoID string, prID int) string {
+	if org == "" || project == "" || repoID == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
+		org, project, repoID, prID)
 }
 
 // truncateString truncates a string to maxRunes runes (not bytes)
@@ -669,16 +685,40 @@ func shortenFilePath(path string) string {
 	return path
 }
 
-// reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles.
-// Delegates to the display map so glyph+color stay in one place.
-func reviewerVoteIconWithStyles(kind provider.VoteKind, s *styles.Styles) string {
-	return display.VoteStyle(kind, s).Render(display.VoteGlyph(kind))
+// reviewerVoteIconWithStyles returns an icon for the reviewer's vote using provided styles
+func reviewerVoteIconWithStyles(vote int, s *styles.Styles) string {
+	switch vote {
+	case 10:
+		return s.Success.Render("✓")
+	case 5:
+		return s.Warning.Render("~")
+	case 0:
+		return s.Muted.Render("○")
+	case -5:
+		return s.Warning.Render("◐")
+	case -10:
+		return s.Error.Render("✗")
+	default:
+		return s.Muted.Render("?")
+	}
 }
 
-// reviewerVoteDescription returns a human-readable description of a vote kind.
-// Delegates to the display map.
-func reviewerVoteDescription(kind provider.VoteKind) string {
-	return display.VoteLabel(kind)
+// reviewerVoteDescription returns a human-readable description of the vote
+func reviewerVoteDescription(vote int) string {
+	switch vote {
+	case 10:
+		return "Approved"
+	case 5:
+		return "Approved with suggestions"
+	case 0:
+		return "No vote"
+	case -5:
+		return "Waiting for author"
+	case -10:
+		return "Rejected"
+	default:
+		return "Unknown"
+	}
 }
 
 // voteResultDescription returns a human-readable result message for a vote action
@@ -718,7 +758,7 @@ func threadStatusIconWithStyles(status string, s *styles.Styles) string {
 // Messages
 
 type threadsMsg struct {
-	threads []provider.Thread
+	threads []azdevops.Thread
 	err     error
 }
 
@@ -729,31 +769,31 @@ type voteResultMsg struct {
 
 // openFileDiffMsg signals that the user wants to open the diff for a specific file
 type openFileDiffMsg struct {
-	file provider.IterationChange
+	file azdevops.IterationChange
 }
 
 // openGeneralCommentsMsg signals that the user wants to view general PR comments
 type openGeneralCommentsMsg struct{}
 
-// fetchThreads fetches PR threads via the provider
+// fetchThreads fetches PR threads from Azure DevOps
 func (m *DetailModel) fetchThreads() tea.Cmd {
 	return func() tea.Msg {
 		if m.client == nil {
 			return threadsMsg{threads: nil, err: nil}
 		}
-		threads, err := m.client.GetPRThreads(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr))
+		threads, err := m.client.GetPRThreads(m.pr.Repository.ID, m.pr.ID)
 		return threadsMsg{threads: threads, err: err}
 	}
 }
 
-// fetchChangedFiles loads iterations and changed files via the provider
+// fetchChangedFiles loads iterations and changed files
 func (m *DetailModel) fetchChangedFiles() tea.Cmd {
 	return func() tea.Msg {
 		if m.client == nil {
 			return changedFilesMsg{changes: nil, err: nil}
 		}
 
-		iterations, err := m.client.GetPRIterations(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr))
+		iterations, err := m.client.GetPRIterations(m.pr.Repository.ID, m.pr.ID)
 		if err != nil {
 			return changedFilesMsg{err: err}
 		}
@@ -762,7 +802,7 @@ func (m *DetailModel) fetchChangedFiles() tea.Cmd {
 		}
 
 		latestID := iterations[len(iterations)-1].ID
-		changes, err := m.client.GetPRIterationChanges(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), latestID)
+		changes, err := m.client.GetPRIterationChanges(m.pr.Repository.ID, m.pr.ID, latestID)
 		if err != nil {
 			return changedFilesMsg{err: err}
 		}
@@ -777,7 +817,7 @@ func (m *DetailModel) votePR(vote int) tea.Cmd {
 		if m.client == nil {
 			return voteResultMsg{message: "", err: nil}
 		}
-		err := m.client.VotePullRequest(m.pr.Identity.Scope, m.pr.RepositoryID, prNumericID(m.pr), vote)
+		err := m.client.VotePullRequest(m.pr.Repository.ID, m.pr.ID, vote)
 		if err != nil {
 			return voteResultMsg{message: "", err: err}
 		}

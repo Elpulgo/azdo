@@ -10,7 +10,6 @@ import (
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/polling"
-	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	"github.com/Elpulgo/azdo/internal/version"
@@ -45,7 +44,7 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -63,9 +62,7 @@ func TestModel_StatusBarShowsOrgProject(t *testing.T) {
 	}
 }
 
-func TestModel_HandlesPollingTick_NilClient_NoCmd(t *testing.T) {
-	// When mc is nil (GitHub-only), a TickMsg must produce no command —
-	// the poller no-ops rather than panicking on the nil Azure backend.
+func TestModel_HandlesPollingTick(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -74,12 +71,14 @@ func TestModel_HandlesPollingTick_NilClient_NoCmd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
-	// Send a tick message — must not panic, cmd must be nil (no Azure polling).
+	// Send a tick message
 	_, cmd := m.Update(polling.TickMsg{})
-	if cmd != nil {
-		t.Error("expected no command after tick message when Azure backend is nil")
+
+	// Should return a command (to fetch data)
+	if cmd == nil {
+		t.Error("expected a command after tick message")
 	}
 }
 
@@ -92,13 +91,13 @@ func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
 	// Simulate successful data fetch
-	runs := []provider.PipelineRun{
-		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
+	runs := []azdevops.PipelineRun{
+		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
 	}
 	msg := polling.PipelineRunsUpdated{Runs: runs, Err: nil}
 
@@ -121,7 +120,7 @@ func TestModel_HandlesPipelineRunsUpdated_Error(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -151,7 +150,7 @@ func TestModel_Init_StartsPolling(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	cmd := m.Init()
 
 	// Should return commands for initialization
@@ -169,7 +168,7 @@ func TestModel_DefaultTab_IsPullRequests(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
 	if m.activeTab != TabPullRequests {
 		t.Errorf("Default tab should be TabPullRequests, got %d", m.activeTab)
@@ -185,7 +184,7 @@ func TestModel_TabSwitching_Key1_IsPullRequests(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -209,7 +208,7 @@ func TestModel_TabSwitching_Key2_IsWorkItems(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -231,7 +230,7 @@ func TestModel_TabSwitching_Key3_IsPipelines(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -253,7 +252,7 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -266,43 +265,6 @@ func TestModel_View_ShowsPullRequests_WhenActiveTab(t *testing.T) {
 	}
 }
 
-// scopeStub embeds provider.Provider so only Scopes() needs an implementation;
-// the other methods are never called by displayScopes.
-type scopeStub struct {
-	provider.Provider
-	scopes []string
-}
-
-func (s scopeStub) Scopes() []string { return s.scopes }
-
-func TestDisplayScopes_UnionWithDisplayNames(t *testing.T) {
-	cfg := &config.Config{
-		Projects:     []string{"projA"},
-		DisplayNames: map[string]string{"projA": "Project A"},
-	}
-	// A mixed setup: one Azure project (display-name mapped) and one GitHub repo
-	// (passed through unchanged). Both must appear.
-	p := scopeStub{scopes: []string{"projA", "octo/repo"}}
-
-	got := displayScopes(p, cfg)
-	want := []string{"Project A", "octo/repo"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("displayScopes() = %v, want %v", got, want)
-	}
-}
-
-func TestDisplayScopes_NilProviderFallsBackToProjects(t *testing.T) {
-	cfg := &config.Config{
-		Projects:     []string{"projA", "projB"},
-		DisplayNames: map[string]string{"projA": "Project A"},
-	}
-	got := displayScopes(nil, cfg)
-	want := []string{"Project A", "projB"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("displayScopes(nil) = %v, want %v (legacy cfg.Projects behavior)", got, want)
-	}
-}
-
 func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -312,7 +274,7 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 200
 	m.height = 60
 
@@ -332,39 +294,6 @@ func TestModel_HelpModalShowsConfigPath(t *testing.T) {
 	}
 }
 
-func TestModel_HelpModal_ReflectsTermOverride(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-		Terms:           map[string]string{"work_items": "Tasks"},
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(nil, client, cfg, "dev", "")
-	m.width = 200
-	m.height = 60
-
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
-	m = updated.(Model)
-
-	// Open the help modal.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	m = updated.(Model)
-
-	view := m.View()
-
-	// The help dialog's Tabs line must honor the term override, not the
-	// hard-coded default label.
-	if !strings.Contains(view, "Tasks") {
-		t.Error("help modal Tabs line should show the overridden term 'Tasks'")
-	}
-	if strings.Contains(view, "Work Items") {
-		t.Error("help modal Tabs line should not show the default 'Work Items' once overridden")
-	}
-}
-
 func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -374,7 +303,7 @@ func TestModel_View_ShowsWorkItems_WhenActiveTab(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -399,7 +328,7 @@ func TestModel_View_HasBorderedTabBar(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -423,7 +352,7 @@ func TestModel_View_HasBorderedContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -449,7 +378,7 @@ func TestModel_View_TabBarAppearsBeforeContent(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -479,7 +408,7 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
 	// Simulate window size first
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -490,13 +419,14 @@ func TestModel_View_PipelinesWithData_FitsInTerminal(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate pipeline data arriving (like from polling)
-	runs := make([]provider.PipelineRun, 30)
+	runs := make([]azdevops.PipelineRun, 30)
 	for i := range runs {
-		runs[i] = provider.PipelineRun{
-			Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
-			BuildNumber:    fmt.Sprintf("2024.%d", i+1),
-			DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
-			RunStatus:      provider.RunStatusSucceeded,
+		runs[i] = azdevops.PipelineRun{
+			ID:          i + 1,
+			BuildNumber: fmt.Sprintf("2024.%d", i+1),
+			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
+			Status:      "completed",
+			Result:      "succeeded",
 		}
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -548,7 +478,7 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	var client *azdevops.MultiClient
 
 	terminalHeight := 40
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: terminalHeight})
 	m = updated.(Model)
@@ -558,13 +488,14 @@ func TestModel_View_ContentFillsBoxWithoutExcessPadding(t *testing.T) {
 	m = updated.(Model)
 
 	// Load enough data to fill the table
-	runs := make([]provider.PipelineRun, 50)
+	runs := make([]azdevops.PipelineRun, 50)
 	for i := range runs {
-		runs[i] = provider.PipelineRun{
-			Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
-			BuildNumber:    fmt.Sprintf("2024.%d", i+1),
-			DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
-			RunStatus:      provider.RunStatusSucceeded,
+		runs[i] = azdevops.PipelineRun{
+			ID:          i + 1,
+			BuildNumber: fmt.Sprintf("2024.%d", i+1),
+			Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
+			Status:      "completed",
+			Result:      "succeeded",
 		}
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -633,7 +564,7 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	terminalHeights := []int{24, 30, 40, 50}
 	for _, termHeight := range terminalHeights {
 		t.Run(fmt.Sprintf("height_%d", termHeight), func(t *testing.T) {
-			m := NewModel(nil, client, cfg, "dev", "")
+			m := NewModel(client, cfg, "dev", "")
 
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: termHeight})
 			m = updated.(Model)
@@ -643,13 +574,14 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 			m = updated.(Model)
 
 			// Load data so content fills
-			runs := make([]provider.PipelineRun, 50)
+			runs := make([]azdevops.PipelineRun, 50)
 			for i := range runs {
-				runs[i] = provider.PipelineRun{
-					Identity:       provider.Identity{ID: fmt.Sprintf("%d", i+1)},
-					BuildNumber:    fmt.Sprintf("2024.%d", i+1),
-					DefinitionName: fmt.Sprintf("Pipeline-%d", i+1),
-					RunStatus:      provider.RunStatusSucceeded,
+				runs[i] = azdevops.PipelineRun{
+					ID:          i + 1,
+					BuildNumber: fmt.Sprintf("2024.%d", i+1),
+					Definition:  azdevops.PipelineDefinition{Name: fmt.Sprintf("Pipeline-%d", i+1)},
+					Status:      "completed",
+					Result:      "succeeded",
 				}
 			}
 			updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
@@ -682,7 +614,7 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
@@ -692,8 +624,8 @@ func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	m = updated.(Model)
 
 	// Load some pipeline data
-	runs := []provider.PipelineRun{
-		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
+	runs := []azdevops.PipelineRun{
+		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
 	m = updated.(Model)
@@ -749,7 +681,7 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
 	// Set up window size
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -760,9 +692,9 @@ func TestModel_MyItemsToggle_EndToEnd(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate work items arriving
-	items := []provider.WorkItem{
-		{Identity: provider.Identity{ID: "1"}, Title: "My task", WorkItemType: "Task", State: "Active"},
-		{Identity: provider.Identity{ID: "2"}, Title: "Other task", WorkItemType: "Task", State: "Active"},
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "My task", WorkItemType: "Task", State: "Active"}},
+		{ID: 2, Fields: azdevops.WorkItemFields{Title: "Other task", WorkItemType: "Task", State: "Active"}},
 	}
 	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: items})
 	m = updated.(Model)
@@ -806,7 +738,7 @@ func TestModel_PRTab_StatusBarShowsMyItemsKeybinding(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
@@ -829,7 +761,7 @@ func TestModel_MyPRsToggle_EndToEnd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
@@ -870,7 +802,7 @@ func TestModel_AsReviewerToggle_EndToEnd(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
@@ -909,7 +841,7 @@ func TestModel_PRTab_StatusBarShowsAsReviewerKeybinding(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
@@ -928,7 +860,7 @@ func TestModel_View_ShowsLogo(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -952,7 +884,7 @@ func TestModel_TabBar_Shows_Three_Tabs(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -979,7 +911,7 @@ func TestModel_UpdateCheckMsg_ShowsNotification(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "1.0.0", "")
+	m := NewModel(client, cfg, "1.0.0", "")
 	m.width = 120
 	m.height = 30
 
@@ -1011,7 +943,7 @@ func TestModel_CriticalErrorMsg_ShowsErrorModal(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1041,7 +973,7 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1049,8 +981,8 @@ func TestModel_ThemeSwitch_PreservesConnectionState(t *testing.T) {
 	m = updated.(Model)
 
 	// Simulate successful data fetch to set status to "connected"
-	runs := []provider.PipelineRun{
-		{Identity: provider.Identity{ID: "1"}, BuildNumber: "2024.1", DefinitionName: "Build"},
+	runs := []azdevops.PipelineRun{
+		{ID: 1, BuildNumber: "2024.1", Definition: azdevops.PipelineDefinition{Name: "Build"}},
 	}
 	updated, _ = m.Update(polling.PipelineRunsUpdated{Runs: runs, Err: nil})
 	m = updated.(Model)
@@ -1122,7 +1054,7 @@ func TestModel_ThemeSwitch_DoesNotRefetchMetrics(t *testing.T) {
 	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1148,7 +1080,7 @@ func TestModel_ThemeSwitch_PreservesWarningMessage(t *testing.T) {
 	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1178,7 +1110,7 @@ func TestModel_HelpModalShowsVersionInfo(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "1.5.0", "abc1234")
+	m := NewModel(client, cfg, "1.5.0", "abc1234")
 	m.width = 200
 	m.height = 60
 
@@ -1209,7 +1141,7 @@ func TestModel_HelpModalShowsDevVersion(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "none")
+	m := NewModel(client, cfg, "dev", "none")
 	m.width = 200
 	m.height = 60
 
@@ -1236,7 +1168,7 @@ func TestModel_UpdateCheckMsg_NoUpdateAvailable(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "2.0.0", "")
+	m := NewModel(client, cfg, "2.0.0", "")
 	m.width = 120
 	m.height = 30
 
@@ -1267,7 +1199,7 @@ func TestModel_DisabledPanes_PipelinesDisabled_TabBarHidesPipelines(t *testing.T
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1294,7 +1226,7 @@ func TestModel_DisabledPanes_WorkItemsDisabled_TabBarHidesWorkItems(t *testing.T
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1321,7 +1253,7 @@ func TestModel_DisabledPanes_Key2_GoesToPipelines_WhenWorkItemsDisabled(t *testi
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1344,7 +1276,7 @@ func TestModel_DisabledPanes_Key3_Noop_WhenOnlyTwoTabs(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1367,7 +1299,7 @@ func TestModel_DisabledPanes_ArrowKeys_SkipDisabledTabs(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -1396,66 +1328,6 @@ func TestModel_DisabledPanes_ArrowKeys_SkipDisabledTabs(t *testing.T) {
 	}
 }
 
-func TestModel_TabBar_DefaultLabels_Unchanged(t *testing.T) {
-	// With no Terms configured the tab bar must show the built-in default labels
-	// byte-for-byte — "Pull Requests", "Work Items", "Pipelines".
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-		// Terms is nil — no overrides
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(nil, client, cfg, "dev", "")
-	m.width = 100
-	m.height = 30
-
-	view := m.View()
-
-	for _, want := range []string{"1: Pull Requests", "2: Work Items", "3: Pipelines"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("expected tab bar to contain %q with default Terms (nil)", want)
-		}
-	}
-}
-
-func TestModel_TabBar_TermOverride_ReplacesLabel(t *testing.T) {
-	// When Terms["work_items"] is set the tab bar must show the override instead
-	// of the default "Work Items", while the other tabs keep their defaults.
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-		Terms:           map[string]string{"work_items": "Tasks"},
-	}
-	var client *azdevops.MultiClient
-
-	m := NewModel(nil, client, cfg, "dev", "")
-	m.width = 100
-	m.height = 30
-
-	view := m.View()
-
-	// Overridden label must appear with its positional number
-	if !strings.Contains(view, "2: Tasks") {
-		t.Error("expected tab bar to contain '2: Tasks' when Terms[\"work_items\"] = \"Tasks\"")
-	}
-	// Default label must be gone for that slot
-	if strings.Contains(view, "Work Items") {
-		t.Error("tab bar must NOT contain 'Work Items' when it is overridden to 'Tasks'")
-	}
-	// Other tabs must keep their default labels
-	if !strings.Contains(view, "1: Pull Requests") {
-		t.Error("expected tab bar to contain '1: Pull Requests' (not overridden)")
-	}
-	if !strings.Contains(view, "3: Pipelines") {
-		t.Error("expected tab bar to contain '3: Pipelines' (not overridden)")
-	}
-}
-
 func TestModel_DisabledPanes_EnabledTabs_AllEnabled(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1464,7 +1336,7 @@ func TestModel_DisabledPanes_EnabledTabs_AllEnabled(t *testing.T) {
 		Theme:           "dark",
 	}
 
-	tabs := buildEnabledTabs(cfg, true)
+	tabs := buildEnabledTabs(cfg)
 	if len(tabs) != 3 {
 		t.Fatalf("expected 3 enabled tabs, got %d", len(tabs))
 	}
@@ -1482,7 +1354,7 @@ func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
 		DisabledPanes:   []string{"pipelines", "workitems"},
 	}
 
-	tabs := buildEnabledTabs(cfg, true)
+	tabs := buildEnabledTabs(cfg)
 	if len(tabs) != 1 {
 		t.Fatalf("expected 1 enabled tab, got %d", len(tabs))
 	}
@@ -1565,15 +1437,15 @@ func openTagPickerOnWorkItemsTab(t *testing.T) Model {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	m = updated.(Model)
 
-	items := []provider.WorkItem{
-		{Identity: provider.Identity{ID: "1"}, Title: "A", Tags: "Spring"},
+	items := []azdevops.WorkItem{
+		{ID: 1, Fields: azdevops.WorkItemFields{Title: "A", Tags: "Spring"}},
 	}
 	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: items})
 	m = updated.(Model)
@@ -1585,53 +1457,6 @@ func openTagPickerOnWorkItemsTab(t *testing.T) Model {
 		t.Fatal("precondition failed: tag picker should be visible")
 	}
 	return m
-}
-
-// TestNewModel_NilAzureBackend_NoInitPanic is a smoke test for the GitHub-only
-// path (mc == nil). It verifies that constructing the model, calling Init(), and
-// processing a WindowSizeMsg through Update() all complete without panicking.
-// Before the fix, NewModel passed the typed-nil *azdevops.MultiClient directly
-// into NewPoller, boxing it into a non-nil PipelineClient interface value. The
-// first FetchPipelineRuns call would then dispatch through the interface to a nil
-// MultiClient, dereferencing mc.clients and panicking at startup.
-func TestNewModel_NilAzureBackend_NoInitPanic(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "githubuser",
-		Projects:        []string{},
-		PollingInterval: 30,
-		Theme:           "dark",
-	}
-
-	// Explicitly typed nil — no Azure backend (GitHub-only user).
-	var mc *azdevops.MultiClient
-
-	// Must not panic during construction.
-	m := NewModel(nil, mc, cfg, "dev", "")
-
-	// Init() must not panic (previously panicked via FetchPipelineRuns → nil deref).
-	_ = m.Init()
-
-	// Pin the regression directly: the poller command that previously panicked is
-	// FetchPipelineRuns. Execute it WITHOUT a recover wrapper. The fix guards on a
-	// genuinely-nil client and returns a nil cmd; if the typed-nil *MultiClient is
-	// ever boxed back into a non-nil interface, p.client == nil is false and this
-	// closure dereferences the nil MultiClient — panicking and failing the test.
-	if cmd := m.poller.FetchPipelineRuns(); cmd != nil {
-		t.Errorf("FetchPipelineRuns() = non-nil cmd, want nil no-op for nil Azure backend; executing it: %v", cmd())
-	}
-	// Same guarantee on the periodic-tick path.
-	if cmd := m.poller.OnTick(); cmd != nil {
-		t.Errorf("OnTick() = non-nil cmd, want nil no-op for nil Azure backend; executing it: %v", cmd())
-	}
-
-	// WindowSizeMsg through Update must also be panic-free.
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(Model)
-
-	// Basic sanity: model is usable.
-	if m.activeTab != TabPullRequests {
-		t.Errorf("expected default tab to be TabPullRequests, got %d", m.activeTab)
-	}
 }
 
 func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {

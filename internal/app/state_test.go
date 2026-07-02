@@ -7,7 +7,6 @@ import (
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
-	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
@@ -30,7 +29,7 @@ func newTestModelWithStore(t *testing.T) (Model, *state.Store) {
 	}
 	store.SetDebounce(5 * time.Millisecond)
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.SetStateStore(store)
 	m.width = 100
 	m.height = 30
@@ -83,14 +82,10 @@ func TestModel_CapturesPRDetailOnEnterAndEsc(t *testing.T) {
 	m, store := newTestModelWithStore(t)
 
 	// Seed PRs so "enter" has something to open.
-	updated, _ := m.Update(pullrequestsSetMsg([]provider.PullRequest{
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "77"},
-			Title:          "Test PR",
-			Status:         "active",
-			CreatedByName:  "Test",
-			RepositoryName: "repo",
-		},
+	updated, _ := m.Update(pullrequestsSetMsg([]azdevops.PullRequest{
+		{ID: 77, Title: "Test PR", Status: "active",
+			CreatedBy:  azdevops.Identity{DisplayName: "Test"},
+			Repository: azdevops.Repository{Name: "repo"}},
 	}))
 	m = updated.(Model)
 
@@ -117,8 +112,8 @@ func TestModel_CapturesWorkItemDetailOnEnterAndEsc(t *testing.T) {
 	m = updated.(Model)
 
 	// Seed work items.
-	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: []provider.WorkItem{
-		{Identity: provider.Identity{ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
+	updated, _ = m.Update(workitems.SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
+		{ID: 4242, Fields: azdevops.WorkItemFields{Title: "T", WorkItemType: "Task", State: "Active"}},
 	}})
 	m = updated.(Model)
 
@@ -139,7 +134,7 @@ func TestModel_CapturesWorkItemDetailOnEnterAndEsc(t *testing.T) {
 
 // pullrequestsSetMsg is a small helper so the test reads cleanly without
 // importing pullrequests just for a type name.
-func pullrequestsSetMsg(prs []provider.PullRequest) tea.Msg {
+func pullrequestsSetMsg(prs []azdevops.PullRequest) tea.Msg {
 	return pullrequests.SetPRsMsg{PRs: prs}
 }
 
@@ -165,7 +160,7 @@ func TestApplyState_IgnoresDisabledTab(t *testing.T) {
 		DisabledPanes:   []string{"workitems"},
 	}
 	var client *azdevops.MultiClient
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 
@@ -196,14 +191,10 @@ func TestApplyState_RestoresPRDetailOnFirstPopulate(t *testing.T) {
 		Tabs:      state.TabsState{PullRequests: state.TabMemory{LastDetailID: 7}},
 	})
 
-	updated, _ := m.Update(pullrequests.SetPRsMsg{PRs: []provider.PullRequest{
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "7"},
-			Title:          "Target",
-			Status:         "active",
-			CreatedByName:  "X",
-			RepositoryName: "r",
-		},
+	updated, _ := m.Update(pullrequests.SetPRsMsg{PRs: []azdevops.PullRequest{
+		{ID: 7, Title: "Target", Status: "active",
+			CreatedBy:  azdevops.Identity{DisplayName: "X"},
+			Repository: azdevops.Repository{Name: "r"}},
 	}})
 	m = updated.(Model)
 
@@ -220,8 +211,8 @@ func TestApplyState_RestoresWIDetailOnFirstPopulate(t *testing.T) {
 		Tabs:      state.TabsState{WorkItems: state.TabMemory{LastDetailID: 4242}},
 	})
 
-	updated, _ := m.Update(workitems.SetWorkItemsMsg{WorkItems: []provider.WorkItem{
-		{Identity: provider.Identity{ID: "4242"}, Title: "T", WorkItemType: "Task", State: "Active"},
+	updated, _ := m.Update(workitems.SetWorkItemsMsg{WorkItems: []azdevops.WorkItem{
+		{ID: 4242, Fields: azdevops.WorkItemFields{Title: "T", WorkItemType: "Task", State: "Active"}},
 	}})
 	m = updated.(Model)
 
@@ -240,8 +231,8 @@ func TestApplyState_MissingItemDoesNotEnterDetail(t *testing.T) {
 		Tabs:      state.TabsState{PullRequests: state.TabMemory{LastDetailID: 999}},
 	})
 
-	updated, _ := m.Update(pullrequests.SetPRsMsg{PRs: []provider.PullRequest{
-		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "12"}, Title: "Different PR"},
+	updated, _ := m.Update(pullrequests.SetPRsMsg{PRs: []azdevops.PullRequest{
+		{ID: 12, Title: "Different PR"},
 	}})
 	m = updated.(Model)
 
@@ -260,7 +251,7 @@ func TestModel_NoStoreDoesNotPanic(t *testing.T) {
 		Theme:           "dark",
 	}
 	var client *azdevops.MultiClient
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 

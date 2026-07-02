@@ -8,13 +8,12 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
-	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
-	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ViewMode re-exports listview.ViewMode for backward compatibility.
@@ -31,12 +30,12 @@ type TagSelectedMsg = components.TagSelectedMsg
 
 // Model represents the work items list view with sub-views
 type Model struct {
-	list        listview.Model[provider.WorkItem]
-	client      provider.Provider
+	list        listview.Model[azdevops.WorkItem]
+	client      *azdevops.MultiClient
 	styles      *styles.Styles
 	myItemsOnly bool
-	allItems    []provider.WorkItem
-	myItems     []provider.WorkItem // base my-items set (before tag/state filter)
+	allItems    []azdevops.WorkItem
+	myItems     []azdevops.WorkItem // base my-items set (before tag/state filter)
 	activeTag   string
 	activeState string
 	tagPicker   components.TagPicker
@@ -49,48 +48,31 @@ type Model struct {
 }
 
 // NewModel creates a new work items list model with default styles
-func NewModel(client provider.Provider) Model {
+func NewModel(client *azdevops.MultiClient) Model {
 	return NewModelWithStyles(client, styles.DefaultStyles())
 }
 
-// wiBaseColumns are the per-row column specs for the work item list,
-// excluding the optional project and glyph columns.
-var wiBaseColumns = []listview.ColumnSpec{
-	{Title: "Type", WidthPct: 10, MinWidth: 8},
-	{Title: "ID", WidthPct: 8, MinWidth: 6},
-	{Title: "Title", WidthPct: 40, MinWidth: 25},
-	{Title: "State", WidthPct: 10, MinWidth: 10},
-	{Title: "Prio", WidthPct: 6, MinWidth: 4},
-	{Title: "Assigned", WidthPct: 26, MinWidth: 10},
-}
-
 // NewModelWithStyles creates a new work items list model with custom styles
-func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
+func NewModelWithStyles(client *azdevops.MultiClient, s *styles.Styles) Model {
 	isMulti := client != nil && client.IsMultiProject()
 
-	// toColumns derives column specs from the current items, mirroring the
-	// cell gating in workItemsToRows / workItemsToRowsMulti exactly:
-	//   [glyph?] [project?] [type] [id] [title] [state] [prio] [assigned]
-	toColumns := func(items []provider.WorkItem) []listview.ColumnSpec {
-		kinds := make([]provider.Kind, len(items))
-		for i, wi := range items {
-			kinds[i] = wi.Identity.Kind
-		}
-		mixed := display.MixedKinds(kinds)
-
-		cols := make([]listview.ColumnSpec, len(wiBaseColumns))
-		copy(cols, wiBaseColumns)
-
-		if isMulti {
-			cols = append([]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 8}}, cols...)
-		}
-		if mixed {
-			cols = append([]listview.ColumnSpec{{Title: "", WidthPct: 3, MinWidth: 3}}, cols...)
-		}
-
-		listview.NormalizeWidths(cols)
-		return cols
+	columns := []listview.ColumnSpec{
+		{Title: "Type", WidthPct: 10, MinWidth: 8},
+		{Title: "ID", WidthPct: 8, MinWidth: 6},
+		{Title: "Title", WidthPct: 40, MinWidth: 25},
+		{Title: "State", WidthPct: 10, MinWidth: 10},
+		{Title: "Prio", WidthPct: 6, MinWidth: 4},
+		{Title: "Assigned", WidthPct: 26, MinWidth: 10},
 	}
+
+	if isMulti {
+		columns = append(
+			[]listview.ColumnSpec{{Title: "Project", WidthPct: 10, MinWidth: 8}},
+			columns...,
+		)
+	}
+
+	listview.NormalizeWidths(columns)
 
 	toRows := workItemsToRows
 	if isMulti {
@@ -102,17 +84,21 @@ func NewModelWithStyles(client provider.Provider, s *styles.Styles) Model {
 		filterFunc = filterWorkItemMulti
 	}
 
-	cfg := listview.Config[provider.WorkItem]{
+	cfg := listview.Config[azdevops.WorkItem]{
+		Columns:        columns,
 		LoadingMessage: "Loading work items...",
 		EntityName:     "work items",
 		MinWidth:       50,
 		ToRows:         toRows,
-		ToColumns:      toColumns,
 		Fetch: func() tea.Cmd {
-			return fetchWorkItems(client)
+			return fetchWorkItemsMulti(client)
 		},
-		EnterDetail: func(item provider.WorkItem, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
-			d := NewDetailModelWithStyles(client, item, st)
+		EnterDetail: func(item azdevops.WorkItem, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
+			var projectClient *azdevops.Client
+			if client != nil {
+				projectClient = client.ClientFor(item.ProjectName)
+			}
+			d := NewDetailModelWithStyles(projectClient, item, st)
 			d.SetSize(w, h)
 			// d.Init() kicks off the comment fetch so the Discussion section
 			// populates as soon as the detail view opens.
@@ -148,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if errors.As(msg.err, &partialErr) {
 				m.allItems = msg.workItems
 				if m.myItemsOnly {
-					return m, fetchMyWorkItems(m.client)
+					return m, fetchMyWorkItemsMulti(m.client)
 				}
 				m.list = m.list.HandleFetchResult(msg.workItems, nil)
 				return m.withRestore(nil)
@@ -166,7 +152,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.allItems = msg.workItems
 		if m.myItemsOnly {
 			// Chain to my-items fetch so loading state is eventually cleared
-			return m, fetchMyWorkItems(m.client)
+			return m, fetchMyWorkItemsMulti(m.client)
 		}
 		m.list = m.list.HandleFetchResult(msg.workItems, nil)
 		return m.withRestore(nil)
@@ -190,7 +176,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.withRestore(nil)
 	case WorkItemStateChangedMsg:
 		// Re-fetch work items so the list reflects the updated state
-		return m, fetchWorkItems(m.client)
+		return m, fetchWorkItemsMulti(m.client)
 	case SetWorkItemsMsg:
 		m.allItems = msg.WorkItems
 		if !m.myItemsOnly {
@@ -224,7 +210,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if msg.String() == "m" && !m.list.IsSearching() && m.GetViewMode() == ViewList {
 				m.myItemsOnly = !m.myItemsOnly
 				if m.myItemsOnly {
-					return m, fetchMyWorkItems(m.client)
+					return m, fetchMyWorkItemsMulti(m.client)
 				}
 				// Toggle OFF: restore all items (with filters if active)
 				m.myItems = nil
@@ -358,7 +344,7 @@ func (m Model) DetailItemID() int {
 	if !ok || adapter == nil {
 		return 0
 	}
-	return adapter.model.GetWorkItemID()
+	return adapter.model.GetWorkItem().ID
 }
 
 // WithPendingDetailRestore queues a one-shot request to open the work
@@ -378,9 +364,8 @@ func (m Model) tryRestoreDetail() (Model, tea.Cmd) {
 	m.pendingDetailID = 0
 	m.pendingRestoreHandled = true
 
-	idx := m.list.FindIndex(func(wi provider.WorkItem) bool {
-		id, _ := strconv.Atoi(wi.Identity.ID)
-		return id == target
+	idx := m.list.FindIndex(func(wi azdevops.WorkItem) bool {
+		return wi.ID == target
 	})
 	if idx < 0 {
 		return m, nil
@@ -461,7 +446,7 @@ func (m *Model) SetStatePickerSize(width, height int) {
 }
 
 // getBaseItems returns the appropriate base items (allItems or myItems)
-func (m Model) getBaseItems() []provider.WorkItem {
+func (m Model) getBaseItems() []azdevops.WorkItem {
 	if m.myItemsOnly {
 		return m.myItems
 	}
@@ -469,7 +454,7 @@ func (m Model) getBaseItems() []provider.WorkItem {
 }
 
 // applyAllFilters applies tag and state filters to the given items.
-func (m Model) applyAllFilters(items []provider.WorkItem) []provider.WorkItem {
+func (m Model) applyAllFilters(items []azdevops.WorkItem) []azdevops.WorkItem {
 	result := applyTagFilter(items, m.activeTag)
 	result = applyStateFilter(result, m.activeState)
 	return result
@@ -506,102 +491,70 @@ func (a *detailAdapter) GetStatusMessage() string {
 	return a.model.GetStatusMessage()
 }
 
-// workItemsToRows converts work items to table rows.
-// When the items span more than one distinct provider Kind (detected via
-// display.MixedKinds), a leading glyph cell is prepended to each row so the
-// user can tell which backend each entry originates from.
-func workItemsToRows(items []provider.WorkItem, s *styles.Styles) []table.Row {
-	kinds := make([]provider.Kind, len(items))
-	for i, wi := range items {
-		kinds[i] = wi.Identity.Kind
-	}
-	mixed := display.MixedKinds(kinds)
-
+// workItemsToRows converts work items to table rows
+func workItemsToRows(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
-		assignedTo := wi.AssignedToName
-		if assignedTo == "" {
-			assignedTo = "-"
+		rows[i] = table.Row{
+			typeIconWithStyles(wi.Fields.WorkItemType, s),
+			strconv.Itoa(wi.ID),
+			wi.Fields.Title,
+			stateTextWithStyles(wi.Fields.State, s),
+			priorityTextWithStyles(wi.Fields.Priority, s),
+			wi.AssignedToName(),
 		}
-		cells := table.Row{
-			typeIconWithStyles(wi.ItemKind, s),
-			wi.Identity.ID,
-			wi.Title,
-			stateTextWithStyles(wi.StateCategory, wi.State, s),
-			priorityTextWithStyles(wi.Priority, s),
-			assignedTo,
-		}
-		if mixed {
-			cells = append(table.Row{display.KindStyle(wi.Identity.Kind, s).Render(display.KindGlyph(wi.Identity.Kind))}, cells...)
-		}
-		rows[i] = cells
 	}
 	return rows
 }
 
 // workItemsToRowsMulti converts work items to table rows with a Project column.
-// When the items span more than one distinct provider Kind (detected via
-// display.MixedKinds), a leading glyph cell is prepended before the Project
-// column so the layout is: [glyph?] [project] [type] [id] [title] …
-func workItemsToRowsMulti(items []provider.WorkItem, s *styles.Styles) []table.Row {
-	kinds := make([]provider.Kind, len(items))
-	for i, wi := range items {
-		kinds[i] = wi.Identity.Kind
-	}
-	mixed := display.MixedKinds(kinds)
-
+func workItemsToRowsMulti(items []azdevops.WorkItem, s *styles.Styles) []table.Row {
 	rows := make([]table.Row, len(items))
 	for i, wi := range items {
-		assignedTo := wi.AssignedToName
-		if assignedTo == "" {
-			assignedTo = "-"
+		rows[i] = table.Row{
+			wi.ProjectDisplayName,
+			typeIconWithStyles(wi.Fields.WorkItemType, s),
+			strconv.Itoa(wi.ID),
+			wi.Fields.Title,
+			stateTextWithStyles(wi.Fields.State, s),
+			priorityTextWithStyles(wi.Fields.Priority, s),
+			wi.AssignedToName(),
 		}
-		cells := table.Row{
-			wi.Identity.ScopeDisplay,
-			typeIconWithStyles(wi.ItemKind, s),
-			wi.Identity.ID,
-			wi.Title,
-			stateTextWithStyles(wi.StateCategory, wi.State, s),
-			priorityTextWithStyles(wi.Priority, s),
-			assignedTo,
-		}
-		if mixed {
-			cells = append(table.Row{display.KindStyle(wi.Identity.Kind, s).Render(display.KindGlyph(wi.Identity.Kind))}, cells...)
-		}
-		rows[i] = cells
 	}
 	return rows
 }
 
 // filterWorkItem returns true if the work item matches the search query.
-func filterWorkItem(wi provider.WorkItem, query string) bool {
+func filterWorkItem(wi azdevops.WorkItem, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	if strings.Contains(strings.ToLower(wi.Title), q) ||
-		strings.Contains(wi.Identity.ID, q) ||
-		strings.Contains(strings.ToLower(wi.State), q) ||
-		strings.Contains(strings.ToLower(wi.WorkItemType), q) {
+	if strings.Contains(strings.ToLower(wi.Fields.Title), q) ||
+		strings.Contains(strconv.Itoa(wi.ID), q) ||
+		strings.Contains(strings.ToLower(wi.Fields.State), q) ||
+		strings.Contains(strings.ToLower(wi.Fields.WorkItemType), q) {
 		return true
 	}
-	if strings.Contains(strings.ToLower(wi.AssignedToName), q) {
-		return true
+	if wi.Fields.AssignedTo != nil {
+		if strings.Contains(strings.ToLower(wi.Fields.AssignedTo.DisplayName), q) {
+			return true
+		}
 	}
-	if strings.Contains(strings.ToLower(wi.Tags), q) {
+	if strings.Contains(strings.ToLower(wi.Fields.Tags), q) {
 		return true
 	}
 	return false
 }
 
 // filterWorkItemMulti matches work item fields including project name.
-func filterWorkItemMulti(wi provider.WorkItem, query string) bool {
+func filterWorkItemMulti(wi azdevops.WorkItem, query string) bool {
 	if query == "" {
 		return true
 	}
 	q := strings.ToLower(query)
-	if strings.Contains(strings.ToLower(wi.Identity.ScopeDisplay), q) ||
-		strings.Contains(strings.ToLower(wi.Identity.Scope), q) {
+	if strings.Contains(strings.ToLower(wi.ProjectDisplayName), q) ||
+		strings.Contains(strings.ToLower(wi.ProjectName), q) {
 		return true
 	}
 	return filterWorkItem(wi, query)
@@ -614,65 +567,48 @@ type WorkItemStateChangedMsg struct{}
 // Messages
 
 type workItemsMsg struct {
-	workItems []provider.WorkItem
+	workItems []azdevops.WorkItem
 	err       error
 }
 
 type myWorkItemsMsg struct {
-	workItems []provider.WorkItem
+	workItems []azdevops.WorkItem
 	err       error
 }
 
 // SetWorkItemsMsg is a message to directly set the work items (from polling)
 type SetWorkItemsMsg struct {
-	WorkItems []provider.WorkItem
+	WorkItems []azdevops.WorkItem
 }
 
-// fetchWorkItems fetches work items from all projects via the provider.
-func fetchWorkItems(client provider.Provider) tea.Cmd {
+// fetchWorkItemsMulti fetches work items from all projects via MultiClient.
+func fetchWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return workItemsMsg{workItems: nil, err: nil}
 		}
-		workItems, err := client.ListWorkItems(50, provider.ListOpts{})
+		workItems, err := client.ListWorkItems(50)
 		return workItemsMsg{workItems: workItems, err: err}
 	}
 }
 
-// fetchMyWorkItems fetches work items assigned to the authenticated user
+// fetchMyWorkItemsMulti fetches work items assigned to the authenticated user
 // using the @Me WIQL macro.
-func fetchMyWorkItems(client provider.Provider) tea.Cmd {
+func fetchMyWorkItemsMulti(client *azdevops.MultiClient) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
 			return myWorkItemsMsg{workItems: nil, err: nil}
 		}
-		workItems, err := client.ListMyWorkItems(50, provider.ListOpts{Mine: true})
+		workItems, err := client.ListMyWorkItems(50)
 		return myWorkItemsMsg{workItems: workItems, err: err}
 	}
 }
 
-// tagList splits a semicolon-separated tags string into a trimmed slice.
-// Returns nil if there are no tags.
-func tagList(tags string) []string {
-	if tags == "" {
-		return nil
-	}
-	raw := strings.Split(tags, ";")
-	result := make([]string, 0, len(raw))
-	for _, t := range raw {
-		t = strings.TrimSpace(t)
-		if t != "" {
-			result = append(result, t)
-		}
-	}
-	return result
-}
-
 // collectUniqueTags extracts all unique tags from the work items, sorted alphabetically.
-func collectUniqueTags(items []provider.WorkItem) []string {
+func collectUniqueTags(items []azdevops.WorkItem) []string {
 	seen := make(map[string]struct{})
 	for i := range items {
-		for _, tag := range tagList(items[i].Tags) {
+		for _, tag := range items[i].TagList() {
 			seen[tag] = struct{}{}
 		}
 	}
@@ -685,11 +621,11 @@ func collectUniqueTags(items []provider.WorkItem) []string {
 }
 
 // collectUniqueStates extracts all unique states from the work items, sorted alphabetically.
-func collectUniqueStates(items []provider.WorkItem) []string {
+func collectUniqueStates(items []azdevops.WorkItem) []string {
 	seen := make(map[string]struct{})
 	for i := range items {
-		if items[i].State != "" {
-			seen[items[i].State] = struct{}{}
+		if items[i].Fields.State != "" {
+			seen[items[i].Fields.State] = struct{}{}
 		}
 	}
 	states := make([]string, 0, len(seen))
@@ -702,13 +638,13 @@ func collectUniqueStates(items []provider.WorkItem) []string {
 
 // applyTagFilter returns only work items that have the given tag.
 // If tag is empty, all items are returned unfiltered.
-func applyTagFilter(items []provider.WorkItem, tag string) []provider.WorkItem {
+func applyTagFilter(items []azdevops.WorkItem, tag string) []azdevops.WorkItem {
 	if tag == "" {
 		return items
 	}
-	var filtered []provider.WorkItem
+	var filtered []azdevops.WorkItem
 	for _, wi := range items {
-		for _, t := range tagList(wi.Tags) {
+		for _, t := range wi.TagList() {
 			if t == tag {
 				filtered = append(filtered, wi)
 				break
@@ -720,45 +656,69 @@ func applyTagFilter(items []provider.WorkItem, tag string) []provider.WorkItem {
 
 // applyStateFilter returns only work items that have the given state.
 // If state is empty, all items are returned unfiltered.
-func applyStateFilter(items []provider.WorkItem, state string) []provider.WorkItem {
+func applyStateFilter(items []azdevops.WorkItem, state string) []azdevops.WorkItem {
 	if state == "" {
 		return items
 	}
-	var filtered []provider.WorkItem
+	var filtered []azdevops.WorkItem
 	for _, wi := range items {
-		if wi.State == state {
+		if wi.Fields.State == state {
 			filtered = append(filtered, wi)
 		}
 	}
 	return filtered
 }
 
-// Icon/text formatting functions
+// Icon/text formatting functions (unchanged)
 
-// typeIconWithStyles returns a styled text label for the work item type using
-// the neutral ItemType enum and the shared display map.
-func typeIconWithStyles(kind provider.ItemType, s *styles.Styles) string {
-	return display.ItemTypeStyle(kind, s).Render(display.ItemTypeLabel(kind))
-}
+// typeIconWithStyles returns a styled text label for the work item type using provided styles
+func typeIconWithStyles(workItemType string, s *styles.Styles) string {
+	accentStyle := lipgloss.NewStyle().Foreground(s.Theme.Accent)
 
-// stateTextWithStyles returns styled text for the work item state using the
-// neutral StateCategory enum and the shared display map. The raw state string
-// is used as a label fallback when the display map returns "" (e.g. for
-// StateCategoryUnknown or custom ready-variants).
-func stateTextWithStyles(cat provider.StateCategory, state string, s *styles.Styles) string {
-	label := display.StateLabel(cat)
-	if label == "" {
-		label = state
+	switch workItemType {
+	case "Bug":
+		return s.Error.Render("Bug")
+	case "Task":
+		return s.Info.Render("Task")
+	case "User Story":
+		return s.Success.Render("Story")
+	case "Feature":
+		return accentStyle.Render("Feature")
+	case "Epic":
+		return s.Warning.Render("Epic")
+	case "Issue":
+		return s.Error.Render("Issue")
+	default:
+		return s.Muted.Render("Item")
 	}
-	return display.StateStyle(cat, s).Render(label)
 }
 
-// priorityTextWithStyles returns styled text for priority using provided styles.
-// A priority of 0 (unset) renders as "-".
+// stateTextWithStyles returns styled text for the work item state using provided styles
+func stateTextWithStyles(state string, s *styles.Styles) string {
+	stateLower := strings.ToLower(state)
+	secondaryStyle := lipgloss.NewStyle().Foreground(s.Theme.Secondary)
+
+	switch {
+	case stateLower == "new":
+		return s.Muted.Render("New")
+	case stateLower == "active":
+		return s.Info.Render("Active")
+	case stateLower == "resolved":
+		return s.Warning.Render("Resolved")
+	case strings.Contains(stateLower, "ready"):
+		return secondaryStyle.Render(state)
+	case stateLower == "closed":
+		return s.Success.Render("Closed")
+	case stateLower == "removed":
+		return s.Error.Render("Removed")
+	default:
+		return s.Muted.Render(state)
+	}
+}
+
+// priorityTextWithStyles returns styled text for priority using provided styles
 func priorityTextWithStyles(priority int, s *styles.Styles) string {
 	switch priority {
-	case 0:
-		return s.Muted.Render("-")
 	case 1:
 		return s.Error.Render("P1")
 	case 2:

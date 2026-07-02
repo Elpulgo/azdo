@@ -6,9 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Elpulgo/azdo/internal/provider"
+	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/ui/components"
-	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,49 +24,55 @@ func TestNewModelWithStyles(t *testing.T) {
 func TestStatusIcon(t *testing.T) {
 	tests := []struct {
 		name         string
-		statusCat    provider.StateCategory
+		status       string
 		isDraft      bool
 		wantContains string
 	}{
 		{
 			name:         "active PR shows Active",
-			statusCat:    provider.StateCategoryActive,
+			status:       "active",
 			isDraft:      false,
-			wantContains: "● Active",
+			wantContains: "Active",
+		},
+		{
+			name:         "Active (capitalized) shows Active",
+			status:       "Active",
+			isDraft:      false,
+			wantContains: "Active",
 		},
 		{
 			name:         "draft PR shows Draft",
-			statusCat:    provider.StateCategoryActive,
+			status:       "active",
 			isDraft:      true,
 			wantContains: "Draft",
 		},
 		{
 			name:         "completed PR shows Merged",
-			statusCat:    provider.StateCategoryClosedDone,
+			status:       "completed",
 			isDraft:      false,
 			wantContains: "Merged",
 		},
 		{
 			name:         "abandoned PR shows Closed",
-			statusCat:    provider.StateCategoryRemoved,
+			status:       "abandoned",
 			isDraft:      false,
-			wantContains: "○ Closed",
+			wantContains: "Closed",
 		},
 		{
-			name:         "unknown status category shows glyph",
-			statusCat:    provider.StateCategoryUnknown,
+			name:         "unknown status shows the status",
+			status:       "unknown",
 			isDraft:      false,
-			wantContains: "○",
+			wantContains: "unknown",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := statusIconWithStyles(tt.statusCat, tt.isDraft, styles.DefaultStyles())
+			got := statusIconWithStyles(tt.status, tt.isDraft, styles.DefaultStyles())
 
 			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("statusIconWithStyles(%v, %v) = %q, want to contain %q",
-					tt.statusCat, tt.isDraft, got, tt.wantContains)
+				t.Errorf("statusIconWithStyles(%q, %v) = %q, want to contain %q",
+					tt.status, tt.isDraft, got, tt.wantContains)
 			}
 		})
 	}
@@ -76,62 +81,62 @@ func TestStatusIcon(t *testing.T) {
 func TestVoteIcon(t *testing.T) {
 	tests := []struct {
 		name         string
-		reviewers    []provider.Reviewer
+		reviewers    []azdevops.Reviewer
 		wantContains string
 	}{
 		{
 			name:         "no reviewers shows dash",
-			reviewers:    []provider.Reviewer{},
+			reviewers:    []azdevops.Reviewer{},
 			wantContains: "-",
 		},
 		{
 			name: "approved vote shows check",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: 10, Kind: provider.VoteKindApproved},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User", Vote: 10},
 			},
 			wantContains: "✓",
 		},
 		{
 			name: "approved with suggestions shows tilde",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: 5, Kind: provider.VoteKindApprovedWithSuggestions},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User", Vote: 5},
 			},
 			wantContains: "~",
 		},
 		{
 			name: "rejected vote shows x",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: -10, Kind: provider.VoteKindRejected},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User", Vote: -10},
 			},
 			wantContains: "✗",
 		},
 		{
 			name: "waiting for author shows wait icon",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: -5, Kind: provider.VoteKindWaitingForAuthor},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User", Vote: -5},
 			},
 			wantContains: "◐",
 		},
 		{
 			name: "no vote shows pending",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User", Vote: 0, Kind: provider.VoteKindNoVote},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User", Vote: 0},
 			},
 			wantContains: "○",
 		},
 		{
 			name: "mixed votes shows most significant (approved)",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User1", Vote: 10, Kind: provider.VoteKindApproved},
-				{ID: "2", DisplayName: "User2", Vote: 0, Kind: provider.VoteKindNoVote},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User1", Vote: 10},
+				{ID: "2", DisplayName: "User2", Vote: 0},
 			},
 			wantContains: "✓",
 		},
 		{
 			name: "mixed votes shows most significant (rejected)",
-			reviewers: []provider.Reviewer{
-				{ID: "1", DisplayName: "User1", Vote: 10, Kind: provider.VoteKindApproved},
-				{ID: "2", DisplayName: "User2", Vote: -10, Kind: provider.VoteKindRejected},
+			reviewers: []azdevops.Reviewer{
+				{ID: "1", DisplayName: "User1", Vote: 10},
+				{ID: "2", DisplayName: "User2", Vote: -10},
 			},
 			wantContains: "✗",
 		},
@@ -163,25 +168,25 @@ func TestNewModel(t *testing.T) {
 func TestUpdateWithSetPRsMsg(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []provider.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+			ID:            101,
 			Title:         "Add feature",
 			Status:        "active",
 			SourceRefName: "refs/heads/feature/test",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "John Doe",
-			RepositoryName: "my-repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
+			Repository:    azdevops.Repository{Name: "my-repo"},
 		},
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "102"},
+			ID:            102,
 			Title:         "Fix bug",
 			Status:        "active",
 			IsDraft:       true,
 			SourceRefName: "refs/heads/fix/bug",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "Jane Smith",
-			RepositoryName: "my-repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "Jane Smith"},
+			Repository:    azdevops.Repository{Name: "my-repo"},
 		},
 	}
 
@@ -191,19 +196,19 @@ func TestUpdateWithSetPRsMsg(t *testing.T) {
 		t.Errorf("After SetPRsMsg, prs length = %d, want 2", len(model.list.Items()))
 	}
 
-	if model.list.Items()[0].Identity.ID != "101" {
-		t.Errorf("First PR ID = %q, want 101", model.list.Items()[0].Identity.ID)
+	if model.list.Items()[0].ID != 101 {
+		t.Errorf("First PR ID = %d, want 101", model.list.Items()[0].ID)
 	}
 }
 
 func TestUpdateWithPullRequestsMsg(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []provider.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
-			Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "201"},
-			Title:    "Test PR",
-			Status:   "active",
+			ID:     201,
+			Title:  "Test PR",
+			Status: "active",
 		},
 	}
 
@@ -235,15 +240,15 @@ func TestViewModeNavigation(t *testing.T) {
 	}
 
 	// Simulate having some PRs loaded
-	model.list = model.list.SetItems([]provider.PullRequest{
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
+			ID:            123,
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/feature/test",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "Test User",
-			RepositoryName: "test-repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "Test User"},
+			Repository:    azdevops.Repository{Name: "test-repo"},
 		},
 	})
 
@@ -279,7 +284,7 @@ func TestViewError(t *testing.T) {
 
 func TestViewEmpty(t *testing.T) {
 	model := NewModel(nil)
-	model.list = model.list.SetItems([]provider.PullRequest{})
+	model.list = model.list.SetItems([]azdevops.PullRequest{})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	view := model.View()
@@ -293,18 +298,18 @@ func TestPRsToRows(t *testing.T) {
 	s := styles.DefaultStyles()
 	now := time.Now()
 
-	prs := []provider.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "101"},
+			ID:            101,
 			Title:         "Add new feature",
 			Status:        "active",
 			IsDraft:       false,
 			SourceRefName: "refs/heads/feature/new",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "John Doe",
-			RepositoryName: "my-repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
+			Repository:    azdevops.Repository{Name: "my-repo"},
 			CreationDate:  now,
-			Reviewers: []provider.Reviewer{
+			Reviewers: []azdevops.Reviewer{
 				{ID: "1", DisplayName: "Jane", Vote: 10},
 			},
 		},
@@ -351,15 +356,15 @@ func TestHasContextBar(t *testing.T) {
 	}
 
 	// PR detail view should have context bar (shows diff, navigate, etc.)
-	model.list = model.list.SetItems([]provider.PullRequest{
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
+			ID:            123,
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "User",
-			RepositoryName: "repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{Name: "repo"},
 		},
 	})
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -370,10 +375,10 @@ func TestHasContextBar(t *testing.T) {
 }
 
 func TestFilterPR(t *testing.T) {
-	pr := provider.PullRequest{
+	pr := azdevops.PullRequest{
 		Title:         "Add login feature",
-		CreatedByName: "John Doe",
-		RepositoryName: "frontend-app",
+		CreatedBy:     azdevops.Identity{DisplayName: "John Doe"},
+		Repository:    azdevops.Repository{Name: "frontend-app"},
 		SourceRefName: "refs/heads/feature/login",
 		TargetRefName: "refs/heads/main",
 	}
@@ -420,20 +425,17 @@ func TestSpinnerIntegration(t *testing.T) {
 
 func TestPrsToRowsMulti_IncludesProjectColumn(t *testing.T) {
 	s := styles.DefaultStyles()
-	prs := []provider.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
-			Identity: provider.Identity{
-				Kind:         provider.KindAzure,
-				Scope:        "alpha",
-				ScopeDisplay: "alpha",
-				ID:           "101",
-			},
-			Title:         "Test PR",
-			Status:        "active",
-			SourceRefName: "refs/heads/feature/x",
-			TargetRefName: "refs/heads/main",
-			CreatedByName: "John",
-			RepositoryName: "repo",
+			ID:                 101,
+			Title:              "Test PR",
+			Status:             "active",
+			SourceRefName:      "refs/heads/feature/x",
+			TargetRefName:      "refs/heads/main",
+			CreatedBy:          azdevops.Identity{DisplayName: "John"},
+			Repository:         azdevops.Repository{Name: "repo"},
+			ProjectName:        "alpha",
+			ProjectDisplayName: "alpha",
 		},
 	}
 
@@ -455,15 +457,15 @@ func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
 	model := NewModel(nil)
 
 	// Set up PR data and navigate to diff view
-	model.list = model.list.SetItems([]provider.PullRequest{
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
+			ID:            123,
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "User",
-			RepositoryName: "repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{Name: "repo"},
 		},
 	})
 
@@ -474,7 +476,7 @@ func TestModel_IsSearching_WhenDiffViewInputActive(t *testing.T) {
 
 	// Simulate having an active diff view with input mode
 	s := styles.DefaultStyles()
-	model.diffView = NewDiffModel(nil, provider.PullRequest{}, nil, s)
+	model.diffView = NewDiffModel(nil, azdevops.PullRequest{}, nil, s)
 	model.viewMode = ViewDiff
 
 	// Without input active, IsSearching should still be false
@@ -499,15 +501,15 @@ func TestModel_VoteFlowThroughDetailView(t *testing.T) {
 	model := NewModel(nil)
 
 	// Set up PR data and navigate to detail view
-	model.list = model.list.SetItems([]provider.PullRequest{
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
+			ID:            123,
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "User",
-			RepositoryName: "repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{Name: "repo"},
 		},
 	})
 
@@ -575,9 +577,9 @@ func TestUpdate_PullRequestsMsg_CriticalErrorNotShownInline(t *testing.T) {
 func TestModel_MyPRsToggle(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "My PR", CreatedByName: "Me"},
-		{Identity: provider.Identity{ID: "2"}, Title: "Other PR", CreatedByName: "Other"},
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1", DisplayName: "Me"}},
+		{ID: 2, Title: "Other PR", CreatedBy: azdevops.Identity{ID: "user-2", DisplayName: "Other"}},
 	}
 
 	// Load PRs
@@ -612,8 +614,8 @@ func TestModel_MyPRsToggle(t *testing.T) {
 func TestModel_MyPRsToggle_NotInSearchMode(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR", CreatedByName: "user-1"},
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -634,12 +636,11 @@ func TestModel_MyPRsToggle_NotInSearchMode(t *testing.T) {
 func TestModel_MyPRsToggle_NotInDetailView(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []provider.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
-			Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
-			Title: "PR", Status: "active",
+			ID: 1, Title: "PR", Status: "active",
 			SourceRefName: "refs/heads/test", TargetRefName: "refs/heads/main",
-			CreatedByName: "User", RepositoryName: "repo",
+			CreatedBy: azdevops.Identity{DisplayName: "User"}, Repository: azdevops.Repository{Name: "repo"},
 		},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
@@ -660,9 +661,9 @@ func TestModel_MyPRsToggle_NotInDetailView(t *testing.T) {
 func TestModel_MyPRsMsg_SetsItems(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "My PR", CreatedByName: "user-1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "Other PR", CreatedByName: "user-2"},
+	allPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
+		{ID: 2, Title: "Other PR", CreatedBy: azdevops.Identity{ID: "user-2"}},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
@@ -670,25 +671,25 @@ func TestModel_MyPRsMsg_SetsItems(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 
 	// Simulate server returning filtered results
-	myPRs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "My PR", CreatedByName: "user-1"},
+	myPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "My PR", CreatedBy: azdevops.Identity{ID: "user-1"}},
 	}
 	model, _ = model.Update(myPullRequestsMsg{prs: myPRs, err: nil})
 
 	if len(model.list.Items()) != 1 {
 		t.Errorf("expected 1 PR after my PRs fetch, got %d", len(model.list.Items()))
 	}
-	if model.list.Items()[0].Identity.ID != "1" {
-		t.Errorf("expected PR ID '1', got %q", model.list.Items()[0].Identity.ID)
+	if model.list.Items()[0].ID != 1 {
+		t.Errorf("expected PR ID 1, got %d", model.list.Items()[0].ID)
 	}
 }
 
 func TestModel_MyPRsMsg_ErrorFallsBack(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
+	allPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
@@ -710,9 +711,9 @@ func TestModel_MyPRsMsg_ErrorFallsBack(t *testing.T) {
 func TestModel_AsReviewerToggle(t *testing.T) {
 	model := NewModel(nil)
 
-	prs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -741,7 +742,7 @@ func TestModel_AsReviewerToggle(t *testing.T) {
 
 func TestModel_AsReviewerToggle_DisablesMyPRs(t *testing.T) {
 	model := NewModel(nil)
-	model, _ = model.Update(pullRequestsMsg{prs: []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}}, err: nil})
+	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
 
 	// Turn on my PRs
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
@@ -761,7 +762,7 @@ func TestModel_AsReviewerToggle_DisablesMyPRs(t *testing.T) {
 
 func TestModel_MyPRsToggle_DisablesAsReviewer(t *testing.T) {
 	model := NewModel(nil)
-	model, _ = model.Update(pullRequestsMsg{prs: []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}}, err: nil})
+	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
 
 	// Turn on as-reviewer
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
@@ -781,7 +782,7 @@ func TestModel_MyPRsToggle_DisablesAsReviewer(t *testing.T) {
 
 func TestModel_AsReviewerToggle_NotInSearchMode(t *testing.T) {
 	model := NewModel(nil)
-	model, _ = model.Update(pullRequestsMsg{prs: []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}}, err: nil})
+	model, _ = model.Update(pullRequestsMsg{prs: []azdevops.PullRequest{{ID: 1}}, err: nil})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
@@ -797,12 +798,11 @@ func TestModel_AsReviewerToggle_NotInSearchMode(t *testing.T) {
 
 func TestModel_AsReviewerToggle_NotInDetailView(t *testing.T) {
 	model := NewModel(nil)
-	prs := []provider.PullRequest{
+	prs := []azdevops.PullRequest{
 		{
-			Identity: provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
-			Title: "PR", Status: "active",
+			ID: 1, Title: "PR", Status: "active",
 			SourceRefName: "refs/heads/x", TargetRefName: "refs/heads/main",
-			CreatedByName: "User", RepositoryName: "r",
+			CreatedBy: azdevops.Identity{DisplayName: "User"}, Repository: azdevops.Repository{Name: "r"},
 		},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
@@ -820,9 +820,9 @@ func TestModel_AsReviewerToggle_NotInDetailView(t *testing.T) {
 
 func TestModel_MyPRs_EscTogglesOff(t *testing.T) {
 	model := NewModel(nil)
-	prs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -844,9 +844,9 @@ func TestModel_MyPRs_EscTogglesOff(t *testing.T) {
 
 func TestModel_AsReviewer_EscTogglesOff(t *testing.T) {
 	model := NewModel(nil)
-	prs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -868,9 +868,9 @@ func TestModel_AsReviewer_EscTogglesOff(t *testing.T) {
 
 func TestModel_Esc_DoesNotTurnOnMyPRs(t *testing.T) {
 	model := NewModel(nil)
-	prs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
+	prs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 
@@ -889,7 +889,7 @@ func TestModel_Esc_DoesNotTurnOnMyPRs(t *testing.T) {
 
 func TestModel_Esc_InSearchMode_ExitsSearchNotFilter(t *testing.T) {
 	model := NewModel(nil)
-	prs := []provider.PullRequest{{Identity: provider.Identity{ID: "1"}, Title: "PR 1"}}
+	prs := []azdevops.PullRequest{{ID: 1, Title: "PR 1"}}
 	model, _ = model.Update(pullRequestsMsg{prs: prs, err: nil})
 	model.list, _ = model.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
@@ -913,9 +913,9 @@ func TestModel_Esc_InSearchMode_ExitsSearchNotFilter(t *testing.T) {
 func TestModel_AsReviewerMsg_SetsItems(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []provider.PullRequest{
-		{Identity: provider.Identity{ID: "1"}, Title: "PR 1"},
-		{Identity: provider.Identity{ID: "2"}, Title: "PR 2"},
+	allPRs := []azdevops.PullRequest{
+		{ID: 1, Title: "PR 1"},
+		{ID: 2, Title: "PR 2"},
 	}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
@@ -923,21 +923,21 @@ func TestModel_AsReviewerMsg_SetsItems(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
 
 	// Simulate server returning filtered results
-	reviewerPRs := []provider.PullRequest{{Identity: provider.Identity{ID: "2"}, Title: "PR 2"}}
+	reviewerPRs := []azdevops.PullRequest{{ID: 2, Title: "PR 2"}}
 	model, _ = model.Update(asReviewerPullRequestsMsg{prs: reviewerPRs, err: nil})
 
 	if len(model.list.Items()) != 1 {
 		t.Errorf("expected 1 PR, got %d", len(model.list.Items()))
 	}
-	if model.list.Items()[0].Identity.ID != "2" {
-		t.Errorf("expected PR ID '2', got %q", model.list.Items()[0].Identity.ID)
+	if model.list.Items()[0].ID != 2 {
+		t.Errorf("expected PR ID 2, got %d", model.list.Items()[0].ID)
 	}
 }
 
 func TestModel_AsReviewerMsg_ErrorFallsBack(t *testing.T) {
 	model := NewModel(nil)
 
-	allPRs := []provider.PullRequest{{Identity: provider.Identity{ID: "1"}}, {Identity: provider.Identity{ID: "2"}}}
+	allPRs := []azdevops.PullRequest{{ID: 1}, {ID: 2}}
 	model, _ = model.Update(pullRequestsMsg{prs: allPRs, err: nil})
 
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
@@ -953,9 +953,9 @@ func TestModel_AsReviewerMsg_ErrorFallsBack(t *testing.T) {
 }
 
 func TestFilterPRMulti_MatchesProjectName(t *testing.T) {
-	pr := provider.PullRequest{
-		Identity: provider.Identity{Scope: "alpha", ScopeDisplay: "alpha"},
-		Title:    "Test PR",
+	pr := azdevops.PullRequest{
+		Title:       "Test PR",
+		ProjectName: "alpha",
 	}
 
 	if !filterPRMulti(pr, "alpha") {
@@ -972,12 +972,12 @@ func newModelInDiffView() Model {
 	s := styles.DefaultStyles()
 	model := NewModel(nil)
 	model.viewMode = ViewDiff
-	model.diffView = NewDiffModel(nil, provider.PullRequest{
-		Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
+	model.diffView = NewDiffModel(nil, azdevops.PullRequest{
+		ID:            123,
 		Title:         "Test PR",
 		SourceRefName: "refs/heads/feature/test",
 		TargetRefName: "refs/heads/main",
-		RepositoryID:  "repo-123",
+		Repository:    azdevops.Repository{ID: "repo-123"},
 	}, nil, s)
 	model.diffView.SetSize(80, 24)
 	return model
@@ -1022,16 +1022,15 @@ func TestUpdateDiffView_NilDiffView_FallsBackToDetail(t *testing.T) {
 
 func newModelInDetailView() Model {
 	model := NewModel(nil)
-	model.list = model.list.SetItems([]provider.PullRequest{
+	model.list = model.list.SetItems([]azdevops.PullRequest{
 		{
-			Identity:      provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "123"},
+			ID:            123,
 			Title:         "Test PR",
 			Status:        "active",
 			SourceRefName: "refs/heads/test",
 			TargetRefName: "refs/heads/main",
-			CreatedByName: "User",
-			RepositoryID:  "repo-123",
-			RepositoryName: "repo",
+			CreatedBy:     azdevops.Identity{DisplayName: "User"},
+			Repository:    azdevops.Repository{ID: "repo-123", Name: "repo"},
 		},
 	})
 	// Enter detail view
@@ -1045,9 +1044,9 @@ func TestUpdateDetail_OpenFileDiffMsg_TransitionsToDiffView(t *testing.T) {
 		t.Fatalf("Expected ViewDetail, got %d", model.GetViewMode())
 	}
 
-	file := provider.IterationChange{
+	file := azdevops.IterationChange{
 		ChangeID:   1,
-		Path:       "/src/main.go",
+		Item:       azdevops.ChangeItem{Path: "/src/main.go"},
 		ChangeType: "edit",
 	}
 
@@ -1129,287 +1128,5 @@ func TestGetStatusMessage_DelegatedToDiffView(t *testing.T) {
 	msg := model.GetStatusMessage()
 	if msg != "Comment added" {
 		t.Errorf("GetStatusMessage() = %q, want %q", msg, "Comment added")
-	}
-}
-
-// ─── Mixed-kind glyph column tests ───────────────────────────────────────────
-// These tests use a synthetic provider.Kind(2) to simulate a second backend
-// (e.g. a future GitHub provider) without adding any KindGitHub constant.
-// In production, all items are KindAzure so the glyph column never appears.
-
-// TestPrsToRows_MixedKinds_GlyphColumnFirst verifies that when items span more
-// than one distinct Kind, prsToRows prepends a glyph cell at position 0.
-// Convention #6: assert the full glyph token AND the KindStyle foreground.
-func TestPrsToRows_MixedKinds_GlyphColumnFirst(t *testing.T) {
-	s := styles.DefaultStyles()
-
-	prs := []provider.PullRequest{
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
-			Title:          "PR One",
-			SourceRefName:  "refs/heads/feature/one",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Alice",
-			RepositoryName: "repo",
-		},
-		{
-			Identity:       provider.Identity{Kind: provider.Kind(2), Scope: "proj", ID: "2"},
-			Title:          "PR Two",
-			SourceRefName:  "refs/heads/feature/two",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Bob",
-			RepositoryName: "repo",
-		},
-	}
-
-	rows := prsToRows(prs, s)
-
-	if len(rows) != 2 {
-		t.Fatalf("Expected 2 rows, got %d", len(rows))
-	}
-	// Mixed kinds: 6 normal + 1 leading glyph = 7 cells per row.
-	const wantCells = 7
-	if len(rows[0]) != wantCells {
-		t.Fatalf("Mixed-kind row[0] has %d cells, want %d (glyph + 6 normal)", len(rows[0]), wantCells)
-	}
-	if len(rows[1]) != wantCells {
-		t.Fatalf("Mixed-kind row[1] has %d cells, want %d", len(rows[1]), wantCells)
-	}
-
-	// Row 0 (KindAzure): glyph cell must contain the Azure glyph "⬡".
-	wantGlyph0 := display.KindGlyph(provider.KindAzure)
-	if !strings.Contains(rows[0][0], wantGlyph0) {
-		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph0)
-	}
-
-	// Row 1 (Kind(2)): glyph cell must contain the unknown-kind fallback "?".
-	wantGlyph1 := display.KindGlyph(provider.Kind(2))
-	if !strings.Contains(rows[1][0], wantGlyph1) {
-		t.Errorf("Row 1 glyph cell = %q, want to contain %q", rows[1][0], wantGlyph1)
-	}
-
-	// Style assertion: KindStyle(KindAzure) must use the Muted foreground.
-	wantFg := s.Theme.ForegroundMuted
-	gotFg := display.KindStyle(provider.KindAzure, s).GetForeground()
-	if gotFg != wantFg {
-		t.Errorf("KindStyle(KindAzure) foreground = %v, want %v (Muted)", gotFg, wantFg)
-	}
-}
-
-// TestPrsToRows_AzureOnly_NoGlyphColumn verifies that Azure-only items produce
-// the standard 6-cell layout without a leading glyph cell (unchanged behavior).
-func TestPrsToRows_AzureOnly_NoGlyphColumn(t *testing.T) {
-	s := styles.DefaultStyles()
-
-	prs := []provider.PullRequest{
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "1"},
-			Title:          "PR One",
-			SourceRefName:  "refs/heads/feature/one",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Alice",
-			RepositoryName: "repo",
-		},
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "proj", ID: "2"},
-			Title:          "PR Two",
-			SourceRefName:  "refs/heads/feature/two",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Bob",
-			RepositoryName: "repo",
-		},
-	}
-
-	rows := prsToRows(prs, s)
-
-	if len(rows) != 2 {
-		t.Fatalf("Expected 2 rows, got %d", len(rows))
-	}
-	// Azure-only: must produce exactly 6 cells (no glyph column prepended).
-	const wantCells = 6
-	if len(rows[0]) != wantCells {
-		t.Errorf("Azure-only row[0] has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
-	}
-}
-
-// TestPrsToRowsMulti_MixedKinds_GlyphColumnFirst verifies the multi-project
-// variant: [glyph] [project] [status] [title] … (8 cells total) when mixed.
-func TestPrsToRowsMulti_MixedKinds_GlyphColumnFirst(t *testing.T) {
-	s := styles.DefaultStyles()
-
-	prs := []provider.PullRequest{
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
-			Title:          "PR One",
-			SourceRefName:  "refs/heads/feature/one",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Alice",
-			RepositoryName: "repo",
-		},
-		{
-			Identity:       provider.Identity{Kind: provider.Kind(2), Scope: "beta", ScopeDisplay: "Beta", ID: "2"},
-			Title:          "PR Two",
-			SourceRefName:  "refs/heads/feature/two",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Bob",
-			RepositoryName: "repo",
-		},
-	}
-
-	rows := prsToRowsMulti(prs, s)
-
-	if len(rows) != 2 {
-		t.Fatalf("Expected 2 rows, got %d", len(rows))
-	}
-	// Mixed + multi: 7 normal (project + 6) + 1 glyph = 8 cells.
-	const wantCells = 8
-	if len(rows[0]) != wantCells {
-		t.Fatalf("Mixed-kind multi row[0] has %d cells, want %d", len(rows[0]), wantCells)
-	}
-
-	// Glyph is at position 0; project is at position 1.
-	wantGlyph := display.KindGlyph(provider.KindAzure)
-	if !strings.Contains(rows[0][0], wantGlyph) {
-		t.Errorf("Row 0 glyph cell = %q, want to contain %q", rows[0][0], wantGlyph)
-	}
-	if rows[0][1] != "Alpha" {
-		t.Errorf("Row 0 project cell = %q, want %q", rows[0][1], "Alpha")
-	}
-}
-
-// TestPrsToRowsMulti_AzureOnly_NoGlyphColumn verifies the multi-project
-// variant produces the standard 7-cell layout when all items are KindAzure.
-func TestPrsToRowsMulti_AzureOnly_NoGlyphColumn(t *testing.T) {
-	s := styles.DefaultStyles()
-
-	prs := []provider.PullRequest{
-		{
-			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ScopeDisplay: "Alpha", ID: "1"},
-			Title:          "PR One",
-			SourceRefName:  "refs/heads/feature/one",
-			TargetRefName:  "refs/heads/main",
-			CreatedByName:  "Alice",
-			RepositoryName: "repo",
-		},
-	}
-
-	rows := prsToRowsMulti(prs, s)
-
-	if len(rows) != 1 {
-		t.Fatalf("Expected 1 row, got %d", len(rows))
-	}
-	// Azure-only multi: must be exactly 7 cells (project + 6 normal, no glyph).
-	const wantCells = 7
-	if len(rows[0]) != wantCells {
-		t.Errorf("Azure-only multi row has %d cells, want %d (no glyph column)", len(rows[0]), wantCells)
-	}
-}
-
-// ─── Column / cell count parity tests ────────────────────────────────────────
-// These tests prove that after SetItems the column headers derived by ToColumns
-// always equal the cell count produced by ToRows — the invariant that prevents
-// the index-out-of-range panic in table.renderRow.
-
-func makePR(kind provider.Kind, id string) provider.PullRequest {
-	return provider.PullRequest{
-		Identity:       provider.Identity{Kind: kind, Scope: "proj", ScopeDisplay: "proj", ID: id},
-		Title:          "PR " + id,
-		SourceRefName:  "refs/heads/feature/" + id,
-		TargetRefName:  "refs/heads/main",
-		CreatedByName:  "User",
-		RepositoryName: "repo",
-	}
-}
-
-// TestPRs_ColumnCellParity_AzureOnly checks single-project Azure-only layout:
-// 6 columns, 6 cells per row — unchanged from before this task.
-func TestPRs_ColumnCellParity_AzureOnly(t *testing.T) {
-	s := styles.DefaultStyles()
-	m := NewModelWithStyles(nil, s) // nil client → isMulti = false
-
-	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.KindAzure, "2")}
-	m.list = m.list.SetItems(prs)
-
-	cols := m.list.Table().Columns()
-	rows := m.list.Table().Rows()
-
-	if len(rows) == 0 {
-		t.Fatal("Expected rows, got 0")
-	}
-	if len(cols) != len(rows[0]) {
-		t.Errorf("Azure-only: column count %d != cell count %d", len(cols), len(rows[0]))
-	}
-	if len(cols) != 6 {
-		t.Errorf("Azure-only single: want 6 columns, got %d", len(cols))
-	}
-}
-
-// TestPRs_ColumnCellParity_MixedKinds checks single-project mixed-kind layout:
-// 7 columns and 7 cells per row (glyph prepended to both).
-func TestPRs_ColumnCellParity_MixedKinds(t *testing.T) {
-	s := styles.DefaultStyles()
-	m := NewModelWithStyles(nil, s)
-
-	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")}
-	m.list = m.list.SetItems(prs)
-
-	cols := m.list.Table().Columns()
-	rows := m.list.Table().Rows()
-
-	if len(rows) == 0 {
-		t.Fatal("Expected rows, got 0")
-	}
-	if len(cols) != len(rows[0]) {
-		t.Errorf("Mixed-kinds: column count %d != cell count %d", len(cols), len(rows[0]))
-	}
-	if len(cols) != 7 {
-		t.Errorf("Mixed single: want 7 columns (glyph + 6), got %d", len(cols))
-	}
-	// Glyph column has empty title.
-	if cols[0].Title != "" {
-		t.Errorf("Glyph column title = %q, want empty string", cols[0].Title)
-	}
-}
-
-// TestPRs_ColumnCellParity_MixedKinds_View renders through the table to prove
-// no index-out-of-range panic occurs when columns and cells are in lock-step.
-func TestPRs_ColumnCellParity_MixedKinds_View(t *testing.T) {
-	s := styles.DefaultStyles()
-	m := NewModelWithStyles(nil, s)
-
-	prs := []provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")}
-	m.list = m.list.SetItems(prs)
-	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-
-	// Must not panic.
-	view := m.View()
-	if view == "" {
-		t.Error("View() returned empty string")
-	}
-}
-
-// TestPRs_ColumnCellParity_AzureOnlyToMixed verifies that transitioning from an
-// Azure-only set to a mixed set via a second SetItems call updates both columns
-// and rows — catching any caching bug.
-func TestPRs_ColumnCellParity_AzureOnlyToMixed(t *testing.T) {
-	s := styles.DefaultStyles()
-	m := NewModelWithStyles(nil, s)
-	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-
-	// First: Azure-only.
-	m.list = m.list.SetItems([]provider.PullRequest{makePR(provider.KindAzure, "1")})
-	if n := len(m.list.Table().Columns()); n != 6 {
-		t.Fatalf("Azure-only: want 6 columns, got %d", n)
-	}
-
-	// Second: mixed kinds.
-	m.list = m.list.SetItems([]provider.PullRequest{makePR(provider.KindAzure, "1"), makePR(provider.Kind(2), "2")})
-	cols := m.list.Table().Columns()
-	rows := m.list.Table().Rows()
-	if len(cols) != 7 {
-		t.Fatalf("Mixed: want 7 columns, got %d", len(cols))
-	}
-	if len(rows) > 0 && len(cols) != len(rows[0]) {
-		t.Errorf("Mixed: column count %d != cell count %d", len(cols), len(rows[0]))
 	}
 }
