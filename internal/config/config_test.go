@@ -621,7 +621,9 @@ func TestConfig_IsPaneEnabled(t *testing.T) {
 		{"workitems disabled - pipelines still enabled", []string{"workitems"}, "pipelines", true},
 		{"both disabled", []string{"pipelines", "workitems"}, "pipelines", false},
 		{"both disabled - workitems", []string{"pipelines", "workitems"}, "workitems", false},
-		{"both disabled - pullrequests always enabled", []string{"pipelines", "workitems"}, "pullrequests", true},
+		{"pipelines+workitems disabled - pullrequests still enabled", []string{"pipelines", "workitems"}, "pullrequests", true},
+		{"pullrequests disabled", []string{"pullrequests"}, "pullrequests", false},
+		{"pullrequests disabled - workitems still enabled", []string{"pullrequests"}, "workitems", true},
 		{"unknown pane name", []string{"unknown"}, "pipelines", true},
 	}
 
@@ -651,8 +653,10 @@ func TestConfig_Validate_InvalidDisabledPane(t *testing.T) {
 		{"valid - pipelines disabled", []string{"pipelines"}, false},
 		{"valid - workitems disabled", []string{"workitems"}, false},
 		{"valid - both disabled", []string{"pipelines", "workitems"}, false},
+		{"valid - pullrequests disabled", []string{"pullrequests"}, false},
+		{"valid - pullrequests+pipelines disabled", []string{"pullrequests", "pipelines"}, false},
 		{"invalid - unknown pane", []string{"unknown"}, true},
-		{"invalid - pullrequests cannot be disabled", []string{"pullrequests"}, true},
+		{"invalid - all panes disabled", []string{"pullrequests", "workitems", "pipelines"}, true},
 	}
 
 	for _, tt := range tests {

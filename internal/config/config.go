@@ -76,8 +76,9 @@ type MetricsStates struct {
 
 // validDisabledPanes lists the pane names that can be disabled.
 var validDisabledPanes = map[string]bool{
-	"pipelines": true,
-	"workitems": true,
+	"pullrequests": true,
+	"pipelines":    true,
+	"workitems":    true,
 }
 
 // IsPaneEnabled returns true if the given pane is not in the disabled list.
@@ -397,8 +398,14 @@ func (c *Config) Validate() error {
 
 	for _, p := range c.DisabledPanes {
 		if !validDisabledPanes[p] {
-			return fmt.Errorf("invalid disabled pane %q: only 'pipelines' and 'workitems' can be disabled", p)
+			return fmt.Errorf("invalid disabled pane %q: only 'pullrequests', 'pipelines' and 'workitems' can be disabled", p)
 		}
+	}
+
+	// At least one pane must remain enabled — otherwise the app would start
+	// with no navigable tabs.
+	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") {
+		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled")
 	}
 
 	if c.Metrics.Enabled {
