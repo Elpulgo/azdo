@@ -90,7 +90,7 @@ func (c *Client) ListPullRequests(top int, opts provider.ListOpts) ([]PullReques
 		top = issuePerPageCap
 	}
 
-	state := mapStateParam(opts.States)
+	state := prStateParam(opts.States)
 	path := fmt.Sprintf("/repos/%s/%s/pulls?state=%s&per_page=%d&sort=updated&direction=desc",
 		c.owner, c.repo, state, issuePerPageCap)
 
@@ -99,6 +99,19 @@ func (c *Client) ListPullRequests(top int, opts provider.ListOpts) ([]PullReques
 		return nil, fmt.Errorf("github: list pull requests: %w", err)
 	}
 	return prs, nil
+}
+
+// prStateParam is the pull-request variant of mapStateParam. Pull-request lists
+// default to open-only, mirroring the Azure DevOps backend which lists active
+// PRs (searchCriteria.status=active). An empty States filter therefore maps to
+// "open" rather than the "all" that mapStateParam returns for issues — without
+// this, merged/closed GitHub PRs leak into the list (see issue #50). A non-empty
+// filter is delegated to mapStateParam unchanged.
+func prStateParam(states []provider.StateCategory) string {
+	if len(states) == 0 {
+		return "open"
+	}
+	return mapStateParam(states)
 }
 
 // ListMyPullRequests returns up to top pull requests authored by the
@@ -136,7 +149,7 @@ func (c *Client) searchPullRequests(top int, opts provider.ListOpts, qualifier s
 	// "is:pr" is required — /search/issues returns both issues and PRs by default.
 	q := fmt.Sprintf("repo:%s/%s is:pr %s", c.owner, c.repo, qualifier)
 
-	state := mapStateParam(opts.States)
+	state := prStateParam(opts.States)
 	if state == "open" || state == "closed" {
 		q += " state:" + state
 	}

@@ -100,6 +100,31 @@ func TestClient_ListPullRequests_ClosedState(t *testing.T) {
 	}
 }
 
+// TestClient_ListPullRequests_DefaultStateOpen guards issue #50: an empty States
+// filter (the default the UI passes) must list open PRs only, so merged/closed
+// GitHub PRs do not leak into the list the way "all" would.
+func TestClient_ListPullRequests_DefaultStateOpen(t *testing.T) {
+	var capturedState string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedState = r.URL.Query().Get("state")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.ListPullRequests(5, provider.ListOpts{})
+	if err != nil {
+		t.Fatalf("ListPullRequests() error = %v", err)
+	}
+	if capturedState != "open" {
+		t.Errorf("state param = %q, want open (issue #50: merged PRs must not appear)", capturedState)
+	}
+}
+
 func TestClient_ListPullRequests_TopCappedAt100(t *testing.T) {
 	var capturedPerPage string
 
@@ -364,6 +389,31 @@ func TestClient_ListPullRequestsAsReviewer_QueryQualifier(t *testing.T) {
 	}
 	if strings.Contains(capturedQ, "author:@me") {
 		t.Errorf("q = %q: must not contain author:@me (wrong method)", capturedQ)
+	}
+}
+
+// TestClient_ListMyPullRequests_DefaultStateOpen guards issue #50 for the
+// search-backed lists: an empty States filter must add a state:open qualifier
+// so merged/closed PRs are excluded rather than returned via an unqualified query.
+func TestClient_ListMyPullRequests_DefaultStateOpen(t *testing.T) {
+	var capturedQ string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQ, _ = url.QueryUnescape(r.URL.Query().Get("q"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"total_count":0,"items":[]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.ListMyPullRequests(10, provider.ListOpts{Mine: true})
+	if err != nil {
+		t.Fatalf("ListMyPullRequests() error = %v", err)
+	}
+	if !strings.Contains(capturedQ, "state:open") {
+		t.Errorf("q = %q: expected state:open for default filter (issue #50)", capturedQ)
 	}
 }
 
