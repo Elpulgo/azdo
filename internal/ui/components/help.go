@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/Elpulgo/azdo/internal/ui/styles"
+	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -22,6 +23,18 @@ type HelpSection struct {
 	Bindings []HelpBinding
 }
 
+// releaseNotesState tracks the lifecycle of the on-demand release-notes fetch
+// so the Release Notes section can render a placeholder while loading and an
+// error message on failure.
+type releaseNotesState int
+
+const (
+	releaseNotesIdle    releaseNotesState = iota // not yet requested
+	releaseNotesLoading                          // fetch dispatched, awaiting result
+	releaseNotesLoaded                           // notes available (possibly empty)
+	releaseNotesFailed                           // fetch failed
+)
+
 // HelpModal is an overlay that displays available keybindings.
 type HelpModal struct {
 	styles       *styles.Styles
@@ -33,6 +46,9 @@ type HelpModal struct {
 	versionInfo  string
 	scopes       []string
 	scrollOffset int
+
+	releaseNotes      []version.ReleaseNote
+	releaseNotesState releaseNotesState
 }
 
 // NewHelpModal creates a new HelpModal with default keybindings.
@@ -143,6 +159,30 @@ func (h *HelpModal) SetVersionInfo(info string) {
 // GitHub "owner/repo" repos) listed in the Info section of the help modal.
 func (h *HelpModal) SetScopes(scopes []string) {
 	h.scopes = scopes
+}
+
+// NeedsReleaseNotes reports whether release notes have not yet been requested.
+// The app uses this when the modal opens to decide whether to dispatch a fetch,
+// so the notes are loaded on demand and only once per modal instance.
+func (h *HelpModal) NeedsReleaseNotes() bool {
+	return h.releaseNotesState == releaseNotesIdle
+}
+
+// BeginReleaseNotesLoad marks release notes as loading so the modal shows a
+// placeholder until the fetch completes.
+func (h *HelpModal) BeginReleaseNotesLoad() {
+	h.releaseNotesState = releaseNotesLoading
+}
+
+// SetReleaseNotes stores the fetched release notes and marks the load complete.
+func (h *HelpModal) SetReleaseNotes(notes []version.ReleaseNote) {
+	h.releaseNotes = notes
+	h.releaseNotesState = releaseNotesLoaded
+}
+
+// SetReleaseNotesError marks the release-notes fetch as failed.
+func (h *HelpModal) SetReleaseNotesError() {
+	h.releaseNotesState = releaseNotesFailed
 }
 
 // AddSection adds a custom section to the help modal.
@@ -378,7 +418,75 @@ func (h *HelpModal) bodyLines(contentWidth int) []string {
 			lines = append(lines, infoValueStyle.Render("Config: "+h.configPath))
 		}
 	}
+
+	lines = append(lines, h.releaseNotesLines(contentWidth, helpSectionStyle, blankLine)...)
+
 	return lines
+}
+
+// releaseNotesLines renders the Release Notes section: a placeholder while the
+// fetch is in flight, an error message on failure, or one sub-section per
+// release (tag heading followed by the wrapped body). Returns nothing until
+// the notes have been requested, so the section stays hidden if the modal is
+// never opened.
+func (h *HelpModal) releaseNotesLines(contentWidth int, sectionStyle lipgloss.Style, blankLine string) []string {
+	if h.releaseNotesState == releaseNotesIdle {
+		return nil
+	}
+
+	messageStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.ForegroundMuted)).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+		Width(contentWidth)
+
+	tagStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Accent)).
+		Bold(true).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+		Width(contentWidth)
+
+	lines := []string{blankLine, sectionStyle.Render("Release Notes")}
+
+	switch h.releaseNotesState {
+	case releaseNotesLoading:
+		return append(lines, messageStyle.Render("Loading release notes…"))
+	case releaseNotesFailed:
+		return append(lines, messageStyle.Render("Could not load release notes."))
+	}
+
+	if len(h.releaseNotes) == 0 {
+		return append(lines, messageStyle.Render("No release notes available."))
+	}
+
+	for i, note := range h.releaseNotes {
+		if i > 0 {
+			lines = append(lines, blankLine)
+		}
+		lines = append(lines, tagStyle.Render(note.TagName))
+		lines = append(lines, h.wrapReleaseBody(note.Body, contentWidth)...)
+	}
+	return lines
+}
+
+// wrapReleaseBody renders a release body into individual, width-constrained
+// lines. The scroll offset indexes into whole lines, so each visually wrapped
+// line must be its own slice entry for paging to stay accurate. Blank source
+// lines are preserved as spacers.
+func (h *HelpModal) wrapReleaseBody(body string, contentWidth int) []string {
+	bodyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(h.styles.Theme.Foreground)).
+		Background(lipgloss.Color(h.styles.Theme.BackgroundAlt)).
+		Width(contentWidth)
+
+	normalized := strings.ReplaceAll(body, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+
+	var out []string
+	for _, srcLine := range strings.Split(normalized, "\n") {
+		rendered := bodyStyle.Render(srcLine)
+		out = append(out, strings.Split(rendered, "\n")...)
+	}
+	return out
 }
 
 // footerText returns the footer hint, with scroll keys appended when

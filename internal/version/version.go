@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	defaultAPIURL = "https://api.github.com/repos/Elpulgo/azdo/releases/latest"
-	httpTimeout   = 5 * time.Second
+	defaultAPIURL      = "https://api.github.com/repos/Elpulgo/azdo/releases/latest"
+	defaultReleasesURL = "https://api.github.com/repos/Elpulgo/azdo/releases?per_page=100"
+	httpTimeout        = 5 * time.Second
 )
 
 // UpdateInfo contains the result of a version check.
@@ -26,6 +27,7 @@ type UpdateInfo struct {
 type Checker struct {
 	currentVersion string
 	apiURL         string
+	releasesURL    string
 	httpClient     *http.Client
 }
 
@@ -40,6 +42,7 @@ func NewChecker(currentVersion string) *Checker {
 	return &Checker{
 		currentVersion: currentVersion,
 		apiURL:         defaultAPIURL,
+		releasesURL:    defaultReleasesURL,
 		httpClient: &http.Client{
 			Timeout: httpTimeout,
 		},
@@ -95,16 +98,21 @@ func isNewer(current, latest string) bool {
 		return false
 	}
 
+	return compareSemver(latParts, curParts) > 0
+}
+
+// compareSemver compares two parsed major.minor.patch versions part by part.
+// Returns 1 if a > b, -1 if a < b, and 0 when they are equal.
+func compareSemver(a, b []int) int {
 	for i := 0; i < 3; i++ {
-		if latParts[i] > curParts[i] {
-			return true
-		}
-		if latParts[i] < curParts[i] {
-			return false
+		switch {
+		case a[i] > b[i]:
+			return 1
+		case a[i] < b[i]:
+			return -1
 		}
 	}
-
-	return false
+	return 0
 }
 
 // parseSemver extracts major.minor.patch from a version string.
