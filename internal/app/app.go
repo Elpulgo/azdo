@@ -541,9 +541,44 @@ func checkForUpdate(currentVersion string) tea.Cmd {
 	}
 }
 
+// releaseNotesCount is how many recent releases the help modal displays.
+const releaseNotesCount = 5
+
+// releaseNotesMsg carries the result of the on-demand release-notes fetch for
+// the help modal. A non-nil err indicates the fetch failed.
+type releaseNotesMsg struct {
+	notes []version.ReleaseNote
+	err   error
+}
+
+// fetchReleaseNotes returns a tea.Cmd that loads the most recent releases at or
+// below the current version, for display in the help modal's Release Notes
+// section. Dispatched lazily the first time the modal is opened.
+func fetchReleaseNotes(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		checker := version.NewChecker(currentVersion)
+		notes, err := checker.LatestReleaseNotes(releaseNotesCount)
+		if err != nil {
+			return releaseNotesMsg{err: err}
+		}
+		return releaseNotesMsg{notes: notes}
+	}
+}
+
 // Update handles incoming messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// Release-notes fetch results are handled up front so they land in the help
+	// modal whether or not it is still visible when the fetch completes.
+	if rn, ok := msg.(releaseNotesMsg); ok {
+		if rn.err != nil {
+			m.helpModal.SetReleaseNotesError()
+		} else {
+			m.helpModal.SetReleaseNotes(rn.notes)
+		}
+		return m, nil
+	}
 
 	// If error modal is visible, handle its input first (highest priority)
 	if m.errorModal.IsVisible() {
@@ -608,6 +643,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.helpModal.SetSize(m.width, m.height)
 			m.helpModal.Show()
+			// Load release notes on demand the first time the modal is opened.
+			if m.helpModal.NeedsReleaseNotes() {
+				m.helpModal.BeginReleaseNotesLoad()
+				return m, fetchReleaseNotes(m.currentVersion)
+			}
 			return m, nil
 		case "t":
 			m.themePicker.SetSize(m.width, m.height)
