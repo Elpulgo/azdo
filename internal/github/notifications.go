@@ -107,14 +107,29 @@ type NotificationListOpts struct {
 // to feel instant, not block for up to maxNotificationPages HTTP round trips.
 // Decision 37 resolves this with a second, independent generation counter:
 // cacheGen is an atomic.Uint64 that MarkRead/MarkDone bump (Add(1)) only
-// after a successful request, with no lock at all. List snapshots cacheGen
-// into cachedGen (guarded by mu, alongside the rest of the cache state)
-// whenever it populates the cache, and on every subsequent call treats the
-// cache as invalid — offering no If-Modified-Since and refusing to serve a
-// 304 from it — whenever cachedGen no longer matches cacheGen.Load(). This
-// keeps the marker lock-free while still making the validator↔cache pairing
-// atomic, because only List ever writes cached/cachedPath/cachedGen and it
-// re-reads cacheGen right before committing them.
+// after a successful request, with no lock at all.
+//
+// The counter is consumed by List under snapshot-once semantics, which
+// Decision 37 makes explicit and which are load-bearing: List reads cacheGen
+// exactly once, into a local genAtStart, before its first request, and that
+// single snapshot drives all three decisions — whether the cache is valid,
+// whether to offer If-Modified-Since, and what to store as cachedGen when it
+// commits. It must never re-read cacheGen at commit time. Re-reading looks
+// equivalent and is not: because mu is held across the whole page walk while
+// the marker is lock-free, a mark can land mid-walk, and committing the
+// post-mark generation alongside a response generated pre-mark would make the
+// cache certify that it already reflects a mark it does not contain. Every
+// later List would then see a valid cache, send If-Modified-Since, get a 304
+// and replay the dismissed row — permanently, since the 304 path never
+// rewrites cachedGen. Committing the snapshot instead leaves cachedGen behind
+// cacheGen, so the next call correctly refetches: at most one redundant fetch,
+// and the response it replaces may genuinely predate the mark.
+//
+// On every subsequent call the cache is therefore treated as invalid —
+// offering no If-Modified-Since and refusing to serve a 304 from it — whenever
+// cachedGen does not match the current snapshot. This keeps the marker
+// lock-free while still making the validator↔cache pairing atomic, because
+// only List ever writes cached/cachedPath/cachedGen.
 type NotificationsClient struct {
 	mu sync.Mutex
 
@@ -168,6 +183,14 @@ func NewNotificationsClient(token string) *NotificationsClient {
 // after switching base URLs: a later List with the same opts would offer the
 // previous host's Last-Modified as a validator, and a 304 would hand back the
 // previous host's rows presented as the new host's answer.
+//
+// Resetting cachedGen to 0 is safe only because cachedPath is cleared in the
+// same breath, and buildPath never returns "" (it always emits at least
+// "/notifications?all=true&per_page=100"). The path check therefore always
+// rejects first, so cachedGen == 0 is never compared against a live
+// cacheGen.Load() of 0 on a stale cache. Anyone "simplifying" the cachedPath =
+// "" line away would silently promote that dead equality into a live one, and a
+// pre-switch cache would be certified valid against the new base URL.
 //
 // SetBaseURL is deliberately left unlocked, matching Client.SetBaseURL and
 // azdevops.Client.SetBaseURL: it is a construction-time-only override (tests,
@@ -229,17 +252,30 @@ func (c *NotificationsClient) PollInterval() time.Duration {
 // leave the collection's Last-Modified unchanged, List would send
 // If-Modified-Since, GitHub would answer 304, and cloneThreads(c.cached)
 // would faithfully replay the row the user just dismissed with Unread: true.
+// The generation is snapshotted once, before the first request, and that
+// snapshot — never a fresh load — is what gets committed as cachedGen; see the
+// type-level doc comment for why the two are not equivalent.
 func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThread, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	path := c.buildPath(opts)
 
+	// Decision 37, snapshot-once: the generation this call reasons about is
+	// fixed here, before the first request, and this single snapshot drives
+	// every generation decision below — cache validity, whether to offer
+	// If-Modified-Since, whether a 304 may be served, and what is committed as
+	// cachedGen at the end. The 304 path does load the counter again, but only
+	// to compare it against this snapshot ("has a mark landed since?"); no
+	// other value may ever be substituted for genAtStart, and in particular the
+	// commit at the end of this function must never use a fresh load.
+	genAtStart := c.cacheGen.Load()
+
 	// Only offer the cached validator when it was produced by this exact
 	// request shape (otherwise a 200 for a different query could be
 	// conditioned against a validator that has nothing to do with it) AND no
 	// mark-read/mark-done has invalidated it since (Decision 37).
-	cacheValid := path == c.cachedPath && c.cachedGen == c.cacheGen.Load()
+	cacheValid := path == c.cachedPath && c.cachedGen == genAtStart
 
 	ifModifiedSince := ""
 	if cacheValid {
@@ -251,7 +287,17 @@ func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThr
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotModified {
 			c.applyPollInterval(header)
-			if !cacheValid {
+			// cacheValid was computed before the request went out, so it can
+			// be stale by the time the 304 lands: the marker is lock-free, so a
+			// MarkRead/MarkDone can complete in that window. Re-checking the
+			// snapshot here closes it. This is not a second read of the
+			// generation for decision-making — genAtStart is still the only
+			// snapshot; the load merely asks "has anything been marked since?".
+			// A cache the generation has invalidated makes this 304 unprompted
+			// by definition (the next call would not have offered a validator),
+			// so it must take Decision 28's error path rather than serve a row
+			// the user has just dismissed.
+			if !cacheValid || c.cacheGen.Load() != genAtStart {
 				// Decision 28: a 304 that does not match a cache produced by
 				// this exact request shape — or, per Decision 37, a cache
 				// that has since been invalidated by a mark-read/mark-done —
@@ -312,14 +358,18 @@ func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThr
 	c.lastModified = header.Get("Last-Modified")
 	c.cached = all
 	c.cachedPath = path
-	// Snapshot the generation as of right now (not the value read at the top
-	// of this call): if a MarkRead/MarkDone landed concurrently while this
-	// fetch was in flight, the cache being committed here reflects a fetch
-	// that may or may not include that mark's effect (an inherent race, not
-	// one this counter is meant to close — see the type-level doc comment),
-	// but recording the freshest generation is what lets the NEXT List call
-	// correctly treat this cache as valid absent any further mark.
-	c.cachedGen = c.cacheGen.Load()
+	// Commit the snapshot taken before the first request — NOT a fresh
+	// c.cacheGen.Load(). The response being cached here was generated by a
+	// server that had seen, at most, the marks that existed when the request
+	// went out, so genAtStart is the generation it actually describes. Storing
+	// the freshest generation instead would certify this cache as already
+	// reflecting a mark that landed mid-walk, and since the 304 path never
+	// rewrites cachedGen that false certification is permanent: every later
+	// List sees a valid cache, offers If-Modified-Since, gets a 304 and replays
+	// the dismissed row forever. Committing genAtStart leaves cachedGen behind
+	// cacheGen after a concurrent mark, so the next call refetches once — the
+	// correct trade, because this response may genuinely predate that mark.
+	c.cachedGen = genAtStart
 	return cloneThreads(all), nil
 }
 

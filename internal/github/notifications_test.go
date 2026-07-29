@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -812,17 +813,6 @@ func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Optional query params (participating, since) — not part of the acceptance
-// criteria's numbered list but documented in the API shapes section.
-// ---------------------------------------------------------------------------
-
-// Review feedback item 10: the original version of this test computed "want"
-// with the same since.Format(time.RFC3339) call the production code makes,
-// on an already-UTC fixture — so the ".UTC()" normalisation in buildPath was
-// never actually pinned; a production bug that dropped the .UTC() call would
-// still pass on a UTC-already input. Asserts the literal expected string and
-// adds a non-UTC input row so the normalisation itself is exercised.
-// ---------------------------------------------------------------------------
 // Task 6: MarkRead / MarkDone — method and path pinned as literals, not
 // derived from the code under test (a test that reads a constant it is meant
 // to be pinning has already slipped through this run once).
@@ -946,6 +936,15 @@ func TestNotificationsClient_MarkDone_RejectedIds_IssueZeroRequests(t *testing.T
 
 // ---------------------------------------------------------------------------
 // Task 6: a non-2xx response surfaces as an error carrying the status code.
+//
+// Review feedback item 5: the status-code assertions alone did not pin
+// markThread's bare-*APIError return — wrapping it as
+// fmt.Errorf("github: mark thread: %w", ...) kept errors.As and StatusCode
+// working and left the suite green, while double-prefixing the user-visible
+// message (APIError.Error() already starts with "github:"). Task 19 also needs
+// the bare *APIError so it can read RequiredScopes/GrantedScopes off a 403.
+// Mirrors TestNotificationsClient_List_ErrorIsNotDoublePrefixed for the List
+// path.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_MarkRead_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
@@ -969,6 +968,9 @@ func TestNotificationsClient_MarkRead_NonSuccessStatus_ReturnsErrorWithStatusCod
 	if apiErr.StatusCode != http.StatusNotFound {
 		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotFound)
 	}
+	if got := strings.Count(err.Error(), "github:"); got != 1 {
+		t.Errorf("error message %q contains %d occurrences of %q, want 1 (double-prefixed)", err.Error(), got, "github:")
+	}
 }
 
 func TestNotificationsClient_MarkDone_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
@@ -991,6 +993,9 @@ func TestNotificationsClient_MarkDone_NonSuccessStatus_ReturnsErrorWithStatusCod
 	}
 	if apiErr.StatusCode != http.StatusForbidden {
 		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusForbidden)
+	}
+	if got := strings.Count(err.Error(), "github:"); got != 1 {
+		t.Errorf("error message %q contains %d occurrences of %q, want 1 (double-prefixed)", err.Error(), got, "github:")
 	}
 }
 
@@ -1064,6 +1069,351 @@ func TestNotificationsClient_MarkRead_InvalidatesCache_SecondListNotStale(t *tes
 }
 
 // ---------------------------------------------------------------------------
+// Review feedback item 3 / Decision 37: MarkDone's twin of the test above.
+// Deleting cacheGen.Add(1) from MarkDone alone SURVIVED the suite — only the
+// MarkRead half was pinned. MarkDone is the more damaging of the two: the
+// thread is gone server-side, so a stale 304 replays a row on which both `o`
+// and `u` then 404 against a thread that no longer exists.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkDone_InvalidatesCache_SecondListNotStale(t *testing.T) {
+	listCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete && r.URL.Path == "/notifications/threads/1":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet:
+			listCalls++
+			if listCalls == 1 {
+				w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"}]`))
+				return
+			}
+			// Second List(): a server that would happily 304 any conditional
+			// request. A correctly invalidated cache offers no validator, so
+			// this answers with the post-done inbox — genuinely empty.
+			if r.Header.Get("If-Modified-Since") != "" {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	first, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("first List() len = %d, want 1", len(first))
+	}
+
+	if err := c.MarkDone("1"); err != nil {
+		t.Fatalf("MarkDone() error = %v", err)
+	}
+
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() error = %v", err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second List() = %+v, want an empty feed — MarkDone must invalidate the cache so a 304 cannot replay a thread that no longer exists server-side (Decision 37)", second)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review feedback item 1 (🔴) / Decision 37's snapshot-once semantics: the
+// regression test for a mark landing MID-FETCH.
+//
+// List used to commit c.cachedGen = c.cacheGen.Load(), re-reading the counter
+// after the walk instead of committing the snapshot taken before it. Because
+// the marker is lock-free while List holds mu across the whole walk, a MarkRead
+// can complete while a page request is in flight — and the response then being
+// committed was generated pre-mark, still unread: true, yet got stamped with
+// the POST-mark generation. The cache thereby certified that it already
+// reflected a mark it did not contain, so every later List saw a valid cache,
+// sent If-Modified-Since, got a 304 and replayed the dismissed row — forever,
+// since the 304 path never rewrites cachedGen.
+//
+// The GET handler is parked on a channel so MarkRead lands strictly between the
+// first List's generation snapshot and its cache commit. Asserted on observable
+// behaviour: the NEXT List must send no If-Modified-Since (so the stale
+// response can never be revalidated into a 304) and must return the row as
+// read. The private counters are never inspected.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_DuringInFlightList_NextListSendsNoValidator(t *testing.T) {
+	const lastModified = "Wed, 21 Oct 2015 07:28:00 GMT"
+
+	release := make(chan struct{})
+	listStarted := make(chan struct{})
+
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+
+	listCalls := 0
+	secondIfModifiedSince := "<never requested>"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/notifications/threads/1":
+			w.WriteHeader(http.StatusResetContent)
+		case r.Method == http.MethodGet:
+			listCalls++
+			if listCalls == 1 {
+				// Park the first List's page request. mu is held for the whole
+				// walk, so the mark below is issued while this response — which
+				// predates it and still says unread: true — is in flight.
+				close(listStarted)
+				<-release
+				w.Header().Set("Last-Modified", lastModified)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"}]`))
+				return
+			}
+			secondIfModifiedSince = r.Header.Get("If-Modified-Since")
+			if secondIfModifiedSince != "" {
+				// The failure under test: a client that thinks its cache
+				// already reflects the mark revalidates and is handed the
+				// pre-mark rows straight back.
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"id":"1","unread":false,"reason":"subscribed"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	defer releaseHandler() // LIFO: frees the parked handler before srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	listDone := make(chan error, 1)
+	go func() {
+		_, err := c.List(NotificationListOpts{})
+		listDone <- err
+	}()
+
+	<-listStarted // the first List's request is parked in the handler
+
+	markDone := make(chan error, 1)
+	go func() {
+		markDone <- c.MarkRead("1")
+	}()
+	select {
+	case err := <-markDone:
+		if err != nil {
+			t.Fatalf("MarkRead() error = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MarkRead() did not complete while a List() call was parked — it must never take the fetch mutex (Decision 37)")
+	}
+
+	releaseHandler()
+	if err := <-listDone; err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() error = %v", err)
+	}
+	if secondIfModifiedSince != "" {
+		t.Errorf("second List() sent If-Modified-Since = %q, want none — a fetch that was in flight when the mark landed must not be cached as already reflecting it (Decision 37, snapshot-once)", secondIfModifiedSince)
+	}
+	if len(second) != 1 {
+		t.Fatalf("second List() len = %d, want 1", len(second))
+	}
+	if second[0].Unread {
+		t.Error("second List()[0].Unread = true, want false — the row the user dismissed mid-fetch was resurrected from a cache that falsely certified it already reflected the mark")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review feedback item 2 / Decisions 28 and 37: cacheValid is computed before
+// the request goes out, so it can be stale by the time a 304 comes back — the
+// marker is lock-free, so a mark can complete in exactly that window. Serving
+// cloneThreads(c.cached) on the strength of the pre-request check hands back
+// the dismissed row once.
+//
+// The generation is re-checked against the snapshot at the serve site, which
+// makes this 304 unprompted by definition (the next call would offer no
+// validator), so Decision 28's error path applies — and it must still wrap the
+// underlying *APIError with %w so errors.As recovers StatusCode == 304.
+//
+// The If-Modified-Since assertion is what stops this test being vacuous: it
+// proves the cache really was considered valid when the request went out, so
+// the narrow post-request window is what is being exercised — not item 1's
+// already-invalid-at-entry path.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_DuringInFlightList_304IsNotServedFromCache(t *testing.T) {
+	const lastModified = "Wed, 21 Oct 2015 07:28:00 GMT"
+
+	release := make(chan struct{})
+	listStarted := make(chan struct{})
+
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+
+	listCalls := 0
+	secondIfModifiedSince := "<never requested>"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/notifications/threads/1":
+			w.WriteHeader(http.StatusResetContent)
+		case r.Method == http.MethodGet:
+			listCalls++
+			if listCalls == 1 {
+				w.Header().Set("Last-Modified", lastModified)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"}]`))
+				return
+			}
+			// Second List: the validator is offered (the cache is still valid
+			// at this point), then the response is parked so the mark below
+			// lands after cacheValid was computed but before the 304 arrives.
+			secondIfModifiedSince = r.Header.Get("If-Modified-Since")
+			close(listStarted)
+			<-release
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	defer releaseHandler() // LIFO: frees the parked handler before srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	if _, err := c.List(NotificationListOpts{}); err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+
+	type listResult struct {
+		rows []NotificationThread
+		err  error
+	}
+	listDone := make(chan listResult, 1)
+	go func() {
+		rows, err := c.List(NotificationListOpts{})
+		listDone <- listResult{rows, err}
+	}()
+
+	<-listStarted // the second List's request is parked, awaiting its 304
+
+	markDone := make(chan error, 1)
+	go func() {
+		markDone <- c.MarkRead("1")
+	}()
+	select {
+	case err := <-markDone:
+		if err != nil {
+			t.Fatalf("MarkRead() error = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MarkRead() did not complete while a List() call was parked — it must never take the fetch mutex (Decision 37)")
+	}
+
+	releaseHandler()
+	got := <-listDone
+
+	if secondIfModifiedSince != lastModified {
+		t.Fatalf("second List() sent If-Modified-Since = %q, want %q — without a conditional request this test would not be exercising the post-request window at all", secondIfModifiedSince, lastModified)
+	}
+	if got.err == nil {
+		t.Fatalf("second List() error = nil and returned %+v, want an error — a mark that landed after cacheValid was computed makes this 304 unprompted, so it must not be served from the cache it invalidated", got.rows)
+	}
+	if len(got.rows) != 0 {
+		t.Errorf("second List() rows = %+v, want none alongside the error", got.rows)
+	}
+	var apiErr *APIError
+	if !errors.As(got.err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v — Decision 28 requires the underlying error to stay wrapped with %%w", got.err)
+	}
+	if apiErr.StatusCode != http.StatusNotModified {
+		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotModified)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review feedback item 6 / Decision 37: the bump's timing is documented on
+// MarkRead ("a failed request changed nothing server-side and does not bump
+// cacheGen") but nothing pinned it — moving cacheGen.Add(1) to before the HTTP
+// call, or applying it on a failed mark too, both SURVIVED the suite. Either
+// mutation costs a full refetch of every page for a mark that never happened.
+//
+// After a 404 MarkRead the cache is untouched, so the next List must still
+// offer its validator and must still be allowed to serve the 304 that comes
+// back. The second GET answers 304 unconditionally: under either mutation the
+// cache is invalid, no validator is sent, and that 304 is unprompted — so
+// Decision 28's error path fires and the assertions below fail loudly.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_FailedMark_DoesNotInvalidateCache(t *testing.T) {
+	const lastModified = "Wed, 21 Oct 2015 07:28:00 GMT"
+	listCalls := 0
+	secondIfModifiedSince := "<never requested>"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPatch:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"Not Found"}`))
+		case http.MethodGet:
+			listCalls++
+			if listCalls == 1 {
+				w.Header().Set("Last-Modified", lastModified)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"}]`))
+				return
+			}
+			secondIfModifiedSince = r.Header.Get("If-Modified-Since")
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	if _, err := c.List(NotificationListOpts{}); err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+
+	if err := c.MarkRead("1"); err == nil {
+		t.Fatal("MarkRead() error = nil, want an error for a 404 response")
+	}
+
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() error = %v, want nil — a failed mark changed nothing server-side, so the cache and its validator must survive and the 304 must still be served from them", err)
+	}
+	if secondIfModifiedSince != lastModified {
+		t.Errorf("second List() sent If-Modified-Since = %q, want %q — a failed mark must not invalidate the cache (Decision 37)", secondIfModifiedSince, lastModified)
+	}
+	if len(second) != 1 || !second[0].Unread {
+		t.Errorf("second List() = %+v, want the single unread cached row", second)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Decision 37 / concurrency: MarkRead must not block while a List is in
 // flight. -race is unavailable in this environment, so this is asserted
 // structurally rather than by timing: List's HTTP request is parked in the
@@ -1071,11 +1421,27 @@ func TestNotificationsClient_MarkRead_InvalidatesCache_SecondListNotStale(t *tes
 // method/path) is proven to complete before the test releases List's
 // handler. If MarkRead took the fetch mutex, it would deadlock behind List
 // until the release, which the select below with a bounded timeout catches.
+//
+// Review feedback item 4: releasing the parked handler must be guaranteed on
+// every exit path, not just the happy one. Every branch of the select below can
+// t.Fatal, which runtime.Goexits into the deferred srv.Close() — and srv.Close
+// blocks until in-flight handlers return, so a GET handler still parked on
+// <-release turned this test's own failure into a package-wide test timeout and
+// goroutine dump instead of the one-line failure it is worded to produce
+// (observed for real during mutation A; CI's default timeout is 10 minutes).
+// The release is therefore wrapped in a sync.Once and deferred BEFORE
+// srv.Close() is deferred: defers run LIFO, so the handler is always freed
+// first and srv.Close() never blocks. Deliberately not t.Cleanup — cleanups run
+// only after the test function has fully unwound, which is too late to unblock
+// a deferred srv.Close() inside it.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 	release := make(chan struct{})
 	listStarted := make(chan struct{})
+
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -1091,6 +1457,7 @@ func TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	defer releaseHandler() // LIFO: runs before srv.Close() on every exit path
 
 	c := NewNotificationsClient("tok")
 	c.SetBaseURL(srv.URL)
@@ -1119,11 +1486,23 @@ func TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 		t.Fatal("MarkRead() did not complete while a List() call was in flight — structural evidence it took the fetch mutex (Decision 37)")
 	}
 
-	close(release)
+	releaseHandler()
 	if err := <-listDone; err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Optional query params (participating, since) — not part of the acceptance
+// criteria's numbered list but documented in the API shapes section.
+//
+// Review feedback item 10: the original version of this test computed "want"
+// with the same since.Format(time.RFC3339) call the production code makes,
+// on an already-UTC fixture — so the ".UTC()" normalisation in buildPath was
+// never actually pinned; a production bug that dropped the .UTC() call would
+// still pass on a UTC-already input. Asserts the literal expected string and
+// adds a non-UTC input row so the normalisation itself is exercised.
+// ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_ParticipatingAndSince(t *testing.T) {
 	cest := time.FixedZone("CEST", 2*60*60)
