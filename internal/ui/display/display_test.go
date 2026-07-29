@@ -404,3 +404,65 @@ func TestRunStatusStyle(t *testing.T) {
 		})
 	}
 }
+
+// ─── NotificationReason ──────────────────────────────────────────────────────
+
+// TestNotificationReasonGlyphAndStyle covers all 12 declared values (spec
+// Decision 18) plus one out-of-range value, per convention 6: it asserts the
+// glyph *and* the named style's foreground color, not a label substring.
+func TestNotificationReasonGlyphAndStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name      string
+		reason    provider.NotificationReason
+		wantGlyph string
+		wantFg    lipgloss.Color
+	}{
+		{"Unknown", provider.NotificationReasonUnknown, "?", th.ForegroundMuted},
+		{"ReviewRequested", provider.NotificationReasonReviewRequested, "◐", th.Warning},
+		{"Mentioned", provider.NotificationReasonMentioned, "@", th.Info},
+		{"Assigned", provider.NotificationReasonAssigned, "●", th.Warning},
+		{"Authored", provider.NotificationReasonAuthored, "✎", th.Info},
+		{"Commented", provider.NotificationReasonCommented, "»", th.Info},
+		{"StateChanged", provider.NotificationReasonStateChanged, "⇄", th.Info},
+		{"CIActivity", provider.NotificationReasonCIActivity, "▶", th.Info},
+		{"SecurityAlert", provider.NotificationReasonSecurityAlert, "⚠", th.Error},
+		{"ApprovalRequested", provider.NotificationReasonApprovalRequested, "◉", th.Warning},
+		{"Subscribed", provider.NotificationReasonSubscribed, "◇", th.ForegroundMuted},
+		{"Other", provider.NotificationReasonOther, "•", th.ForegroundMuted},
+		// Sentinel: an out-of-range value must render as Other, never empty.
+		{"OutOfRange", provider.NotificationReason(99), "•", th.ForegroundMuted},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotGlyph := display.NotificationReasonGlyph(tc.reason)
+			if gotGlyph != tc.wantGlyph {
+				t.Errorf("NotificationReasonGlyph(%v) = %q, want %q", tc.reason, gotGlyph, tc.wantGlyph)
+			}
+			if gotGlyph == "" {
+				t.Errorf("NotificationReasonGlyph(%v) must never be empty", tc.reason)
+			}
+
+			gotFg := display.NotificationReasonStyle(tc.reason, s).GetForeground()
+			if gotFg != tc.wantFg {
+				t.Errorf("NotificationReasonStyle(%v) foreground = %v, want %v", tc.reason, gotFg, tc.wantFg)
+			}
+
+			if label := display.NotificationReasonLabel(tc.reason); label == "" {
+				t.Errorf("NotificationReasonLabel(%v) must never be empty", tc.reason)
+			}
+		})
+	}
+}
+
+// TestNotificationReasonLabel_OutOfRangeIsOther pins that an unrecognised
+// value renders as the same label as the declared Other value, matching the
+// glyph/style fallback above.
+func TestNotificationReasonLabel_OutOfRangeIsOther(t *testing.T) {
+	got := display.NotificationReasonLabel(provider.NotificationReason(99))
+	want := display.NotificationReasonLabel(provider.NotificationReasonOther)
+	if got != want {
+		t.Errorf("NotificationReasonLabel(out-of-range) = %q, want %q (same as Other)", got, want)
+	}
+}

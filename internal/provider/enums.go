@@ -163,3 +163,81 @@ const (
 // values. It exists so tests can assert the enum's size in both directions;
 // production code should never branch on it.
 func NotificationReasonCount() int { return int(notificationReasonCount) }
+
+// String returns a stable, lowercase snake_case identifier for the
+// NotificationReason, suitable for the `exclude_reasons` config key (Decision
+// 19) and for on-disk/round-trip use generally. This is distinct from
+// display.NotificationReasonLabel, which returns a human-facing name.
+// Unrecognized values (including the zero value) return "unknown".
+// Mirrors Kind.String's shape (see types.go), following Decision 24.
+func (r NotificationReason) String() string {
+	switch r {
+	case NotificationReasonReviewRequested:
+		return "review_requested"
+	case NotificationReasonMentioned:
+		return "mentioned"
+	case NotificationReasonAssigned:
+		return "assigned"
+	case NotificationReasonAuthored:
+		return "authored"
+	case NotificationReasonCommented:
+		return "commented"
+	case NotificationReasonStateChanged:
+		return "state_changed"
+	case NotificationReasonCIActivity:
+		return "ci_activity"
+	case NotificationReasonSecurityAlert:
+		return "security_alert"
+	case NotificationReasonApprovalRequested:
+		return "approval_requested"
+	case NotificationReasonSubscribed:
+		return "subscribed"
+	case NotificationReasonOther:
+		return "other"
+	default: // NotificationReasonUnknown and any future/unrecognised value
+		return "unknown"
+	}
+}
+
+// ParseNotificationReason maps a stable string identifier (see
+// NotificationReason.String) back to a NotificationReason. The match is
+// case-sensitive against the lowercase snake_case form String() emits —
+// config keys arrive already lowercased by viper (convention 9), so this
+// never needs to fold case itself.
+//
+// Unlike ParseKind, unrecognized input deliberately returns
+// NotificationReasonOther rather than the zero value: Decision 18 requires
+// that no notification is ever silently dropped, and exclude_reasons is a
+// user-editable config key that can easily contain a typo or a reason this
+// binary predates. Returning Other keeps the row visible and groups it with
+// the other catch-all cases rather than mis-filing it as "unset".
+func ParseNotificationReason(s string) NotificationReason {
+	switch s {
+	case "unknown":
+		return NotificationReasonUnknown
+	case "review_requested":
+		return NotificationReasonReviewRequested
+	case "mentioned":
+		return NotificationReasonMentioned
+	case "assigned":
+		return NotificationReasonAssigned
+	case "authored":
+		return NotificationReasonAuthored
+	case "commented":
+		return NotificationReasonCommented
+	case "state_changed":
+		return NotificationReasonStateChanged
+	case "ci_activity":
+		return NotificationReasonCIActivity
+	case "security_alert":
+		return NotificationReasonSecurityAlert
+	case "approval_requested":
+		return NotificationReasonApprovalRequested
+	case "subscribed":
+		return NotificationReasonSubscribed
+	case "other":
+		return NotificationReasonOther
+	default:
+		return NotificationReasonOther
+	}
+}

@@ -97,3 +97,94 @@ func TestNotification_IdentityIsProviderQualified(t *testing.T) {
 		t.Fatalf("identities differing only in ScopeDisplay must be the same item: %+v vs %+v", displayA, displayB)
 	}
 }
+
+// TestNotificationReason_String pins Decision 19's config-facing contract:
+// lowercase snake_case, exactly the strings task 3's design notes settle on.
+// Tasks 9 and 10 parse user config through ParseNotificationReason, so these
+// strings are effectively public API — a rename here is a breaking change.
+func TestNotificationReason_String(t *testing.T) {
+	tests := []struct {
+		reason provider.NotificationReason
+		want   string
+	}{
+		{provider.NotificationReasonUnknown, "unknown"},
+		{provider.NotificationReasonReviewRequested, "review_requested"},
+		{provider.NotificationReasonMentioned, "mentioned"},
+		{provider.NotificationReasonAssigned, "assigned"},
+		{provider.NotificationReasonAuthored, "authored"},
+		{provider.NotificationReasonCommented, "commented"},
+		{provider.NotificationReasonStateChanged, "state_changed"},
+		{provider.NotificationReasonCIActivity, "ci_activity"},
+		{provider.NotificationReasonSecurityAlert, "security_alert"},
+		{provider.NotificationReasonApprovalRequested, "approval_requested"},
+		{provider.NotificationReasonSubscribed, "subscribed"},
+		{provider.NotificationReasonOther, "other"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			if got := tc.reason.String(); got != tc.want {
+				t.Errorf("%v.String() = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNotificationReason_StringRoundTripsThroughParse asserts that every one
+// of the 12 declared values survives a String() -> ParseNotificationReason()
+// round trip unchanged. This is what guarantees exclude_reasons config values
+// map back to the exact reason the user intended.
+func TestNotificationReason_StringRoundTripsThroughParse(t *testing.T) {
+	all := []provider.NotificationReason{
+		provider.NotificationReasonUnknown,
+		provider.NotificationReasonReviewRequested,
+		provider.NotificationReasonMentioned,
+		provider.NotificationReasonAssigned,
+		provider.NotificationReasonAuthored,
+		provider.NotificationReasonCommented,
+		provider.NotificationReasonStateChanged,
+		provider.NotificationReasonCIActivity,
+		provider.NotificationReasonSecurityAlert,
+		provider.NotificationReasonApprovalRequested,
+		provider.NotificationReasonSubscribed,
+		provider.NotificationReasonOther,
+	}
+	if len(all) != provider.NotificationReasonCount() {
+		t.Fatalf("test lists %d values but the enum declares %d — update this list alongside Decision 18", len(all), provider.NotificationReasonCount())
+	}
+	for _, r := range all {
+		t.Run(r.String(), func(t *testing.T) {
+			if got := provider.ParseNotificationReason(r.String()); got != r {
+				t.Errorf("ParseNotificationReason(%q) = %v, want %v", r.String(), got, r)
+			}
+		})
+	}
+}
+
+// TestParseNotificationReason_UnparseableYieldsOther asserts Decision 18's
+// hard rule end to end: a config value the parser does not recognise must
+// resolve to NotificationReasonOther, never an error that would cause a
+// filter to drop the row, and never the zero value (which would misfile it
+// as "unset" rather than "recognised but uncategorised").
+func TestParseNotificationReason_UnparseableYieldsOther(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"garbage word", "nonsense"},
+		{"empty string", ""},
+		// Case-sensitivity: String() only ever emits lowercase, and config
+		// keys arrive already lowercased by viper (convention 9), so a
+		// mixed-case match is deliberately NOT folded — it is treated the
+		// same as any other unrecognised string.
+		{"mixed case", "Review_Requested"},
+		{"upper case", "REVIEW_REQUESTED"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := provider.ParseNotificationReason(tc.input)
+			if got != provider.NotificationReasonOther {
+				t.Errorf("ParseNotificationReason(%q) = %v, want NotificationReasonOther", tc.input, got)
+			}
+		})
+	}
+}
