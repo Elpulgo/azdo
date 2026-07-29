@@ -123,6 +123,9 @@ accepted value.
 | 30 | What must satisfy `PollIntervalHinter`? | `Adapter` — it forwards `PollInterval()` from the client (task 7), because that is the type the composite holds and task 15 asserts against | Decision 23 settled that the hint travels by a separate interface but not *which type implements it*. The header is parsed in the client, which the composite never sees. If only the client has the method, task 15's assertion against `Adapter` fails, the poller silently falls back to the configured interval, and decision 8's `max()` rule becomes dead code no test notices — a passing suite with the rate-limit protection switched off |
 | 31 | How does task 7 honour `NotifOpts.Max`? | Cache the **full** walk, then truncate **on return** — never stop the walk early | Stopping early caches a truncated set under a `cachedPath` that does not encode `Max`, so a later call with a larger `Max` and the same shape hits 304 and gets the truncated cache presented as complete — the exact truncated-feed-as-complete failure decision 27's path-keying was added to prevent. `NotifOpts.Max`'s own doc ("caps the number returned across all fetched pages") is satisfied by truncate-on-return. The cycle bound (decision 29) is what protects the walk; `Max` is a presentation cap, not a fetch bound. Supersedes the earlier "page walk stops once `Max` items are collected" wording |
 | 32 | Does `PollInterval()` share the fetch mutex? | No — the cadence hint gets its own guard, so the accessor never contends with an in-flight `List` | `app.go` calls `poller.StartPolling()`/`OnTick()` on the Bubble Tea **main** goroutine, and decision 30 puts `PollInterval()` on that path. Sharing the fetch mutex means a tick landing during a multi-page refresh blocks the main goroutine — worst case 50 pages × the 30s HTTP timeout, so the UI stops rendering and dropping keypresses for minutes. Holding the mutex across `List`'s I/O is still correct (it makes the validator↔cache pairing atomic); it is only the accessor that must not join it |
+| 33 | How is a `Release` row's web URL built? | The repo's `/releases` **list** page — never `/releases/{id}`, which 404s. General rule: when the id segment cannot be trusted to produce a real page, fall back | Verified against live github.com (public release pages need no token): `/cli/cli/releases/348300685` → 404, `/cli/cli/releases/tag/v2.96.0` → 200, `/cli/cli/releases` → 200. The correct route needs the **tag name**, and `NotificationSubject` carries only `Title`, `URL`, `LatestCommentURL`, `Type` — so it cannot be built from a notification payload at all. Under decision 3 `o` is the *only* action on rows from unconfigured repos, so a wrong-but-well-formed URL is strictly worse than the fallback: it spends the user's one action on a dead page. Same reasoning forces shape-validation of the id segment (digits for PR/issue, hex for commit) rather than trusting whatever the last path segment happens to be |
+| 34 | Which host do web URLs use? | `Repository.HTMLURL` when the wire supplies it, else `https://github.com/<full_name>` | Deferring GHE by hardcoding `github.com` was inconsistent *with itself*: measured, a GHE thread got the right host on unrecognised subject types (which route through the repo fallback and so use the wire `HTMLURL`) and the wrong one on the four handled types. The `weburl.go` precedent does not apply — `WorkItemURL`/`PRURL`/`PipelineURL` hardcode the host because they have no wire URL at all, whereas the sibling *mappers* (`mapping_pr.go`, `mapping_pipeline.go`) already populate this same neutral `WebURL` field from a wire `HTMLURL`. Notifications carry one, so they follow the mappers. Building every per-type URL on the repo-URL prefix therefore fixes the empty-`FullName` case (`https://github.com//pull/42`) and delivers GHE support in the same change. Residual: a GHE thread with an empty `HTMLURL` still falls back to github.com — task 20 documents that |
+| 35 | Who defaults `ScopeDisplay`? | `MapNotification` — it **is** the adapter boundary | `provider.Notification`'s doc states `ScopeDisplay` falls back to `Scope` at the adapter boundary, and the mapper derives `scope` from the thread itself, so a caller cannot compute the fallback before calling. Leaving it to task 7's `MultiClient.DisplayNameFor` only covers *configured* scopes, and under decisions 2 and 3 most inbox rows come from unconfigured repos — every list view renders the column from `ScopeDisplay` verbatim, so those rows would render a blank repo column |
 
 ## Tasks
 
@@ -130,13 +133,13 @@ accepted value.
 - [x] 2. `provider`: `Notification` type (provider-qualified identity + `Read`/`Done` per decisions 14, 15), `NotificationReason` enum (exactly decision 18's values), `NotifOpts`, `NotificationSource` (blocked by: 1). → done: `go build ./...` clean, `gofmt -l` empty, enum values match decision 18 one-for-one
 - [x] 3. `ui/display`: reason → glyph + label + style map, plus `String()`/`ParseNotificationReason` next to the enum per decisions 24 and 26 (blocked by: 2). → done: every enum value returns non-empty glyph, label and named style; an unrecognised value renders as `Other`, never empty; table test covers all values plus one unrecognised input; asserts glyph, **exact label** and named style (convention 6 — a non-emptiness check on the label does not satisfy it); `String()` emits the decision-19 lowercase snake_case names and round-trips through `ParseNotificationReason` for all 12 values; `ParseNotificationReason` returns `(NotificationReason, bool)` per decision 26 — `(Other, false)` for an unrecognised string and for `unknown`, never an error and never a dropped row; `String()`'s out-of-range fallback is `"other"`, matching the display layer, with `Unknown` an explicit case returning `"unknown"`
 - [x] 4. `github`: user-scoped client — `GET /notifications` with `all=true` (decision 12), pagination, `If-Modified-Since`, `X-Poll-Interval` (blocked by: 2). → done: `httptest` tests assert `all=true` in the query, `Link rel=next` followed, `If-Modified-Since` sent when a cached timestamp exists, 304 returns the cached slice unchanged, `X-Poll-Interval` parsed. Per decisions 27–29: the cache is mutex-guarded and returned **by copy**, so mutating a returned slice cannot change what a later 304 yields — assert that by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; the cache is invalidated when `buildPath(opts)` changes; a 304 with no cached validator is an error; the walk is bounded by a page constant, tested with a self-referential `next`. Tests must also pin the method and path (`GET /notifications`) and `per_page`
-- [x] 5. `github`: wire → neutral mapping, reason mapping, `subject.url` → web URL resolution (blocked by: 4). → done: table test maps every reason string in decision 18 plus an invented unknown → `Other`; `subject.url` resolves for pull/issue/release/commit and falls back to the repo URL otherwise; no panic on absent optional fields
+- [ ] 5. `github`: wire → neutral mapping, reason mapping, `subject.url` → web URL resolution (blocked by: 4). → done: table test maps every reason string in decision 18 plus an invented unknown → `Other`; `subject.url` resolves for pull/issue/commit and falls back to the repo URL otherwise; no panic on absent optional fields. Per decisions 33-35: `Release` resolves to the repo's `/releases` list page and the test asserts that **from GitHub's URL scheme, not from the implementation**; the id segment is shape-validated (digits for PR/issue, hex for commit) so `.../pulls` with no id, a trailing slash, or a non-numeric id falls back rather than emitting a clickable 404; every per-type URL is built on the `Repository.HTMLURL` prefix so an empty `FullName` can never yield `https://github.com//pull/42` and a GHE host is honoured; `ScopeDisplay` falls back to `Scope` inside the mapper, with a test row
 - [ ] 6. `github`: mark read (`PATCH /notifications/threads/{id}`) + mark done (`DELETE`) (blocked by: 4). → done: tests assert method and path per call; ids are **strings** on the wire (`NotificationThread.ID`), so convention 11's guard is restated as: reject empty, non-numeric, and `<= 0`-after-parse — a raw `"-5"` interpolated into `/notifications/threads/-5` is the convention-11 failure shape, so keep the negative-input row; one-way read documented in the doc comment, not claimed as API-verified (decision 13)
 - [ ] 7. `github`: implement `NotificationSource` on `Adapter` (blocked by: 5,6). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)`; conformance test following `adapter_conformance_test.go`; `NotifOpts.Max` is honoured by **truncating on return, not by stopping the walk** (decision 31), with a test proving a `Max` smaller than one page truncates **and** that a later call with a larger `Max` served from cache is not stuck at the smaller one; and `Adapter` forwards `PollInterval()` so it satisfies task 15's `PollIntervalHinter` (decision 30), asserted by a compile-time `var _` against that interface
 - [ ] 8. `provider`: composite fan-out, merge/sort, `HasNotifications()` (blocked by: 2). → done: fans out only to backends implementing the interface; `HasNotifications()` false with zero capable backends and true with ≥1; merged output sorted newest-first; per decision 20 a failing backend still returns the others' rows and never empties the feed — test that case explicitly; per decision 25 `MarkRead`/`MarkDone` route by `Identity.Kind` and **not** `backendFor(scope)` — test that a row from an unconfigured repo still routes to a backend
 - [ ] 9. `config`: `notifications` block with decision-19 key names, defaults, validation, `validDisabledPanes` entry, guard accepts notifications-only (decision 22) (blocked by: 2). → done: block loads with documented defaults; keys resolve lowercased (convention 9); `disabled_panes: notifications` validates; a config with only notifications enabled passes `Validate()`; per decision 26 an unrecognised `exclude_reasons` entry produces a **warning naming the bad value and the eleven accepted ones** and is then ignored — it must never silently act as `other`, and must never be a hard config error that stops the app from starting
 - [ ] 10. Config-driven filter as a pure function (blocked by: 8,9). → done: table tests cover each knob alone, the full precedence chain, the `participating_only` + `exclude_reasons` compose case (decision 10), and that an unrecognised reason is only filtered when `other` is listed explicitly
-- [ ] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6); the filter-collapse path and cursor survival are asserted (convention 14); the `f` filter offers **only reasons actually present in the loaded feed**, never the full enum — otherwise it lists `Unknown`, which no mapped row can carry (decision 18), as a choice that matches nothing
+- [ ] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6); the filter-collapse path and cursor survival are asserted (convention 14); a zero `UpdatedAt` renders as `—`, never as a year-0001 date (the mapper leaves it zero when the wire omits `updated_at`); the `f` filter offers **only reasons actually present in the loaded feed**, never the full enum — otherwise it lists `Unknown`, which no mapped row can carry (decision 18), as a choice that matches nothing
 - [ ] 12. `app`: register the tab first, remap number keys, `enabledTabs`, `state.TabID` (decisions 6, 9, 11) (blocked by: 11). → done: notifications is `enabledTabs[0]`; number keys map to the new order; `TabID "notifications"` round-trips through `state.yaml`; the tab is absent when no backend implements the capability, and present-but-empty when one does
 - [ ] 13. `app`: the three render states — empty inbox, capability-unsupported, token-scope error (decisions 11, 17) (blocked by: 12). → done: three distinct renders, each asserted by its own test; the empty state reads as "you're clear", never as an error
 - [ ] 14. `app`: `u` mark-read (one-way, decision 13) / `d` mark-done (blocked by: 13). → done: `u` issues one mark-read and updates the row optimistically, rolling back on API failure; `d` removes the row and restores it on failure; a poll that returns stale `unread` inside the debounce window does not flicker the row back
@@ -164,3 +167,66 @@ marked _(manual)_ needs a human with a real token before merge. Do not report th
 - Read state may be eventually consistent: a poll landing right after a `PATCH` could still
   return `unread`, flickering the optimistic update back. Task 14 holds the local intent until
   the server agrees rather than trusting the first poll that contradicts it.
+
+## Review feedback: 5.
+
+Reviewer verdict REQUEST_CHANGES on `7860a8d`. The reason mapping is **correct and needs no
+changes** — 15 of 16 mutations were killed, both `Read`-inversion directions are pinned, and the
+switch was verified line by line against decision 18. Keying on `Subject.Type` rather than
+parsing the path for a type hint is right and defeats the `o/my-pulls-tool` trap. Everything
+below is URL resolution plus one boundary default. Decisions 33-35 now cover items 1-4.
+
+**Must fix**
+
+1. **Every `Release` row links to a guaranteed 404** (`mapping_notifications.go:140-141`, doc claim
+   at `:105`). `/{owner}/{repo}/releases/{id}` is not a github.com route — verified live:
+   `/cli/cli/releases/348300685` → 404, `/cli/cli/releases/tag/v2.96.0` → 200, `/cli/cli/releases`
+   → 200. The real route needs the **tag name**, which `NotificationSubject`
+   (`types.go:193-198`) does not carry, so it cannot be built from a notification payload at all.
+   Under decision 3 `o` is the only action on the row, so the pane spends its one action on a dead
+   page. Per decision 33, resolve to the repo's `/releases` list page. **The test at
+   `mapping_notifications_test.go:203-208` currently asserts the 404 URL** — it was written from
+   the implementation instead of from GitHub's URL scheme, so it certifies the bug. Rewrite it
+   from the scheme.
+
+**Also fold in**
+
+2. `lastPathSegment` trusts whatever the last segment is, with no id-shape check
+   (`:132`, `:172-180`). Measured: `.../repos/o/r/pulls` → `/o/r/pull/pulls`; `.../issues/` →
+   `/o/r/issues/issues`; `notaurl` → `/o/r/pull/notaurl`; `.../pulls/abc` → `/o/r/pull/abc`.
+   Each is a clickable 404 where the fallback would have worked. Validate the segment (digits for
+   PR/issue, hex for commit) and fall back otherwise — convention 11's spirit applied to a string
+   id. Query strings and fragments land after the id and are benign; the doc comment at
+   `:176-178` is right about panics and silent about wrongness.
+3. An empty `Repository.FullName` yields `https://github.com//pull/42` while discarding a usable
+   `HTMLURL` (`:135-141`). The per-type branch interpolates `FullName` unguarded, defeating the
+   invariant `repositoryWebURL` (`:155-162`) carefully states for itself.
+4. GHE handling is inconsistent **with itself** (`:118-130`, `:135-141`): measured on a GHE thread,
+   `Discussion` → `https://ghe.corp.example/o/r` (right host, via the fallback) but `PullRequest` →
+   `https://github.com/o/r/pull/42` (wrong host). Per decision 34, build every per-type URL on the
+   `Repository.HTMLURL` prefix — that fixes items 3 and 4 in one change and gives GHE support for
+   free. The `weburl.go` precedent was the wrong one to cite: those functions hardcode the host
+   because they have no wire URL, whereas `mapping_pr.go:60` and `mapping_pipeline.go:58` populate
+   this same neutral `WebURL` from a wire `HTMLURL`.
+5. `scopeDisplay` is passed through unguarded (`:35`), so `MapNotification(thread, "")` yields
+   `ScopeDisplay: ""` — but `provider.Notification` documents the fallback to `Scope` as happening
+   at the adapter boundary, and this mapper *is* that boundary (it derives `scope` itself, so no
+   caller can precompute it). Every list view renders the column from `ScopeDisplay` verbatim
+   (`ui/pullrequests/list.go:633`, `ui/pipelines/list.go:437`, `ui/workitems/list.go:561`), so
+   task 11's repo column renders blank. Decision 35: default it in the mapper. The zero-value test
+   passes `""` and asserts nothing about `ScopeDisplay`, locking in the gap — add a row.
+
+**Nits**
+
+6. Note in a comment that `SameItem`'s collision-safety with an empty `Scope` rests on GitHub
+   thread ids being globally unique, not on `Scope` being populated — phase 2's Azure keys are
+   derived strings where that does not hold.
+7. A zero `UpdatedAt` maps to `0001-01-01`. Not the mapper's bug; folded into task 11's criteria.
+8. The one mutation that **survived**: replacing `if base == "." || base == "/"` (`:177`) with
+   `if false` stays green. `path.Base` returns `"."` only for `""`, which `:173` already handles,
+   so the `"."` arm is dead; the `"/"` arm is live but untested. Add a `subject.url: "/"` row or
+   drop the dead half and keep a comment.
+9. The no-panic test's comment (`mapping_notifications_test.go:~152`) claims it covers
+   `LastReadAt` being nil, but the mapper never reads that field, so the criterion is satisfied by
+   construction rather than by the test. Keep the test (it pins reason and WebURL on a zero
+   thread); fix the comment, and state in the mapper's doc comment that `LastReadAt` is unused.
