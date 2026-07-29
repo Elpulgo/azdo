@@ -117,16 +117,20 @@ accepted value.
 | 24 | Who owns `NotificationReason` ⇄ config-string conversion? | Task 3, next to the enum: `String()` + `ParseNotificationReason`, following `Kind`'s existing `String()`/`ParseKind` precedent | Decision 19 makes the enum both display *and* serialized. Task 3 owns the display half and tasks 9/10 the config half; without one owner they each invent a parser and the two drift |
 | 25 | How does the composite route `MarkRead`/`MarkDone`? | By `Identity.Kind`, **never** `backendFor(scope)` | `backendFor` is built from configured `Scopes()` and returns nil for unconfigured repos — which under decisions 2 and 3 is most of the inbox. Routing by scope would make mark-read silently no-op on exactly the rows the pane exists to surface |
 | 26 | What does `ParseNotificationReason` do with an unrecognised string? | Returns `(Other, false)` — the value still degrades to `Other` so nothing errors, but the `bool` reports non-recognition. Callers must not ignore it: task 9 warns on an unrecognised `exclude_reasons` entry, task 10 skips it | Collapsing silently to `Other` inverts the intent on the config side. `exclude_reasons: [subscibed]` would drop every catch-all row while leaving the `subscribed` noise the user actually asked to hide — one typo, two wrong outcomes, no feedback. It also makes task 10's criterion ("an unrecognised reason is only filtered when `other` is listed explicitly") unsatisfiable, because the information needed to honour it has already been discarded. Degrade-to-`Other` is right on the **wire** side (decision 18, keeps rows visible) and wrong on the **config** side; the `bool` is what separates them. `unknown` is likewise `(Other, false)` — it is reserved and matches nothing |
+| 27 | Who owns the cached feed the client hands out? | The **caller**. `NotificationsClient` guards its cache with a mutex and returns a **copy** on both the 200 and the 304 path; the cache is also invalidated whenever the request shape (`buildPath(opts)`) changes | Two measured corruptions, both silent. (a) Bubble Tea runs every `tea.Cmd` in its own goroutine, so a poll tick overlapping the refresh key puts two goroutines inside `List`; an unguarded `c.cached = all` racing a 304's `return c.cached` can tear the slice header and render rows read past the end of the array. `polling/poller.go` already guards exactly this tick-vs-refresh state with an `RWMutex` — `Client`/`MultiClient` need no lock only because they are immutable after construction, so a mutable type here breaks a package invariant silently. (b) Returning the cache by reference means a caller doing the standard in-place filter (`out := s[:0]; append(out, …)`) rewrites the cache: `[1 2 3]` filtered to `[2]` leaves the cache `[2 2 3]`, so the next 304 returns a vanished row and a duplicated one. Tasks 10 and 11 both take this slice, and task 11's `sort.Slice` reorders it in place |
+| 28 | What does a 304 with nothing cached mean? | An **error**, never an empty feed | The branch exists because the code does not trust the server to send only anticipated statuses — so its fallback must not be "silently report an empty inbox", which is decision 20's worst outcome. It is not unreachable: a caching proxy or MITM appliance can revalidate against its own stored validator and synthesise a 304 nobody asked for, and `SetBaseURL` is a production-supported override (demo mode, GHE), not only a test seam. Guarding costs two lines |
+| 29 | What bounds the `Link rel=next` walk? | A hard page-count constant inside the client (cycle protection, task 4) **plus** `NotifOpts.Max` honoured at the adapter boundary (task 7) | Measured: a `next` pointing at itself produced 501 requests and 500 rows with `err == nil`. Inside a `tea.Cmd` a genuinely cyclic `next` never returns — the pane hangs on "loading" with no error and no cancel. Bypassing `getAllPages` is correct (it discards the headers the 304/`X-Poll-Interval` contract needs) but it dropped the only bound the package had, and `NotifOpts.Max` shipped with no implementer. The two bounds are different failures: the constant stops a malformed server, `Max` honours the user's config |
+| 30 | What must satisfy `PollIntervalHinter`? | `Adapter` — it forwards `PollInterval()` from the client (task 7), because that is the type the composite holds and task 15 asserts against | Decision 23 settled that the hint travels by a separate interface but not *which type implements it*. The header is parsed in the client, which the composite never sees. If only the client has the method, task 15's assertion against `Adapter` fails, the poller silently falls back to the configured interval, and decision 8's `max()` rule becomes dead code no test notices — a passing suite with the rate-limit protection switched off |
 
 ## Tasks
 
 - [x] 1. ADR `docs/adr/0001-notifications-capability-interface.md` — decisions 1, 2, 5. → done: file exists, ≤30 lines, `Status: Accepted`, has Context/Decision/Alternatives/Consequences
 - [x] 2. `provider`: `Notification` type (provider-qualified identity + `Read`/`Done` per decisions 14, 15), `NotificationReason` enum (exactly decision 18's values), `NotifOpts`, `NotificationSource` (blocked by: 1). → done: `go build ./...` clean, `gofmt -l` empty, enum values match decision 18 one-for-one
 - [x] 3. `ui/display`: reason → glyph + label + style map, plus `String()`/`ParseNotificationReason` next to the enum per decisions 24 and 26 (blocked by: 2). → done: every enum value returns non-empty glyph, label and named style; an unrecognised value renders as `Other`, never empty; table test covers all values plus one unrecognised input; asserts glyph, **exact label** and named style (convention 6 — a non-emptiness check on the label does not satisfy it); `String()` emits the decision-19 lowercase snake_case names and round-trips through `ParseNotificationReason` for all 12 values; `ParseNotificationReason` returns `(NotificationReason, bool)` per decision 26 — `(Other, false)` for an unrecognised string and for `unknown`, never an error and never a dropped row; `String()`'s out-of-range fallback is `"other"`, matching the display layer, with `Unknown` an explicit case returning `"unknown"`
-- [x] 4. `github`: user-scoped client — `GET /notifications` with `all=true` (decision 12), pagination, `If-Modified-Since`, `X-Poll-Interval` (blocked by: 2). → done: `httptest` tests assert `all=true` in the query, `Link rel=next` followed, `If-Modified-Since` sent when a cached timestamp exists, 304 returns the cached slice unchanged, `X-Poll-Interval` parsed
+- [ ] 4. `github`: user-scoped client — `GET /notifications` with `all=true` (decision 12), pagination, `If-Modified-Since`, `X-Poll-Interval` (blocked by: 2). → done: `httptest` tests assert `all=true` in the query, `Link rel=next` followed, `If-Modified-Since` sent when a cached timestamp exists, 304 returns the cached slice unchanged, `X-Poll-Interval` parsed. Per decisions 27–29: the cache is mutex-guarded and returned **by copy**, so mutating a returned slice cannot change what a later 304 yields — assert that by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; the cache is invalidated when `buildPath(opts)` changes; a 304 with no cached validator is an error; the walk is bounded by a page constant, tested with a self-referential `next`. Tests must also pin the method and path (`GET /notifications`) and `per_page`
 - [ ] 5. `github`: wire → neutral mapping, reason mapping, `subject.url` → web URL resolution (blocked by: 4). → done: table test maps every reason string in decision 18 plus an invented unknown → `Other`; `subject.url` resolves for pull/issue/release/commit and falls back to the repo URL otherwise; no panic on absent optional fields
-- [ ] 6. `github`: mark read (`PATCH /notifications/threads/{id}`) + mark done (`DELETE`) (blocked by: 4). → done: tests assert method and path per call; ids `<= 0` rejected (convention 11) with a negative-input row; one-way read documented in the doc comment, not claimed as API-verified (decision 13)
-- [ ] 7. `github`: implement `NotificationSource` on `Adapter` (blocked by: 5,6). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)`; conformance test following `adapter_conformance_test.go`
+- [ ] 6. `github`: mark read (`PATCH /notifications/threads/{id}`) + mark done (`DELETE`) (blocked by: 4). → done: tests assert method and path per call; ids are **strings** on the wire (`NotificationThread.ID`), so convention 11's guard is restated as: reject empty, non-numeric, and `<= 0`-after-parse — a raw `"-5"` interpolated into `/notifications/threads/-5` is the convention-11 failure shape, so keep the negative-input row; one-way read documented in the doc comment, not claimed as API-verified (decision 13)
+- [ ] 7. `github`: implement `NotificationSource` on `Adapter` (blocked by: 5,6). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)`; conformance test following `adapter_conformance_test.go`; `NotifOpts.Max` is honoured — the page walk stops once `Max` items are collected (decision 29) — with a test proving a `Max` smaller than one page truncates; and `Adapter` forwards `PollInterval()` so it satisfies task 15's `PollIntervalHinter` (decision 30), asserted by a compile-time `var _` against that interface
 - [ ] 8. `provider`: composite fan-out, merge/sort, `HasNotifications()` (blocked by: 2). → done: fans out only to backends implementing the interface; `HasNotifications()` false with zero capable backends and true with ≥1; merged output sorted newest-first; per decision 20 a failing backend still returns the others' rows and never empties the feed — test that case explicitly; per decision 25 `MarkRead`/`MarkDone` route by `Identity.Kind` and **not** `backendFor(scope)` — test that a row from an unconfigured repo still routes to a backend
 - [ ] 9. `config`: `notifications` block with decision-19 key names, defaults, validation, `validDisabledPanes` entry, guard accepts notifications-only (decision 22) (blocked by: 2). → done: block loads with documented defaults; keys resolve lowercased (convention 9); `disabled_panes: notifications` validates; a config with only notifications enabled passes `Validate()`; per decision 26 an unrecognised `exclude_reasons` entry produces a **warning naming the bad value and the eleven accepted ones** and is then ignored — it must never silently act as `other`, and must never be a hard config error that stops the app from starting
 - [ ] 10. Config-driven filter as a pure function (blocked by: 8,9). → done: table tests cover each knob alone, the full precedence chain, the `participating_only` + `exclude_reasons` compose case (decision 10), and that an unrecognised reason is only filtered when `other` is listed explicitly
@@ -158,3 +162,60 @@ marked _(manual)_ needs a human with a real token before merge. Do not report th
 - Read state may be eventually consistent: a poll landing right after a `PATCH` could still
   return `unread`, flickering the optimistic update back. Task 14 holds the local intent until
   the server agrees rather than trusting the first poll that contradicts it.
+
+## Review feedback: 4.
+
+Reviewer verdict REQUEST_CHANGES on `3e2645c`. The five acceptance criteria are all genuinely
+implemented and four of five survived mutation testing; what bounced it is state management.
+Two mutations survived the suite and must be closed. Fix in place, keep everything that works.
+
+**Must fix**
+
+1. **Data race on the cache** (`internal/github/notifications.go:64-72,100-105,124-133,155-159`).
+   Fields are unguarded. A poll tick overlapping the refresh key puts two goroutines inside
+   `List`; `c.cached = all` racing a 304's `return c.cached` can tear the slice header and render
+   rows read past the end of the array. Milder and more frequent: a lost `c.lastModified` write
+   makes the next poll re-fetch unconditionally, silently disabling decision 8's protection.
+   Add `sync.Mutex` held across the whole `List` body and in `PollInterval()`/`applyPollInterval`.
+   Follow `internal/polling/poller.go:80-130`, which guards the same tick-vs-refresh state.
+   Note CI does not run `-race` (`.github/workflows/ci.yml:29`) and `-race` needs cgo, which the
+   sandbox blocks — so reason about this from the code, and do not report it race-tested.
+2. **Returned slice aliases the cache** (`notifications.go:129,158-159`). Measured: caller
+   in-place-filters `[1 2 3]` down to `[2]`, the next 304 returns `[2 2 3]` — a row vanishes and
+   another duplicates, silently. Return a copy on **both** paths (the copy at `:139` already
+   establishes the idiom). The existing 304 test at `notifications_test.go:171-175` compares two
+   aliases of one backing array, so it is a content-tautology: a mutation clobbering every cached
+   row's `Unread`/`Reason` on the 304 path stays green. Re-pin it against independently-declared
+   expected values **and** by mutating the first result before asserting the second.
+
+**Also fold in (decisions 27-29 now cover these)**
+
+3. `lastModified` is not keyed by the request (`:69,124,155-158`). `List({})` then
+   `List({Participating: true})` sends the first query's validator against a different query and
+   returns the full inbox as the participating-only result. Reverse the order and it is a
+   truncated feed presented as complete — decision 20's worst case. Invalidate cache and
+   validator when `buildPath(opts)` differs from the path that produced them.
+4. A 304 with nothing cached returns `(nil, nil)` (`:127-130`) — return an error instead
+   (decision 28). The reviewer and validator disagreed on reachability; decision 28 settles it.
+5. Unbounded page walk (`:141-153`) — a self-referential `next` produced 501 requests, 500 rows,
+   `err == nil`; a truly cyclic `next` never returns inside a `tea.Cmd`. Add a hard page-count
+   constant that terminates with an error, and test it with a self-pointing `next`. `NotifOpts.Max`
+   stays task 7's (decision 29).
+6. The `APIError` widening is untested (`client.go:254-268,311-312`). It is additive and populated
+   for every status, which is what task 19 needs — but nothing asserts the header extraction, while
+   the sibling `RetryAfter` **is** pinned (`client_test.go:386-411`). Add one 403 test asserting
+   both raw values via `errors.As`.
+7. No test pins the method or path — mutating the endpoint to `/notificationz` left the suite
+   green. Assert `GET` and `/notifications`, and `per_page=100`, in the `all=true` handler.
+
+**Nits worth taking while in the file**
+
+8. `fmt.Errorf("github: list notifications: %w", …)` double-prefixes, since `APIError.Error()`
+   already starts `github:` — user-visible in the error pane. `Client.get` returns it unwrapped.
+9. Document that a 304 on page ≥2 fails the whole `List` (safe: the cache is untouched), since
+   the code reads as though 304 is handled everywhere.
+10. `notifications_test.go:304` computes `want` with the same `Format` call the production code
+    makes, on an already-UTC fixture, so the `.UTC()` normalisation at `:171` is unpinned. Assert
+    the literal `"2026-07-01T12:00:00Z"` and add a non-UTC input row.
+
+Leave nit 11 (`getPage` duplication) alone — consistent with the package, not worth the churn.
