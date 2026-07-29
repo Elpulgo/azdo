@@ -101,7 +101,7 @@ cost you the review requests. Reason is the axis that correlates with "needs me"
 
 ## Tasks
 
-- [ ] 1. ADR `docs/adr/0001-notifications-capability-interface.md` — decisions 1, 2, 5. → done: file exists, ≤30 lines, `Status: Accepted`, has Context/Decision/Alternatives/Consequences
+- [x] 1. ADR `docs/adr/0001-notifications-capability-interface.md` — decisions 1, 2, 5. → done: file exists, ≤30 lines, `Status: Accepted`, has Context/Decision/Alternatives/Consequences
 - [ ] 2. `provider`: `Notification` type (provider-qualified identity + `Read`/`Done` per decisions 14, 15), `NotificationReason` enum (exactly decision 18's values), `NotifOpts`, `NotificationSource` (blocked by: 1). → done: `go build ./...` clean, `gofmt -l` empty, enum values match decision 18 one-for-one
 - [ ] 3. `ui/display`: reason → glyph + label + style map (blocked by: 2). → done: every enum value returns non-empty glyph, label and named style; an unrecognised value renders as `Other`, never empty; table test covers all values plus one unrecognised input; asserts glyph *and* style, not label substrings (convention 6)
 - [ ] 4. `github`: user-scoped client — `GET /notifications` with `all=true` (decision 12), pagination, `If-Modified-Since`, `X-Poll-Interval` (blocked by: 2). → done: `httptest` tests assert `all=true` in the query, `Link rel=next` followed, `If-Modified-Since` sent when a cached timestamp exists, 304 returns the cached slice unchanged, `X-Poll-Interval` parsed
