@@ -250,6 +250,22 @@ type APIError struct {
 	Message     string // GitHub's JSON {"message": "..."}, when present
 	RateLimited bool   // true when the response indicates rate limiting
 	RetryAfter  string // raw Retry-After header value, when present
+
+	// RequiredScopes is the raw X-Accepted-OAuth-Scopes response header, when
+	// present: the OAuth scopes GitHub requires for the endpoint that
+	// returned this error (e.g. "notifications" or "repo"). GitHub sends
+	// this header only for classic PATs, not fine-grained tokens, so an
+	// empty value here does not itself prove the token has enough scope —
+	// it just means the header wasn't sent. Documented GitHub behaviour, not
+	// observed live (no token in this environment). Task 19 uses this,
+	// together with StatusCode == 403, to render a scope-specific error
+	// instead of a generic one.
+	RequiredScopes string
+	// GrantedScopes is the raw X-OAuth-Scopes response header, when present:
+	// the scopes the caller's token actually carries. Comparing this against
+	// RequiredScopes is how task 19 distinguishes "token lacks the
+	// `notifications` scope" from an unrelated 403.
+	GrantedScopes string
 }
 
 // Error renders the friendly, status-specific message. A rate-limited response
@@ -292,6 +308,8 @@ func newAPIError(statusCode int, header http.Header, body []byte) *APIError {
 	}
 
 	e.RetryAfter = header.Get("Retry-After")
+	e.RequiredScopes = header.Get("X-Accepted-OAuth-Scopes")
+	e.GrantedScopes = header.Get("X-OAuth-Scopes")
 
 	switch statusCode {
 	case http.StatusTooManyRequests:
