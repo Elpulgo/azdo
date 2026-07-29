@@ -117,7 +117,7 @@ emits it, so listing it matches nothing in phase 1.
 
 - [x] 1. ADR `docs/adr/0001-notifications-capability-interface.md` — decisions 1, 2, 5. → done: file exists, ≤30 lines, `Status: Accepted`, has Context/Decision/Alternatives/Consequences
 - [x] 2. `provider`: `Notification` type (provider-qualified identity + `Read`/`Done` per decisions 14, 15), `NotificationReason` enum (exactly decision 18's values), `NotifOpts`, `NotificationSource` (blocked by: 1). → done: `go build ./...` clean, `gofmt -l` empty, enum values match decision 18 one-for-one
-- [ ] 3. `ui/display`: reason → glyph + label + style map, plus `String()`/`ParseNotificationReason` next to the enum per decisions 24 and 26 (blocked by: 2). → done: every enum value returns non-empty glyph, label and named style; an unrecognised value renders as `Other`, never empty; table test covers all values plus one unrecognised input; asserts glyph, **exact label** and named style (convention 6 — a non-emptiness check on the label does not satisfy it); `String()` emits the decision-19 lowercase snake_case names and round-trips through `ParseNotificationReason` for all 12 values; `ParseNotificationReason` returns `(NotificationReason, bool)` per decision 26 — `(Other, false)` for an unrecognised string and for `unknown`, never an error and never a dropped row; `String()`'s out-of-range fallback is `"other"`, matching the display layer, with `Unknown` an explicit case returning `"unknown"`
+- [x] 3. `ui/display`: reason → glyph + label + style map, plus `String()`/`ParseNotificationReason` next to the enum per decisions 24 and 26 (blocked by: 2). → done: every enum value returns non-empty glyph, label and named style; an unrecognised value renders as `Other`, never empty; table test covers all values plus one unrecognised input; asserts glyph, **exact label** and named style (convention 6 — a non-emptiness check on the label does not satisfy it); `String()` emits the decision-19 lowercase snake_case names and round-trips through `ParseNotificationReason` for all 12 values; `ParseNotificationReason` returns `(NotificationReason, bool)` per decision 26 — `(Other, false)` for an unrecognised string and for `unknown`, never an error and never a dropped row; `String()`'s out-of-range fallback is `"other"`, matching the display layer, with `Unknown` an explicit case returning `"unknown"`
 - [ ] 4. `github`: user-scoped client — `GET /notifications` with `all=true` (decision 12), pagination, `If-Modified-Since`, `X-Poll-Interval` (blocked by: 2). → done: `httptest` tests assert `all=true` in the query, `Link rel=next` followed, `If-Modified-Since` sent when a cached timestamp exists, 304 returns the cached slice unchanged, `X-Poll-Interval` parsed
 - [ ] 5. `github`: wire → neutral mapping, reason mapping, `subject.url` → web URL resolution (blocked by: 4). → done: table test maps every reason string in decision 18 plus an invented unknown → `Other`; `subject.url` resolves for pull/issue/release/commit and falls back to the repo URL otherwise; no panic on absent optional fields
 - [ ] 6. `github`: mark read (`PATCH /notifications/threads/{id}`) + mark done (`DELETE`) (blocked by: 4). → done: tests assert method and path per call; ids `<= 0` rejected (convention 11) with a negative-input row; one-way read documented in the doc comment, not claimed as API-verified (decision 13)
@@ -153,33 +153,3 @@ marked _(manual)_ needs a human with a real token before merge. Do not report th
 - Read state may be eventually consistent: a poll landing right after a `PATCH` could still
   return `unread`, flickering the optimistic update back. Task 14 holds the local intent until
   the server agrees rather than trusting the first poll that contradicts it.
-
-## Review feedback: 3. `ui/display` reason map + String/ParseNotificationReason
-
-Reviewer verdict on commit `44bc653`: REQUEST_CHANGES. The strings themselves are correct
-and stay as they are; what changes is that a wrong string becomes *visible* instead of
-silently meaningful. Address every bullet:
-
-- 🔴 `ParseNotificationReason` must return `(NotificationReason, bool)` per decision 26.
-  Today it collapses any unrecognised string to `Other`, so `exclude_reasons: [subscibed]`
-  drops every catch-all row while leaving the `subscribed` noise the user asked to hide.
-  This also makes task 10's criterion unsatisfiable — it cannot tell "user wrote `other`"
-  from "user wrote a typo". Value still degrades to `Other`; only the `bool` is new.
-- 🔴 `unknown` must parse as `(Other, false)` — reserved, matches nothing in phase 1, since
-  the wire mapper never emits `Unknown` (decision 18).
-- 🟡 `String()`'s out-of-range fallback must be `"other"`, not `"unknown"`, so all four
-  functions agree; give `NotificationReasonUnknown` its own case returning `"unknown"`.
-  As written a corrupt value renders as "Other" but serializes as `"unknown"`, which is
-  convention 5's failure shape for task 11's `f` reason filter.
-- 🟡 Pin the **exact** label per value in the display table test. A non-emptiness check let
-  the reviewer rename "Review requested" to "Rev. req" with the suite still green;
-  `TestVoteLabel` and `TestKindLabel` in the same file already pin exact labels.
-- 🟢 Assert glyph distinctness with a `map[string]bool` loop — `NotificationReasonGlyph`'s
-  doc comment promises distinct glyphs and nothing tests it.
-- 🟢 `notifications_test.go:126` formats the enum with `%v`, invoking the `String()` under
-  test; a broken `String()` prints a self-referential message. Use `%d`.
-
-Not required: GitHub wire spellings as aliases were considered and **rejected** — decision 19
-keeps the config vocabulary neutral for phase 2, and two spellings would be permanent. The
-spec's `## Config shape` prose has been corrected to list all twelve neutral names instead of
-GitHub's `mention`.

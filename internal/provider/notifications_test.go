@@ -123,16 +123,22 @@ func TestNotificationReason_String(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.want, func(t *testing.T) {
 			if got := tc.reason.String(); got != tc.want {
-				t.Errorf("%v.String() = %q, want %q", tc.reason, got, tc.want)
+				t.Errorf("%d.String() = %q, want %q", tc.reason, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestNotificationReason_StringRoundTripsThroughParse asserts that every one
-// of the 12 declared values survives a String() -> ParseNotificationReason()
-// round trip unchanged. This is what guarantees exclude_reasons config values
-// map back to the exact reason the user intended.
+// TestNotificationReason_StringRoundTripsThroughParse asserts the round-trip
+// contract for all 12 declared values, per Decision 26's asymmetry:
+//   - The 11 non-Unknown values survive String() -> ParseNotificationReason()
+//     unchanged, with the recognised bool true. This is what guarantees
+//     exclude_reasons config values map back to the exact reason the user
+//     intended.
+//   - NotificationReasonUnknown is the deliberate exception: its String() is
+//     "unknown", but that string is reserved (the wire mapper never emits
+//     Unknown) and does not parse back to itself — ParseNotificationReason
+//     degrades it to (Other, false), same as any other unrecognised string.
 func TestNotificationReason_StringRoundTripsThroughParse(t *testing.T) {
 	all := []provider.NotificationReason{
 		provider.NotificationReasonUnknown,
@@ -153,18 +159,32 @@ func TestNotificationReason_StringRoundTripsThroughParse(t *testing.T) {
 	}
 	for _, r := range all {
 		t.Run(r.String(), func(t *testing.T) {
-			if got := provider.ParseNotificationReason(r.String()); got != r {
+			got, ok := provider.ParseNotificationReason(r.String())
+
+			if r == provider.NotificationReasonUnknown {
+				if got != provider.NotificationReasonOther || ok {
+					t.Errorf("ParseNotificationReason(%q) = (%v, %v), want (Other, false) — unknown is reserved and must not round-trip to itself (Decision 26)", r.String(), got, ok)
+				}
+				return
+			}
+
+			if !ok {
+				t.Errorf("ParseNotificationReason(%q) ok = false, want true", r.String())
+			}
+			if got != r {
 				t.Errorf("ParseNotificationReason(%q) = %v, want %v", r.String(), got, r)
 			}
 		})
 	}
 }
 
-// TestParseNotificationReason_UnparseableYieldsOther asserts Decision 18's
+// TestParseNotificationReason_UnparseableYieldsOther asserts Decision 26's
 // hard rule end to end: a config value the parser does not recognise must
-// resolve to NotificationReasonOther, never an error that would cause a
-// filter to drop the row, and never the zero value (which would misfile it
-// as "unset" rather than "recognised but uncategorised").
+// resolve to (NotificationReasonOther, false) — never an error that would
+// cause a filter to drop the row, never the zero value (which would misfile
+// it as "unset" rather than "recognised but uncategorised"), and never a bool
+// that claims recognition it did not have — task 9's warning and task 10's
+// skip-unrecognised behaviour both depend on the bool being accurate.
 func TestParseNotificationReason_UnparseableYieldsOther(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -178,12 +198,19 @@ func TestParseNotificationReason_UnparseableYieldsOther(t *testing.T) {
 		// same as any other unrecognised string.
 		{"mixed case", "Review_Requested"},
 		{"upper case", "REVIEW_REQUESTED"},
+		// Decision 26: "unknown" is reserved. The wire mapper never emits
+		// NotificationReasonUnknown, so this string must be reported as
+		// unrecognised even though it is what Unknown.String() emits.
+		{"reserved unknown", "unknown"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := provider.ParseNotificationReason(tc.input)
+			got, ok := provider.ParseNotificationReason(tc.input)
 			if got != provider.NotificationReasonOther {
 				t.Errorf("ParseNotificationReason(%q) = %v, want NotificationReasonOther", tc.input, got)
+			}
+			if ok {
+				t.Errorf("ParseNotificationReason(%q) ok = true, want false", tc.input)
 			}
 		})
 	}

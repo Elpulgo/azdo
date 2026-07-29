@@ -168,10 +168,23 @@ func NotificationReasonCount() int { return int(notificationReasonCount) }
 // NotificationReason, suitable for the `exclude_reasons` config key (Decision
 // 19) and for on-disk/round-trip use generally. This is distinct from
 // display.NotificationReasonLabel, which returns a human-facing name.
-// Unrecognized values (including the zero value) return "unknown".
+// NotificationReasonUnknown is an explicit case returning "unknown"; any
+// out-of-range value falls back to "other", matching the display layer
+// (display.NotificationReasonGlyph/Label/Style all fall back to Other) so the
+// four functions agree on corrupt input.
+//
+// This produces a deliberate asymmetry with ParseNotificationReason: the
+// string "unknown" round-trips out of String() for NotificationReasonUnknown,
+// but does not round-trip back in — ParseNotificationReason("unknown")
+// returns (Other, false), because the wire mapper (task 5) never emits
+// Unknown (Decision 18) and the string is reserved rather than parseable. Do
+// not "fix" this by adding an "unknown" case to ParseNotificationReason;
+// Decision 26 is explicit that unknown must match nothing in phase 1.
 // Mirrors Kind.String's shape (see types.go), following Decision 24.
 func (r NotificationReason) String() string {
 	switch r {
+	case NotificationReasonUnknown:
+		return "unknown"
 	case NotificationReasonReviewRequested:
 		return "review_requested"
 	case NotificationReasonMentioned:
@@ -194,50 +207,56 @@ func (r NotificationReason) String() string {
 		return "subscribed"
 	case NotificationReasonOther:
 		return "other"
-	default: // NotificationReasonUnknown and any future/unrecognised value
-		return "unknown"
+	default: // any future/unrecognised value
+		return "other"
 	}
 }
 
 // ParseNotificationReason maps a stable string identifier (see
-// NotificationReason.String) back to a NotificationReason. The match is
+// NotificationReason.String) back to a NotificationReason, reporting via the
+// second return value whether the string was recognised. The match is
 // case-sensitive against the lowercase snake_case form String() emits —
 // config keys arrive already lowercased by viper (convention 9), so this
 // never needs to fold case itself.
 //
-// Unlike ParseKind, unrecognized input deliberately returns
-// NotificationReasonOther rather than the zero value: Decision 18 requires
-// that no notification is ever silently dropped, and exclude_reasons is a
-// user-editable config key that can easily contain a typo or a reason this
-// binary predates. Returning Other keeps the row visible and groups it with
-// the other catch-all cases rather than mis-filing it as "unset".
-func ParseNotificationReason(s string) NotificationReason {
+// Per Decision 26, the returned value always degrades to
+// NotificationReasonOther when the bool is false — an unrecognised string
+// never errors and never causes a config-driven filter to drop a row.
+// Callers MUST NOT ignore the bool: it is what separates "the user wrote
+// `other`" from "the user made a typo", which the value alone cannot. Task 9
+// warns on an unrecognised `exclude_reasons` entry; task 10's filter skips
+// applying an unrecognised entry rather than silently treating it as Other.
+//
+// "unknown" is reserved and deliberately returns (Other, false): the wire
+// mapper (task 5) never emits NotificationReasonUnknown (Decision 18), so
+// listing "unknown" in exclude_reasons can never match a real row. This is
+// the intentional asymmetry with String(), documented there — do not add an
+// "unknown" case here to "fix" it.
+func ParseNotificationReason(s string) (NotificationReason, bool) {
 	switch s {
-	case "unknown":
-		return NotificationReasonUnknown
 	case "review_requested":
-		return NotificationReasonReviewRequested
+		return NotificationReasonReviewRequested, true
 	case "mentioned":
-		return NotificationReasonMentioned
+		return NotificationReasonMentioned, true
 	case "assigned":
-		return NotificationReasonAssigned
+		return NotificationReasonAssigned, true
 	case "authored":
-		return NotificationReasonAuthored
+		return NotificationReasonAuthored, true
 	case "commented":
-		return NotificationReasonCommented
+		return NotificationReasonCommented, true
 	case "state_changed":
-		return NotificationReasonStateChanged
+		return NotificationReasonStateChanged, true
 	case "ci_activity":
-		return NotificationReasonCIActivity
+		return NotificationReasonCIActivity, true
 	case "security_alert":
-		return NotificationReasonSecurityAlert
+		return NotificationReasonSecurityAlert, true
 	case "approval_requested":
-		return NotificationReasonApprovalRequested
+		return NotificationReasonApprovalRequested, true
 	case "subscribed":
-		return NotificationReasonSubscribed
+		return NotificationReasonSubscribed, true
 	case "other":
-		return NotificationReasonOther
-	default:
-		return NotificationReasonOther
+		return NotificationReasonOther, true
+	default: // includes "unknown" (reserved, Decision 26) and any typo
+		return NotificationReasonOther, false
 	}
 }

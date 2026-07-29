@@ -409,7 +409,8 @@ func TestRunStatusStyle(t *testing.T) {
 
 // TestNotificationReasonGlyphAndStyle covers all 12 declared values (spec
 // Decision 18) plus one out-of-range value, per convention 6: it asserts the
-// glyph *and* the named style's foreground color, not a label substring.
+// glyph, the exact label, and the named style's foreground color — not a
+// label substring or a non-emptiness check.
 func TestNotificationReasonGlyphAndStyle(t *testing.T) {
 	s := styles.DefaultStyles()
 	th := s.Theme
@@ -417,23 +418,26 @@ func TestNotificationReasonGlyphAndStyle(t *testing.T) {
 		name      string
 		reason    provider.NotificationReason
 		wantGlyph string
+		wantLabel string
 		wantFg    lipgloss.Color
 	}{
-		{"Unknown", provider.NotificationReasonUnknown, "?", th.ForegroundMuted},
-		{"ReviewRequested", provider.NotificationReasonReviewRequested, "◐", th.Warning},
-		{"Mentioned", provider.NotificationReasonMentioned, "@", th.Info},
-		{"Assigned", provider.NotificationReasonAssigned, "●", th.Warning},
-		{"Authored", provider.NotificationReasonAuthored, "✎", th.Info},
-		{"Commented", provider.NotificationReasonCommented, "»", th.Info},
-		{"StateChanged", provider.NotificationReasonStateChanged, "⇄", th.Info},
-		{"CIActivity", provider.NotificationReasonCIActivity, "▶", th.Info},
-		{"SecurityAlert", provider.NotificationReasonSecurityAlert, "⚠", th.Error},
-		{"ApprovalRequested", provider.NotificationReasonApprovalRequested, "◉", th.Warning},
-		{"Subscribed", provider.NotificationReasonSubscribed, "◇", th.ForegroundMuted},
-		{"Other", provider.NotificationReasonOther, "•", th.ForegroundMuted},
+		{"Unknown", provider.NotificationReasonUnknown, "?", "Unknown", th.ForegroundMuted},
+		{"ReviewRequested", provider.NotificationReasonReviewRequested, "◐", "Review requested", th.Warning},
+		{"Mentioned", provider.NotificationReasonMentioned, "@", "Mentioned", th.Info},
+		{"Assigned", provider.NotificationReasonAssigned, "●", "Assigned", th.Warning},
+		{"Authored", provider.NotificationReasonAuthored, "✎", "Authored", th.Info},
+		{"Commented", provider.NotificationReasonCommented, "»", "Commented", th.Info},
+		{"StateChanged", provider.NotificationReasonStateChanged, "⇄", "State changed", th.Info},
+		{"CIActivity", provider.NotificationReasonCIActivity, "▶", "CI activity", th.Info},
+		{"SecurityAlert", provider.NotificationReasonSecurityAlert, "⚠", "Security alert", th.Error},
+		{"ApprovalRequested", provider.NotificationReasonApprovalRequested, "◉", "Approval requested", th.Warning},
+		{"Subscribed", provider.NotificationReasonSubscribed, "◇", "Subscribed", th.ForegroundMuted},
+		{"Other", provider.NotificationReasonOther, "•", "Other", th.ForegroundMuted},
 		// Sentinel: an out-of-range value must render as Other, never empty.
-		{"OutOfRange", provider.NotificationReason(99), "•", th.ForegroundMuted},
+		{"OutOfRange", provider.NotificationReason(99), "•", "Other", th.ForegroundMuted},
 	}
+
+	seenGlyphs := map[string]bool{}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gotGlyph := display.NotificationReasonGlyph(tc.reason)
@@ -443,14 +447,22 @@ func TestNotificationReasonGlyphAndStyle(t *testing.T) {
 			if gotGlyph == "" {
 				t.Errorf("NotificationReasonGlyph(%v) must never be empty", tc.reason)
 			}
+			// The out-of-range sentinel deliberately reuses Other's glyph, so
+			// it is excluded from the distinctness check below.
+			if tc.name != "OutOfRange" {
+				if seenGlyphs[gotGlyph] {
+					t.Errorf("NotificationReasonGlyph(%v) = %q is not distinct — another declared reason already uses this glyph", tc.reason, gotGlyph)
+				}
+				seenGlyphs[gotGlyph] = true
+			}
 
 			gotFg := display.NotificationReasonStyle(tc.reason, s).GetForeground()
 			if gotFg != tc.wantFg {
 				t.Errorf("NotificationReasonStyle(%v) foreground = %v, want %v", tc.reason, gotFg, tc.wantFg)
 			}
 
-			if label := display.NotificationReasonLabel(tc.reason); label == "" {
-				t.Errorf("NotificationReasonLabel(%v) must never be empty", tc.reason)
+			if label := display.NotificationReasonLabel(tc.reason); label != tc.wantLabel {
+				t.Errorf("NotificationReasonLabel(%v) = %q, want %q", tc.reason, label, tc.wantLabel)
 			}
 		})
 	}
