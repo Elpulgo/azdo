@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -88,8 +89,16 @@ type NotificationListOpts struct {
 // serialises the conditional-request pairing (the If-Modified-Since sent
 // must correspond to the lastModified/cachedPath this same call reads),
 // which is the point, not a missed opportunity to narrow the critical
-// section. PollInterval() takes the same lock independently since it is
-// called from outside List.
+// section.
+//
+// pollInterval deliberately does NOT share mu (Decision 32): app.go calls
+// poller.StartPolling()/OnTick() — which read PollInterval() — on the Bubble
+// Tea main goroutine, so if the accessor blocked on mu, a tick landing during
+// a multi-page List refresh would freeze the main goroutine for as long as
+// that refresh takes (worst case maxNotificationPages HTTP round trips),
+// dropping keypresses and rendering. pollInterval is therefore an
+// atomic.Int64 of nanoseconds, written by applyPollInterval and read by
+// PollInterval, with no lock at all.
 type NotificationsClient struct {
 	mu sync.Mutex
 
@@ -104,7 +113,11 @@ type NotificationsClient struct {
 	cached       []NotificationThread
 	cachedPath   string
 
-	pollInterval time.Duration
+	// pollInterval holds the cadence GitHub last asked for, in nanoseconds,
+	// with 0 meaning "not yet set". Guarded independently of mu — see the
+	// type-level doc comment (Decision 32) — via atomic loads/stores rather
+	// than a second mutex, since it is a single word.
+	pollInterval atomic.Int64
 }
 
 // NewNotificationsClient creates a user-scoped GitHub notifications client.
@@ -123,9 +136,26 @@ func NewNotificationsClient(token string) *NotificationsClient {
 }
 
 // SetBaseURL overrides the API base URL. Used in tests to point the client
-// at an httptest.Server.
+// at an httptest.Server, and in production to point at a GitHub Enterprise
+// instance instead of github.com.
+//
+// It unconditionally clears the cache, cached validator and cached request
+// shape. buildPath(opts) — the cache key — has no host component, so without
+// this a cache populated against one base URL would still match cachedPath
+// after switching base URLs: a later List with the same opts would offer the
+// previous host's Last-Modified as a validator, and a 304 would hand back the
+// previous host's rows presented as the new host's answer.
+//
+// SetBaseURL is deliberately left unlocked, matching Client.SetBaseURL and
+// azdevops.Client.SetBaseURL: it is a construction-time-only override (tests,
+// demo mode, switching to a GHE instance) and its contract is that it must
+// not be called concurrently with List — callers needing to redirect a
+// live client must not do so while a fetch may be in flight.
 func (c *NotificationsClient) SetBaseURL(url string) {
 	c.baseURL = url
+	c.cachedPath = ""
+	c.lastModified = ""
+	c.cached = nil
 }
 
 // PollInterval returns the cadence floor GitHub most recently asked for via
@@ -133,14 +163,15 @@ func (c *NotificationsClient) SetBaseURL(url string) {
 // absent or malformed on every call so far, this falls back to
 // defaultPollInterval (60s) — a garbage or missing header must never panic
 // or produce a nonsense (e.g. zero or negative) interval.
+//
+// Deliberately does not take mu (Decision 32) — see the type-level doc
+// comment — so a poll tick reading the cadence on Bubble Tea's main goroutine
+// never blocks behind an in-flight, possibly multi-page List call.
 func (c *NotificationsClient) PollInterval() time.Duration {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.pollInterval <= 0 {
-		return defaultPollInterval
+	if ns := c.pollInterval.Load(); ns > 0 {
+		return time.Duration(ns)
 	}
-	return c.pollInterval
+	return defaultPollInterval
 }
 
 // List fetches the caller's notification inbox. Per Decision 12 it always
@@ -188,8 +219,13 @@ func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThr
 			if path != c.cachedPath {
 				// Decision 28: a 304 that does not match a cache produced by
 				// this exact request shape is never treated as "the inbox is
-				// empty" — it is reported as an error instead.
-				return nil, fmt.Errorf("github: list notifications: received 304 Not Modified with no matching cached response")
+				// empty" — it is reported as an error instead. Wrapped with
+				// %w (not just formatted in) so a caller can errors.As this
+				// back to the underlying *APIError (StatusCode == 304) and
+				// branch on that rather than string-matching the message —
+				// tasks 13 and 19 both need to tell an unsolicited 304 apart
+				// from a transport failure.
+				return nil, fmt.Errorf("github: list notifications: received 304 Not Modified with no matching cached response: %w", apiErr)
 			}
 			return cloneThreads(c.cached), nil
 		}
@@ -277,6 +313,13 @@ func (c *NotificationsClient) buildPath(opts NotificationListOpts) string {
 // malformed (non-integer or <= 0) value is ignored rather than applied —
 // neither case may panic or leave a nonsense interval in place. Use
 // PollInterval to read the value with its fallback applied.
+//
+// Precondition: none — c.pollInterval is an atomic.Int64 (Decision 32), so
+// this may be called with or without mu held. In practice every call site is
+// inside List, which already holds mu for unrelated reasons (the fetch
+// itself); that is incidental, not a requirement of this function. Future
+// callers (e.g. task 6's mark read/done, if it ever needs to observe
+// X-Poll-Interval) do not need to take mu first.
 func (c *NotificationsClient) applyPollInterval(header http.Header) {
 	raw := header.Get("X-Poll-Interval")
 	if raw == "" {
@@ -286,7 +329,7 @@ func (c *NotificationsClient) applyPollInterval(header http.Header) {
 	if err != nil || secs <= 0 {
 		return
 	}
-	c.pollInterval = time.Duration(secs) * time.Second
+	c.pollInterval.Store(int64(time.Duration(secs) * time.Second))
 }
 
 // getPage performs an authenticated GET against rawURL (a leading-slash path

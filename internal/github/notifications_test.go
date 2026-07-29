@@ -69,10 +69,17 @@ func TestNotificationsClient_List_RequestsCorrectMethodPathAndPerPage(t *testing
 }
 
 // ---------------------------------------------------------------------------
-// Decision 27: List always hands out a copy, on the 200 path too — not just
-// the 304 path. Mutating a 200 result must never leak into a later call's
-// result, which is exactly the corruption fold-in 2 measured: a caller
-// in-place-filtering [1 2 3] down to [2] left the cache [2 2 3].
+// Decision 27: List always hands out a copy, on the 304 path too — not just
+// the 200 path. The previous version of this test only ever mutated a result
+// that traced back to a 200 response (both here and in
+// TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged), so reverting
+// *only* the 304 path's cloneThreads(c.cached) call back to a bare
+// `return c.cached, nil` left the whole suite green — nothing exercised
+// mutating a result that itself came from a 304. This three-call version
+// closes that gap: 200 (caches), then 304 (mutate *that* result in place),
+// then 304 again (assert the mutation left no trace) — which is exactly the
+// corruption fold-in 2 measured: a caller in-place-filtering [1 2 3] down to
+// [2] left the cache [2 2 3].
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_200_MutatingResultDoesNotAffectLaterCall(t *testing.T) {
@@ -86,11 +93,7 @@ func TestNotificationsClient_List_200_MutatingResultDoesNotAffectLaterCall(t *te
 			w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"},{"id":"2","unread":true,"reason":"mention"},{"id":"3","unread":true,"reason":"author"}]`))
 			return
 		}
-		// Second call hits the 304 cache-read path, so this exercises the
-		// exact corruption fold-in 2 measured: if the 200 path had stored a
-		// slice that aliases what it returned, the in-place filter below
-		// would corrupt c.cached and this 304 would hand back the corrupted
-		// rows.
+		// Every call after the first hits the 304 cache-read path.
 		w.WriteHeader(http.StatusNotModified)
 	}))
 	defer srv.Close()
@@ -100,15 +103,26 @@ func TestNotificationsClient_List_200_MutatingResultDoesNotAffectLaterCall(t *te
 
 	first, err := c.List(NotificationListOpts{})
 	if err != nil {
-		t.Fatalf("first List() error = %v", err)
+		t.Fatalf("first List() (200) error = %v", err)
 	}
 	if len(first) != 3 {
 		t.Fatalf("first List() len = %d, want 3", len(first))
 	}
 
-	// The standard in-place filter idiom: keep only id "2".
-	out := first[:0]
-	for _, row := range first {
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() (304) error = %v", err)
+	}
+	if len(second) != 3 {
+		t.Fatalf("second List() len = %d, want 3", len(second))
+	}
+
+	// The standard in-place filter idiom, applied to the SECOND call's
+	// (304) result — not the first. If the 304 path handed back an alias of
+	// c.cached rather than a copy, this filter corrupts c.cached directly,
+	// and the third call (also 304, from the same cache) would observe it.
+	out := second[:0]
+	for _, row := range second {
 		if row.ID == "2" {
 			out = append(out, row)
 		}
@@ -117,17 +131,17 @@ func TestNotificationsClient_List_200_MutatingResultDoesNotAffectLaterCall(t *te
 		t.Fatalf("filter setup failed: out = %+v", out)
 	}
 
-	second, err := c.List(NotificationListOpts{})
+	third, err := c.List(NotificationListOpts{})
 	if err != nil {
-		t.Fatalf("second List() error = %v", err)
+		t.Fatalf("third List() (304) error = %v", err)
 	}
-	if len(second) != 3 {
-		t.Fatalf("second List() len = %d, want 3 — the in-place filter of the first result must not have rewritten the cache", len(second))
+	if len(third) != 3 {
+		t.Fatalf("third List() len = %d, want 3 — mutating the second call's (304) result must not have rewritten the cache", len(third))
 	}
 	wantIDs := []string{"1", "2", "3"}
 	for i, id := range wantIDs {
-		if second[i].ID != id {
-			t.Errorf("second[%d].ID = %q, want %q", i, second[i].ID, id)
+		if third[i].ID != id {
+			t.Errorf("third[%d].ID = %q, want %q", i, third[i].ID, id)
 		}
 	}
 }
@@ -216,8 +230,15 @@ func TestNotificationsClient_List_CyclicNextLink_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("List() error = nil, want an error for a cyclic Link rel=\"next\"")
 	}
-	if requests > maxNotificationPages+1 {
-		t.Errorf("requests = %d, want bounded near maxNotificationPages (%d)", requests, maxNotificationPages)
+	// Asserted against the literal 50, not maxNotificationPages: reading the
+	// constant under test here would let a mutation that widens the constant
+	// (e.g. to 500) pass silently, since "requests" would widen right along
+	// with it. 50 = 1 initial fetch + 49 more before the loop's pages > 50
+	// check trips (see the boundary arithmetic at the top of the pagination
+	// loop in List) — an independently-computed value, not derived from
+	// maxNotificationPages's current value.
+	if requests != 50 {
+		t.Errorf("requests = %d, want exactly 50", requests)
 	}
 }
 
@@ -256,6 +277,62 @@ func TestNotificationsClient_List_IfModifiedSince_OnlyAfterCache(t *testing.T) {
 	}
 	if capturedIfModifiedSince[1] != lastModified {
 		t.Errorf("second call If-Modified-Since = %q, want %q", capturedIfModifiedSince[1], lastModified)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Round-3 review item 9: List assigns c.lastModified unconditionally from
+// the response header (List's final lines), not only when the header is
+// non-empty as an earlier revision did. A 200 that omits Last-Modified
+// therefore clears any previously cached validator, even though it still
+// sets cached/cachedPath — making the NEXT call's request unconditional
+// again. This is the correct trade (a validator must pair with the cache it
+// belongs to; keeping a stale one would offer it as if it still described
+// the current cache), but nothing pinned it before this test.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_List_200WithoutLastModified_ClearsValidator(t *testing.T) {
+	const lastModified1 = "Wed, 21 Oct 2015 07:28:00 GMT"
+	call := 0
+	var capturedIfModifiedSince []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		capturedIfModifiedSince = append(capturedIfModifiedSince, r.Header.Get("If-Modified-Since"))
+		if call == 1 {
+			w.Header().Set("Last-Modified", lastModified1)
+		}
+		// Calls 2 and 3 send no Last-Modified header at all — an unusual but
+		// real shape GitHub's API can return.
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"id":"1","reason":"subscribed"}]`))
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	if _, err := c.List(NotificationListOpts{}); err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+	if _, err := c.List(NotificationListOpts{}); err != nil {
+		t.Fatalf("second List() error = %v", err)
+	}
+	if _, err := c.List(NotificationListOpts{}); err != nil {
+		t.Fatalf("third List() error = %v", err)
+	}
+
+	if len(capturedIfModifiedSince) != 3 {
+		t.Fatalf("got %d requests, want 3", len(capturedIfModifiedSince))
+	}
+	if capturedIfModifiedSince[0] != "" {
+		t.Errorf("first call If-Modified-Since = %q, want empty (nothing cached yet)", capturedIfModifiedSince[0])
+	}
+	if capturedIfModifiedSince[1] != lastModified1 {
+		t.Errorf("second call If-Modified-Since = %q, want %q (cached from the first response)", capturedIfModifiedSince[1], lastModified1)
+	}
+	if capturedIfModifiedSince[2] != "" {
+		t.Errorf("third call If-Modified-Since = %q, want empty — the second response's 200 with no Last-Modified header must clear the cached validator", capturedIfModifiedSince[2])
 	}
 }
 
@@ -382,8 +459,71 @@ func TestNotificationsClient_List_DifferentRequestShape_NeverSendsMismatchedVali
 }
 
 // ---------------------------------------------------------------------------
+// Round-3 review item 4: cachedPath is buildPath(opts), which has no host
+// component. Without SetBaseURL invalidating the cache, switching base URLs
+// (e.g. github.com -> a GitHub Enterprise instance, or any demo-mode
+// redirect) with the same NotificationListOpts would still match cachedPath,
+// so a validator captured against one host would be offered to another —
+// and a 304 would hand back the FIRST host's cached rows presented as the
+// second host's answer. srv2 below deliberately synthesises exactly that
+// 304-if-conditioned response so the test fails loudly (wrong rows) rather
+// than subtly (an extra unwanted header) if the invalidation regresses.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_SetBaseURL_InvalidatesCache(t *testing.T) {
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"id":"1","reason":"subscribed"}]`))
+	}))
+	defer srv1.Close()
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-Modified-Since") != "" {
+			// This is the failure mode under test: if srv1's cache were still
+			// considered valid for srv2, an unrelated server conditioned on
+			// srv1's validator would (plausibly) still say "not modified",
+			// and List would hand back srv1's rows as srv2's answer.
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"id":"99","reason":"mention"}]`))
+	}))
+	defer srv2.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv1.URL)
+
+	first, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("first List() (srv1) error = %v", err)
+	}
+	if len(first) != 1 || first[0].ID != "1" {
+		t.Fatalf("first List() = %+v, want single row id=1", first)
+	}
+
+	// Switching base URLs must invalidate the cache and validator.
+	c.SetBaseURL(srv2.URL)
+
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() (srv2, after SetBaseURL) error = %v", err)
+	}
+	if len(second) != 1 || second[0].ID != "99" {
+		t.Fatalf("second List() = %+v, want single row id=99 from the new base URL — got the previous base URL's cached rows instead", second)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Review feedback item 4 / Decision 28: a 304 with nothing cached (or nothing
 // cached for this request shape) is an error, never an empty feed.
+//
+// Round-3 review item 6: the returned error must wrap the underlying
+// *APIError (StatusCode == 304) with %w, not just format it into a plain
+// string — otherwise a caller (tasks 13, 19) needing to branch on "was this
+// an unsolicited 304" versus "a transport failure" has no route but string
+// matching. Asserted here via errors.As.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_304WithNoCache_ReturnsError(t *testing.T) {
@@ -404,6 +544,14 @@ func TestNotificationsClient_List_304WithNoCache_ReturnsError(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("List() returned %+v on error, want nil", got)
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v — the 304 must be wrapped with %%w, not just formatted into the message", err)
+	}
+	if apiErr.StatusCode != http.StatusNotModified {
+		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotModified)
 	}
 }
 
@@ -537,28 +685,22 @@ func TestNotificationsClient_List_ErrorIsNotDoublePrefixed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback nit 9: a 304 on page >= 2 fails the whole List rather than
-// being special-cased — documented here since the pagination loop reads as
-// though 304 is handled everywhere. Safe: the cache from the prior
-// successful fetch is left untouched.
+// Round-3 review item 5: getPage (List's HTTP call site) is a SECOND,
+// independent newAPIError call site from Client.get — TestClient_Get_403_
+// MissingScope_RecoversScopeHeaders in client_test.go only exercises the
+// other one. Changing getPage's newAPIError call to pass an empty
+// http.Header{} instead of resp.Header leaves that suite green (Required/
+// GrantedScopes come back empty and nothing at the List level notices).
+// Pinned here at the List level, via errors.As, the same way task 19 will
+// need to detect it.
 // ---------------------------------------------------------------------------
 
-func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
-	var srv *httptest.Server
-	call := 0
-
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call++
-		switch call {
-		case 1:
-			w.Header().Set("Link", `<`+srv.URL+`/notifications?page=2>; rel="next"`)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`[{"id":"1","reason":"subscribed"}]`))
-		default:
-			// A misbehaving intermediary sends a 304 on the second page even
-			// though no If-Modified-Since was sent for it.
-			w.WriteHeader(http.StatusNotModified)
-		}
+func TestNotificationsClient_List_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Accepted-OAuth-Scopes", "notifications")
+		w.Header().Set("X-OAuth-Scopes", "repo, read:org")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
 	}))
 	defer srv.Close()
 
@@ -567,7 +709,105 @@ func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
 
 	_, err := c.List(NotificationListOpts{})
 	if err == nil {
-		t.Fatal("List() error = nil, want an error when page 2 returns an unsolicited 304")
+		t.Fatal("List() error = nil, want an error for a missing-scope 403")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if apiErr.RequiredScopes != "notifications" {
+		t.Errorf("RequiredScopes = %q, want %q", apiErr.RequiredScopes, "notifications")
+	}
+	if apiErr.GrantedScopes != "repo, read:org" {
+		t.Errorf("GrantedScopes = %q, want %q", apiErr.GrantedScopes, "repo, read:org")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review feedback nit 9: a 304 on page >= 2 fails the whole List rather than
+// being special-cased — documented here since the pagination loop reads as
+// though 304 is handled everywhere.
+//
+// Round-3 review item 10: the comment above the mid-walk fetch in List
+// claims "the cache from the prior successful fetch is left untouched", but
+// nothing asserted it — this test only ever checked that the failing call
+// itself returned an error. Extended to a three-call sequence: a first
+// successful List() populates the cache and validator; a second List() fails
+// mid-walk on an unsolicited page-2 304 (after a fresh, different page-1 200
+// — so there's something-other-than-the-original-cache in flight for the
+// assertion to distinguish from); a third List() proves the cache and
+// validator on offer are still the FIRST call's, never the second (failed)
+// call's partial page-1 fetch.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
+	var srv *httptest.Server
+	call := 0
+	var capturedIfModifiedSince []string
+	const lastModified1 = "Wed, 21 Oct 2015 07:28:00 GMT"
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		capturedIfModifiedSince = append(capturedIfModifiedSince, r.Header.Get("If-Modified-Since"))
+		switch call {
+		case 1:
+			// First List() call: succeeds outright, single page, caches a
+			// validator and rows.
+			w.Header().Set("Last-Modified", lastModified1)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"id":"1","reason":"subscribed"}]`))
+		case 2:
+			// Second List() call, page 1: a fresh 200 with a DIFFERENT
+			// Last-Modified and rows, plus a Link header pointing at page 2 —
+			// the walk is mid-flight when it fails below, so if this partial
+			// fetch leaked into the cache it would be distinguishable from
+			// call 1's.
+			w.Header().Set("Last-Modified", "Thu, 22 Oct 2015 07:28:00 GMT")
+			w.Header().Set("Link", `<`+srv.URL+`/notifications?page=2>; rel="next"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"id":"2","reason":"mention"}]`))
+		case 3:
+			// Second List() call, page 2: a misbehaving intermediary sends a
+			// 304 even though no If-Modified-Since was sent for it. This
+			// fails the whole List call.
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			// Third List() call: if the cache/validator is still call 1's,
+			// this If-Modified-Since matches and a 304 is the correct
+			// response — proven by the returned rows below.
+			w.WriteHeader(http.StatusNotModified)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	first, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+	if len(first) != 1 || first[0].ID != "1" {
+		t.Fatalf("first List() = %+v, want single row id=1", first)
+	}
+
+	if _, err := c.List(NotificationListOpts{}); err == nil {
+		t.Fatal("second List() error = nil, want an error when page 2 returns an unsolicited 304")
+	}
+
+	third, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("third List() error = %v", err)
+	}
+	if len(third) != 1 || third[0].ID != "1" {
+		t.Fatalf("third List() = %+v, want the untouched cache from the first successful fetch (single row id=1), not the second call's failed mid-walk fetch", third)
+	}
+	if len(capturedIfModifiedSince) != 4 {
+		t.Fatalf("got %d requests, want 4", len(capturedIfModifiedSince))
+	}
+	if capturedIfModifiedSince[3] != lastModified1 {
+		t.Errorf("third call If-Modified-Since = %q, want %q — the validator from the first successful fetch, untouched by the second call's mid-walk failure", capturedIfModifiedSince[3], lastModified1)
 	}
 }
 
