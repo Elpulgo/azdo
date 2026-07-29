@@ -25,8 +25,20 @@ import (
 // exposes no "done" bit on a listed thread — marking a thread done removes it
 // from the inbox via DELETE (task 6), so any thread this mapper ever sees is
 // by definition not done (Decision 15).
+//
+// NotificationThread.LastReadAt is not read by this mapper: Read is derived
+// solely from Unread above, and phase 1 keeps no local read/done state
+// (Decision 15) for LastReadAt to feed into.
 func MapNotification(thread NotificationThread, scopeDisplay string) provider.Notification {
 	scope := thread.Repository.FullName
+
+	// provider.Notification documents ScopeDisplay falling back to Scope "at
+	// the adapter boundary" — this mapper is that boundary for notifications,
+	// since it derives scope from the thread itself and no caller can
+	// precompute the fallback before calling (Decision 35).
+	if scopeDisplay == "" {
+		scopeDisplay = scope
+	}
 
 	return provider.Notification{
 		Identity: provider.Identity{
@@ -90,58 +102,112 @@ func MapNotificationReason(reason string) provider.NotificationReason {
 
 // NotificationWebURL resolves a GitHub notification thread's subject.url — an
 // API URL such as "https://api.github.com/repos/o/r/pulls/1" — to the
-// github.com browser URL that `o` (open in browser) opens (spec Decision 3;
-// see the "Constraints" and "## Unknowns" sections of
+// github.com (or GHE) browser URL that `o` (open in browser) opens (spec
+// Decision 3; see the "Constraints" and "## Unknowns" sections of
 // 20260729-notif-p1-github.md).
+//
+// Every per-type URL is built on the repositoryWebURL(thread.Repository)
+// prefix (Decision 34) rather than defaultWebBaseURL+FullName: it honours a
+// GHE host via the wire Repository.HTMLURL, the same way mapping_pr.go and
+// mapping_pipeline.go already populate WebURL from a wire HTMLURL, and it
+// makes an empty FullName fall back cleanly instead of ever producing
+// "https://github.com//pull/42". When the repository itself carries no usable
+// URL at all, the prefix — and so this function — returns "".
 //
 // Resolution is keyed on NotificationSubject.Type — GitHub's own
 // classification of what the notification is about — not on parsing
 // subject.url's path segments for a type hint; only the trailing identifier
-// (issue/PR number, commit SHA, or release id) is extracted from the URL:
+// (issue/PR number or commit SHA) is extracted from the URL, and it is
+// shape-validated before being trusted (digits for PullRequest/Issue, hex for
+// Commit — Decision 33 / convention 11's spirit applied to a string id).
+// Anything that fails validation — no id segment, a trailing slash, or a
+// non-matching id — falls back to the repository prefix rather than emitting
+// a clickable 404:
 //
-//	Type "PullRequest" → .../repos/{o}/{r}/pulls/{n}   → https://github.com/{o}/{r}/pull/{n}    (singular "pull")
-//	Type "Issue"       → .../repos/{o}/{r}/issues/{n}  → https://github.com/{o}/{r}/issues/{n}  (unchanged)
-//	Type "Commit"      → .../repos/{o}/{r}/commits/{s} → https://github.com/{o}/{r}/commit/{s}  (singular "commit")
-//	Type "Release"     → .../repos/{o}/{r}/releases/{n} → https://github.com/{o}/{r}/releases/{n}
+//	Type "PullRequest" → .../repos/{o}/{r}/pulls/{n}   → {prefix}/pull/{n}    (singular "pull"; n must be all-digit)
+//	Type "Issue"       → .../repos/{o}/{r}/issues/{n}  → {prefix}/issues/{n} (unchanged; n must be all-digit)
+//	Type "Commit"      → .../repos/{o}/{r}/commits/{s} → {prefix}/commit/{s} (singular "commit"; s must be hex)
+//
+// Type "Release" is deliberately NOT resolved to a per-item route at all
+// (Decision 33): the real github.com route for a specific release needs the
+// tag name (verified live: "/cli/cli/releases/348300685" → 404,
+// "/cli/cli/releases/tag/v2.96.0" → 200), and NotificationSubject carries no
+// tag name — only Title, URL, LatestCommentURL and Type. Every Release row
+// therefore resolves to the repo's "/releases" list page
+// ("/cli/cli/releases" → 200), regardless of what subject.url contains.
 //
 // Every other subject type — Discussion, CheckSuite,
 // RepositoryVulnerabilityAlert, and any type GitHub adds later — falls back
-// to the notification's repository web URL, as does any of the four types
-// above when Subject.URL is empty. GitHub sends a null (empty, once decoded)
-// subject.url for several subject types, notably Discussion and check-suite
-// rows; that is exactly what the fallback exists for (see repositoryWebURL).
-// The fallback is the correctness guarantee this function offers, not the
-// per-type mapping above — the spec's "## Unknowns" section is explicit that
-// none of these shapes have been confirmed against a live token in this
-// environment (no token is available here).
-//
-// Decision on GitHub Enterprise / SetBaseURL: this function deliberately does
-// NOT honour NotificationsClient.baseURL (or Client.baseURL) and always
-// builds against defaultWebBaseURL ("https://github.com"), matching the
-// existing precedent in weburl.go (WorkItemURL/PRURL/PipelineURL), whose doc
-// comment already states that a GHE web host is a future config concern, not
-// handled yet. This mapper is a pure function with no client receiver at all
-// (a notification's repo varies row-by-row, unlike the per-repo Client
-// methods in weburl.go), so there is no natural place to thread a host
-// override through without adding a parameter every call site would have to
-// thread for a scenario (GHE) that the rest of the package does not support
-// today either. Widening only this one mapper would be inconsistent with its
-// siblings and is not worth the complexity for a case with no test coverage
-// possible in this environment.
+// to the notification's repository web URL, as does any of the three
+// id-bearing types above when Subject.URL is empty or its id segment does not
+// validate. GitHub sends a null (empty, once decoded) subject.url for several
+// subject types, notably Discussion and check-suite rows; that is exactly
+// what the fallback exists for (see repositoryWebURL). The fallback is the
+// correctness guarantee this function offers, not the per-type mapping above
+// — the spec's "## Unknowns" section is explicit that none of these shapes
+// have been confirmed against a live token in this environment (no token is
+// available here).
 func NotificationWebURL(thread NotificationThread) string {
+	prefix := repositoryWebURL(thread.Repository)
+	if prefix == "" {
+		return ""
+	}
+
+	// Release has no per-item route buildable from a notification payload
+	// (see doc comment above) — always the list page.
+	if thread.Subject.Type == "Release" {
+		return prefix + "/releases"
+	}
+
 	if id := lastPathSegment(thread.Subject.URL); id != "" {
 		switch thread.Subject.Type {
 		case "PullRequest":
-			return fmt.Sprintf("%s/%s/pull/%s", defaultWebBaseURL, thread.Repository.FullName, id)
+			if isDigits(id) {
+				return fmt.Sprintf("%s/pull/%s", prefix, id)
+			}
 		case "Issue":
-			return fmt.Sprintf("%s/%s/issues/%s", defaultWebBaseURL, thread.Repository.FullName, id)
+			if isDigits(id) {
+				return fmt.Sprintf("%s/issues/%s", prefix, id)
+			}
 		case "Commit":
-			return fmt.Sprintf("%s/%s/commit/%s", defaultWebBaseURL, thread.Repository.FullName, id)
-		case "Release":
-			return fmt.Sprintf("%s/%s/releases/%s", defaultWebBaseURL, thread.Repository.FullName, id)
+			if isHex(id) {
+				return fmt.Sprintf("%s/commit/%s", prefix, id)
+			}
 		}
 	}
-	return repositoryWebURL(thread.Repository)
+	return prefix
+}
+
+// isDigits reports whether s is non-empty and consists entirely of ASCII
+// digits — the shape of a GitHub PR or issue number.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isHex reports whether s is non-empty and consists entirely of ASCII
+// hexadecimal digits — the shape of a (possibly abbreviated) commit SHA.
+func isHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // repositoryWebURL returns the browser URL for a notification's repository —
@@ -164,17 +230,23 @@ func repositoryWebURL(repo NotificationRepository) string {
 
 // lastPathSegment returns the final "/"-separated segment of rawURL —
 // typically the numeric id or commit SHA at the end of a GitHub API URL — or
-// "" for an empty input. path.Base("") is "." (not ""), so that case is
-// special-cased to "" rather than leaking a literal dot into a constructed
-// URL; every subject.url shape observed in GitHub's documentation is a plain
-// https:// URL with no query string, so a path-based split is sufficient and
-// cannot panic on malformed input.
+// "" for an empty input. It only extracts the segment; it does not validate
+// its shape (whether it looks like a real id) — that is NotificationWebURL's
+// job via isDigits/isHex, so a bare "pulls" (no id segment at all) or "abc"
+// (a non-numeric one) still comes back from here, deliberately, for the
+// caller to reject. Every subject.url shape observed in GitHub's
+// documentation is a plain https:// URL with no query string, so a
+// path-based split is sufficient and cannot panic on malformed input.
 func lastPathSegment(rawURL string) string {
 	if rawURL == "" {
 		return ""
 	}
 	base := path.Base(rawURL)
-	if base == "." || base == "/" {
+	// path.Base returns "." only for an empty input, which the rawURL == ""
+	// guard above already handles, so that arm would be dead code here. The
+	// "/" case is live and real: path.Base("/") is "/", which would otherwise
+	// leak a literal slash into a constructed URL.
+	if base == "/" {
 		return ""
 	}
 	return base

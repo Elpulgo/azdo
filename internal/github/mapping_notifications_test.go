@@ -168,6 +168,30 @@ func TestMapNotification_NearlyEmptyThread_NoPanic(t *testing.T) {
 	if got.WebURL != "" {
 		t.Errorf("WebURL = %q, want empty — no subject url and no repository url present", got.WebURL)
 	}
+	if got.Identity.ScopeDisplay != "" {
+		t.Errorf("Identity.ScopeDisplay = %q, want empty — Scope is also empty on a zero-value thread, so the Decision 35 fallback has nothing to default to", got.Identity.ScopeDisplay)
+	}
+}
+
+// TestMapNotification_ScopeDisplayDefaultsToScope pins Decision 35: the
+// mapper is the adapter boundary for notifications (it derives scope from
+// the thread itself, so no caller can precompute the fallback before
+// calling), so an empty scopeDisplay argument must default to Scope here,
+// not stay blank and leave the repo column empty in every list view.
+func TestMapNotification_ScopeDisplayDefaultsToScope(t *testing.T) {
+	thread := github.NotificationThread{
+		ID:     "1",
+		Reason: "subscribed",
+		Repository: github.NotificationRepository{
+			FullName: "octo/repo",
+		},
+	}
+
+	got := github.MapNotification(thread, "")
+
+	if got.Identity.ScopeDisplay != "octo/repo" {
+		t.Errorf("Identity.ScopeDisplay = %q, want %q (falls back to Scope per Decision 35)", got.Identity.ScopeDisplay, "octo/repo")
+	}
 }
 
 // ── NotificationWebURL: subject.url resolution per type ─────────────────────
@@ -200,12 +224,19 @@ func TestNotificationWebURL_ResolvesPerSubjectType(t *testing.T) {
 			want: "https://github.com/octo/repo/issues/7",
 		},
 		{
+			// Decision 33, verified against live github.com:
+			// "/cli/cli/releases/348300685" → 404 (per-release-id is not a
+			// real route; the real one needs a tag name the wire payload
+			// does not carry), "/cli/cli/releases" → 200. So every Release
+			// row resolves to the repo's /releases list page, never a
+			// per-id route, regardless of what subject.url's trailing
+			// segment happens to be.
 			name: "release",
 			subject: github.NotificationSubject{
 				Type: "Release",
 				URL:  "https://api.github.com/repos/octo/repo/releases/99",
 			},
-			want: "https://github.com/octo/repo/releases/99",
+			want: "https://github.com/octo/repo/releases",
 		},
 		{
 			name: "commit",
@@ -268,6 +299,120 @@ func TestNotificationWebURL_FallsBackWhenSubjectURLEmpty(t *testing.T) {
 	want := "https://github.com/octo/repo"
 	if got != want {
 		t.Errorf("NotificationWebURL() = %q, want %q (repo fallback on empty subject.url)", got, want)
+	}
+}
+
+// TestNotificationWebURL_FallsBackWhenIDSegmentInvalid covers the four
+// measured 404-producing shapes from the review: a URL with no id segment at
+// all, a trailing-slash URL, a non-URL string, and a non-numeric id where a
+// numeric one is required. Each must fall back to the repository URL rather
+// than emit a clickable 404.
+func TestNotificationWebURL_FallsBackWhenIDSegmentInvalid(t *testing.T) {
+	repo := github.NotificationRepository{
+		FullName: "octo/repo",
+		HTMLURL:  "https://github.com/octo/repo",
+	}
+	want := "https://github.com/octo/repo"
+
+	cases := []struct {
+		name    string
+		subject github.NotificationSubject
+	}{
+		{
+			name:    "no id segment at all",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls"},
+		},
+		{
+			name:    "trailing slash",
+			subject: github.NotificationSubject{Type: "Issue", URL: "https://api.github.com/repos/o/r/issues/"},
+		},
+		{
+			name:    "not a url",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "notaurl"},
+		},
+		{
+			name:    "non-numeric id",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/abc"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			thread := github.NotificationThread{Subject: tc.subject, Repository: repo}
+			got := github.NotificationWebURL(thread)
+			if got != want {
+				t.Errorf("NotificationWebURL() = %q, want %q (repo fallback on unvalidated id)", got, want)
+			}
+		})
+	}
+}
+
+// TestNotificationWebURL_EmptyFullNameUsesHTMLURL pins the fix for
+// "https://github.com//pull/42": with FullName empty and HTMLURL present, the
+// per-type URL must be built on HTMLURL, never on the empty FullName.
+func TestNotificationWebURL_EmptyFullNameUsesHTMLURL(t *testing.T) {
+	thread := github.NotificationThread{
+		Subject: github.NotificationSubject{
+			Type: "PullRequest",
+			URL:  "https://api.github.com/repos/octo/repo/pulls/42",
+		},
+		Repository: github.NotificationRepository{
+			FullName: "",
+			HTMLURL:  "https://github.com/octo/repo",
+		},
+	}
+
+	got := github.NotificationWebURL(thread)
+	want := "https://github.com/octo/repo/pull/42"
+	if got != want {
+		t.Errorf("NotificationWebURL() = %q, want %q", got, want)
+	}
+}
+
+// TestNotificationWebURL_HonoursGHEHost pins Decision 34: every per-type URL
+// is built on the Repository.HTMLURL prefix, so a GHE thread gets the GHE
+// host on the four handled subject types, not just on the fallback path.
+func TestNotificationWebURL_HonoursGHEHost(t *testing.T) {
+	repo := github.NotificationRepository{
+		FullName: "o/r",
+		HTMLURL:  "https://ghe.corp.example/o/r",
+	}
+
+	cases := []struct {
+		name    string
+		subject github.NotificationSubject
+		want    string
+	}{
+		{
+			name:    "pull request",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://ghe.corp.example/api/v3/repos/o/r/pulls/42"},
+			want:    "https://ghe.corp.example/o/r/pull/42",
+		},
+		{
+			name:    "issue",
+			subject: github.NotificationSubject{Type: "Issue", URL: "https://ghe.corp.example/api/v3/repos/o/r/issues/7"},
+			want:    "https://ghe.corp.example/o/r/issues/7",
+		},
+		{
+			name:    "commit",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://ghe.corp.example/api/v3/repos/o/r/commits/abc123"},
+			want:    "https://ghe.corp.example/o/r/commit/abc123",
+		},
+		{
+			name:    "release",
+			subject: github.NotificationSubject{Type: "Release", URL: "https://ghe.corp.example/api/v3/repos/o/r/releases/9"},
+			want:    "https://ghe.corp.example/o/r/releases",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			thread := github.NotificationThread{Subject: tc.subject, Repository: repo}
+			got := github.NotificationWebURL(thread)
+			if got != tc.want {
+				t.Errorf("NotificationWebURL() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

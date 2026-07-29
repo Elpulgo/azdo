@@ -261,6 +261,14 @@ type WorkItemComment struct {
 // merged feed. Views read the repo for the dynamic repo column off
 // Identity.Scope / Identity.ScopeDisplay, the same fields the PR list uses
 // for its project column.
+//
+// SameItem's collision-safety here does not actually depend on Scope being
+// populated: GitHub notification thread IDs are globally unique on the wire,
+// so even a row with an empty Scope (e.g. a partial/absent repository
+// payload) cannot collide with another GitHub row on ID alone. Scope only
+// starts to matter once a second backend's IDs are not globally unique —
+// phase 2's Azure-derived keys are exactly that case, which is why Scope is
+// still compared unconditionally rather than only when non-empty.
 type Notification struct {
 	Identity Identity
 
