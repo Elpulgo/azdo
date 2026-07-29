@@ -104,24 +104,30 @@ func TestNotification_IdentityIsProviderQualified(t *testing.T) {
 // strings are effectively public API — a rename here is a breaking change.
 func TestNotificationReason_String(t *testing.T) {
 	tests := []struct {
+		name   string
 		reason provider.NotificationReason
 		want   string
 	}{
-		{provider.NotificationReasonUnknown, "unknown"},
-		{provider.NotificationReasonReviewRequested, "review_requested"},
-		{provider.NotificationReasonMentioned, "mentioned"},
-		{provider.NotificationReasonAssigned, "assigned"},
-		{provider.NotificationReasonAuthored, "authored"},
-		{provider.NotificationReasonCommented, "commented"},
-		{provider.NotificationReasonStateChanged, "state_changed"},
-		{provider.NotificationReasonCIActivity, "ci_activity"},
-		{provider.NotificationReasonSecurityAlert, "security_alert"},
-		{provider.NotificationReasonApprovalRequested, "approval_requested"},
-		{provider.NotificationReasonSubscribed, "subscribed"},
-		{provider.NotificationReasonOther, "other"},
+		// Out-of-range must fall back to "other", matching the glyph, label and
+		// style fallbacks in ui/display (which pins the same NotificationReason(99)
+		// sentinel). Before Unknown got its own case this branch was covered
+		// incidentally; it needs its own row now.
+		{"out_of_range", provider.NotificationReason(99), "other"},
+		{"unknown", provider.NotificationReasonUnknown, "unknown"},
+		{"review_requested", provider.NotificationReasonReviewRequested, "review_requested"},
+		{"mentioned", provider.NotificationReasonMentioned, "mentioned"},
+		{"assigned", provider.NotificationReasonAssigned, "assigned"},
+		{"authored", provider.NotificationReasonAuthored, "authored"},
+		{"commented", provider.NotificationReasonCommented, "commented"},
+		{"state_changed", provider.NotificationReasonStateChanged, "state_changed"},
+		{"ci_activity", provider.NotificationReasonCIActivity, "ci_activity"},
+		{"security_alert", provider.NotificationReasonSecurityAlert, "security_alert"},
+		{"approval_requested", provider.NotificationReasonApprovalRequested, "approval_requested"},
+		{"subscribed", provider.NotificationReasonSubscribed, "subscribed"},
+		{"other", provider.NotificationReasonOther, "other"},
 	}
 	for _, tc := range tests {
-		t.Run(tc.want, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.reason.String(); got != tc.want {
 				t.Errorf("%d.String() = %q, want %q", tc.reason, got, tc.want)
 			}

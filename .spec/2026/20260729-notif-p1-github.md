@@ -70,16 +70,21 @@ filters are all-or-nothing per repo, and the repos you work in hardest emit both
 `review_requested` rows and the bulk of your `subscribed` noise: blacklisting the repo would
 cost you the review requests. Reason is the axis that correlates with "needs me".
 
-The accepted values are the **neutral** enum names, not GitHub's wire strings. All twelve,
-verbatim and exhaustive (task 20 documents this list; do not abbreviate it with "…"):
-`unknown`, `review_requested`, `mentioned`, `assigned`, `authored`, `commented`,
-`state_changed`, `ci_activity`, `security_alert`, `approval_requested`, `subscribed`,
-`other`. Five deliberately differ from GitHub's spelling — GitHub sends `mention`, `assign`,
-`author`, `comment`, `state_change` — because decision 19 keeps the config neutral for
-phase 2. GitHub spellings are **not** accepted as aliases; instead a value the parser does
-not recognise is reported as unrecognised (decision 26) so the user sees their typo rather
-than getting silently reinterpreted behaviour. `unknown` is reserved: the wire mapper never
-emits it, so listing it matches nothing in phase 1.
+The accepted values are the **neutral** enum names, not GitHub's wire strings. There are
+**eleven** configurable values, verbatim and exhaustive (task 20 documents this list; do not
+abbreviate it with "…"): `review_requested`, `mentioned`, `assigned`, `authored`,
+`commented`, `state_changed`, `ci_activity`, `security_alert`, `approval_requested`,
+`subscribed`, `other`. Five deliberately differ from GitHub's spelling — GitHub sends
+`mention`, `assign`, `author`, `comment`, `state_change` — because decision 19 keeps the
+config neutral for phase 2. GitHub spellings are **not** accepted as aliases; instead a value
+the parser does not recognise is reported as unrecognised (decision 26) so the user sees
+their typo rather than getting silently reinterpreted behaviour.
+
+The enum's twelfth value, `unknown`, is **not configurable**. `String()` emits it for the
+zero value, but `ParseNotificationReason` rejects it — the wire mapper never emits `Unknown`
+(decision 18), so it could only ever match nothing. Listing it in `exclude_reasons`
+therefore produces task 9's unrecognised-entry warning. Task 20 must not document it as an
+accepted value.
 
 ## Decisions
 
@@ -123,9 +128,9 @@ emits it, so listing it matches nothing in phase 1.
 - [ ] 6. `github`: mark read (`PATCH /notifications/threads/{id}`) + mark done (`DELETE`) (blocked by: 4). → done: tests assert method and path per call; ids `<= 0` rejected (convention 11) with a negative-input row; one-way read documented in the doc comment, not claimed as API-verified (decision 13)
 - [ ] 7. `github`: implement `NotificationSource` on `Adapter` (blocked by: 5,6). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)`; conformance test following `adapter_conformance_test.go`
 - [ ] 8. `provider`: composite fan-out, merge/sort, `HasNotifications()` (blocked by: 2). → done: fans out only to backends implementing the interface; `HasNotifications()` false with zero capable backends and true with ≥1; merged output sorted newest-first; per decision 20 a failing backend still returns the others' rows and never empties the feed — test that case explicitly; per decision 25 `MarkRead`/`MarkDone` route by `Identity.Kind` and **not** `backendFor(scope)` — test that a row from an unconfigured repo still routes to a backend
-- [ ] 9. `config`: `notifications` block with decision-19 key names, defaults, validation, `validDisabledPanes` entry, guard accepts notifications-only (decision 22) (blocked by: 2). → done: block loads with documented defaults; keys resolve lowercased (convention 9); `disabled_panes: notifications` validates; a config with only notifications enabled passes `Validate()`
+- [ ] 9. `config`: `notifications` block with decision-19 key names, defaults, validation, `validDisabledPanes` entry, guard accepts notifications-only (decision 22) (blocked by: 2). → done: block loads with documented defaults; keys resolve lowercased (convention 9); `disabled_panes: notifications` validates; a config with only notifications enabled passes `Validate()`; per decision 26 an unrecognised `exclude_reasons` entry produces a **warning naming the bad value and the eleven accepted ones** and is then ignored — it must never silently act as `other`, and must never be a hard config error that stops the app from starting
 - [ ] 10. Config-driven filter as a pure function (blocked by: 8,9). → done: table tests cover each knob alone, the full precedence chain, the `participating_only` + `exclude_reasons` compose case (decision 10), and that an unrecognised reason is only filtered when `other` is listed explicitly
-- [ ] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6); the filter-collapse path and cursor survival are asserted (convention 14)
+- [ ] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6); the filter-collapse path and cursor survival are asserted (convention 14); the `f` filter offers **only reasons actually present in the loaded feed**, never the full enum — otherwise it lists `Unknown`, which no mapped row can carry (decision 18), as a choice that matches nothing
 - [ ] 12. `app`: register the tab first, remap number keys, `enabledTabs`, `state.TabID` (decisions 6, 9, 11) (blocked by: 11). → done: notifications is `enabledTabs[0]`; number keys map to the new order; `TabID "notifications"` round-trips through `state.yaml`; the tab is absent when no backend implements the capability, and present-but-empty when one does
 - [ ] 13. `app`: the three render states — empty inbox, capability-unsupported, token-scope error (decisions 11, 17) (blocked by: 12). → done: three distinct renders, each asserted by its own test; the empty state reads as "you're clear", never as an error
 - [ ] 14. `app`: `u` mark-read (one-way, decision 13) / `d` mark-done (blocked by: 13). → done: `u` issues one mark-read and updates the row optimistically, rolling back on API failure; `d` removes the row and restores it on failure; a poll that returns stale `unread` inside the debounce window does not flicker the row back
