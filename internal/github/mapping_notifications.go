@@ -3,6 +3,8 @@ package github
 import (
 	"fmt"
 	"path"
+	"strconv"
+	"strings"
 
 	"github.com/Elpulgo/azdo/internal/provider"
 )
@@ -118,14 +120,15 @@ func MapNotificationReason(reason string) provider.NotificationReason {
 // classification of what the notification is about — not on parsing
 // subject.url's path segments for a type hint; only the trailing identifier
 // (issue/PR number or commit SHA) is extracted from the URL, and it is
-// shape-validated before being trusted (digits for PullRequest/Issue, hex for
-// Commit — Decision 33 / convention 11's spirit applied to a string id).
-// Anything that fails validation — no id segment, a trailing slash, or a
-// non-matching id — falls back to the repository prefix rather than emitting
-// a clickable 404:
+// shape-validated before being trusted (a plausible item number for
+// PullRequest/Issue, hex for Commit — Decision 33 / Decision 36, convention
+// 11 applied to a string id). Anything that fails validation — no id segment,
+// a trailing slash, a non-matching id, or a number GitHub can never have
+// issued ("0", "007") — falls back to the repository prefix rather than
+// emitting a clickable 404:
 //
-//	Type "PullRequest" → .../repos/{o}/{r}/pulls/{n}   → {prefix}/pull/{n}    (singular "pull"; n must be all-digit)
-//	Type "Issue"       → .../repos/{o}/{r}/issues/{n}  → {prefix}/issues/{n} (unchanged; n must be all-digit)
+//	Type "PullRequest" → .../repos/{o}/{r}/pulls/{n}   → {prefix}/pull/{n}    (singular "pull"; n must satisfy isItemNumber)
+//	Type "Issue"       → .../repos/{o}/{r}/issues/{n}  → {prefix}/issues/{n} (unchanged; n must satisfy isItemNumber)
 //	Type "Commit"      → .../repos/{o}/{r}/commits/{s} → {prefix}/commit/{s} (singular "commit"; s must be hex)
 //
 // Type "Release" is deliberately NOT resolved to a per-item route at all
@@ -150,6 +153,10 @@ func MapNotificationReason(reason string) provider.NotificationReason {
 func NotificationWebURL(thread NotificationThread) string {
 	prefix := repositoryWebURL(thread.Repository)
 	if prefix == "" {
+		// Load-bearing: without this every branch below would still run and
+		// return a relative path ("/releases", "/pull/42"). A bare path handed
+		// to the OS opener is strictly worse than "", which the caller can at
+		// least detect.
 		return ""
 	}
 
@@ -162,11 +169,11 @@ func NotificationWebURL(thread NotificationThread) string {
 	if id := lastPathSegment(thread.Subject.URL); id != "" {
 		switch thread.Subject.Type {
 		case "PullRequest":
-			if isDigits(id) {
+			if isItemNumber(id) {
 				return fmt.Sprintf("%s/pull/%s", prefix, id)
 			}
 		case "Issue":
-			if isDigits(id) {
+			if isItemNumber(id) {
 				return fmt.Sprintf("%s/issues/%s", prefix, id)
 			}
 		case "Commit":
@@ -178,10 +185,29 @@ func NotificationWebURL(thread NotificationThread) string {
 	return prefix
 }
 
-// isDigits reports whether s is non-empty and consists entirely of ASCII
-// digits — the shape of a GitHub PR or issue number.
-func isDigits(s string) bool {
+// isItemNumber reports whether s has the shape of a GitHub PR or issue number:
+// non-empty, all ASCII digits, no leading "0", and > 0 once parsed
+// (Decision 36; convention 11's "guard positive identifiers with <= 0, never
+// == 0"). Task 6 restates the same rule for thread ids, so the two guards in
+// this package stay consistent.
+//
+// Digits-only alone is not enough: ".../pulls/0" would render
+// "github.com/o/r/pull/0" and ".../pulls/007" would render ".../pull/007",
+// both dead pages — the exact class of clickable 404 Decision 33 exists to
+// eliminate, since GitHub PR and issue numbers start at 1.
+//
+// A digit string too long for an int (e.g. a 26-digit id) fails the parse with
+// a range error and is rejected here, rather than wrapping to a negative or
+// panicking downstream.
+//
+// isHex is deliberately exempt from both the leading-zero and the magnitude
+// rule: a commit SHA legitimately begins with "0" and has no ordering.
+func isItemNumber(s string) bool {
 	if s == "" {
+		return false
+	}
+	// Rejects "0" itself and every leading-zero form ("007").
+	if s[0] == '0' {
 		return false
 	}
 	for _, r := range s {
@@ -189,11 +215,18 @@ func isDigits(s string) bool {
 			return false
 		}
 	}
-	return true
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		// Out of int range: too long to be a real item number.
+		return false
+	}
+	return n > 0
 }
 
 // isHex reports whether s is non-empty and consists entirely of ASCII
 // hexadecimal digits — the shape of a (possibly abbreviated) commit SHA.
+// Unlike isItemNumber it applies no leading-zero or magnitude rule (see
+// isItemNumber's note and Decision 36).
 func isHex(s string) bool {
 	if s == "" {
 		return false
@@ -218,9 +251,14 @@ func isHex(s string) bool {
 // "https://github.com/{full_name}" from FullName. Returns "" only when both
 // HTMLURL and FullName are empty, so a row with no repository information at
 // all never renders a bare, dangling "https://github.com".
+//
+// A trailing "/" is trimmed off the wire HTMLURL because every caller appends
+// its own "/..." suffix: GitHub's own html_url never carries one, but the
+// prefix is wire-controlled, and without the trim an "https://github.com/o/r/"
+// payload would emit "https://github.com/o/r//pull/42".
 func repositoryWebURL(repo NotificationRepository) string {
-	if repo.HTMLURL != "" {
-		return repo.HTMLURL
+	if prefix := strings.TrimSuffix(repo.HTMLURL, "/"); prefix != "" {
+		return prefix
 	}
 	if repo.FullName != "" {
 		return fmt.Sprintf("%s/%s", defaultWebBaseURL, repo.FullName)
@@ -230,22 +268,29 @@ func repositoryWebURL(repo NotificationRepository) string {
 
 // lastPathSegment returns the final "/"-separated segment of rawURL —
 // typically the numeric id or commit SHA at the end of a GitHub API URL — or
-// "" for an empty input. It only extracts the segment; it does not validate
+// "" for an empty input. It only extracts the segment; it does NOT validate
 // its shape (whether it looks like a real id) — that is NotificationWebURL's
-// job via isDigits/isHex, so a bare "pulls" (no id segment at all) or "abc"
-// (a non-numeric one) still comes back from here, deliberately, for the
+// job via isItemNumber/isHex, so a bare "pulls" (no id segment at all) or
+// "abc" (a non-numeric one) still comes back from here, deliberately, for the
 // caller to reject. Every subject.url shape observed in GitHub's
 // documentation is a plain https:// URL with no query string, so a
 // path-based split is sufficient and cannot panic on malformed input.
+//
+// The invariant that keeps this safe is on the caller's side:
+// NotificationWebURL never interpolates a segment it has not shape-validated.
+// Do NOT read the two guards below as sanitisation — they are not. path.Base
+// can return "." from non-empty input (path.Base(".") and path.Base("./") are
+// both "."), and it can return any other junk a malformed URL ends with. Those
+// values are harmless only because every consumer rejects them. Anyone adding
+// a fifth subject type must add its own shape check too.
 func lastPathSegment(rawURL string) string {
 	if rawURL == "" {
 		return ""
 	}
 	base := path.Base(rawURL)
-	// path.Base returns "." only for an empty input, which the rawURL == ""
-	// guard above already handles, so that arm would be dead code here. The
-	// "/" case is live and real: path.Base("/") is "/", which would otherwise
-	// leak a literal slash into a constructed URL.
+	// path.Base("/") is "/" — returning it would leak a literal slash into a
+	// constructed URL if a future caller ever skipped validation. Redundant
+	// today (all three consumers reject "/"), kept as a cheap belt.
 	if base == "/" {
 		return ""
 	}

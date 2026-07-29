@@ -290,7 +290,15 @@ type Notification struct {
 	UpdatedAt time.Time
 
 	// WebURL is the browser URL to open on `o`, resolved from the wire
-	// subject at the adapter boundary (task 5). Falls back to the
-	// notification's repository URL when the subject type is unrecognised.
+	// subject at the adapter boundary (task 5). It is a best-effort
+	// resolution, not a guaranteed per-item link: it falls back to the
+	// notification's repository URL when the subject type is unrecognised,
+	// when the wire subject carries no URL, and when the URL's trailing id
+	// segment fails shape validation (Decision 33/36 — a wrong-but-clickable
+	// 404 is worse than the repo page). A `Release` subject always resolves to
+	// the repository's `/releases` list page, since the per-release route
+	// needs a tag name the notification payload does not carry. It is "" when
+	// the wire carries no usable repository URL at all; consumers must treat
+	// an empty WebURL as "nothing to open" rather than opening it.
 	WebURL string
 }

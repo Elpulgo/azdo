@@ -142,9 +142,14 @@ func TestMapNotification_UnreadFalseWhenThreadRead(t *testing.T) {
 	}
 }
 
-// TestMapNotification_NearlyEmptyThread_NoPanic covers the wire type's only
-// pointer field (LastReadAt) being nil, plus every other field left at its
-// zero value — MapNotification must not panic and must not populate Unknown.
+// TestMapNotification_NearlyEmptyThread_NoPanic drives a fully zero-value wire
+// thread through the mapper and pins what that must produce: Kind GitHub, an
+// empty wire reason mapped to Other (never Unknown), WebURL "" (no subject url
+// and no repository url to build one from) and ScopeDisplay "" (Scope is empty
+// too, so the Decision 35 fallback has nothing to default to). The no-panic
+// criterion holds by construction — the mapper reads no pointer field, in
+// particular not LastReadAt — so the recover below is a tripwire, not the
+// thing this test pins.
 func TestMapNotification_NearlyEmptyThread_NoPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -259,6 +264,72 @@ func TestNotificationWebURL_ResolvesPerSubjectType(t *testing.T) {
 	}
 }
 
+// TestNotificationWebURL_AcceptsValidIDShapes is the positive counterpart to
+// TestNotificationWebURL_FallsBackWhenIDSegmentInvalid: Decision 36 tightened
+// the numeric guard, so pin that the shapes GitHub really issues still resolve
+// to a per-item URL — the smallest legal item number, an ordinary one, a full
+// 40-char SHA, an abbreviated 7-char one, and hex in upper and mixed case
+// (isHex is case-insensitive and, unlike the numeric guard, allows a leading
+// zero).
+func TestNotificationWebURL_AcceptsValidIDShapes(t *testing.T) {
+	repo := github.NotificationRepository{
+		FullName: "octo/repo",
+		HTMLURL:  "https://github.com/octo/repo",
+	}
+
+	cases := []struct {
+		name    string
+		subject github.NotificationSubject
+		want    string
+	}{
+		{
+			name:    "smallest legal pr number",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/octo/repo/pulls/1"},
+			want:    "https://github.com/octo/repo/pull/1",
+		},
+		{
+			name:    "ordinary pr number",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/octo/repo/pulls/42"},
+			want:    "https://github.com/octo/repo/pull/42",
+		},
+		{
+			name:    "smallest legal issue number",
+			subject: github.NotificationSubject{Type: "Issue", URL: "https://api.github.com/repos/octo/repo/issues/1"},
+			want:    "https://github.com/octo/repo/issues/1",
+		},
+		{
+			name:    "full 40-char sha",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://api.github.com/repos/octo/repo/commits/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"},
+			want:    "https://github.com/octo/repo/commit/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+		},
+		{
+			name:    "abbreviated 7-char sha",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://api.github.com/repos/octo/repo/commits/0abc123"},
+			want:    "https://github.com/octo/repo/commit/0abc123",
+		},
+		{
+			name:    "uppercase hex sha",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://api.github.com/repos/octo/repo/commits/ABCDEF1"},
+			want:    "https://github.com/octo/repo/commit/ABCDEF1",
+		},
+		{
+			name:    "mixed-case hex sha",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://api.github.com/repos/octo/repo/commits/AbC123dEf"},
+			want:    "https://github.com/octo/repo/commit/AbC123dEf",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			thread := github.NotificationThread{Subject: tc.subject, Repository: repo}
+			got := github.NotificationWebURL(thread)
+			if got != tc.want {
+				t.Errorf("NotificationWebURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // ── NotificationWebURL: fallback to the repository URL ──────────────────────
 
 func TestNotificationWebURL_FallsBackForUnrecognisedSubjectType(t *testing.T) {
@@ -302,11 +373,13 @@ func TestNotificationWebURL_FallsBackWhenSubjectURLEmpty(t *testing.T) {
 	}
 }
 
-// TestNotificationWebURL_FallsBackWhenIDSegmentInvalid covers the four
-// measured 404-producing shapes from the review: a URL with no id segment at
-// all, a trailing-slash URL, a non-URL string, and a non-numeric id where a
-// numeric one is required. Each must fall back to the repository URL rather
-// than emit a clickable 404.
+// TestNotificationWebURL_FallsBackWhenIDSegmentInvalid covers every measured
+// 404-producing id shape: no id segment at all, a trailing-slash URL, a
+// non-URL string, a non-numeric id where a number is required, the
+// implausible numbers Decision 36 rejects ("0", "007", a 26-digit id), and —
+// on the Commit side, where the guard is isHex rather than isItemNumber — a
+// missing and a non-hex segment. Each must fall back to the repository URL
+// rather than emit a clickable 404.
 func TestNotificationWebURL_FallsBackWhenIDSegmentInvalid(t *testing.T) {
 	repo := github.NotificationRepository{
 		FullName: "octo/repo",
@@ -333,6 +406,42 @@ func TestNotificationWebURL_FallsBackWhenIDSegmentInvalid(t *testing.T) {
 		{
 			name:    "non-numeric id",
 			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/abc"},
+		},
+		{
+			// Decision 36: GitHub PR/issue numbers start at 1, so "0" is not a
+			// real item — "/pull/0" is a measured dead page.
+			name:    "zero pr number",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/0"},
+		},
+		{
+			name:    "zero issue number",
+			subject: github.NotificationSubject{Type: "Issue", URL: "https://api.github.com/repos/o/r/issues/0"},
+		},
+		{
+			// Leading zeros: "/pull/007" is likewise a dead page, and GitHub
+			// never issues a zero-padded number.
+			name:    "leading-zero pr number",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/007"},
+		},
+		{
+			name:    "leading-zero issue number",
+			subject: github.NotificationSubject{Type: "Issue", URL: "https://api.github.com/repos/o/r/issues/007"},
+		},
+		{
+			// 26 digits — far past int64. Must be rejected via the parse's
+			// range error, not wrapped to a negative and not a panic.
+			name:    "absurdly long numeric id",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/12345678901234567890123456"},
+		},
+		{
+			// Commit's guard is isHex, not isItemNumber: prove the hex
+			// rejection direction, not just the digit one.
+			name:    "commit with no sha segment",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://api.github.com/repos/o/r/commits"},
+		},
+		{
+			name:    "commit with non-hex sha",
+			subject: github.NotificationSubject{Type: "Commit", URL: "https://api.github.com/repos/o/r/commits/zzz"},
 		},
 	}
 
@@ -434,13 +543,73 @@ func TestNotificationWebURL_FallsBackToConstructedRepoURLWhenHTMLURLEmpty(t *tes
 	}
 }
 
+// TestNotificationWebURL_EmptyWhenRepositoryAbsent pins the empty-prefix early
+// return. The zero-thread row alone does not: its Subject.Type is "", so it
+// never reaches a per-type branch and would return "" even without the guard.
+// The other two rows pair an absent repository with a subject type that DOES
+// resolve, so without the guard they return the relative strings "/releases"
+// and "/pull/42" — bare paths handed to the OS opener, strictly worse than "",
+// which the caller can at least detect.
 func TestNotificationWebURL_EmptyWhenRepositoryAbsent(t *testing.T) {
-	// A pathological all-absent case: no subject.url, no repository fields at
-	// all. Must not panic and must not produce a malformed link.
-	var thread github.NotificationThread
+	cases := []struct {
+		name   string
+		thread github.NotificationThread
+	}{
+		{
+			// A pathological all-absent case: no subject.url, no repository
+			// fields at all. Must not panic and must not produce a malformed
+			// link.
+			name:   "zero thread",
+			thread: github.NotificationThread{},
+		},
+		{
+			name: "release with absent repository",
+			thread: github.NotificationThread{
+				Subject:    github.NotificationSubject{Type: "Release"},
+				Repository: github.NotificationRepository{},
+			},
+		},
+		{
+			name: "pull request with absent repository",
+			thread: github.NotificationThread{
+				Subject: github.NotificationSubject{
+					Type: "PullRequest",
+					URL:  "https://api.github.com/repos/o/r/pulls/42",
+				},
+				Repository: github.NotificationRepository{},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := github.NotificationWebURL(tc.thread)
+			if got != "" {
+				t.Errorf("NotificationWebURL() = %q, want empty string when the repository payload is absent", got)
+			}
+		})
+	}
+}
+
+// TestNotificationWebURL_TrailingSlashHTMLURLYieldsSingleSlash pins the
+// TrimSuffix in repositoryWebURL. GitHub's own html_url never carries a
+// trailing slash, but the prefix is wire-controlled, and without the trim this
+// payload emits "https://github.com/octo/repo//pull/42".
+func TestNotificationWebURL_TrailingSlashHTMLURLYieldsSingleSlash(t *testing.T) {
+	thread := github.NotificationThread{
+		Subject: github.NotificationSubject{
+			Type: "PullRequest",
+			URL:  "https://api.github.com/repos/octo/repo/pulls/42",
+		},
+		Repository: github.NotificationRepository{
+			FullName: "octo/repo",
+			HTMLURL:  "https://github.com/octo/repo/",
+		},
+	}
 
 	got := github.NotificationWebURL(thread)
-	if got != "" {
-		t.Errorf("NotificationWebURL() = %q, want empty string when repository is entirely absent", got)
+	want := "https://github.com/octo/repo/pull/42"
+	if got != want {
+		t.Errorf("NotificationWebURL() = %q, want %q (trailing slash on the wire HTMLURL must not double up)", got, want)
 	}
 }
