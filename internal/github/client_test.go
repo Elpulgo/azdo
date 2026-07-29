@@ -414,6 +414,40 @@ func TestClient_Get_403_RateLimited_RetryAfter(t *testing.T) {
 	}
 }
 
+// Review feedback item 6: the APIError widening (RequiredScopes/GrantedScopes)
+// is additive and populated for every status, but nothing asserted the header
+// extraction — unlike the sibling RetryAfter, which is pinned by
+// TestClient_Get_403_RateLimited_RetryAfter above. Task 19 (missing-scope
+// error state) depends on both raw values being recovered correctly.
+func TestClient_Get_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Accepted-OAuth-Scopes", "notifications")
+		w.Header().Set("X-OAuth-Scopes", "repo, read:org")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("o", "r", "tok")
+	c.SetBaseURL(srv.URL)
+
+	_, err := c.get("/search/issues")
+	if err == nil {
+		t.Fatal("expected error for missing-scope 403, got nil")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if apiErr.RequiredScopes != "notifications" {
+		t.Errorf("RequiredScopes = %q, want %q", apiErr.RequiredScopes, "notifications")
+	}
+	if apiErr.GrantedScopes != "repo, read:org" {
+		t.Errorf("GrantedScopes = %q, want %q", apiErr.GrantedScopes, "repo, read:org")
+	}
+}
+
 func TestClient_Get_403_PlainStillMentionsScopes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
