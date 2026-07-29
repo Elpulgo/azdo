@@ -109,9 +109,9 @@ type PullRequest struct {
 	// SourceRefName and TargetRefName are plain branch names (e.g. "main"),
 	// already stripped of any backend ref prefix (Azure's refs/heads/) at the
 	// adapter boundary. The UI renders them verbatim.
-	SourceRefName string
-	TargetRefName string
-	IsDraft       bool
+	SourceRefName  string
+	TargetRefName  string
+	IsDraft        bool
 	CreatedByName  string
 	CreatedByID    string
 	RepositoryID   string
@@ -130,11 +130,11 @@ type Reviewer struct {
 
 // PipelineRun is the neutral representation of a pipeline/build run.
 type PipelineRun struct {
-	Identity       Identity
-	BuildNumber    string
-	Status         string
-	Result         string
-	RunStatus      RunStatus // neutral enum; populated by MapRunStatus at the adapter boundary
+	Identity    Identity
+	BuildNumber string
+	Status      string
+	Result      string
+	RunStatus   RunStatus // neutral enum; populated by MapRunStatus at the adapter boundary
 	// SourceBranch is a plain branch name, stripped of any backend ref prefix
 	// (Azure's refs/heads/) at the adapter boundary.
 	SourceBranch   string
