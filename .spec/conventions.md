@@ -32,6 +32,8 @@ promote them — move a line up into Active to accept it, delete it to reject.
 
 12. **`.gitignore` patterns must match the exact paths the tooling writes — verify, don't assume.** A near-miss (ignoring `.go-cache/`/`.go-tmp/` while the build actually writes `.gocache/`/`.gotmp/`) silently commits thousands of cache blobs into every subsequent commit, invisibly bloating each diff. When tooling writes a build/cache dir, confirm the ignore pattern matches the literal path (`git check-ignore <path>`) rather than trusting a similar-looking entry. _(approved 2026-06-29; Phase 3 — `GOCACHE=$PWD/.gocache` mismatch committed 2927 blobs before it was caught.)_
 
+17. **Never call `Config.Save()` in a test on a config that did not come from `LoadFrom(<t.TempDir() path>)`.** `Save()` falls back to `GetPath()` when `configPath` is empty, so a `Config{...}` struct literal — or anything built without an explicit path — writes straight to the developer's real `~/.config/azdo-tui/config.yaml` and destroys it. Build every save-path fixture by writing a temp YAML file and loading it with `LoadFrom`; never a bare struct literal, never `GetPath()`. _(approved 2026-07-29; a live session overwrote the maintainer's actual config this way.)_
+
 ## Proposed — awaiting approval
 
 <!-- afk appends candidates here -->
