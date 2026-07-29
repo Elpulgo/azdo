@@ -151,4 +151,15 @@ const (
 	// triages these differently, and an unrecognised reason must never be
 	// dropped from the feed.
 	NotificationReasonOther
+
+	// notificationReasonCount is an unexported sentinel that must stay last.
+	// It pins the enum's size so a value added or removed without updating
+	// Decision 18 fails the test in notifications_test.go, rather than
+	// slipping through green as it would if the test only listed names.
+	notificationReasonCount
 )
+
+// NotificationReasonCount returns the number of declared NotificationReason
+// values. It exists so tests can assert the enum's size in both directions;
+// production code should never branch on it.
+func NotificationReasonCount() int { return int(notificationReasonCount) }

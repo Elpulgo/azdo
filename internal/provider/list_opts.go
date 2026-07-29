@@ -44,15 +44,12 @@ type ListOpts struct {
 //
 // Zero value is always valid: all fields at zero mean "fetch the whole
 // inbox, no bound".
+// There is deliberately no UnreadOnly field. Decision 12 forbids fetching
+// unread-only — GitHub's default response would make a row vanish the moment
+// it is marked read — so unread_only is a client-side filter over the full
+// feed (task 10) and has exactly one landing site. A fetch-time hint that its
+// only implementer is required to ignore is a trap, not an option.
 type NotifOpts struct {
-	// UnreadOnly is a generic fetch-time hint for backends that can safely
-	// filter unread server-side. GitHub's adapter does not honor it: per
-	// spec Decision 12, GitHub always fetches with all=true regardless of
-	// this field, because the default (unread-only) response would make a
-	// row disappear the moment it's marked read. unread_only is applied
-	// client-side instead, over the full fetched feed (task 10).
-	UnreadOnly bool
-
 	// ParticipatingOnly restricts results to notifications where the
 	// authenticated user is directly participating (assigned, mentioned,
 	// author, review-requested, etc.) rather than merely subscribed. Maps to

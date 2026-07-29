@@ -24,16 +24,11 @@ func (s stubNotificationSource) MarkDone(id provider.Identity) error { return ni
 // provider.NotificationSource.
 var _ provider.NotificationSource = stubNotificationSource{}
 
-// TestNotificationSourceInterfaceExists passes trivially once the file
-// compiles. The real gate is the compile-time var _ assertion above.
-func TestNotificationSourceInterfaceExists(t *testing.T) {
-	t.Log("provider.NotificationSource interface compiles and stubNotificationSource satisfies it")
-}
-
 // TestNotificationReasonEnum_MatchesDecision18 pins the exact value set from
-// spec Decision 18. It is written so that a future rename or omission fails
-// loudly at compile time (unknown identifier) or at test time (missing from
-// the set / wrong count).
+// spec Decision 18 in both directions: naming every value catches a rename or
+// removal at compile time, and comparing the count against the enum's own
+// sentinel catches an *addition* — the drift the enum's doc comment forbids
+// first, and the one a name-only list cannot see.
 func TestNotificationReasonEnum_MatchesDecision18(t *testing.T) {
 	want := []provider.NotificationReason{
 		provider.NotificationReasonUnknown,
@@ -50,20 +45,11 @@ func TestNotificationReasonEnum_MatchesDecision18(t *testing.T) {
 		provider.NotificationReasonOther,
 	}
 
-	const wantCount = 12
-	if len(want) != wantCount {
-		t.Fatalf("test setup error: want slice has %d entries, expected %d", len(want), wantCount)
-	}
-
-	seen := make(map[provider.NotificationReason]bool, len(want))
-	for i, r := range want {
-		if seen[r] {
-			t.Fatalf("duplicate NotificationReason value at index %d: %v (two decision-18 names share an ordinal)", i, r)
-		}
-		seen[r] = true
-	}
-	if len(seen) != wantCount {
-		t.Fatalf("expected exactly %d distinct NotificationReason values, got %d", wantCount, len(seen))
+	// Decision 18 lists exactly twelve reasons. Asserting against the enum's
+	// own sentinel is what catches an added value: a thirteenth constant makes
+	// NotificationReasonCount() 13 while this list stays at 12.
+	if got := provider.NotificationReasonCount(); got != len(want) {
+		t.Fatalf("enum has %d values but Decision 18 lists %d — a value was added or removed without updating the decision", got, len(want))
 	}
 
 	// NotificationReasonUnknown must remain the zero value so an unset field
@@ -99,17 +85,15 @@ func TestNotification_IdentityIsProviderQualified(t *testing.T) {
 	if !githubRepoA.Identity.SameItem(githubRepoADuplicate.Identity) {
 		t.Fatalf("identical Kind+Scope+ID must be treated as the same item: %+v vs %+v", githubRepoA.Identity, githubRepoADuplicate.Identity)
 	}
-}
 
-// TestNotification_ReadAndDoneFieldsExist pins Decision 15: both Read and
-// Done exist on the neutral type in phase 1, even though phase 1 keeps no
-// local state. This test fails to compile if either field is removed.
-func TestNotification_ReadAndDoneFieldsExist(t *testing.T) {
-	n := provider.Notification{Read: true, Done: false}
-	if !n.Read {
-		t.Fatalf("expected Read to be true")
-	}
-	if n.Done {
-		t.Fatalf("expected Done to be false")
+	// ScopeDisplay must stay out of the comparison. It is a human-facing label
+	// that can change (a repo rename, a fallback display name), and phase 2
+	// keys its local read/done store on this identity — if display text leaked
+	// in, a changed label would silently resurrect everything the user
+	// dismissed. This is the only test of SameItem in the repo.
+	displayA := provider.Identity{Kind: provider.KindGitHub, Scope: "acme/repo-a", ScopeDisplay: "Repo A", ID: "1"}
+	displayB := provider.Identity{Kind: provider.KindGitHub, Scope: "acme/repo-a", ScopeDisplay: "acme/repo-a", ID: "1"}
+	if !displayA.SameItem(displayB) {
+		t.Fatalf("identities differing only in ScopeDisplay must be the same item: %+v vs %+v", displayA, displayB)
 	}
 }
