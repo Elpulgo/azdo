@@ -249,3 +249,40 @@ type WorkItemComment struct {
 	AuthorName  string
 	CreatedDate time.Time
 }
+
+// Notification is the neutral representation of a single inbox notification
+// (a GitHub thread today; an Azure-derived row in phase 2).
+//
+// Identity is provider-qualified from day one (Decision 14): Kind + Scope +
+// native ID, never a bare ID. Scope carries the repo the notification
+// belongs to (GitHub's "owner/repo", mirroring the PullRequest convention),
+// so the same numeric thread ID from two different repos — or the same
+// numeric ID reused by a future Azure-derived key — can never collide in a
+// merged feed. Views read the repo for the dynamic repo column off
+// Identity.Scope / Identity.ScopeDisplay, the same fields the PR list uses
+// for its project column.
+type Notification struct {
+	Identity Identity
+
+	Title string
+
+	// Reason is why this notification reached the inbox. Populated by the
+	// adapter's wire→enum mapping (task 5); see NotificationReason for the
+	// settled value set (Decision 18).
+	Reason NotificationReason
+
+	// Read and Done both exist in phase 1 even though phase 1 keeps no local
+	// state (Decision 15). GitHub fills them from the server; Azure fills
+	// them from local state in phase 2. Do not simplify them away while
+	// GitHub is the only source.
+	Read bool
+	Done bool
+
+	// UpdatedAt drives the merged feed's newest-first sort (Decision 7).
+	UpdatedAt time.Time
+
+	// WebURL is the browser URL to open on `o`, resolved from the wire
+	// subject at the adapter boundary (task 5). Falls back to the
+	// notification's repository URL when the subject type is unrecognised.
+	WebURL string
+}

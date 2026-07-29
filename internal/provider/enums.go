@@ -102,3 +102,53 @@ const (
 	// and a half-circle glyph, distinct from RunStatusSucceeded.
 	RunStatusSucceededWithIssues
 )
+
+// NotificationReason is a neutral semantic enum for why a notification
+// reached the inbox. Views use it to decide glyph, label, and style without
+// inspecting backend reason strings.
+//
+// The value set is settled by spec Decision 18 (20260729-notif-p1-github.md)
+// and is not left to the implementer: do not add, omit, or rename a value
+// without updating that decision first. GitHub's wire→enum mapping (task 5)
+// collapses several wire reasons per value — e.g. "team_mention" maps to
+// NotificationReasonMentioned, and "manual"/"invitation"/
+// "member_feature_requested" all map to NotificationReasonOther — and any
+// unrecognised wire reason also maps to NotificationReasonOther rather than
+// being dropped.
+type NotificationReason int
+
+const (
+	// NotificationReasonUnknown is the zero value; used for unmapped or
+	// unset reasons before the adapter boundary populates this field.
+	NotificationReasonUnknown NotificationReason = iota
+	// NotificationReasonReviewRequested corresponds to GitHub's
+	// "review_requested".
+	NotificationReasonReviewRequested
+	// NotificationReasonMentioned corresponds to GitHub's "mention" and
+	// "team_mention".
+	NotificationReasonMentioned
+	// NotificationReasonAssigned corresponds to GitHub's "assign".
+	NotificationReasonAssigned
+	// NotificationReasonAuthored corresponds to GitHub's "author".
+	NotificationReasonAuthored
+	// NotificationReasonCommented corresponds to GitHub's "comment".
+	NotificationReasonCommented
+	// NotificationReasonStateChanged corresponds to GitHub's "state_change".
+	NotificationReasonStateChanged
+	// NotificationReasonCIActivity corresponds to GitHub's "ci_activity".
+	NotificationReasonCIActivity
+	// NotificationReasonSecurityAlert corresponds to GitHub's
+	// "security_alert" and "security_advisory_credit".
+	NotificationReasonSecurityAlert
+	// NotificationReasonApprovalRequested corresponds to GitHub's
+	// "approval_requested".
+	NotificationReasonApprovalRequested
+	// NotificationReasonSubscribed corresponds to GitHub's "subscribed".
+	NotificationReasonSubscribed
+	// NotificationReasonOther is the catch-all: GitHub's "manual",
+	// "invitation", and "member_feature_requested" map here deliberately,
+	// and so does any reason string the mapper does not recognise. Nobody
+	// triages these differently, and an unrecognised reason must never be
+	// dropped from the feed.
+	NotificationReasonOther
+)
