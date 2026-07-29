@@ -99,6 +99,22 @@ type NotificationListOpts struct {
 // dropping keypresses and rendering. pollInterval is therefore an
 // atomic.Int64 of nanoseconds, written by applyPollInterval and read by
 // PollInterval, with no lock at all.
+//
+// MarkRead/MarkDone (task 6) mutate server-side state the cache still
+// describes, so they must invalidate it — but, like pollInterval, they must
+// not contend with mu: decision 27 has List hold mu across the entire
+// (possibly multi-page) fetch, and a mark issued from a tea.Cmd is expected
+// to feel instant, not block for up to maxNotificationPages HTTP round trips.
+// Decision 37 resolves this with a second, independent generation counter:
+// cacheGen is an atomic.Uint64 that MarkRead/MarkDone bump (Add(1)) only
+// after a successful request, with no lock at all. List snapshots cacheGen
+// into cachedGen (guarded by mu, alongside the rest of the cache state)
+// whenever it populates the cache, and on every subsequent call treats the
+// cache as invalid — offering no If-Modified-Since and refusing to serve a
+// 304 from it — whenever cachedGen no longer matches cacheGen.Load(). This
+// keeps the marker lock-free while still making the validator↔cache pairing
+// atomic, because only List ever writes cached/cachedPath/cachedGen and it
+// re-reads cacheGen right before committing them.
 type NotificationsClient struct {
 	mu sync.Mutex
 
@@ -107,11 +123,18 @@ type NotificationsClient struct {
 	httpClient *http.Client
 
 	// lastModified and cached are only valid for the request shape recorded
-	// in cachedPath (see buildPath) — an empty cachedPath means nothing is
-	// cached yet.
+	// in cachedPath (see buildPath) and the generation recorded in cachedGen
+	// — an empty cachedPath means nothing is cached yet, and cachedGen !=
+	// cacheGen.Load() means a mark-read/mark-done has invalidated it since.
 	lastModified string
 	cached       []NotificationThread
 	cachedPath   string
+	cachedGen    uint64
+
+	// cacheGen is Decision 37's invalidation counter: MarkRead/MarkDone bump
+	// it (Add(1)) after a successful request, without ever taking mu. See the
+	// type-level doc comment above for the full rationale.
+	cacheGen atomic.Uint64
 
 	// pollInterval holds the cadence GitHub last asked for, in nanoseconds,
 	// with 0 meaning "not yet set". Guarded independently of mu — see the
@@ -156,6 +179,7 @@ func (c *NotificationsClient) SetBaseURL(url string) {
 	c.cachedPath = ""
 	c.lastModified = ""
 	c.cached = nil
+	c.cachedGen = 0
 }
 
 // PollInterval returns the cadence floor GitHub most recently asked for via
@@ -197,6 +221,14 @@ func (c *NotificationsClient) PollInterval() time.Duration {
 // out a fresh copy on both the 200 and 304 paths, so a caller's in-place
 // filter/sort of the returned slice can never rewrite the cache that a later
 // 304 hands back.
+//
+// Per Decision 37, the cache is also treated as invalid — no If-Modified-Since
+// offered, no 304 served from it — whenever a MarkRead/MarkDone call has
+// bumped cacheGen since this cache was populated, even when the request shape
+// (buildPath(opts)) is unchanged. Without this, marking a thread read would
+// leave the collection's Last-Modified unchanged, List would send
+// If-Modified-Since, GitHub would answer 304, and cloneThreads(c.cached)
+// would faithfully replay the row the user just dismissed with Unread: true.
 func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThread, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -204,10 +236,13 @@ func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThr
 	path := c.buildPath(opts)
 
 	// Only offer the cached validator when it was produced by this exact
-	// request shape — otherwise a 200 for a different query could be
-	// conditioned against a validator that has nothing to do with it.
+	// request shape (otherwise a 200 for a different query could be
+	// conditioned against a validator that has nothing to do with it) AND no
+	// mark-read/mark-done has invalidated it since (Decision 37).
+	cacheValid := path == c.cachedPath && c.cachedGen == c.cacheGen.Load()
+
 	ifModifiedSince := ""
-	if path == c.cachedPath {
+	if cacheValid {
 		ifModifiedSince = c.lastModified
 	}
 
@@ -216,10 +251,12 @@ func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThr
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotModified {
 			c.applyPollInterval(header)
-			if path != c.cachedPath {
+			if !cacheValid {
 				// Decision 28: a 304 that does not match a cache produced by
-				// this exact request shape is never treated as "the inbox is
-				// empty" — it is reported as an error instead. Wrapped with
+				// this exact request shape — or, per Decision 37, a cache
+				// that has since been invalidated by a mark-read/mark-done —
+				// is never treated as "the inbox is empty" or "nothing
+				// changed". It is reported as an error instead. Wrapped with
 				// %w (not just formatted in) so a caller can errors.As this
 				// back to the underlying *APIError (StatusCode == 304) and
 				// branch on that rather than string-matching the message —
@@ -275,6 +312,14 @@ func (c *NotificationsClient) List(opts NotificationListOpts) ([]NotificationThr
 	c.lastModified = header.Get("Last-Modified")
 	c.cached = all
 	c.cachedPath = path
+	// Snapshot the generation as of right now (not the value read at the top
+	// of this call): if a MarkRead/MarkDone landed concurrently while this
+	// fetch was in flight, the cache being committed here reflects a fetch
+	// that may or may not include that mark's effect (an inherent race, not
+	// one this counter is meant to close — see the type-level doc comment),
+	// but recording the freshest generation is what lets the NEXT List call
+	// correctly treat this cache as valid absent any further mark.
+	c.cachedGen = c.cacheGen.Load()
 	return cloneThreads(all), nil
 }
 
@@ -330,6 +375,116 @@ func (c *NotificationsClient) applyPollInterval(header http.Header) {
 		return
 	}
 	c.pollInterval.Store(int64(time.Duration(secs) * time.Second))
+}
+
+// MarkRead marks a single notification thread as read via
+// PATCH /notifications/threads/{id} (Decision 4).
+//
+// Decision 13: this is one-way. GitHub documents mark-read but exposes no
+// mark-unread endpoint, so calling this is not a toggle — there is no route
+// back once a thread is marked read through this call. This environment has
+// network access to api.github.com but no token, so the route's existence
+// and auth-gating cannot be confirmed here; the request shape below follows
+// GitHub's documented contract but is NOT claimed as API-verified — task 6's
+// "## Unknowns" entry flags mark-read/mark-done for manual confirmation with
+// a real token before merge.
+//
+// id is the wire NotificationThread.ID (a decimal string, not a number —
+// GitHub thread ids are opaque strings on the wire). It is validated with
+// isItemNumber, the same guard mapping_notifications.go already uses for PR
+// and issue id segments, before any request is built or a byte reaches the
+// network — a rejected id never produces a request to
+// /notifications/threads/<rejected>. Reusing isItemNumber here rather than
+// writing a second, near-identical guard keeps the package's id guards from
+// diverging (see isItemNumber's doc comment, which already anticipates this
+// call site). One nuance worth calling out explicitly: isItemNumber also
+// rejects a leading zero ("007"), which task 6's wording ("reject empty,
+// non-numeric, and <=0-after-parse") does not itself mention. Rejecting it
+// here is still correct — a GitHub thread id is a positive integer with no
+// zero padding, so "007" is malformed input either way — this comment exists
+// so the next reader knows the extra strictness was a deliberate reuse
+// decision, not an accident of sharing the mapper's function.
+//
+// Per Decision 37, a successful mark bumps cacheGen so the next List call
+// treats its cache as invalidated, rather than serving a 304 that would
+// resurrect this exact row with Unread: true. MarkRead deliberately never
+// takes mu (the fetch mutex) — see the type-level doc comment — so a mark
+// issued while a multi-page List refresh is in flight completes immediately
+// instead of blocking behind it. A failed request changed nothing server-side
+// and does not bump cacheGen — invalidating on failure would cost a full
+// refetch for no reason.
+func (c *NotificationsClient) MarkRead(id string) error {
+	if !isItemNumber(id) {
+		return fmt.Errorf("github: mark read: invalid thread id %q", id)
+	}
+	if err := c.markThread(http.MethodPatch, id); err != nil {
+		return err
+	}
+	c.cacheGen.Add(1)
+	return nil
+}
+
+// MarkDone marks a single notification thread as done — removing it from the
+// inbox — via DELETE /notifications/threads/{id} (Decision 4). See
+// MarkRead's doc comment: the id guard (including the deliberate leading-zero
+// rejection), the "not API-verified" caveat, and the Decision 37
+// cache-invalidation/lock-free rationale are all shared and not repeated
+// here.
+func (c *NotificationsClient) MarkDone(id string) error {
+	if !isItemNumber(id) {
+		return fmt.Errorf("github: mark done: invalid thread id %q", id)
+	}
+	if err := c.markThread(http.MethodDelete, id); err != nil {
+		return err
+	}
+	c.cacheGen.Add(1)
+	return nil
+}
+
+// markThread issues method against /notifications/threads/{id}, shared by
+// MarkRead and MarkDone. Both endpoints return a 2xx with no meaningful body
+// on success per GitHub's documented contract, so the response body is
+// drained (to allow connection reuse) but never decoded. A non-2xx status
+// becomes the shared *APIError and is returned unwrapped, matching List's
+// convention in this file: APIError.Error() already prefixes "github:", so
+// wrapping it in another formatted string would double that prefix.
+//
+// Precondition: id has already been validated by the caller (MarkRead/
+// MarkDone) — this function repeats no check and must never be reached with
+// an unvalidated id.
+//
+// Deliberately does not take mu — see Decision 37 in the type-level doc
+// comment: List holds mu across an entire, possibly multi-page fetch, and a
+// mark issued from a tea.Cmd is expected to feel instant, not block behind
+// that. baseURL/token are read without a lock here, the same as getPage
+// inside List and consistent with SetBaseURL's documented contract that it
+// must not be called concurrently with any in-flight request (List, MarkRead,
+// or MarkDone).
+func (c *NotificationsClient) markThread(method, id string) error {
+	fullURL := c.baseURL + "/notifications/threads/" + id
+
+	req, err := http.NewRequest(method, fullURL, nil)
+	if err != nil {
+		return fmt.Errorf("github: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("github: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("github: read response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return newAPIError(resp.StatusCode, resp.Header, body)
+	}
+	return nil
 }
 
 // getPage performs an authenticated GET against rawURL (a leading-slash path

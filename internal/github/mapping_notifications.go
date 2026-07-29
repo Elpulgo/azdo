@@ -220,6 +220,15 @@ func isItemNumber(s string) bool {
 		// Out of int range: too long to be a real item number.
 		return false
 	}
+	// Unreachable today: the leading-zero check above already rejects "0",
+	// and the digit-only loop already rejects '-', so every s that reaches
+	// this line is a non-empty run of '1'-'9'/'0' digits not starting with
+	// '0' — which parses to n >= 1 unconditionally. This line is kept anyway
+	// as defence-in-depth: it is the actual carrier of convention 11's "<= 0"
+	// guarantee in this function's contract, so if a future change relaxes
+	// either guard above (e.g. permits a leading "0"), this still stops a
+	// non-positive id from silently being accepted rather than depending on
+	// whichever guard happens to get relaxed to also remember the rule.
 	return n > 0
 }
 

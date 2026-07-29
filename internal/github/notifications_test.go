@@ -822,6 +822,309 @@ func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
 // never actually pinned; a production bug that dropped the .UTC() call would
 // still pass on a UTC-already input. Asserts the literal expected string and
 // adds a non-UTC input row so the normalisation itself is exercised.
+// ---------------------------------------------------------------------------
+// Task 6: MarkRead / MarkDone — method and path pinned as literals, not
+// derived from the code under test (a test that reads a constant it is meant
+// to be pinning has already slipped through this run once).
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_RequestsCorrectMethodAndPath(t *testing.T) {
+	var capturedMethod, capturedPath string
+	requests := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(http.StatusResetContent)
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	if err := c.MarkRead("42"); err != nil {
+		t.Fatalf("MarkRead() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if capturedMethod != "PATCH" {
+		t.Errorf("method = %q, want %q", capturedMethod, "PATCH")
+	}
+	if capturedPath != "/notifications/threads/42" {
+		t.Errorf("path = %q, want %q", capturedPath, "/notifications/threads/42")
+	}
+}
+
+func TestNotificationsClient_MarkDone_RequestsCorrectMethodAndPath(t *testing.T) {
+	var capturedMethod, capturedPath string
+	requests := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.WriteHeader(http.StatusResetContent)
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	if err := c.MarkDone("42"); err != nil {
+		t.Fatalf("MarkDone() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if capturedMethod != "DELETE" {
+		t.Errorf("method = %q, want %q", capturedMethod, "DELETE")
+	}
+	if capturedPath != "/notifications/threads/42" {
+		t.Errorf("path = %q, want %q", capturedPath, "/notifications/threads/42")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 6: rejected thread ids must issue zero requests — the id guard runs
+// before any HTTP request is built. Rows per task 6's acceptance criteria:
+// "", "abc", "-5" (the convention-11 negative-input shape), "0", and "007"
+// (isItemNumber's extra leading-zero strictness, reused from
+// mapping_notifications.go — see MarkRead's doc comment).
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_RejectedIds_IssueZeroRequests(t *testing.T) {
+	ids := []string{"", "abc", "-5", "0", "007"}
+
+	for _, id := range ids {
+		t.Run(id, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			c := NewNotificationsClient("tok")
+			c.SetBaseURL(srv.URL)
+
+			if err := c.MarkRead(id); err == nil {
+				t.Fatalf("MarkRead(%q) error = nil, want a rejection error", id)
+			}
+			if requests != 0 {
+				t.Errorf("requests = %d, want 0 — a rejected id must never reach the network", requests)
+			}
+		})
+	}
+}
+
+func TestNotificationsClient_MarkDone_RejectedIds_IssueZeroRequests(t *testing.T) {
+	ids := []string{"", "abc", "-5", "0", "007"}
+
+	for _, id := range ids {
+		t.Run(id, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			c := NewNotificationsClient("tok")
+			c.SetBaseURL(srv.URL)
+
+			if err := c.MarkDone(id); err == nil {
+				t.Fatalf("MarkDone(%q) error = nil, want a rejection error", id)
+			}
+			if requests != 0 {
+				t.Errorf("requests = %d, want 0 — a rejected id must never reach the network", requests)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 6: a non-2xx response surfaces as an error carrying the status code.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	err := c.MarkRead("42")
+	if err == nil {
+		t.Fatal("MarkRead() error = nil, want an error for a 404 response")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if apiErr.StatusCode != http.StatusNotFound {
+		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestNotificationsClient_MarkDone_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"boom"}`))
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	err := c.MarkDone("42")
+	if err == nil {
+		t.Fatal("MarkDone() error = nil, want an error for a 403 response")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *APIError from %v", err)
+	}
+	if apiErr.StatusCode != http.StatusForbidden {
+		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusForbidden)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decision 37, the important regression test: List (200, populates the
+// cache) -> MarkRead -> List again against a server that would answer 304 to
+// any conditional request. Without cacheGen invalidation, the second List
+// would send the cached If-Modified-Since, get a 304, and
+// cloneThreads(c.cached) would faithfully replay the row the user just
+// dismissed with Unread: true. Asserted on observable behaviour (the returned
+// row's Unread field), not on the private cacheGen/cachedGen counters.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_InvalidatesCache_SecondListNotStale(t *testing.T) {
+	listCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/notifications/threads/1":
+			w.WriteHeader(http.StatusResetContent)
+		case r.Method == http.MethodGet:
+			listCalls++
+			if listCalls == 1 {
+				w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"}]`))
+				return
+			}
+			// Second List(): a server that would happily 304 any conditional
+			// request — the failure mode under test is the client offering
+			// If-Modified-Since here at all after MarkRead. A correctly
+			// invalidated cache sends none, so this branch always answers
+			// with a fresh 200 reflecting the now-read state.
+			if r.Header.Get("If-Modified-Since") != "" {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"id":"1","unread":false,"reason":"subscribed"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	first, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+	if len(first) != 1 || !first[0].Unread {
+		t.Fatalf("first List() = %+v, want single unread row", first)
+	}
+
+	if err := c.MarkRead("1"); err != nil {
+		t.Fatalf("MarkRead() error = %v", err)
+	}
+
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() error = %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("second List() len = %d, want 1", len(second))
+	}
+	if second[0].Unread {
+		t.Fatal("second List()[0].Unread = true, want false — MarkRead must invalidate the cache so a 304 cannot resurrect the row the user just dismissed (Decision 37)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decision 37 / concurrency: MarkRead must not block while a List is in
+// flight. -race is unavailable in this environment, so this is asserted
+// structurally rather than by timing: List's HTTP request is parked in the
+// handler on a channel, and MarkRead (hitting the same server, a different
+// method/path) is proven to complete before the test releases List's
+// handler. If MarkRead took the fetch mutex, it would deadlock behind List
+// until the release, which the select below with a bounded timeout catches.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
+	release := make(chan struct{})
+	listStarted := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			close(listStarted)
+			<-release
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[]`))
+		case http.MethodPatch:
+			w.WriteHeader(http.StatusResetContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	listDone := make(chan error, 1)
+	go func() {
+		_, err := c.List(NotificationListOpts{})
+		listDone <- err
+	}()
+
+	<-listStarted // List's request has reached the handler and is now parked
+
+	markDone := make(chan error, 1)
+	go func() {
+		markDone <- c.MarkRead("42")
+	}()
+
+	select {
+	case err := <-markDone:
+		if err != nil {
+			t.Fatalf("MarkRead() error = %v, want nil", err)
+		}
+	case err := <-listDone:
+		t.Fatalf("List() returned before MarkRead even though its handler is still parked on release: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("MarkRead() did not complete while a List() call was in flight — structural evidence it took the fetch mutex (Decision 37)")
+	}
+
+	close(release)
+	if err := <-listDone; err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+}
+
 func TestNotificationsClient_List_ParticipatingAndSince(t *testing.T) {
 	cest := time.FixedZone("CEST", 2*60*60)
 
