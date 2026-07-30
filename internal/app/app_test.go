@@ -2360,67 +2360,65 @@ func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {
 // which is exactly why the content has to be pinned too.
 const notificationsPaneMarker = "No notifications found."
 
-// TestBuildEnabledTabs_NotificationsFirst_WhenCapable pins Decision 6:
-// notifications lands at enabledTabs[0] whenever it is present at all.
-func TestBuildEnabledTabs_NotificationsFirst_WhenCapable(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
+// TestBuildEnabledTabs_NotificationsGate walks the full
+// capability × disabled_panes matrix behind
+// `IsPaneEnabled("notifications") && notifCapable`:
+//
+//   - capable, pane enabled  → present, and first (Decision 6: notifications
+//     lands at enabledTabs[0] whenever it is present at all);
+//   - incapable, pane enabled → absent (Decision 11: the tab is gated on
+//     capability, never on config alone — an Azure-only provider must never
+//     surface it even though "notifications" is not in DisabledPanes);
+//   - capable, pane disabled → absent (disabled_panes still applies on top of
+//     capability, same as every other pane).
+//
+// Each row asserts the whole slice, so the surviving tabs' order and
+// membership are pinned alongside the notifications gate itself.
+func TestBuildEnabledTabs_NotificationsGate(t *testing.T) {
+	tests := []struct {
+		name          string
+		disabledPanes []string
+		notifCapable  bool
+		want          []Tab
+	}{
+		{
+			name:         "capable and pane enabled: first",
+			notifCapable: true,
+			want:         []Tab{TabNotifications, TabPullRequests, TabWorkItems, TabPipelines},
+		},
+		{
+			name:         "incapable: absent",
+			notifCapable: false,
+			want:         []Tab{TabPullRequests, TabWorkItems, TabPipelines},
+		},
+		{
+			name:          "pane disabled despite capability: absent",
+			disabledPanes: []string{"notifications"},
+			notifCapable:  true,
+			want:          []Tab{TabPullRequests, TabWorkItems, TabPipelines},
+		},
 	}
 
-	tabs := buildEnabledTabs(cfg, false, true)
-	if len(tabs) != 4 {
-		t.Fatalf("expected 4 enabled tabs, got %d: %v", len(tabs), tabs)
-	}
-	if tabs[0] != TabNotifications {
-		t.Fatalf("expected TabNotifications first, got %v", tabs[0])
-	}
-	if tabs[1] != TabPullRequests || tabs[2] != TabWorkItems || tabs[3] != TabPipelines {
-		t.Errorf("unexpected tab order after notifications: %v", tabs)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Organization:    "testorg",
+				Projects:        []string{"testproject"},
+				PollingInterval: 60,
+				Theme:           "dark",
+				DisabledPanes:   tt.disabledPanes,
+			}
 
-// TestBuildEnabledTabs_NotificationsAbsent_WhenIncapable pins Decision 11:
-// the tab is gated on capability, never on config alone — an Azure-only
-// provider (notifCapable=false) must never surface it even though
-// "notifications" is not in DisabledPanes.
-func TestBuildEnabledTabs_NotificationsAbsent_WhenIncapable(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-	}
-
-	tabs := buildEnabledTabs(cfg, false, false)
-	for _, tab := range tabs {
-		if tab == TabNotifications {
-			t.Fatalf("expected no TabNotifications when incapable, got tabs: %v", tabs)
-		}
-	}
-	if len(tabs) != 3 {
-		t.Fatalf("expected 3 enabled tabs, got %d: %v", len(tabs), tabs)
-	}
-}
-
-// TestBuildEnabledTabs_NotificationsAbsent_WhenPaneDisabled confirms
-// disabled_panes still applies on top of capability, same as every other pane.
-func TestBuildEnabledTabs_NotificationsAbsent_WhenPaneDisabled(t *testing.T) {
-	cfg := &config.Config{
-		Organization:    "testorg",
-		Projects:        []string{"testproject"},
-		PollingInterval: 60,
-		Theme:           "dark",
-		DisabledPanes:   []string{"notifications"},
-	}
-
-	tabs := buildEnabledTabs(cfg, false, true)
-	for _, tab := range tabs {
-		if tab == TabNotifications {
-			t.Fatalf("expected no TabNotifications when pane disabled, got tabs: %v", tabs)
-		}
+			tabs := buildEnabledTabs(cfg, false, tt.notifCapable)
+			if len(tabs) != len(tt.want) {
+				t.Fatalf("buildEnabledTabs() = %v (%d tabs), want %v (%d tabs)", tabs, len(tabs), tt.want, len(tt.want))
+			}
+			for i, want := range tt.want {
+				if tabs[i] != want {
+					t.Errorf("tab[%d] = %v, want %v (full result %v)", i, tabs[i], want, tabs)
+				}
+			}
+		})
 	}
 }
 

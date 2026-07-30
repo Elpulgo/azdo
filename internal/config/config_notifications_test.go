@@ -367,92 +367,108 @@ func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 // --- Decision 47: notifications counts as a remaining pane only when
 // HasGitHub() is true (phase-1-only coupling). ---
 
-func TestConfig_Validate_PaneGuard_Decision47_GitHubConfigured_OthersDisabled_Valid(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	content := `polling_interval: 60
+// TestConfig_Validate_PaneGuard_Decision47 walks the three fixtures that
+// together pin both conjuncts of `IsPaneEnabled("notifications") &&
+// HasGitHub()`:
+//
+//   - GitHub configured, other three panes disabled → valid (notifications is
+//     the remaining pane);
+//   - Azure-only, other three panes disabled → still rejected, because the
+//     notifications tab hides on capability (decision 11), and the message
+//     must explain the GitHub coupling rather than repeat the old three-pane
+//     text verbatim;
+//   - GitHub configured, ALL FOUR panes disabled → rejected.
+//
+// The third row is the one that distinguishes the conjunction from a bare
+// HasGitHub(): the first two vary HasGitHub() while notifications stays
+// enabled, so dropping the IsPaneEnabled("notifications") conjunct leaves
+// them both green. Without it a GitHub config that explicitly turns off every
+// pane would validate and the app would start with zero navigable tabs.
+func TestConfig_Validate_PaneGuard_Decision47(t *testing.T) {
+	// oldThreePaneText is the pre-decision-47 message. Row 2 must not be it:
+	// repeating it verbatim explains nothing about why notifications does not
+	// rescue an Azure-only config.
+	const oldThreePaneText = "cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled"
+
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+		// wantErrContains are substrings every rejection message must carry.
+		wantErrContains []string
+		// forbidExactErr, when non-empty, must not be the whole message.
+		forbidExactErr string
+	}{
+		{
+			name: "GitHub configured, other three panes disabled",
+			content: `polling_interval: 60
 theme: dark
 github:
   repos:
     - owner/repo
 disabled_panes: pullrequests,workitems,pipelines
-`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := LoadFrom(configPath)
-	if err != nil {
-		t.Fatalf("LoadFrom() should succeed: GitHub configured + notifications is the only remaining pane, got: %v", err)
-	}
-	if !cfg.HasGitHub() {
-		t.Fatal("HasGitHub() = false, want true (test fixture invalid)")
-	}
-}
-
-func TestConfig_Validate_PaneGuard_Decision47_AzureOnly_OthersDisabled_StillRejected(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	content := `organization: test-org
+`,
+			wantErr: false,
+		},
+		{
+			name: "Azure-only, other three panes disabled",
+			content: `organization: test-org
 projects:
   - alpha
 polling_interval: 60
 theme: dark
 disabled_panes: pullrequests,workitems,pipelines
-`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	_, err := LoadFrom(configPath)
-	if err == nil {
-		t.Fatal("LoadFrom() should fail: Azure-only config with the other three panes disabled leaves zero navigable tabs (notifications tab hides on capability, decision 11)")
-	}
-
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "notifications") {
-		t.Errorf("error should explain the notifications/GitHub coupling, got: %s", errMsg)
-	}
-	if !strings.Contains(errMsg, "GitHub") {
-		t.Errorf("error should name GitHub as the missing requirement, got: %s", errMsg)
-	}
-	// Must not be merely the old three-pane text repeated verbatim with no
-	// explanation of why notifications doesn't rescue this config.
-	if errMsg == "cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled" {
-		t.Error("error message is just the old three-pane text; must explain the GitHub/notifications coupling")
-	}
-}
-
-// TestConfig_Validate_PaneGuard_Decision47_GitHubConfigured_AllFourDisabled_Rejected
-// pins the OTHER half of the decision-47 guard. The two tests above vary
-// HasGitHub() while notifications stays enabled, so they only exercise the
-// HasGitHub() conjunct; drop the IsPaneEnabled("notifications") conjunct and
-// they all still pass. This fixture disables all four panes with GitHub
-// configured, which is the only shape that distinguishes
-// `IsPaneEnabled("notifications") && HasGitHub()` from a bare `HasGitHub()`.
-// Without it, a GitHub config that explicitly turns off every pane would
-// validate and the app would start with zero navigable tabs — exactly what the
-// guard exists to prevent.
-func TestConfig_Validate_PaneGuard_Decision47_GitHubConfigured_AllFourDisabled_Rejected(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	content := `polling_interval: 60
+`,
+			wantErr:         true,
+			wantErrContains: []string{"notifications", "GitHub"},
+			forbidExactErr:  oldThreePaneText,
+		},
+		{
+			name: "GitHub configured, all four panes disabled",
+			content: `polling_interval: 60
 theme: dark
 github:
   repos:
     - owner/repo
 disabled_panes: pullrequests,workitems,pipelines,notifications
-`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
+`,
+			wantErr:         true,
+			wantErrContains: []string{"cannot disable all panes"},
+		},
 	}
 
-	_, err := LoadFrom(configPath)
-	if err == nil {
-		t.Fatal("LoadFrom() should fail: all four panes disabled leaves zero navigable tabs even with GitHub configured")
-	}
-	if !strings.Contains(err.Error(), "cannot disable all panes") {
-		t.Errorf("error should be the at-least-one-pane guard, got: %s", err.Error())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := LoadFrom(configPath)
+
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("LoadFrom() = %v, want nil — notifications is the only remaining pane and GitHub is configured", err)
+				}
+				if !cfg.HasGitHub() {
+					t.Fatal("HasGitHub() = false, want true (test fixture invalid)")
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("LoadFrom() = nil, want an error — this config leaves zero navigable tabs")
+			}
+			errMsg := err.Error()
+			for _, want := range tt.wantErrContains {
+				if !strings.Contains(errMsg, want) {
+					t.Errorf("error should mention %q, got: %s", want, errMsg)
+				}
+			}
+			if tt.forbidExactErr != "" && errMsg == tt.forbidExactErr {
+				t.Errorf("error message is just the old three-pane text; must explain the GitHub/notifications coupling")
+			}
+		})
 	}
 }
 

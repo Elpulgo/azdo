@@ -12,41 +12,22 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Decision 12: all=true always present
+// The default request shape, pinned in one place: Decision 12's mandatory
+// all=true, plus the method, path and per_page that review feedback item 7
+// found unpinned (mutating the endpoint to "/notificationz" left the suite
+// green). One List call observes all four, so they share a server rather than
+// standing up two identical ones.
+//
+// Every expectation is a literal, never derived from the code under test.
 // ---------------------------------------------------------------------------
 
-func TestNotificationsClient_List_RequestsAllTrue(t *testing.T) {
-	var capturedAll string
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAll = r.URL.Query().Get("all")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
-
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
-
-	if _, err := c.List(NotificationListOpts{}); err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if capturedAll != "true" {
-		t.Errorf("all query param = %q, want %q", capturedAll, "true")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Review feedback item 7: nothing pinned the method or path — mutating the
-// endpoint to "/notificationz" left the suite green.
-// ---------------------------------------------------------------------------
-
-func TestNotificationsClient_List_RequestsCorrectMethodPathAndPerPage(t *testing.T) {
-	var capturedMethod, capturedPath, capturedPerPage string
+func TestNotificationsClient_List_RequestShape(t *testing.T) {
+	var capturedMethod, capturedPath, capturedAll, capturedPerPage string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedMethod = r.Method
 		capturedPath = r.URL.Path
+		capturedAll = r.URL.Query().Get("all")
 		capturedPerPage = r.URL.Query().Get("per_page")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`[]`))
@@ -64,6 +45,9 @@ func TestNotificationsClient_List_RequestsCorrectMethodPathAndPerPage(t *testing
 	}
 	if capturedPath != "/notifications" {
 		t.Errorf("path = %q, want %q", capturedPath, "/notifications")
+	}
+	if capturedAll != "true" {
+		t.Errorf("all query param = %q, want %q (Decision 12)", capturedAll, "true")
 	}
 	if capturedPerPage != "100" {
 		t.Errorf("per_page = %q, want %q", capturedPerPage, "100")
@@ -561,67 +545,58 @@ func TestNotificationsClient_List_304WithNoCache_ReturnsError(t *testing.T) {
 // X-Poll-Interval parsing, including malformed/absent-header fallback.
 // ---------------------------------------------------------------------------
 
-func TestNotificationsClient_PollInterval_ParsesHeader(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Poll-Interval", "30")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
-
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
-
-	if _, err := c.List(NotificationListOpts{}); err != nil {
-		t.Fatalf("List() error = %v", err)
+// TestNotificationsClient_PollInterval_SingleCall covers every
+// single-response X-Poll-Interval shape: a well-formed value is adopted, and
+// a malformed, non-positive or absent header falls back to
+// defaultPollInterval rather than producing a nonsense cadence.
+//
+// The "before any call" row deliberately issues no request at all — it pins
+// the fallback on a freshly constructed client, where pollInterval is still
+// the atomic's zero value and no header has ever been seen.
+//
+// The stateful "absent header must keep the previously adopted value" case
+// needs two responses and is pinned separately below.
+func TestNotificationsClient_PollInterval_SingleCall(t *testing.T) {
+	tests := []struct {
+		name string
+		// header is the X-Poll-Interval value the server sends; empty means
+		// the server sets no such header at all.
+		header string
+		// skipList makes the test never call List, so PollInterval is read on
+		// a client that has seen no response whatsoever.
+		skipList bool
+		want     time.Duration
+	}{
+		{name: "parses header", header: "30", want: 30 * time.Second},
+		{name: "malformed header falls back", header: "not-a-number", want: defaultPollInterval},
+		{name: "negative header falls back", header: "-5", want: defaultPollInterval},
+		{name: "absent header falls back", header: "", want: defaultPollInterval},
+		{name: "before any call falls back", skipList: true, want: defaultPollInterval},
 	}
-	if got, want := c.PollInterval(), 30*time.Second; got != want {
-		t.Errorf("PollInterval() = %v, want %v", got, want)
-	}
-}
 
-func TestNotificationsClient_PollInterval_MalformedHeaderFallsBack(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Poll-Interval", "not-a-number")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.header != "" {
+					w.Header().Set("X-Poll-Interval", tt.header)
+				}
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[]`))
+			}))
+			defer srv.Close()
 
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
+			c := NewNotificationsClient("tok")
+			c.SetBaseURL(srv.URL)
 
-	if _, err := c.List(NotificationListOpts{}); err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if got, want := c.PollInterval(), defaultPollInterval; got != want {
-		t.Errorf("PollInterval() = %v, want fallback %v", got, want)
-	}
-}
-
-func TestNotificationsClient_PollInterval_NegativeHeaderFallsBack(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Poll-Interval", "-5")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
-
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
-
-	if _, err := c.List(NotificationListOpts{}); err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if got, want := c.PollInterval(), defaultPollInterval; got != want {
-		t.Errorf("PollInterval() = %v, want fallback %v", got, want)
-	}
-}
-
-func TestNotificationsClient_PollInterval_AbsentHeaderFallsBackBeforeAnyCall(t *testing.T) {
-	c := NewNotificationsClient("tok")
-	if got, want := c.PollInterval(), defaultPollInterval; got != want {
-		t.Errorf("PollInterval() before any call = %v, want fallback %v", got, want)
+			if !tt.skipList {
+				if _, err := c.List(NotificationListOpts{}); err != nil {
+					t.Fatalf("List() error = %v", err)
+				}
+			}
+			if got := c.PollInterval(); got != tt.want {
+				t.Errorf("PollInterval() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -819,61 +794,59 @@ func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
 // to be pinning has already slipped through this run once).
 // ---------------------------------------------------------------------------
 
-func TestNotificationsClient_MarkRead_RequestsCorrectMethodAndPath(t *testing.T) {
-	var capturedMethod, capturedPath string
-	requests := 0
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		capturedMethod = r.Method
-		capturedPath = r.URL.Path
-		w.WriteHeader(http.StatusResetContent)
-	}))
-	defer srv.Close()
-
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
-
-	if err := c.MarkRead("42"); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
-	}
-	if requests != 1 {
-		t.Fatalf("requests = %d, want 1", requests)
-	}
-	if capturedMethod != "PATCH" {
-		t.Errorf("method = %q, want %q", capturedMethod, "PATCH")
-	}
-	if capturedPath != "/notifications/threads/42" {
-		t.Errorf("path = %q, want %q", capturedPath, "/notifications/threads/42")
-	}
+// markCall names one of the two mark operations and how to invoke it, so the
+// MarkRead/MarkDone pairs below share a table instead of two copies that can
+// drift apart. The per-row wantMethod is what keeps a MarkDone-calls-MarkRead
+// copy-paste swap visible.
+type markCall struct {
+	name       string
+	call       func(*NotificationsClient, string) error
+	wantMethod string
 }
 
-func TestNotificationsClient_MarkDone_RequestsCorrectMethodAndPath(t *testing.T) {
-	var capturedMethod, capturedPath string
-	requests := 0
+var markCalls = []markCall{
+	{
+		name:       "MarkRead",
+		call:       func(c *NotificationsClient, id string) error { return c.MarkRead(id) },
+		wantMethod: "PATCH",
+	},
+	{
+		name:       "MarkDone",
+		call:       func(c *NotificationsClient, id string) error { return c.MarkDone(id) },
+		wantMethod: "DELETE",
+	},
+}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		capturedMethod = r.Method
-		capturedPath = r.URL.Path
-		w.WriteHeader(http.StatusResetContent)
-	}))
-	defer srv.Close()
+func TestNotificationsClient_Mark_RequestsCorrectMethodAndPath(t *testing.T) {
+	for _, mc := range markCalls {
+		t.Run(mc.name, func(t *testing.T) {
+			var capturedMethod, capturedPath string
+			requests := 0
 
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				capturedMethod = r.Method
+				capturedPath = r.URL.Path
+				w.WriteHeader(http.StatusResetContent)
+			}))
+			defer srv.Close()
 
-	if err := c.MarkDone("42"); err != nil {
-		t.Fatalf("MarkDone() error = %v", err)
-	}
-	if requests != 1 {
-		t.Fatalf("requests = %d, want 1", requests)
-	}
-	if capturedMethod != "DELETE" {
-		t.Errorf("method = %q, want %q", capturedMethod, "DELETE")
-	}
-	if capturedPath != "/notifications/threads/42" {
-		t.Errorf("path = %q, want %q", capturedPath, "/notifications/threads/42")
+			c := NewNotificationsClient("tok")
+			c.SetBaseURL(srv.URL)
+
+			if err := mc.call(c, "42"); err != nil {
+				t.Fatalf("%s() error = %v", mc.name, err)
+			}
+			if requests != 1 {
+				t.Fatalf("requests = %d, want 1", requests)
+			}
+			if capturedMethod != mc.wantMethod {
+				t.Errorf("method = %q, want %q", capturedMethod, mc.wantMethod)
+			}
+			if capturedPath != "/notifications/threads/42" {
+				t.Errorf("path = %q, want %q", capturedPath, "/notifications/threads/42")
+			}
+		})
 	}
 }
 
@@ -885,53 +858,30 @@ func TestNotificationsClient_MarkDone_RequestsCorrectMethodAndPath(t *testing.T)
 // mapping_notifications.go — see MarkRead's doc comment).
 // ---------------------------------------------------------------------------
 
-func TestNotificationsClient_MarkRead_RejectedIds_IssueZeroRequests(t *testing.T) {
+func TestNotificationsClient_Mark_RejectedIds_IssueZeroRequests(t *testing.T) {
 	ids := []string{"", "abc", "-5", "0", "007"}
 
-	for _, id := range ids {
-		t.Run(id, func(t *testing.T) {
-			requests := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				w.WriteHeader(http.StatusOK)
-			}))
-			defer srv.Close()
+	for _, mc := range markCalls {
+		for _, id := range ids {
+			t.Run(mc.name+"/"+id, func(t *testing.T) {
+				requests := 0
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer srv.Close()
 
-			c := NewNotificationsClient("tok")
-			c.SetBaseURL(srv.URL)
+				c := NewNotificationsClient("tok")
+				c.SetBaseURL(srv.URL)
 
-			if err := c.MarkRead(id); err == nil {
-				t.Fatalf("MarkRead(%q) error = nil, want a rejection error", id)
-			}
-			if requests != 0 {
-				t.Errorf("requests = %d, want 0 — a rejected id must never reach the network", requests)
-			}
-		})
-	}
-}
-
-func TestNotificationsClient_MarkDone_RejectedIds_IssueZeroRequests(t *testing.T) {
-	ids := []string{"", "abc", "-5", "0", "007"}
-
-	for _, id := range ids {
-		t.Run(id, func(t *testing.T) {
-			requests := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				w.WriteHeader(http.StatusOK)
-			}))
-			defer srv.Close()
-
-			c := NewNotificationsClient("tok")
-			c.SetBaseURL(srv.URL)
-
-			if err := c.MarkDone(id); err == nil {
-				t.Fatalf("MarkDone(%q) error = nil, want a rejection error", id)
-			}
-			if requests != 0 {
-				t.Errorf("requests = %d, want 0 — a rejected id must never reach the network", requests)
-			}
-		})
+				if err := mc.call(c, id); err == nil {
+					t.Fatalf("%s(%q) error = nil, want a rejection error", mc.name, id)
+				}
+				if requests != 0 {
+					t.Errorf("requests = %d, want 0 — a rejected id must never reach the network", requests)
+				}
+			})
+		}
 	}
 }
 
@@ -948,55 +898,44 @@ func TestNotificationsClient_MarkDone_RejectedIds_IssueZeroRequests(t *testing.T
 // path.
 // ---------------------------------------------------------------------------
 
-func TestNotificationsClient_MarkRead_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"message":"Not Found"}`))
-	}))
-	defer srv.Close()
+func TestNotificationsClient_Mark_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
+	// Each row keeps the status code its standalone predecessor used, so both
+	// a 404 and a 403 still reach newAPIError through markThread.
+	tests := []struct {
+		mark   markCall
+		status int
+		body   string
+	}{
+		{mark: markCalls[0], status: http.StatusNotFound, body: `{"message":"Not Found"}`},
+		{mark: markCalls[1], status: http.StatusForbidden, body: `{"message":"boom"}`},
+	}
 
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
+	for _, tt := range tests {
+		t.Run(tt.mark.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
 
-	err := c.MarkRead("42")
-	if err == nil {
-		t.Fatal("MarkRead() error = nil, want an error for a 404 response")
-	}
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("errors.As did not recover *APIError from %v", err)
-	}
-	if apiErr.StatusCode != http.StatusNotFound {
-		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotFound)
-	}
-	if got := strings.Count(err.Error(), "github:"); got != 1 {
-		t.Errorf("error message %q contains %d occurrences of %q, want 1 (double-prefixed)", err.Error(), got, "github:")
-	}
-}
+			c := NewNotificationsClient("tok")
+			c.SetBaseURL(srv.URL)
 
-func TestNotificationsClient_MarkDone_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"message":"boom"}`))
-	}))
-	defer srv.Close()
-
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
-
-	err := c.MarkDone("42")
-	if err == nil {
-		t.Fatal("MarkDone() error = nil, want an error for a 403 response")
-	}
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("errors.As did not recover *APIError from %v", err)
-	}
-	if apiErr.StatusCode != http.StatusForbidden {
-		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusForbidden)
-	}
-	if got := strings.Count(err.Error(), "github:"); got != 1 {
-		t.Errorf("error message %q contains %d occurrences of %q, want 1 (double-prefixed)", err.Error(), got, "github:")
+			err := tt.mark.call(c, "42")
+			if err == nil {
+				t.Fatalf("%s() error = nil, want an error for a %d response", tt.mark.name, tt.status)
+			}
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("errors.As did not recover *APIError from %v", err)
+			}
+			if apiErr.StatusCode != tt.status {
+				t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, tt.status)
+			}
+			if got := strings.Count(err.Error(), "github:"); got != 1 {
+				t.Errorf("error message %q contains %d occurrences of %q, want 1 (double-prefixed)", err.Error(), got, "github:")
+			}
+		})
 	}
 }
 
@@ -1528,88 +1467,16 @@ func TestNotificationsClient_MarkRead_FailedMark_DoesNotInvalidateCache(t *testi
 	}
 }
 
-// ---------------------------------------------------------------------------
 // Decision 37 / concurrency: MarkRead must not block while a List is in
-// flight. -race is unavailable in this environment, so this is asserted
-// structurally rather than by timing: List's HTTP request is parked in the
-// handler on a channel, and MarkRead (hitting the same server, a different
-// method/path) is proven to complete before the test releases List's
-// handler. If MarkRead took the fetch mutex, it would deadlock behind List
-// until the release, which the select below with a bounded timeout catches.
-//
-// Review feedback item 4: releasing the parked handler must be guaranteed on
-// every exit path, not just the happy one. Every branch of the select below can
-// t.Fatal, which runtime.Goexits into the deferred srv.Close() — and srv.Close
-// blocks until in-flight handlers return, so a GET handler still parked on
-// <-release turned this test's own failure into a package-wide test timeout and
-// goroutine dump instead of the one-line failure it is worded to produce
-// (observed for real during mutation A; CI's default timeout is 10 minutes).
-// The release is therefore wrapped in a sync.Once and deferred BEFORE
-// srv.Close() is deferred: defers run LIFO, so the handler is always freed
-// first and srv.Close() never blocks. Deliberately not t.Cleanup — cleanups run
-// only after the test function has fully unwound, which is too late to unblock
-// a deferred srv.Close() inside it.
-// ---------------------------------------------------------------------------
-
-func TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
-	release := make(chan struct{})
-	listStarted := make(chan struct{})
-
-	var releaseOnce sync.Once
-	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			close(listStarted)
-			<-release
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`[]`))
-		case http.MethodPatch:
-			w.WriteHeader(http.StatusResetContent)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-	defer releaseHandler() // LIFO: runs before srv.Close() on every exit path
-
-	c := NewNotificationsClient("tok")
-	c.SetBaseURL(srv.URL)
-
-	listDone := make(chan error, 1)
-	go func() {
-		_, err := c.List(NotificationListOpts{})
-		listDone <- err
-	}()
-
-	select {
-	case <-listStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("List()'s handler was never reached")
-	}
-
-	markDone := make(chan error, 1)
-	go func() {
-		markDone <- c.MarkRead("42")
-	}()
-
-	select {
-	case err := <-markDone:
-		if err != nil {
-			t.Fatalf("MarkRead() error = %v, want nil", err)
-		}
-	case err := <-listDone:
-		t.Fatalf("List() returned before MarkRead even though its handler is still parked on release: %v", err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("MarkRead() did not complete while a List() call was in flight — structural evidence it took the fetch mutex (Decision 37)")
-	}
-
-	releaseHandler()
-	if err := <-listDone; err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-}
+// flight. That contract is pinned once, at the adapter boundary, by
+// TestAdapter_MarkRead_DoesNotBlockOnInFlightList in
+// adapter_notifications_test.go — it drives Adapter.List/Adapter.MarkRead,
+// which forward straight into this file's List/MarkRead, so it covers both
+// "markThread reaches for the fetch mutex" (verified: adding
+// c.mu.Lock()/Unlock() to markThread fails that test in 2s) and the
+// adapter-layer regression of reinstating a shared lock. A client-level copy
+// of the same channel choreography lived here and killed strictly fewer
+// mutants, so it was folded into that one test.
 
 // ---------------------------------------------------------------------------
 // Optional query params (participating, since) — not part of the acceptance

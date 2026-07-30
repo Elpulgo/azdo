@@ -141,31 +141,50 @@ func mkNotif(kind provider.Kind, scope, id string, ts time.Time) provider.Notifi
 // HasNotifications
 // ---------------------------------------------------------------------------
 
-func TestCompositeProvider_HasNotifications_FalseWithZeroCapable(t *testing.T) {
-	a := &fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}
-	cp := provider.NewCompositeProvider(a)
-
-	if cp.HasNotifications() {
-		t.Fatal("want false with zero capable backends")
+// TestCompositeProvider_HasNotifications covers the whole capability matrix:
+// no capable backend, one capable backend, and — the row that matters, since
+// it is the only one that fails if the scan gives up at the first incapable
+// backend instead of continuing — an incapable backend registered ahead of a
+// capable one.
+func TestCompositeProvider_HasNotifications(t *testing.T) {
+	tests := []struct {
+		name     string
+		backends func() []provider.Provider
+		want     bool
+	}{
+		{
+			name: "zero capable backends",
+			backends: func() []provider.Provider {
+				return []provider.Provider{&fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}}
+			},
+			want: false,
+		},
+		{
+			name: "one capable backend",
+			backends: func() []provider.Provider {
+				return []provider.Provider{newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})}
+			},
+			want: true,
+		},
+		{
+			name: "incapable backend registered before a capable one",
+			backends: func() []provider.Provider {
+				return []provider.Provider{
+					&fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}},
+					newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"}),
+				}
+			},
+			want: true,
+		},
 	}
-}
 
-func TestCompositeProvider_HasNotifications_TrueWithOneCapable(t *testing.T) {
-	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
-	cp := provider.NewCompositeProvider(b)
-
-	if !cp.HasNotifications() {
-		t.Fatal("want true with one capable backend")
-	}
-}
-
-func TestCompositeProvider_HasNotifications_TrueWithMix(t *testing.T) {
-	incapable := &fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}
-	capable := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
-	cp := provider.NewCompositeProvider(incapable, capable)
-
-	if !cp.HasNotifications() {
-		t.Fatal("want true with a mix of capable and incapable backends")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := provider.NewCompositeProvider(tt.backends()...)
+			if got := cp.HasNotifications(); got != tt.want {
+				t.Fatalf("HasNotifications() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -447,23 +466,50 @@ func TestCompositeProvider_Notifications_IdenticalKeysKeepInputOrder(t *testing.
 	}
 }
 
-// TestCompositeProvider_Notifications_NilVsEmptySliceConsistent verifies a
-// capable backend returning (nil, nil) and one returning an empty non-nil
-// slice merge to the same observable (empty) result.
-func TestCompositeProvider_Notifications_NilVsEmptySliceConsistent(t *testing.T) {
-	a := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r1"})
-	a.notifs = nil
-	b := newFakeNotifyBackend(provider.KindAzure, []string{"o/r2"})
-	b.notifs = []provider.Notification{}
-
-	cp := provider.NewCompositeProvider(a, b)
-
-	got, err := cp.List(provider.NotifOpts{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestCompositeProvider_Notifications_EmptyResultIsNotAnError collects the
+// shapes that legitimately produce an empty feed with a nil error, since both
+// rows make the same two assertions:
+//
+//   - nil vs empty slice: a capable backend returning (nil, nil) and one
+//     returning an empty non-nil slice merge to the same observable result;
+//   - zero capable backends: the separate total == 0 guard, which must not
+//     take the all-failed branch — len(errs) == total is satisfied vacuously
+//     at 0 == 0.
+func TestCompositeProvider_Notifications_EmptyResultIsNotAnError(t *testing.T) {
+	tests := []struct {
+		name     string
+		backends func() []provider.Provider
+	}{
+		{
+			name: "capable backends returning nil and empty slices",
+			backends: func() []provider.Provider {
+				a := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r1"})
+				a.notifs = nil
+				b := newFakeNotifyBackend(provider.KindAzure, []string{"o/r2"})
+				b.notifs = []provider.Notification{}
+				return []provider.Provider{a, b}
+			},
+		},
+		{
+			name: "zero capable backends",
+			backends: func() []provider.Provider {
+				return []provider.Provider{&fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}}
+			},
+		},
 	}
-	if len(got) != 0 {
-		t.Fatalf("want an empty merged result regardless of nil-vs-empty sources, got %d items", len(got))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := provider.NewCompositeProvider(tt.backends()...)
+
+			got, err := cp.List(provider.NotifOpts{})
+			if err != nil {
+				t.Fatalf("List() error = %v, want nil", err)
+			}
+			if len(got) != 0 {
+				t.Fatalf("List() returned %d items, want an empty result", len(got))
+			}
+		})
 	}
 }
 
@@ -546,22 +592,6 @@ func TestCompositeProvider_Notifications_TotalIsCapableCountNotAllBackends(t *te
 	}
 	if !errors.Is(err, stub) {
 		t.Fatalf("want errors.Is to find the exact backend error through the single-error errors.Join chain, got %v", err)
-	}
-}
-
-// TestCompositeProvider_Notifications_ZeroCapable_ReturnsEmptyNilError
-// verifies the separate zero-capable-backends guard: len(errs)==total is
-// satisfied vacuously at 0==0, so this must not take the all-failed branch.
-func TestCompositeProvider_Notifications_ZeroCapable_ReturnsEmptyNilError(t *testing.T) {
-	a := &fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}
-	cp := provider.NewCompositeProvider(a)
-
-	got, err := cp.List(provider.NotifOpts{})
-	if err != nil {
-		t.Fatalf("want nil error with zero capable backends, got %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("want an empty result, got %d items", len(got))
 	}
 }
 
@@ -855,19 +885,41 @@ func TestCompositeProvider_MarkRead_UnroutableKind(t *testing.T) {
 	}
 }
 
-// TestCompositeProvider_MarkRead_ZeroIdentity verifies that a zero-value
-// Identity (unset Kind) falls through to the not-found error rather than
-// accidentally matching the first capable backend.
-func TestCompositeProvider_MarkRead_ZeroIdentity(t *testing.T) {
-	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
-	cp := provider.NewCompositeProvider(b)
-
-	err := cp.MarkRead(provider.Identity{})
-	if err == nil {
-		t.Fatal("want error for a zero-value Identity, got nil")
+// TestCompositeProvider_Mark_ZeroIdentity verifies that a zero-value Identity
+// (unset Kind) falls through to the not-found error rather than accidentally
+// matching the first capable backend — for MarkRead and MarkDone alike, each
+// row asserting on its own call-recording slice so a
+// MarkDone-calls-MarkRead swap stays visible.
+func TestCompositeProvider_Mark_ZeroIdentity(t *testing.T) {
+	tests := []struct {
+		name  string
+		mark  func(*provider.CompositeProvider, provider.Identity) error
+		calls func(*fakeNotifyBackend) []provider.Identity
+	}{
+		{
+			name:  "MarkRead",
+			mark:  func(cp *provider.CompositeProvider, id provider.Identity) error { return cp.MarkRead(id) },
+			calls: func(b *fakeNotifyBackend) []provider.Identity { return b.markReadCalls },
+		},
+		{
+			name:  "MarkDone",
+			mark:  func(cp *provider.CompositeProvider, id provider.Identity) error { return cp.MarkDone(id) },
+			calls: func(b *fakeNotifyBackend) []provider.Identity { return b.markDoneCalls },
+		},
 	}
-	if len(b.markReadCalls) != 0 {
-		t.Errorf("want no backend call for a zero-value Identity, got %d calls", len(b.markReadCalls))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+			cp := provider.NewCompositeProvider(b)
+
+			if err := tt.mark(cp, provider.Identity{}); err == nil {
+				t.Fatal("want error for a zero-value Identity, got nil")
+			}
+			if got := tt.calls(b); len(got) != 0 {
+				t.Errorf("want no backend call for a zero-value Identity, got %d calls", len(got))
+			}
+		})
 	}
 }
 
@@ -893,20 +945,5 @@ func TestCompositeProvider_MarkRead_ZeroKindCapableBackend(t *testing.T) {
 	}
 	if len(b.markReadCalls) != 0 {
 		t.Errorf("want no backend call for a zero Kind, got %d calls: %v", len(b.markReadCalls), b.markReadCalls)
-	}
-}
-
-// TestCompositeProvider_MarkDone_ZeroIdentity mirrors the MarkRead case for
-// MarkDone.
-func TestCompositeProvider_MarkDone_ZeroIdentity(t *testing.T) {
-	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
-	cp := provider.NewCompositeProvider(b)
-
-	err := cp.MarkDone(provider.Identity{})
-	if err == nil {
-		t.Fatal("want error for a zero-value Identity, got nil")
-	}
-	if len(b.markDoneCalls) != 0 {
-		t.Errorf("want no backend call for a zero-value Identity, got %d calls", len(b.markDoneCalls))
 	}
 }

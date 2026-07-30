@@ -712,13 +712,35 @@ func TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 37 at the adapter boundary: MarkRead must not block behind an
-// in-flight List. Adapter.MarkRead/MarkDone forward straight through with no
-// lock of their own, so this is structurally guaranteed as long as Adapter
-// adds no mutex to this path — this test guards a regression at the adapter
-// layer specifically, mirroring
-// TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList at the client
-// layer.
+// Decision 37: MarkRead must not block behind an in-flight List. -race is
+// unavailable in this environment, so this is asserted structurally rather
+// than by timing: List's HTTP request is parked in the handler on a channel,
+// and MarkRead (hitting the same server, a different method/path) is proven
+// to complete before the test releases List's handler. If anything on the
+// mark path took the fetch mutex it would deadlock behind List until the
+// release, which the select below with a bounded timeout catches.
+//
+// This is the sole test for that contract at BOTH layers. Adapter.MarkRead/
+// MarkDone forward straight through with no lock of their own, so driving the
+// adapter guards the adapter-layer regression (reinstating a shared lock)
+// AND, because the calls land in NotificationsClient.List/MarkRead unchanged,
+// the client-layer one (markThread reaching for c.mu — verified: adding
+// c.mu.Lock()/defer c.mu.Unlock() to markThread fails this test at the 2s
+// timeout). A client-level duplicate of this choreography in
+// notifications_test.go killed a strict subset and was removed.
+//
+// Review feedback item 4: releasing the parked handler must be guaranteed on
+// every exit path, not just the happy one. Every branch of the select below can
+// t.Fatal, which runtime.Goexits into the deferred srv.Close() — and srv.Close
+// blocks until in-flight handlers return, so a GET handler still parked on
+// <-release turned this test's own failure into a package-wide test timeout and
+// goroutine dump instead of the one-line failure it is worded to produce
+// (observed for real during mutation A; CI's default timeout is 10 minutes).
+// The release is therefore wrapped in a sync.Once and deferred BEFORE
+// srv.Close() is deferred: defers run LIFO, so the handler is always freed
+// first and srv.Close() never blocks. Deliberately not t.Cleanup — cleanups run
+// only after the test function has fully unwound, which is too late to unblock
+// a deferred srv.Close() inside it.
 // ---------------------------------------------------------------------------
 
 func TestAdapter_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {

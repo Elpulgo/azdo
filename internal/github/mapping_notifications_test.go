@@ -30,8 +30,14 @@ func TestMapNotificationReason_Decision18Table(t *testing.T) {
 		{"manual", provider.NotificationReasonOther},
 		{"invitation", provider.NotificationReasonOther},
 		{"member_feature_requested", provider.NotificationReasonOther},
-		// Invented, never-issued-by-GitHub string.
+		// Invented, never-issued-by-GitHub strings. "unknown" is called out
+		// separately from the other bogus values because it is the one input
+		// most likely to tempt an implementation into echoing the reserved
+		// NotificationReasonUnknown back out — Decision 18 forbids that, and
+		// the per-case check below is what pins it.
 		{"some_future_reason_nobody_has_seen_yet", provider.NotificationReasonOther},
+		{"unknown", provider.NotificationReasonOther},
+		{"totally_bogus", provider.NotificationReasonOther},
 		// Absent/zero-value reason.
 		{"", provider.NotificationReasonOther},
 	}
@@ -47,28 +53,6 @@ func TestMapNotificationReason_Decision18Table(t *testing.T) {
 				t.Errorf("MapNotificationReason(%q) = Unknown; the wire mapper must never emit Unknown (Decision 18)", tc.wire)
 			}
 		})
-	}
-}
-
-// TestMapNotificationReason_NeverEmitsUnknown widens the sweep beyond
-// Decision 18's list: every declared enum value plus every case above,
-// scanned again, must never collapse to the zero value from any wire input.
-// This is a second, independent pass over the same claim from
-// TestMapNotificationReason_Decision18Table's per-case check, guarding
-// against a future edit to one test loop silently dropping the assertion
-// from the other.
-func TestMapNotificationReason_NeverEmitsUnknown(t *testing.T) {
-	inputs := []string{
-		"review_requested", "mention", "team_mention", "assign", "author",
-		"comment", "state_change", "ci_activity", "security_alert",
-		"security_advisory_credit", "approval_requested", "subscribed",
-		"manual", "invitation", "member_feature_requested",
-		"unknown", "totally_bogus", "",
-	}
-	for _, in := range inputs {
-		if got := github.MapNotificationReason(in); got == provider.NotificationReasonUnknown {
-			t.Errorf("MapNotificationReason(%q) = Unknown, want anything else", in)
-		}
 	}
 }
 
@@ -351,35 +335,13 @@ func TestNotificationWebURL_FallsBackForUnrecognisedSubjectType(t *testing.T) {
 	}
 }
 
-func TestNotificationWebURL_FallsBackWhenSubjectURLEmpty(t *testing.T) {
-	// GitHub sends a null subject.url for some subject types (e.g. check-suite
-	// rows). Type is still "PullRequest"-shaped here to prove the empty URL,
-	// not the type, is what triggers the fallback.
-	thread := github.NotificationThread{
-		Subject: github.NotificationSubject{
-			Type: "PullRequest",
-			URL:  "",
-		},
-		Repository: github.NotificationRepository{
-			FullName: "octo/repo",
-			HTMLURL:  "https://github.com/octo/repo",
-		},
-	}
-
-	got := github.NotificationWebURL(thread)
-	want := "https://github.com/octo/repo"
-	if got != want {
-		t.Errorf("NotificationWebURL() = %q, want %q (repo fallback on empty subject.url)", got, want)
-	}
-}
-
 // TestNotificationWebURL_FallsBackWhenIDSegmentInvalid covers every measured
-// 404-producing id shape: no id segment at all, a trailing-slash URL, a
-// non-URL string, a non-numeric id where a number is required, the
-// implausible numbers Decision 36 rejects ("0", "007", a 26-digit id), and —
-// on the Commit side, where the guard is isHex rather than isItemNumber — a
-// missing and a non-hex segment. Each must fall back to the repository URL
-// rather than emit a clickable 404.
+// 404-producing id shape: an absent subject.url, no id segment at all, a
+// trailing-slash URL, a non-URL string, a non-numeric id where a number is
+// required, the implausible numbers Decision 36 rejects ("0", "007", a
+// 26-digit id), and — on the Commit side, where the guard is isHex rather
+// than isItemNumber — a missing and a non-hex segment. Each must fall back to
+// the repository URL rather than emit a clickable 404.
 func TestNotificationWebURL_FallsBackWhenIDSegmentInvalid(t *testing.T) {
 	repo := github.NotificationRepository{
 		FullName: "octo/repo",
@@ -391,6 +353,13 @@ func TestNotificationWebURL_FallsBackWhenIDSegmentInvalid(t *testing.T) {
 		name    string
 		subject github.NotificationSubject
 	}{
+		{
+			// GitHub sends a null subject.url for some subject types (e.g.
+			// check-suite rows). Type is still "PullRequest"-shaped here to
+			// prove the empty URL, not the type, triggers the fallback.
+			name:    "empty subject url",
+			subject: github.NotificationSubject{Type: "PullRequest", URL: ""},
+		},
 		{
 			name:    "no id segment at all",
 			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls"},
