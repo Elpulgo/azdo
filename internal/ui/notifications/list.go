@@ -48,6 +48,106 @@ type Model struct {
 	// unreachable through the tab in phase 1). Set only by
 	// SetCapabilityUnsupported; nothing in production ever calls it today.
 	capabilityUnsupported bool
+
+	// marker issues the mark-read/mark-done API calls behind `u`/`d` (task
+	// 14, decisions 13, 25, 43). It is exactly provider.NotificationSource —
+	// the composite already routes MarkRead/MarkDone by Identity.Kind over
+	// capable backends and reports a descriptive per-kind error when none
+	// match, so the pane needs no routing logic of its own, only the two
+	// mutating methods.
+	//
+	// Nil-safe by construction: NewModelWithStyles is called unconditionally
+	// from app.NewModel even for a capability-absent or nil provider
+	// (Decision 61), so a nil marker is a reachable state, not a defensive
+	// fallback. markRead/markDone both guard it explicitly before issuing a
+	// tea.Cmd.
+	marker provider.NotificationSource
+
+	// overrides holds the pane's local optimistic intent for in-flight or
+	// already-resolved `u`/`d` actions, applied on top of the feed by
+	// visibleItems until either the server agrees or the debounce window
+	// expires (the spec's Unknowns section: GitHub's read state can be
+	// eventually consistent, so a poll landing right after a PATCH can still
+	// report unread). Rollback on API failure is dropping the entry here —
+	// never deleting/re-inserting a row — so decision 45's merge-sort total
+	// order is never reproduced by hand and can never be gotten wrong.
+	//
+	// Keyed by identityKey (Kind+Scope+ID) rather than provider.Identity
+	// itself, matching Identity.SameItem's own comparison: ScopeDisplay is a
+	// presentation detail that must never split one logical row's override
+	// in two.
+	//
+	// FORWARD: task 16 — the unread-count footer badge must decide whether it
+	// counts m.feed's raw Read field or this pane's override-adjusted view.
+	// Nothing here exposes an "effective unread count" accessor; visibleItems
+	// is unexported and is the only place the two are currently combined.
+	// Without deciding this, a successful `u` would optimistically clear the
+	// row on screen while the badge still counted it, which reads as the
+	// count and the rows disagreeing.
+	overrides map[identityKey]override
+
+	// now lets tests replace time.Now for deterministic debounce-window
+	// assertions, mirroring internal/ui/metrics/list.go's own now field.
+	// Always set by NewModelWithStyles; use the clock() accessor rather than
+	// calling m.now directly so a zero-value Model (Decision 61's documented
+	// latent hazard — never reachable through production code today) cannot
+	// nil-deref here even if some future caller reaches this path.
+	now func() time.Time
+}
+
+// markDebounceWindow bounds how long a local u/d override outweighs a poll
+// that has not yet caught up. It is finite on purpose: Decision 5 keeps
+// phase 1 free of persisted local read/done state, so this is a short-lived
+// debounce buffer, not a second source of truth — once it elapses, a poll
+// that still disagrees with the local action is trusted again rather than
+// held back forever.
+const markDebounceWindow = 30 * time.Second
+
+// overrideKind distinguishes the two `u`/`d` optimistic intents held in
+// Model.overrides.
+type overrideKind int
+
+const (
+	// overrideRead forces the row's effective Read to true — u's optimistic
+	// mark-read. One-way per Decision 13: there is no corresponding
+	// "unread" kind, since GitHub exposes no mark-unread endpoint.
+	overrideRead overrideKind = iota
+	// overrideHidden removes the row from the visible feed entirely — d's
+	// optimistic mark-done.
+	overrideHidden
+)
+
+// override is one entry in Model.overrides: which intent is being held, and
+// until when it outweighs whatever the polled feed says.
+type override struct {
+	kind      overrideKind
+	expiresAt time.Time
+}
+
+// identityKey is the map key used for Model.overrides: provider.Identity
+// narrowed to exactly the fields Identity.SameItem compares (Kind, Scope,
+// ID), deliberately dropping ScopeDisplay so a presentation-only difference
+// between the row that was marked and a later poll's row can never be read
+// as two different notifications.
+type identityKey struct {
+	kind  provider.Kind
+	scope string
+	id    string
+}
+
+// keyOf derives an identityKey from a full Identity.
+func keyOf(id provider.Identity) identityKey {
+	return identityKey{kind: id.Kind, scope: id.Scope, id: id.ID}
+}
+
+// notificationMarkResultMsg reports the outcome of an in-flight
+// MarkRead/MarkDone call issued by markCmd. err is carried through untouched
+// — never flattened into a string — so a caller can still errors.As it apart
+// (e.g. *github.APIError) rather than pattern-matching rendered text.
+type notificationMarkResultMsg struct {
+	key  identityKey
+	kind overrideKind
+	err  error
 }
 
 // baseColumns are the notifications list's per-row column specs, excluding
@@ -63,17 +163,19 @@ var baseColumns = []listview.ColumnSpec{
 // than one distinct Identity.Scope (convention 7).
 var repoColumn = listview.ColumnSpec{Title: "Repo", WidthPct: 20, MinWidth: 10}
 
-// NewModel creates a new notifications pane model with default styles.
+// NewModel creates a new notifications pane model with default styles and no
+// marker (u/d are no-ops until a real one is injected).
 func NewModel() Model {
-	return NewModelWithStyles(styles.DefaultStyles())
+	return NewModelWithStyles(styles.DefaultStyles(), nil)
 }
 
 // NewModelWithStyles creates a new notifications pane model with custom
-// styles. Fetching/polling wiring (the provider.NotificationSource client,
-// the tab registration, the render states) is owned by later tasks (12, 13,
-// 15) — this constructor builds a self-contained pane whose data enters
-// exclusively through SetFeed.
-func NewModelWithStyles(s *styles.Styles) Model {
+// styles and the marker used for `u`/`d` (task 14). marker may be nil — see
+// Model.marker's doc comment; that is a reachable state, not a caller error.
+// Polling wiring (the tab registration, the render states) is owned by later
+// tasks (12, 13, 15) — this constructor builds a pane whose feed data enters
+// exclusively through SetFeed/HandleFetchResult.
+func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource) Model {
 	cfg := listview.Config[provider.Notification]{
 		LoadingMessage: "Loading notifications...",
 		EntityName:     "notifications",
@@ -94,8 +196,21 @@ func NewModelWithStyles(s *styles.Styles) Model {
 	}
 
 	return Model{
-		list: listview.New(cfg, s),
+		list:   listview.New(cfg, s),
+		marker: marker,
+		now:    time.Now,
 	}
+}
+
+// clock returns the pane's current time, via now when set (always true for
+// a pane built through NewModelWithStyles) and falling back to time.Now
+// otherwise, so a zero-value Model (Decision 61's documented latent hazard)
+// cannot nil-deref here.
+func (m Model) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 // Init initializes the model.
@@ -103,15 +218,32 @@ func (m Model) Init() tea.Cmd {
 	return m.list.Init()
 }
 
-// Update handles messages. The `f` key cycles the reason filter (decision
-// 53) when the list is in its normal browsing state; `r` is swallowed while
-// the fetch hook is a stub (decision 58); every other message is forwarded to
-// the underlying listview.
+// Update handles messages. notificationMarkResultMsg (the result of a `u`/`d`
+// API call issued by markCmd) is handled unconditionally, since it can land
+// regardless of view mode or search state. Otherwise: the `f` key cycles the
+// reason filter (decision 53), `u`/`d` mark read/done (task 14) when
+// canTriage allows it, `r` is swallowed while the fetch hook is a stub
+// (decision 58), and every other message is forwarded to the underlying
+// listview.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if res, ok := msg.(notificationMarkResultMsg); ok {
+		return m.handleMarkResult(res), nil
+	}
+
 	if key, ok := msg.(tea.KeyMsg); ok && !m.list.IsSearching() && m.list.GetViewMode() == listview.ViewList {
 		switch key.String() {
 		case "f":
 			return m.cycleReasonFilter(), nil
+		case "u":
+			if !m.canTriage() {
+				return m, nil
+			}
+			return m.markRead()
+		case "d":
+			if !m.canTriage() {
+				return m, nil
+			}
+			return m.markDone()
 		case "r":
 			// STOPGAP — removed by task 15, which wires the real fetch.
 			// listview.updateList sets loading = true and shows the spinner
@@ -128,6 +260,137 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// canTriage reports whether `u`/`d` make sense right now: there must be a
+// visible row under the cursor, and the pane must not be showing one of
+// View()'s error/capability render states (task 13, decisions 17, 63) — both
+// hide the table entirely, so a keypress reaching m.list in either state
+// would act on a row the user cannot even see. listview.HandleFetchResult's
+// error path leaves stale items in place (see listview.Err's doc comment),
+// so the error check is needed in addition to the emptiness check, not
+// implied by it.
+func (m Model) canTriage() bool {
+	if m.capabilityUnsupported || m.list.Err() != nil {
+		return false
+	}
+	return len(m.list.Items()) > 0
+}
+
+// markRead issues one MarkRead call for the row under the cursor and marks
+// it read optimistically (task 14). One-way per Decision 13: an already-Read
+// row — whether the feed itself says so, or a still-active overrideRead
+// already does — is left alone: no second MarkRead call, and no toggle back
+// to unread. item.Read here is the row's *effective* state (visibleItems
+// already applied any active override), so this single check covers both
+// cases without consulting m.overrides directly.
+func (m Model) markRead() (Model, tea.Cmd) {
+	item, ok := m.selectedItem()
+	if !ok || m.marker == nil {
+		return m, nil
+	}
+	if item.Read {
+		return m, nil
+	}
+
+	id := item.Identity
+	m = m.withOverride(keyOf(id), overrideRead)
+	return m, m.markCmd(id, overrideRead)
+}
+
+// markDone issues one MarkDone call for the row under the cursor and removes
+// it from view optimistically (task 14). Restoring it on failure is dropping
+// the override — never re-inserting into m.feed — so Decision 45's merge-sort
+// total order is never reproduced by hand.
+func (m Model) markDone() (Model, tea.Cmd) {
+	item, ok := m.selectedItem()
+	if !ok || m.marker == nil {
+		return m, nil
+	}
+
+	key := keyOf(item.Identity)
+	if ov, exists := m.overrides[key]; exists && ov.kind == overrideHidden && m.clock().Before(ov.expiresAt) {
+		// Already marked done and still hidden by its own override: nothing
+		// to re-trigger. Not reachable through the UI today — the row
+		// disappears from Items() the moment this happens, so the cursor can
+		// never land back on it while the override is live — guarded anyway
+		// so a future caller driving markDone directly cannot double-fire.
+		return m, nil
+	}
+
+	id := item.Identity
+	m = m.withOverride(key, overrideHidden)
+	return m, m.markCmd(id, overrideHidden)
+}
+
+// withOverride returns a copy of m with an override recorded for key,
+// expiring markDebounceWindow after the current clock reading, and
+// immediately re-applies it to the visible list (the "optimistic" half of
+// task 14 — the row updates before the API call resolves).
+//
+// Always allocates a new map rather than mutating m.overrides in place: every
+// other mutating method on this pane (reasonFiltered, visibleItems) hands
+// back a fresh slice for the same reason — an aliased map would let two
+// Model value copies silently share mutations, which would be observable the
+// moment a rollback on one copy also changed a snapshot taken earlier.
+func (m Model) withOverride(key identityKey, kind overrideKind) Model {
+	next := make(map[identityKey]override, len(m.overrides)+1)
+	for k, v := range m.overrides {
+		next[k] = v
+	}
+	next[key] = override{kind: kind, expiresAt: m.clock().Add(markDebounceWindow)}
+	m.overrides = next
+	return m.setItemsPreservingSelection()
+}
+
+// dropOverride returns a copy of m with key's override removed — the
+// rollback path for a failed MarkRead/MarkDone (task 14). This is
+// deliberately NOT a no-op: dropping the override is what un-hides a failed
+// `d` and un-marks-read a failed `u`, since neither ever touched m.feed
+// itself. A no-op rollback would make the optimistic update permanent even
+// when the API call failed.
+func (m Model) dropOverride(key identityKey) Model {
+	if _, ok := m.overrides[key]; !ok {
+		return m
+	}
+	next := make(map[identityKey]override, len(m.overrides))
+	for k, v := range m.overrides {
+		if k != key {
+			next[k] = v
+		}
+	}
+	m.overrides = next
+	return m.setItemsPreservingSelection()
+}
+
+// markCmd returns the tea.Cmd that performs the actual API call for kind
+// (overrideRead -> MarkRead, overrideHidden -> MarkDone) against id, and
+// reports the outcome via notificationMarkResultMsg. m.marker is captured by
+// value into the closure at call time, not m itself, so the goroutine
+// bubbletea runs this in can never race a later Update on the model.
+func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
+	marker := m.marker
+	key := keyOf(id)
+	return func() tea.Msg {
+		var err error
+		if kind == overrideRead {
+			err = marker.MarkRead(id)
+		} else {
+			err = marker.MarkDone(id)
+		}
+		return notificationMarkResultMsg{key: key, kind: kind, err: err}
+	}
+}
+
+// handleMarkResult applies the outcome of a markCmd. Success is a no-op: the
+// optimistic override already applied and stays in place — until the feed
+// agrees or the debounce window elapses (see visibleItems). Failure rolls the
+// optimistic change back by dropping the override.
+func (m Model) handleMarkResult(res notificationMarkResultMsg) Model {
+	if res.err == nil {
+		return m
+	}
+	return m.dropOverride(res.key)
 }
 
 // View renders task 13's four render states, in priority order, per decision
@@ -348,16 +611,21 @@ func (m Model) cycleReasonFilter() Model {
 	return m.setItemsPreservingSelection()
 }
 
-// setItemsPreservingSelection hands the current `f`-filtered view to
-// listview.SetItems (decision 54) and restores the cursor onto the *same
-// item* it was on before, by Identity.SameItem (decision 55).
+// setItemsPreservingSelection hands the current override-applied,
+// `f`-filtered view to listview.SetItems (decision 54) and restores the
+// cursor onto the *same item* it was on before, by Identity.SameItem
+// (decision 55).
 //
 // listview.setColumnsAndRows restores the cursor purely positionally — it
 // saves table.Cursor() and re-applies it clamped to the new row count — so
 // narrowing the feed silently moves the selection to a different row.
 // Decision 45 canonicalised the merge's sort order to protect exactly this
 // index-held cursor; an in-pane filter reintroduces the hazard from the other
-// direction, and task 14's `d` would then mark the wrong row done.
+// direction, and task 14's `d` would then mark the wrong row done. This same
+// call is what applies a fresh `u`/`d` override immediately (the "optimistic"
+// half of task 14) and what re-applies one after a poll (SetFeed) or a
+// rollback (dropOverride) — a single call site for every path that changes
+// the visible row set, per convention 7.
 //
 // When the previously selected item did not survive the filter there is
 // nothing to restore to, and listview's clamp is the correct behaviour — so
@@ -365,7 +633,7 @@ func (m Model) cycleReasonFilter() Model {
 func (m Model) setItemsPreservingSelection() Model {
 	prev, hadSelection := m.selectedIdentity()
 
-	m.list = m.list.SetItems(m.reasonFiltered())
+	m.list = m.list.SetItems(m.visibleItems())
 
 	if hadSelection {
 		if idx := m.list.FindIndex(func(n provider.Notification) bool {
@@ -377,16 +645,60 @@ func (m Model) setItemsPreservingSelection() Model {
 	return m
 }
 
-// selectedIdentity returns the Identity of the row currently under the cursor
-// and whether there was one (an empty list, or a cursor listview has clamped
-// to -1, yields false).
-func (m Model) selectedIdentity() (provider.Identity, bool) {
+// selectedItem returns the notification currently under the cursor and
+// whether there was one (an empty list, or a cursor listview has clamped to
+// -1, yields false).
+func (m Model) selectedItem() (provider.Notification, bool) {
 	items := m.list.Items()
 	idx := m.list.SelectedIndex()
 	if idx < 0 || idx >= len(items) {
+		return provider.Notification{}, false
+	}
+	return items[idx], true
+}
+
+// selectedIdentity returns the Identity of the row currently under the cursor
+// and whether there was one.
+func (m Model) selectedIdentity() (provider.Identity, bool) {
+	item, ok := m.selectedItem()
+	if !ok {
 		return provider.Identity{}, false
 	}
-	return items[idx].Identity, true
+	return item.Identity, true
+}
+
+// visibleItems returns the rows the table should render: the `f`-filtered
+// feed (reasonFiltered) with any active `u`/`d` override applied on top —
+// overrideHidden rows dropped, overrideRead rows shown with Read forced true.
+// An override past its debounce window is treated as expired and skipped, so
+// the polled feed's own data wins again (Decision 5: this is a short-lived
+// buffer, not persisted local state) — this is exactly what makes "the
+// debounce window" a real, finite window rather than a permanent override.
+//
+// Always a freshly allocated slice when any override is active, for the same
+// reason reasonFiltered is: the pane's held feed must never be aliased or
+// mutated by a later step.
+func (m Model) visibleItems() []provider.Notification {
+	base := m.reasonFiltered()
+	if len(m.overrides) == 0 {
+		return base
+	}
+
+	now := m.clock()
+	out := make([]provider.Notification, 0, len(base))
+	for _, n := range base {
+		ov, ok := m.overrides[keyOf(n.Identity)]
+		if !ok || !now.Before(ov.expiresAt) {
+			out = append(out, n)
+			continue
+		}
+		if ov.kind == overrideHidden {
+			continue
+		}
+		n.Read = true
+		out = append(out, n)
+	}
+	return out
 }
 
 // reasonFiltered returns the rows visible under the current `f` position: the

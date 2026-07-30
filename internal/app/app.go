@@ -298,6 +298,21 @@ func hasNotificationCapability(p provider.Provider) bool {
 	return nc.HasNotifications()
 }
 
+// notificationMarker returns p as a provider.NotificationSource for the
+// notifications pane's u/d mark actions (task 14), or nil when p does not
+// implement it — including when p is nil, since a nil interface value type
+// asserted against an interface simply fails the assertion. Unlike
+// hasNotificationCapability, this does not additionally require
+// HasNotifications(): *provider.CompositeProvider.MarkRead/MarkDone already
+// route by Identity.Kind (Decisions 25, 43) and report a descriptive
+// per-kind error when no backend matches, so the plain type assertion is the
+// correct level here — the pane never needs to know which kinds are
+// routable, only whether it has something to call at all.
+func notificationMarker(p provider.Provider) provider.NotificationSource {
+	marker, _ := p.(provider.NotificationSource)
+	return marker
+}
+
 // buildEnabledTabs returns the list of enabled tabs based on config.
 // azurePresent must be true when a live Azure MultiClient is available;
 // the metrics tab requires both cfg.Metrics.Enabled AND azurePresent.
@@ -580,7 +595,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// tasks 15 and 16 deliver messages to this pane from the top-level switch.
 	// Constructing here is measured behaviour-preserving and removes the
 	// hazard instead of documenting it.
-	nv := notifications.NewModelWithStyles(appStyles)
+	nv := notifications.NewModelWithStyles(appStyles, notificationMarker(p))
 
 	return Model{
 		client:        p,
@@ -862,11 +877,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// recreating would erase its loaded snapshots, sprint selection and
 		// fetched rows, blanking the section on theme change.
 		m.metricsView.SetStyles(m.styles)
-		// notificationsView has no client dependency (task 12's Fetch is a
-		// stub, task 15 wires the real one) and no accumulated state worth
-		// preserving yet, so it is recreated like pipelines/PR/WI rather than
-		// restyled in place like metrics.
-		m.notificationsView = notifications.NewModelWithStyles(m.styles)
+		// notificationsView is recreated like pipelines/PR/WI rather than
+		// restyled in place like metrics. Its marker (task 14) is re-supplied
+		// from m.client on every reconstruction, same as the other panes; any
+		// in-flight optimistic overrides are discarded here exactly as the
+		// feed itself is, which is consistent with the rest of this block —
+		// task 15's poller will simply repopulate both on the next fetch.
+		m.notificationsView = notifications.NewModelWithStyles(m.styles, notificationMarker(m.client))
 
 		// CRITICAL: Set window size for all views before they try to render
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)

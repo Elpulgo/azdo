@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -171,7 +172,7 @@ func TestMultiRepo_GatesOnScope_NotScopeDisplay(t *testing.T) {
 // SetFeed → listview.SetItems → setColumnsAndRows → SetRows → UpdateViewport.
 
 func TestView_RendersAfterWindowSizeMsg_SingleRepo(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	defer func() {
@@ -187,7 +188,7 @@ func TestView_RendersAfterWindowSizeMsg_SingleRepo(t *testing.T) {
 }
 
 func TestView_RendersAfterWindowSizeMsg_MultiRepo(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	defer func() {
@@ -451,7 +452,7 @@ func TestPresentReasons_NeverIncludesUnknown(t *testing.T) {
 }
 
 func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Feed order deliberately reversed vs. enum order, and a row carrying
@@ -511,7 +512,7 @@ func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
 // index (1 of 3) is neither zero nor last either. Reset-to-0, clamp-to-last and
 // keep-the-saved-index all land on a different row than the identity restore.
 func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Row 0: id 1, a/repo1, Subscribed
@@ -596,7 +597,7 @@ func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testi
 // 2-row result, so it must clamp to the last row (index 1) — which also pins
 // that the clamp is to len(rows)-1 and not to 0.
 func TestCycleReasonFilter_Collapse_CursorClamped_ItemDropped(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	feed := []provider.Notification{
@@ -633,7 +634,7 @@ func TestCycleReasonFilter_Collapse_CursorClamped_ItemDropped(t *testing.T) {
 // moved (the merge sorts newest-first, so ties and new arrivals reshuffle
 // constantly) must keep the cursor rather than keeping the index.
 func TestSetFeed_PreservesSelectedItemAcrossReorder(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	m = m.SetFeed([]provider.Notification{
@@ -660,7 +661,7 @@ func TestSetFeed_PreservesSelectedItemAcrossReorder(t *testing.T) {
 // ─── f filter: observability (decision 57) ──────────────────────────────────
 
 func TestReasonFilter_Accessor_ReportsCyclePosition(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
@@ -689,7 +690,7 @@ func TestReasonFilter_Accessor_ReportsCyclePosition(t *testing.T) {
 // that reason. Without the indicator the pane renders the plain "no
 // notifications" text while a user-set filter is what hides every row.
 func TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
@@ -728,7 +729,7 @@ func TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox(t *testing.T) {
 // HandleFetchResult. Task 15 removes both the stopgap and this test's reason to
 // exist when the real fetch lands.
 func TestUpdate_RKey_DoesNotStrandSpinner(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "Still here after r", provider.NotificationReasonMentioned, false, fixedNow),
@@ -753,7 +754,7 @@ func TestUpdate_RKey_DoesNotStrandSpinner(t *testing.T) {
 // must then return to the "all" position rather than jumping to the first
 // present reason — which would silently move the user's filter sideways.
 func TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
@@ -789,7 +790,7 @@ func TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll(t *testing.T) {
 // sets no FilterFunc, so listview's search mode is unreachable in phase 1 and
 // the ViewList half of the guard is the only testable one.
 func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
@@ -835,7 +836,7 @@ func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
 // hand-written zero constant would keep passing when listview's own contract
 // changes underneath.
 func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
-	base := NewModelWithStyles(styles.DefaultStyles())
+	base := NewModelWithStyles(styles.DefaultStyles(), nil)
 	base.list, _ = base.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	base = base.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
@@ -920,7 +921,7 @@ func assertOtherStatesAbsent(t *testing.T, view string, own string) {
 // "you're clear", never as an error, and per decision 58's `r` stopgap must
 // not tell the user to press a key this pane currently swallows.
 func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed(nil)
 
@@ -940,7 +941,7 @@ func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
 // feed has rows, but the active `f` reason filter matches none of them. This
 // must not render as the plain empty-inbox text.
 func TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
@@ -986,7 +987,7 @@ func TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows(t *testin
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "Must not render once errored", provider.NotificationReasonMentioned, false, fixedNow),
@@ -1024,7 +1025,7 @@ func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	// No SetFeed call at all: items start at zero.
 
@@ -1047,7 +1048,7 @@ func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
 // directly, rather than as an app-level test that could never fail for the
 // right reason.
 func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetCapabilityUnsupported()
 
@@ -1079,7 +1080,7 @@ func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.HandleFetchResult(nil, listErr)
 	if !strings.Contains(m.View(), errorMarker) {
@@ -1119,7 +1120,7 @@ func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
 // a real Fetch replaces the stub. Task 15 must set loading on the initial
 // fetch, or move this pane off listview's flag.
 func TestView_Loading_DoesNotClaimCaughtUp(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed(nil)
 	if !strings.Contains(m.View(), emptyInboxMarker) {
@@ -1152,7 +1153,7 @@ func TestView_CapabilityUnsupported_OutranksError(t *testing.T) {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles())
+	m := NewModelWithStyles(styles.DefaultStyles(), nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.HandleFetchResult(nil, listErr)
 	m = m.SetCapabilityUnsupported()
@@ -1162,4 +1163,431 @@ func TestView_CapabilityUnsupported_OutranksError(t *testing.T) {
 		t.Errorf("view with both capability-unsupported and an error = %q, want the capability state to win", view)
 	}
 	assertOtherStatesAbsent(t, view, capabilityMarker)
+}
+
+// ─── task 14: u mark-read / d mark-done, optimistic update + rollback ───────
+
+// fakeMarker is a test double for provider.NotificationSource (task 14). It
+// records every MarkRead/MarkDone call it receives — including the exact
+// Identity — and returns readErr/doneErr (nil unless a test sets them) so
+// failure/rollback paths can be driven deterministically.
+type fakeMarker struct {
+	readCalls []provider.Identity
+	doneCalls []provider.Identity
+	readErr   error
+	doneErr   error
+}
+
+func (f *fakeMarker) List(provider.NotifOpts) ([]provider.Notification, error) {
+	return nil, nil
+}
+
+func (f *fakeMarker) MarkRead(id provider.Identity) error {
+	f.readCalls = append(f.readCalls, id)
+	return f.readErr
+}
+
+func (f *fakeMarker) MarkDone(id provider.Identity) error {
+	f.doneCalls = append(f.doneCalls, id)
+	return f.doneErr
+}
+
+// runMarkCmd runs cmd synchronously (the way bubbletea itself would, just
+// without the goroutine) and feeds the resulting message back into m.Update,
+// mirroring how markCmd's notificationMarkResultMsg actually reaches the
+// pane in production.
+func runMarkCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("want a non-nil tea.Cmd from the mark action")
+	}
+	msg := cmd()
+	m, _ = m.Update(msg)
+	return m
+}
+
+func newTriagePane(t *testing.T, marker provider.NotificationSource, feed []provider.Notification) Model {
+	t.Helper()
+	m := NewModelWithStyles(styles.DefaultStyles(), marker)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.now = func() time.Time { return fixedNow }
+	return m.SetFeed(feed)
+}
+
+// TestMarkRead_Success_AppliesOptimisticallyAndSurvivesSuccess pins the
+// happy path: `u` marks the row Read immediately (before the API call
+// resolves), issues exactly one MarkRead call for the selected row's own
+// Identity, and a successful result leaves the optimistic mark in place.
+func TestMarkRead_Success_AppliesOptimisticallyAndSurvivesSuccess(t *testing.T) {
+	marker := &fakeMarker{}
+	want := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{want})
+
+	m, cmd := m.Update(keyRune('u'))
+
+	// The optimistic mark is applied synchronously inside Update, before the
+	// tea.Cmd — and therefore the actual MarkRead call — ever runs.
+	item, ok := m.selectedItem()
+	if !ok || !item.Read {
+		t.Fatalf("after u, selected item = %+v, ok=%v, want Read=true applied optimistically before the API call resolves", item, ok)
+	}
+	if len(marker.readCalls) != 0 {
+		t.Fatalf("MarkRead calls = %d before the cmd runs, want 0 (the call happens inside the tea.Cmd)", len(marker.readCalls))
+	}
+
+	m = runMarkCmd(t, m, cmd)
+
+	if len(marker.readCalls) != 1 {
+		t.Fatalf("MarkRead calls = %d, want exactly 1", len(marker.readCalls))
+	}
+	if !marker.readCalls[0].SameItem(want.Identity) {
+		t.Errorf("MarkRead called with Identity = %+v, want %+v", marker.readCalls[0], want.Identity)
+	}
+
+	item, ok = m.selectedItem()
+	if !ok || !item.Read {
+		t.Errorf("after a successful MarkRead result, item = %+v, ok=%v, want Read to remain true", item, ok)
+	}
+}
+
+// TestMarkRead_Failure_RollsBackOptimisticUpdate is the mutation target for
+// "rollback made a no-op": a failed MarkRead must un-mark the row, since
+// markRead never touches m.feed itself — only dropOverride can undo it.
+func TestMarkRead_Failure_RollsBackOptimisticUpdate(t *testing.T) {
+	marker := &fakeMarker{readErr: errors.New("boom")}
+	want := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{want})
+
+	m, cmd := m.Update(keyRune('u'))
+	if item, ok := m.selectedItem(); !ok || !item.Read {
+		t.Fatalf("precondition: item = %+v, ok=%v, want Read=true right after u", item, ok)
+	}
+
+	m = runMarkCmd(t, m, cmd)
+
+	item, ok := m.selectedItem()
+	if !ok || item.Read {
+		t.Errorf("after a failed MarkRead result, item = %+v, ok=%v, want Read rolled back to false", item, ok)
+	}
+}
+
+// TestMarkRead_AlreadyRead_IsOneWay_NoSecondCall is the mutation target for
+// "u turned into a toggle": pressing u a second time on a row already marked
+// Read (via a prior successful u) must not issue a second MarkRead call and
+// must not flip Read back to false. Decision 13 gives GitHub no mark-unread
+// endpoint at all, so a toggle here would have nothing real to call.
+func TestMarkRead_AlreadyRead_IsOneWay_NoSecondCall(t *testing.T) {
+	marker := &fakeMarker{}
+	want := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{want})
+
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+	if len(marker.readCalls) != 1 {
+		t.Fatalf("precondition: MarkRead calls = %d, want exactly 1 after the first u", len(marker.readCalls))
+	}
+
+	m, cmd = m.Update(keyRune('u'))
+
+	if cmd != nil {
+		t.Error("a second u on an already-Read row must not issue another tea.Cmd")
+	}
+	if len(marker.readCalls) != 1 {
+		t.Errorf("MarkRead calls after a second u = %d, want still exactly 1", len(marker.readCalls))
+	}
+	if item, ok := m.selectedItem(); !ok || !item.Read {
+		t.Errorf("after a second u, item = %+v, ok=%v, want Read to remain true (no toggle back to unread)", item, ok)
+	}
+}
+
+// TestMarkRead_AlreadyReadInFeed_NeverCallsMarkRead covers the same one-way
+// rule for a row the feed itself already reports as Read (no override
+// involved at all): u must be a pure no-op.
+func TestMarkRead_AlreadyReadInFeed_NeverCallsMarkRead(t *testing.T) {
+	marker := &fakeMarker{}
+	already := mkNotification("1", "owner/repo", "Already read", provider.NotificationReasonMentioned, true, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{already})
+
+	m, cmd := m.Update(keyRune('u'))
+
+	if cmd != nil {
+		t.Error("u on a row the feed already reports Read must not issue a tea.Cmd")
+	}
+	if len(marker.readCalls) != 0 {
+		t.Errorf("MarkRead calls = %d, want 0", len(marker.readCalls))
+	}
+}
+
+// TestMarkDone_Success_RemovesRowAndStaysRemoved pins the happy path for `d`:
+// the row disappears from Items() immediately (optimistic), and a successful
+// result leaves it gone.
+func TestMarkDone_Success_RemovesRowAndStaysRemoved(t *testing.T) {
+	marker := &fakeMarker{}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonReviewRequested, false, fixedNow)
+	other := mkNotification("2", "owner/repo", "Leave me", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target, other})
+
+	m, cmd := m.Update(keyRune('d'))
+
+	// Optimistic removal happens synchronously inside Update, before the
+	// tea.Cmd — and therefore the actual MarkDone call — ever runs.
+	if len(m.list.Items()) != 1 || m.list.Items()[0].Identity.ID != "2" {
+		t.Fatalf("after d, Items() = %+v, want only the other row left", m.list.Items())
+	}
+	if len(marker.doneCalls) != 0 {
+		t.Fatalf("MarkDone calls = %+v before the cmd runs, want none (the call happens inside the tea.Cmd)", marker.doneCalls)
+	}
+
+	m = runMarkCmd(t, m, cmd)
+
+	if len(marker.doneCalls) != 1 || !marker.doneCalls[0].SameItem(target.Identity) {
+		t.Fatalf("MarkDone calls = %+v, want exactly one call for %+v", marker.doneCalls, target.Identity)
+	}
+	if len(m.list.Items()) != 1 || m.list.Items()[0].Identity.ID != "2" {
+		t.Errorf("after a successful MarkDone result, Items() = %+v, want the row to stay removed", m.list.Items())
+	}
+}
+
+// TestMarkDone_Failure_RestoresRow is the mutation target for "rollback made
+// a no-op" on the d path: a failed MarkDone must bring the row back, and by
+// dropping the override rather than re-inserting into m.feed (so decision
+// 45's merge order is never reproduced by hand).
+func TestMarkDone_Failure_RestoresRow(t *testing.T) {
+	marker := &fakeMarker{doneErr: errors.New("boom")}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonReviewRequested, false, fixedNow)
+	other := mkNotification("2", "owner/repo", "Leave me", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target, other})
+
+	m, cmd := m.Update(keyRune('d'))
+	if len(m.list.Items()) != 1 {
+		t.Fatalf("precondition: Items() = %+v, want the target row optimistically removed", m.list.Items())
+	}
+
+	m = runMarkCmd(t, m, cmd)
+
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("after a failed MarkDone result, Items() = %+v, want both rows restored", m.list.Items())
+	}
+	foundTarget := false
+	for _, n := range m.list.Items() {
+		if n.Identity.SameItem(target.Identity) {
+			foundTarget = true
+		}
+	}
+	if !foundTarget {
+		t.Errorf("Items() = %+v, want the rolled-back row's own Identity restored", m.list.Items())
+	}
+}
+
+// TestMarkRead_ExactIdentity_SelectsRowUnderCursor_NotFirstRow is the
+// mutation target for "MarkRead firing on the wrong Identity": with the
+// cursor moved onto the second row, u must call MarkRead for that row's
+// Identity, never the first row's.
+func TestMarkRead_ExactIdentity_SelectsRowUnderCursor_NotFirstRow(t *testing.T) {
+	marker := &fakeMarker{}
+	first := mkNotification("1", "owner/repo", "First", provider.NotificationReasonReviewRequested, false, fixedNow)
+	second := mkNotification("2", "owner/repo", "Second", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{first, second})
+	m.list.SetCursor(1)
+
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+
+	if len(marker.readCalls) != 1 {
+		t.Fatalf("MarkRead calls = %d, want exactly 1", len(marker.readCalls))
+	}
+	if !marker.readCalls[0].SameItem(second.Identity) {
+		t.Errorf("MarkRead called with Identity = %+v, want the cursor row's own Identity %+v", marker.readCalls[0], second.Identity)
+	}
+}
+
+// TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack is the core task
+// 14 criterion from the spec's Unknowns section, and the mutation target for
+// both "dropping the override for a still-unread polled row" and "debounce
+// window forced to zero": a poll landing well inside the 30s window, still
+// reporting the row unread, must not un-mark it — the local intent is held
+// until the server agrees or the window elapses, whichever comes first.
+func TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack(t *testing.T) {
+	marker := &fakeMarker{}
+	stale := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{stale})
+
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+	if item, ok := m.selectedItem(); !ok || !item.Read {
+		t.Fatalf("precondition: item = %+v, ok=%v, want Read=true after the successful mark", item, ok)
+	}
+
+	// A poll lands 1s later (well inside the 30s debounce window) and still
+	// reports the row unread — GitHub's read state is eventually consistent
+	// (spec's Unknowns section).
+	m.now = func() time.Time { return fixedNow.Add(1 * time.Second) }
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+	})
+
+	item, ok := m.selectedItem()
+	if !ok || !item.Read {
+		t.Errorf("after a stale poll inside the debounce window, item = %+v, ok=%v, want Read to stay true (no flicker)", item, ok)
+	}
+}
+
+// TestMarkRead_PollAfterDebounceWindowExpires_TrustsPoll is the mutation
+// target for "debounce window forced to infinite": once the window has
+// genuinely elapsed, a poll that still disagrees must win — the override is
+// a short-lived buffer (decision 5), not a second permanent source of truth.
+func TestMarkRead_PollAfterDebounceWindowExpires_TrustsPoll(t *testing.T) {
+	marker := &fakeMarker{}
+	stale := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{stale})
+
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+
+	// A poll lands well past the 30s debounce window, still reporting unread.
+	m.now = func() time.Time { return fixedNow.Add(10 * time.Minute) }
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+	})
+
+	item, ok := m.selectedItem()
+	if !ok || item.Read {
+		t.Errorf("after a poll past the debounce window, item = %+v, ok=%v, want Read=false (the poll wins)", item, ok)
+	}
+}
+
+// TestMarkDone_PollWithinDebounceWindow_RowStaysHidden mirrors the read-side
+// debounce test for the hidden (d) path: a poll landing inside the window
+// that still includes the row must not bring it back.
+func TestMarkDone_PollWithinDebounceWindow_RowStaysHidden(t *testing.T) {
+	marker := &fakeMarker{}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target})
+
+	m, cmd := m.Update(keyRune('d'))
+	m = runMarkCmd(t, m, cmd)
+
+	m.now = func() time.Time { return fixedNow.Add(1 * time.Second) }
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonReviewRequested, false, fixedNow),
+	})
+
+	if len(m.list.Items()) != 0 {
+		t.Errorf("Items() = %+v, want the row to stay hidden inside the debounce window", m.list.Items())
+	}
+}
+
+// TestCanTriage_Blocks_UAndD_WhenNoRows pins that u/d are no-ops with an
+// empty feed: canTriage must gate on more than "a marker is set".
+func TestCanTriage_Blocks_UAndD_WhenNoRows(t *testing.T) {
+	marker := &fakeMarker{}
+	m := newTriagePane(t, marker, nil)
+
+	if _, cmd := m.Update(keyRune('u')); cmd != nil {
+		t.Error("u with no rows must not issue a tea.Cmd")
+	}
+	if _, cmd := m.Update(keyRune('d')); cmd != nil {
+		t.Error("d with no rows must not issue a tea.Cmd")
+	}
+	if len(marker.readCalls) != 0 || len(marker.doneCalls) != 0 {
+		t.Errorf("marker calls = read:%d done:%d, want none", len(marker.readCalls), len(marker.doneCalls))
+	}
+}
+
+// TestCanTriage_Blocks_UAndD_WhenErrored pins that a pane in decision 63's
+// error render state swallows u/d rather than acting on whatever stale items
+// listview.HandleFetchResult left behind (listview never clears m.items on
+// its error path).
+func TestCanTriage_Blocks_UAndD_WhenErrored(t *testing.T) {
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	marker := &fakeMarker{}
+	m := newTriagePane(t, marker, []provider.Notification{
+		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+	})
+	m = m.HandleFetchResult(nil, listErr)
+
+	if _, cmd := m.Update(keyRune('u')); cmd != nil {
+		t.Error("u while errored must not issue a tea.Cmd")
+	}
+	if _, cmd := m.Update(keyRune('d')); cmd != nil {
+		t.Error("d while errored must not issue a tea.Cmd")
+	}
+	if len(marker.readCalls) != 0 || len(marker.doneCalls) != 0 {
+		t.Errorf("marker calls = read:%d done:%d, want none", len(marker.readCalls), len(marker.doneCalls))
+	}
+}
+
+// TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported pins the third gate:
+// decision 63's capability-unsupported state must also block u/d.
+func TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported(t *testing.T) {
+	marker := &fakeMarker{}
+	m := newTriagePane(t, marker, []provider.Notification{
+		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+	})
+	m = m.SetCapabilityUnsupported()
+
+	if _, cmd := m.Update(keyRune('u')); cmd != nil {
+		t.Error("u while capability-unsupported must not issue a tea.Cmd")
+	}
+	if _, cmd := m.Update(keyRune('d')); cmd != nil {
+		t.Error("d while capability-unsupported must not issue a tea.Cmd")
+	}
+	if len(marker.readCalls) != 0 || len(marker.doneCalls) != 0 {
+		t.Errorf("marker calls = read:%d done:%d, want none", len(marker.readCalls), len(marker.doneCalls))
+	}
+}
+
+// TestMarkRead_NilMarker_IsNoop pins decision 61's nil-safety requirement:
+// a pane built with no marker (the capability-absent / nil provider case)
+// must swallow u/d without panicking rather than dereferencing a nil
+// interface.
+func TestMarkRead_NilMarker_IsNoop(t *testing.T) {
+	m := newTriagePane(t, nil, []provider.Notification{
+		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+	})
+
+	m, cmd := m.Update(keyRune('u'))
+	if cmd != nil {
+		t.Error("u with a nil marker must not issue a tea.Cmd")
+	}
+	if item, ok := m.selectedItem(); !ok || item.Read {
+		t.Errorf("item = %+v, ok=%v, want Read unchanged with a nil marker", item, ok)
+	}
+
+	m, cmd = m.Update(keyRune('d'))
+	if cmd != nil {
+		t.Error("d with a nil marker must not issue a tea.Cmd")
+	}
+	if len(m.list.Items()) != 1 {
+		t.Errorf("Items() = %+v, want the row still present with a nil marker", m.list.Items())
+	}
+}
+
+// TestMarkDone_CursorSurvives_OnPreviouslySelectedNeighbor pins decision 55's
+// identity-based cursor restore for d's own removal: with the cursor on the
+// middle row of three, marking it done must land the cursor on the row that
+// was its neighbor, not wherever listview's positional clamp would leave it
+// by accident.
+func TestMarkDone_CursorSurvives_OnPreviouslySelectedNeighbor(t *testing.T) {
+	marker := &fakeMarker{}
+	first := mkNotification("1", "owner/repo", "First", provider.NotificationReasonReviewRequested, false, fixedNow)
+	middle := mkNotification("2", "owner/repo", "Middle", provider.NotificationReasonMentioned, false, fixedNow)
+	last := mkNotification("3", "owner/repo", "Last", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{first, middle, last})
+	m.list.SetCursor(1)
+
+	m, _ = m.Update(keyRune('d'))
+
+	item, ok := m.selectedItem()
+	if !ok {
+		t.Fatal("want a selection to remain after removing the middle row")
+	}
+	if item.Identity.ID == "2" {
+		t.Fatalf("selected item = %+v, the removed row must not still be selectable", item)
+	}
 }

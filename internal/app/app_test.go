@@ -2107,12 +2107,12 @@ func TestModel_WindowSizeMsg_SizesNotificationsPane(t *testing.T) {
 
 	got := m.notificationsView.View()
 
-	sized := notifications.NewModelWithStyles(m.styles)
+	sized := notifications.NewModelWithStyles(m.styles, nil)
 	sized, _ = sized.Update(m.contentViewSize())
 	sized = sized.SetFeed(feed)
 	want := sized.View()
 
-	unsized := notifications.NewModelWithStyles(m.styles)
+	unsized := notifications.NewModelWithStyles(m.styles, nil)
 	unsized = unsized.SetFeed(feed)
 	reference := unsized.View()
 
@@ -2235,7 +2235,7 @@ func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.
 
 	// resizeActiveViewIfNeeded: the pane must be re-measured for the shorter
 	// footer instead of keeping (c)'s height.
-	sized := notifications.NewModelWithStyles(m.styles)
+	sized := notifications.NewModelWithStyles(m.styles, nil)
 	sized, _ = sized.Update(m.contentViewSize())
 	sized = sized.SetFeed(feed)
 	wantHeight := lipgloss.Height(sized.View())
