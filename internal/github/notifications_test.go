@@ -2,6 +2,7 @@ package github
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1131,6 +1132,112 @@ func TestNotificationsClient_MarkDone_InvalidatesCache_SecondListNotStale(t *tes
 }
 
 // ---------------------------------------------------------------------------
+// Decision 37, the important regression test: a SECOND mark in the same
+// sitting. Every other mark->List test in this suite does exactly one mark,
+// which does not distinguish cacheGen.Add(1) from cacheGen.Store(1) in
+// MarkRead/MarkDone — both take the counter from 0 to 1 on a single call. A
+// second mark tells them apart: Store(1) leaves the counter at 1 again
+// instead of advancing it to 2, so the cache committed after the first mark's
+// refetch (cachedGen == 1) is wrongly re-certified as valid against the
+// post-second-mark generation (also 1, under the mutant) — the server is
+// then offered If-Modified-Since, answers 304, and the row dismissed by the
+// SECOND mark is replayed forever. This is exactly decision 37's resurrection
+// bug, one mark later than the single-mark tests above can see.
+//
+// Asserted purely on observable behaviour (the rows List returns and their
+// Unread values) — the private cacheGen/cachedGen fields are never read.
+// ---------------------------------------------------------------------------
+
+func TestNotificationsClient_TwoSequentialMarkReads_SecondListNotStale(t *testing.T) {
+	const lastModified = "Wed, 21 Oct 2015 07:28:00 GMT"
+
+	var read1, read2 bool
+	listCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/notifications/threads/1":
+			read1 = true
+			w.WriteHeader(http.StatusResetContent)
+		case r.Method == http.MethodPatch && r.URL.Path == "/notifications/threads/2":
+			read2 = true
+			w.WriteHeader(http.StatusResetContent)
+		case r.Method == http.MethodGet:
+			listCalls++
+			if listCalls == 1 {
+				w.Header().Set("Last-Modified", lastModified)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`[{"id":"1","unread":true,"reason":"subscribed"},{"id":"2","unread":true,"reason":"mention"}]`))
+				return
+			}
+			// A server that would happily 304 any conditional request, even
+			// though a mark has landed server-side since — the collection's
+			// Last-Modified need not move just because one thread's read
+			// state changed. Only a client that (wrongly) still believes its
+			// cache reflects every mark so far would offer a validator here
+			// at all.
+			if r.Header.Get("If-Modified-Since") != "" {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			// The same Last-Modified value is echoed on every fresh 200, not
+			// just the first — otherwise List clears its cached validator on
+			// this response (Last-Modified absent) and the third call would
+			// offer no If-Modified-Since regardless of cacheGen, masking
+			// exactly the mutation this test exists to catch.
+			w.Header().Set("Last-Modified", lastModified)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(fmt.Sprintf(
+				`[{"id":"1","unread":%t,"reason":"subscribed"},{"id":"2","unread":%t,"reason":"mention"}]`,
+				!read1, !read2)))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewNotificationsClient("tok")
+	c.SetBaseURL(srv.URL)
+
+	first, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("first List() error = %v", err)
+	}
+	if len(first) != 2 || !first[0].Unread || !first[1].Unread {
+		t.Fatalf("first List() = %+v, want both rows unread", first)
+	}
+
+	if err := c.MarkRead("1"); err != nil {
+		t.Fatalf("MarkRead(1) error = %v", err)
+	}
+
+	second, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("second List() error = %v", err)
+	}
+	if len(second) != 2 || second[0].Unread || !second[1].Unread {
+		t.Fatalf("second List() = %+v, want row 1 read and row 2 still unread", second)
+	}
+
+	if err := c.MarkRead("2"); err != nil {
+		t.Fatalf("MarkRead(2) error = %v", err)
+	}
+
+	third, err := c.List(NotificationListOpts{})
+	if err != nil {
+		t.Fatalf("third List() error = %v", err)
+	}
+	if len(third) != 2 {
+		t.Fatalf("third List() len = %d, want 2", len(third))
+	}
+	for i, row := range third {
+		if row.Unread {
+			t.Errorf("third List()[%d] = %+v, want Unread=false — a second mark-read must not leave any row resurrected as unread (Decision 37)", i, row)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Review feedback item 1 (🔴) / Decision 37's snapshot-once semantics: the
 // regression test for a mark landing MID-FETCH.
 //
@@ -1206,7 +1313,11 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_NextListSendsNoValidato
 		listDone <- err
 	}()
 
-	<-listStarted // the first List's request is parked in the handler
+	select {
+	case <-listStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first List()'s handler was never reached")
+	}
 
 	markDone := make(chan error, 1)
 	go func() {
@@ -1314,7 +1425,11 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_304IsNotServedFromCache
 		listDone <- listResult{rows, err}
 	}()
 
-	<-listStarted // the second List's request is parked, awaiting its 304
+	select {
+	case <-listStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second List()'s handler was never reached")
+	}
 
 	markDone := make(chan error, 1)
 	go func() {
@@ -1468,7 +1583,11 @@ func TestNotificationsClient_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 		listDone <- err
 	}()
 
-	<-listStarted // List's request has reached the handler and is now parked
+	select {
+	case <-listStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("List()'s handler was never reached")
+	}
 
 	markDone := make(chan error, 1)
 	go func() {
