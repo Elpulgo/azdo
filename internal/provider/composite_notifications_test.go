@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -165,9 +166,27 @@ func TestCompositeProvider_Notifications_SkipsIncapableBackendEntirely(t *testin
 // Merge / sort
 // ---------------------------------------------------------------------------
 
+// gotIDs returns the Identity.IDs of a merged feed in order, so ordering
+// assertions can name the exact expected sequence.
+func gotIDs(notifs []provider.Notification) []string {
+	ids := make([]string, len(notifs))
+	for i, n := range notifs {
+		ids[i] = n.Identity.ID
+	}
+	return ids
+}
+
+func joinIDs(ids []string) string { return strings.Join(ids, ",") }
+
 // TestCompositeProvider_Notifications_MergeSortedNewestFirst interleaves rows
 // across two backends, including a tie, so the sort is genuinely exercised
 // rather than validated against already-ordered input.
+//
+// Per Decision 45 the merged order is a total order, so every position is
+// pinned exactly — including the two tied t3 rows, which the Identity.Kind
+// tiebreaker orders Azure (1) before GitHub (2) no matter which goroutine
+// drains first. Asserting the tie as an unordered set (as this test once did)
+// would leave that guarantee unpinned.
 func TestCompositeProvider_Notifications_MergeSortedNewestFirst(t *testing.T) {
 	a := newFakeNotifyBackend(provider.KindGitHub, []string{"acme/repo-a"})
 	a.notifs = []provider.Notification{
@@ -189,16 +208,134 @@ func TestCompositeProvider_Notifications_MergeSortedNewestFirst(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("want 4 notifications, got %d", len(got))
 	}
-	// The two t3 rows tie; sort.Slice does not guarantee their relative
-	// order, so only assert both land ahead of t2 and t1.
-	if !got[0].UpdatedAt.Equal(t3) || !got[1].UpdatedAt.Equal(t3) {
-		t.Errorf("want the first two entries at t3 (tie), got %v and %v", got[0].UpdatedAt, got[1].UpdatedAt)
+	// "4" (Azure, t3) before "1" (GitHub, t3) by the Kind tiebreaker, then
+	// "3" (t2), then "2" (t1).
+	want := "4,1,3,2"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want merged order %q, got %q", want, joinIDs(gotIDs(got)))
 	}
-	if !got[2].UpdatedAt.Equal(t2) {
-		t.Errorf("want the third entry at t2, got %v", got[2].UpdatedAt)
+	wantTimes := []time.Time{t3, t3, t2, t1}
+	for i, ts := range wantTimes {
+		if !got[i].UpdatedAt.Equal(ts) {
+			t.Errorf("position %d: want UpdatedAt %v, got %v", i, ts, got[i].UpdatedAt)
+		}
 	}
-	if !got[3].UpdatedAt.Equal(t1) {
-		t.Errorf("want the fourth (oldest) entry at t1, got %v", got[3].UpdatedAt)
+}
+
+// ---------------------------------------------------------------------------
+// Decision 45: deterministic tie order (total order, not merely stable)
+// ---------------------------------------------------------------------------
+
+// TestCompositeProvider_Notifications_TieBrokenByKind pins the second level of
+// the total order. Both rows share an UpdatedAt, and their Scopes are chosen
+// so scope order ("acme/aaa" first) disagrees with kind order (Azure first):
+// dropping the Kind comparison flips these two rows.
+func TestCompositeProvider_Notifications_TieBrokenByKind(t *testing.T) {
+	gh := newFakeNotifyBackend(provider.KindGitHub, []string{"acme/aaa"})
+	gh.notifs = []provider.Notification{mkNotif(provider.KindGitHub, "acme/aaa", "gh", t2)}
+	az := newFakeNotifyBackend(provider.KindAzure, []string{"acme/zzz"})
+	az.notifs = []provider.Notification{mkNotif(provider.KindAzure, "acme/zzz", "az", t2)}
+
+	cp := provider.NewCompositeProvider(gh, az)
+
+	got, err := cp.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "az,gh"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want tied rows ordered by Identity.Kind (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_TieBrokenByScope pins the third level.
+// One backend supplies both rows so the input order is fixed rather than
+// goroutine-completion dependent. UpdatedAt and Kind tie, and the IDs are
+// chosen so ID order ("1" first) disagrees with scope order ("acme/aaa"
+// first): dropping the Scope comparison flips these two rows.
+func TestCompositeProvider_Notifications_TieBrokenByScope(t *testing.T) {
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"acme/aaa", "acme/bbb"})
+	b.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "acme/bbb", "1", t2),
+		mkNotif(provider.KindGitHub, "acme/aaa", "2", t2),
+	}
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "2,1"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want tied rows ordered by Identity.Scope (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_TieBrokenByID pins the fourth and last
+// level. UpdatedAt, Kind and Scope all tie, and the rows are fed in
+// descending ID order, so without the ID comparison the stable sort would
+// return them exactly as supplied ("2","1").
+func TestCompositeProvider_Notifications_TieBrokenByID(t *testing.T) {
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"acme/aaa"})
+	b.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "acme/aaa", "2", t2),
+		mkNotif(provider.KindGitHub, "acme/aaa", "1", t2),
+	}
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "1,2"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want tied rows ordered by Identity.ID (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_IdenticalKeysKeepInputOrder pins the
+// residual guarantee of sort.SliceStable over sort.Slice. Once the comparator
+// is a total order over (UpdatedAt, Kind, Scope, ID), stability is observable
+// only for rows the comparator cannot distinguish at all — a duplicate thread
+// from an overlapping page, identical in all four keys. Measured: Go's pdqsort
+// only reorders such rows once there are several multi-member equivalence
+// classes, so this fixture uses 10 duplicate pairs.
+func TestCompositeProvider_Notifications_IdenticalKeysKeepInputOrder(t *testing.T) {
+	const pairs = 10
+	var rows []provider.Notification
+	var want []string
+	// Ascending timestamps, so the sort must genuinely reverse the input.
+	for i := 0; i < pairs; i++ {
+		ts := t1.Add(time.Duration(i) * time.Minute)
+		id := fmt.Sprintf("dup-%d", i)
+		first := mkNotif(provider.KindGitHub, "acme/aaa", id, ts)
+		first.Title = fmt.Sprintf("%s-first", id)
+		second := mkNotif(provider.KindGitHub, "acme/aaa", id, ts)
+		second.Title = fmt.Sprintf("%s-second", id)
+		rows = append(rows, first, second)
+	}
+	// Newest pair first in the expected output, each pair still first-then-second.
+	for i := pairs - 1; i >= 0; i-- {
+		want = append(want, fmt.Sprintf("dup-%d-first", i), fmt.Sprintf("dup-%d-second", i))
+	}
+
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"acme/aaa"})
+	b.notifs = rows
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	titles := make([]string, len(got))
+	for i, n := range got {
+		titles[i] = n.Title
+	}
+	if strings.Join(titles, ",") != strings.Join(want, ",") {
+		t.Fatalf("want rows identical in all four sort keys to keep their input order\nwant %v\ngot  %v", want, titles)
 	}
 }
 
@@ -263,10 +400,20 @@ func TestCompositeProvider_Notifications_PartialFailure(t *testing.T) {
 // not 2 (len(cp.backends)) — otherwise len(errs)==1 != total==2 takes the
 // partial branch and returns (nil, &PartialError{1,2}), an empty feed
 // carrying a buried error.
+//
+// This is also the only test covering the all-failed path at the shape phase 1
+// actually ships — exactly one capable backend, so len(errs) == 1 — and it
+// therefore also pins Decision 42's error chain through a *single-error*
+// errors.Join. errors.Join wraps even one error in a *joinError, so the outer
+// %w reaches it via Unwrap() []error; a %v there would leave the suite green
+// (the error is still non-nil) while silently breaking task 19's scope-error
+// recovery. The two-capable-backend chain is pinned separately below, but that
+// config cannot exist before phase 2.
 func TestCompositeProvider_Notifications_TotalIsCapableCountNotAllBackends(t *testing.T) {
 	incapable := &fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}
+	stub := &stubBackendError{msg: "403 missing scope"}
 	broken := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
-	broken.listErr = errors.New("403 missing scope")
+	broken.listErr = stub
 
 	cp := provider.NewCompositeProvider(incapable, broken)
 
@@ -280,6 +427,17 @@ func TestCompositeProvider_Notifications_TotalIsCapableCountNotAllBackends(t *te
 	}
 	if got != nil {
 		t.Errorf("want nil results on all-failed (1 of 1 capable backends), got %v", got)
+	}
+
+	var target *stubBackendError
+	if !errors.As(err, &target) {
+		t.Fatalf("want errors.As to recover *stubBackendError through the single-error errors.Join chain, got %v", err)
+	}
+	if target.msg != stub.msg {
+		t.Errorf("want recovered error msg %q, got %q", stub.msg, target.msg)
+	}
+	if !errors.Is(err, stub) {
+		t.Fatalf("want errors.Is to find the exact backend error through the single-error errors.Join chain, got %v", err)
 	}
 }
 
@@ -296,6 +454,142 @@ func TestCompositeProvider_Notifications_ZeroCapable_ReturnsEmptyNilError(t *tes
 	}
 	if len(got) != 0 {
 		t.Fatalf("want an empty result, got %d items", len(got))
+	}
+}
+
+// TestCompositeProvider_Notifications_BackendRowsWithErrorAreDiscarded pins
+// the discard contract: a backend that returns rows *and* an error
+// contributes only its error, never its rows. Two capable backends are needed
+// to observe it — with one, the all-failed path returns nil regardless. No
+// shipped implementation reaches this (github.Adapter returns (nil, err) on
+// every error path), but the choice is deliberate and otherwise untested:
+// dropping the `continue` after errs = append(...) is invisible to every
+// other fixture, because they all leave notifs nil whenever listErr is set.
+func TestCompositeProvider_Notifications_BackendRowsWithErrorAreDiscarded(t *testing.T) {
+	healthy := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	healthy.notifs = []provider.Notification{mkNotif(provider.KindGitHub, "o/r", "kept", t1)}
+	broken := newFakeNotifyBackend(provider.KindAzure, []string{"P"})
+	broken.notifs = []provider.Notification{mkNotif(provider.KindAzure, "P", "discarded", t3)}
+	broken.listErr = errors.New("partial page then failed")
+
+	cp := provider.NewCompositeProvider(healthy, broken)
+
+	got, err := cp.List(provider.NotifOpts{})
+	var pe *provider.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *PartialError, got %T: %v", err, err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want only the healthy backend's row, got %d rows: %v", len(got), gotIDs(got))
+	}
+	if got[0].Identity.ID != "kept" {
+		t.Fatalf("want the failing backend's rows discarded, got %v", gotIDs(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decision 44: NotifOpts.Max is re-applied after the merge
+// ---------------------------------------------------------------------------
+
+// TestCompositeProvider_Notifications_MaxTruncatesToNewest verifies Max caps
+// the merged feed and does so *after* the sort. The single backend supplies
+// its rows oldest-first, so an implementation that truncates before sorting
+// keeps {t1,t2} and returns "old,mid" — the exact rows the user does not want.
+func TestCompositeProvider_Notifications_MaxTruncatesToNewest(t *testing.T) {
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	b.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "old", t1),
+		mkNotif(provider.KindGitHub, "o/r", "mid", t2),
+		mkNotif(provider.KindGitHub, "o/r", "new", t3),
+	}
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{Max: 2})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "new,mid"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want the newest %d rows (%q), got %q", 2, want, joinIDs(gotIDs(got)))
+	}
+	// Full slice expression: what Max removed must be unrecoverable, not
+	// merely out of view (same reasoning as the adapter's own Max cap).
+	if cap(got) != len(got) {
+		t.Errorf("want cap == len on a truncated result so the dropped rows cannot be recovered via got[:cap(got)], got cap=%d len=%d", cap(got), len(got))
+	}
+}
+
+// TestCompositeProvider_Notifications_MaxLargerThanFeedIsNoOp verifies a Max
+// above the merged length neither truncates nor reorders.
+func TestCompositeProvider_Notifications_MaxLargerThanFeedIsNoOp(t *testing.T) {
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	b.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "old", t1),
+		mkNotif(provider.KindGitHub, "o/r", "new", t3),
+	}
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{Max: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "new,old"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want all rows unchanged (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_MaxZeroIsUncapped verifies Max's zero
+// value means "no cap" (NotifOpts's documented zero-value contract), so the
+// guard must be Max > 0 and never Max >= 0.
+func TestCompositeProvider_Notifications_MaxZeroIsUncapped(t *testing.T) {
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	b.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "old", t1),
+		mkNotif(provider.KindGitHub, "o/r", "mid", t2),
+		mkNotif(provider.KindGitHub, "o/r", "new", t3),
+	}
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{Max: 0})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want Max: 0 to leave the feed uncapped (3 rows), got %d: %v", len(got), gotIDs(got))
+	}
+}
+
+// TestCompositeProvider_Notifications_MaxAppliedOnPartialPath verifies Max is
+// re-applied on the partial-error return too, not only the clean one — the
+// partial path is where a truncated cap matters most, since the feed the user
+// sees is already incomplete.
+func TestCompositeProvider_Notifications_MaxAppliedOnPartialPath(t *testing.T) {
+	healthy := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	healthy.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "old", t1),
+		mkNotif(provider.KindGitHub, "o/r", "mid", t2),
+		mkNotif(provider.KindGitHub, "o/r", "new", t3),
+	}
+	broken := newFakeNotifyBackend(provider.KindAzure, []string{"P"})
+	broken.listErr = errors.New("backend down")
+
+	cp := provider.NewCompositeProvider(healthy, broken)
+
+	got, err := cp.List(provider.NotifOpts{Max: 2})
+	var pe *provider.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *PartialError, got %T: %v", err, err)
+	}
+	want := "new,mid"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want Max applied on the partial-error path too (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+	if cap(got) != len(got) {
+		t.Errorf("want cap == len on the truncated partial result, got cap=%d len=%d", cap(got), len(got))
 	}
 }
 
@@ -409,10 +703,16 @@ func TestCompositeProvider_MarkDone_RoutesByKindNotScope(t *testing.T) {
 }
 
 // TestCompositeProvider_MarkRead_FiltersCapableBeforeKind pins Decision 43's
-// lookup order: an incapable backend sharing the same Kind as a later
-// capable backend must not shadow it. Matching kind before asserting
-// capability would let the incapable backend's kind match win and return a
-// not-found error instead of continuing the search.
+// lookup shape: an incapable backend sharing the same Kind as a later capable
+// backend must not shadow it. What this catches is any implementation that
+// *gives up* at the first kind-matching-but-incapable backend — e.g. turning
+// the !ok branch into an early `return nil, notificationMarkRouteErr(kind)`
+// instead of continuing the loop.
+//
+// It deliberately does not claim to catch a swap of the two checks: with both
+// `continue`s kept, checking Kind before capability is a provably equivalent
+// mutant (each iteration skips on the disjunction of the same two conditions),
+// so no test can distinguish the orders.
 func TestCompositeProvider_MarkRead_FiltersCapableBeforeKind(t *testing.T) {
 	incapableGH := &fakeBackend{kind: provider.KindGitHub, scopes: []string{"o/r"}}
 	capableGH := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
@@ -460,6 +760,31 @@ func TestCompositeProvider_MarkRead_ZeroIdentity(t *testing.T) {
 	}
 	if len(b.markReadCalls) != 0 {
 		t.Errorf("want no backend call for a zero-value Identity, got %d calls", len(b.markReadCalls))
+	}
+}
+
+// TestCompositeProvider_MarkRead_ZeroKindCapableBackend pins the explicit
+// kind == 0 guard rather than leaving it implied by KindAzure = iota + 1.
+// TestCompositeProvider_MarkRead_ZeroIdentity above cannot: its fixture
+// reports KindGitHub, so it pins the kind-*mismatch* path. Here the sole
+// capable backend reports Kind() == 0 — the shape CompositeProvider.Kind()
+// itself returns on an empty backend list — so without the guard a fully
+// zero-valued Identity matches it and MarkRead returns nil, an optimistic row
+// update (task 14) whose rollback never fires for a mark that targeted nothing.
+func TestCompositeProvider_MarkRead_ZeroKindCapableBackend(t *testing.T) {
+	b := newFakeNotifyBackend(provider.Kind(0), []string{"o/r"})
+	cp := provider.NewCompositeProvider(b)
+
+	if b.Kind() != 0 {
+		t.Fatalf("fixture must report Kind() == 0 for this test to pin the guard, got %d", b.Kind())
+	}
+
+	err := cp.MarkRead(provider.Identity{})
+	if err == nil {
+		t.Fatal("want error routing a zero Kind even when a capable backend reports Kind() == 0, got nil")
+	}
+	if len(b.markReadCalls) != 0 {
+		t.Errorf("want no backend call for a zero Kind, got %d calls: %v", len(b.markReadCalls), b.markReadCalls)
 	}
 }
 
