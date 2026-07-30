@@ -5,6 +5,7 @@ package notifications
 import (
 	"path"
 	"strings"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/provider"
@@ -125,6 +126,35 @@ func FilterNotifications(rows []provider.Notification, cfg *config.Config) []pro
 	}
 
 	return out
+}
+
+// NotifOptsFromConfig derives the fetch-time provider.NotifOpts from the
+// notifications config's participating_only, since_days and max_items knobs
+// (decision 52): these three are server-side query shaping, not the
+// post-fetch predicates FilterNotifications applies, so they are read here
+// and nowhere else.
+//
+// A nil cfg returns the zero-value NotifOpts (no participating-only
+// narrowing, no since bound, no cap) rather than panicking, matching
+// FilterNotifications' own nil-cfg contract.
+//
+// since_days <= 0 leaves Since at its zero value (no lower bound), never a
+// negative or zero-length window; only a positive count of days produces a
+// Since cutoff.
+func NotifOptsFromConfig(cfg *config.Config) provider.NotifOpts {
+	if cfg == nil {
+		return provider.NotifOpts{}
+	}
+
+	nc := cfg.Notifications
+	opts := provider.NotifOpts{
+		ParticipatingOnly: nc.ParticipatingOnly,
+		Max:               nc.MaxItems,
+	}
+	if nc.SinceDays > 0 {
+		opts.Since = time.Now().AddDate(0, 0, -nc.SinceDays)
+	}
+	return opts
 }
 
 // matchesAnyGlob reports whether scope matches at least one pattern in

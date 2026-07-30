@@ -1,5 +1,7 @@
 package provider
 
+import "time"
+
 // NotificationSource is an optional capability interface for backends that
 // can supply a user-level notification inbox (Decision 1, ADR 0001). It is
 // deliberately a separate interface, not a set of methods added to Provider:
@@ -35,4 +37,19 @@ type NotificationSource interface {
 	// inbox. id must be the notification's own provider-qualified Identity
 	// (Decision 14).
 	MarkDone(id Identity) error
+}
+
+// PollIntervalHinter is a separate optional capability interface (Decision
+// 23) for backends that can report a server-suggested polling cadence — for
+// GitHub, the last response's X-Poll-Interval header. It is deliberately not
+// a fourth method on NotificationSource: Azure DevOps has no such hint, and a
+// backend that does not implement PollIntervalHinter simply falls back to
+// the configured interval (task 15) rather than needing a stub method or a
+// zero-value sentinel on the core interface.
+//
+// PollInterval returns 0 when no hint is available yet (e.g. before the
+// first successful fetch), which callers must treat the same as "not
+// implemented".
+type PollIntervalHinter interface {
+	PollInterval() time.Duration
 }

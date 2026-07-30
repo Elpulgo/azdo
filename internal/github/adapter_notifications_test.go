@@ -37,6 +37,15 @@ type pollIntervalHinter interface {
 var _ pollIntervalHinter = (*github.Adapter)(nil)
 
 // ---------------------------------------------------------------------------
+// Task 15: the real interface now exists in internal/provider, colocated with
+// NotificationSource. This assertion is additive, not a replacement for the
+// local one above (Decision 40) — the two are structurally independent, so
+// either one breaking on its own pins a real regression.
+// ---------------------------------------------------------------------------
+
+var _ provider.PollIntervalHinter = (*github.Adapter)(nil)
+
+// ---------------------------------------------------------------------------
 // nil nc — List/MarkRead/MarkDone must error, never panic (Decision 39).
 //
 // "Descriptive" is only enforced if the message itself is asserted: an

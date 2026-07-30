@@ -700,3 +700,79 @@ func TestCompilableGlobs(t *testing.T) {
 		})
 	}
 }
+
+// --- NotifOptsFromConfig (task 15, decision 52) ---
+
+func TestNotifOptsFromConfig_NilConfig_ReturnsZeroValue(t *testing.T) {
+	got := NotifOptsFromConfig(nil)
+	want := provider.NotifOpts{}
+	if got != want {
+		t.Errorf("NotifOptsFromConfig(nil) = %+v, want zero value %+v", got, want)
+	}
+}
+
+func TestNotifOptsFromConfig_ForwardsParticipatingOnlyAndMax(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			ParticipatingOnly: true,
+			MaxItems:          42,
+		},
+	}
+
+	got := NotifOptsFromConfig(cfg)
+
+	if !got.ParticipatingOnly {
+		t.Error("ParticipatingOnly = false, want true")
+	}
+	if got.Max != 42 {
+		t.Errorf("Max = %d, want 42", got.Max)
+	}
+	if !got.Since.IsZero() {
+		t.Errorf("Since = %v, want zero value when since_days is unset", got.Since)
+	}
+}
+
+func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{SinceDays: 7},
+	}
+
+	before := time.Now().AddDate(0, 0, -7)
+	got := NotifOptsFromConfig(cfg)
+	after := time.Now().AddDate(0, 0, -7)
+
+	if got.Since.Before(before.Add(-time.Minute)) || got.Since.After(after.Add(time.Minute)) {
+		t.Errorf("Since = %v, want approximately 7 days ago (between %v and %v)", got.Since, before, after)
+	}
+}
+
+func TestNotifOptsFromConfig_SinceDaysZero_LeavesSinceZeroValue(t *testing.T) {
+	cfg := &config.Config{Notifications: config.NotificationsConfig{SinceDays: 0}}
+
+	got := NotifOptsFromConfig(cfg)
+	if !got.Since.IsZero() {
+		t.Errorf("Since = %v, want zero value when since_days is 0", got.Since)
+	}
+}
+
+func TestNotifOptsFromConfig_DoesNotReadFilterOnlyKnobs(t *testing.T) {
+	// exclude_repos/exclude_reasons/unread_only/include_repos/
+	// only_configured_repos are FilterNotifications' concern (decision 52),
+	// not NotifOptsFromConfig's -- this pins that populating them produces no
+	// observable effect on the derived NotifOpts.
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			ExcludeRepos:        []string{"acme/*"},
+			ExcludeReasons:      []string{"subscribed"},
+			UnreadOnly:          true,
+			IncludeRepos:        []string{"acme/*"},
+			OnlyConfiguredRepos: true,
+		},
+	}
+
+	got := NotifOptsFromConfig(cfg)
+	want := provider.NotifOpts{}
+	if got != want {
+		t.Errorf("NotifOptsFromConfig with only filter-stage knobs set = %+v, want zero value %+v", got, want)
+	}
+}

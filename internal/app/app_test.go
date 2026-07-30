@@ -128,6 +128,151 @@ func TestModel_HandlesPollingTick_NilClient_NoCmd(t *testing.T) {
 	}
 }
 
+// firstLeafCmdMsg repeatedly resolves cmd, following only the first element
+// of any resulting tea.BatchMsg, and returns the first non-batch message it
+// reaches. Both polling.Poller.OnTick and polling.NotificationsPoller.OnTick
+// construct tea.Batch(Fetch..., StartPolling()) in that exact order (Fetch
+// first), so index 0 always leads to the fetch's own result and never to
+// StartPolling's tea.Every-wrapped timer — which blocks for the real
+// interval if invoked, exactly like calling it directly would. This helper
+// must never be changed to walk any index other than 0.
+func firstLeafCmdMsg(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	for {
+		if cmd == nil {
+			t.Fatal("firstLeafCmdMsg: nil cmd")
+		}
+		msg := cmd()
+		batch, ok := msg.(tea.BatchMsg)
+		if !ok || len(batch) == 0 {
+			return msg
+		}
+		cmd = batch[0]
+	}
+}
+
+// TestModel_Update_NotificationsTickMsg_DrivesNotificationsPollerNotPipelinePoller
+// pins Decision 69 at the app.go wiring level: internal/polling's own
+// TestNotificationsPoller_StartPolling_EmitsNotificationsTickMsg pins the
+// tick's own concrete type, and this pins that app.go's case for that type
+// actually calls m.notificationsPoller.OnTick(), not m.poller.OnTick(). Both
+// pollers produce a non-nil cmd here — github.NewAdapterWithNotifications(nil,
+// nil) satisfies both PipelineClient and provider.NotificationSource
+// unconditionally, each failing fast in-process with no network I/O — so this
+// cannot pass by either arm trivially no-op'ing; the two are told apart by the
+// concrete message type each Fetch half resolves to.
+func TestModel_Update_NotificationsTickMsg_DrivesNotificationsPollerNotPipelinePoller(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	_, cmd := m.Update(polling.NotificationsTickMsg{})
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from polling.NotificationsTickMsg")
+	}
+
+	got := firstLeafCmdMsg(t, cmd)
+	if _, ok := got.(polling.NotificationsFetchedMsg); !ok {
+		t.Errorf("polling.NotificationsTickMsg resolved to %T, want polling.NotificationsFetchedMsg — app.go's case must call m.notificationsPoller.OnTick(), not m.poller.OnTick()", got)
+	}
+}
+
+// TestModel_Update_NotificationsFetchedMsg_AppliesFilterAndFeed pins that the
+// polling.NotificationsFetchedMsg case actually reaches the notifications
+// pane (through notifications.FilterNotifications + HandleFetchResult), the
+// same way this pane's own Init()/`r` fetch does. cfg.Notifications.UnreadOnly
+// is set so the assertion cannot pass by the case merely handing msg.Items
+// straight to the pane unfiltered — a mutation dropping the
+// FilterNotifications call would leave the read row on screen.
+func TestModel_Update_NotificationsFetchedMsg_AppliesFilterAndFeed(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Notifications:   config.NotificationsConfig{UnreadOnly: true},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	items := []provider.Notification{
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+			Title:     "From the poller",
+			Reason:    provider.NotificationReasonMentioned,
+			Read:      false,
+			UpdatedAt: time.Now(),
+		},
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "2"},
+			Title:     "Already read, must be filtered",
+			Reason:    provider.NotificationReasonMentioned,
+			Read:      true,
+			UpdatedAt: time.Now(),
+		},
+	}
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{Items: items})
+	m = updated.(Model)
+
+	view := m.notificationsView.View()
+	if !strings.Contains(view, "From the poller") {
+		t.Errorf("notifications pane view = %q, want the unread poller-pushed row rendered", view)
+	}
+	if strings.Contains(view, "Already read, must be filtered") {
+		t.Errorf("notifications pane view = %q, want the read row dropped by cfg.Notifications.UnreadOnly (FilterNotifications must run)", view)
+	}
+}
+
+// TestModel_Update_NotificationsFetchedMsg_ErrorDoesNotClearFeed pins the
+// error half of the same case: a failure must not wipe rows already on
+// screen (HandleFetchResult's own contract), so a transient poll failure
+// cannot make a populated inbox look empty.
+func TestModel_Update_NotificationsFetchedMsg_ErrorDoesNotClearFeed(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{
+		Items: []provider.Notification{
+			{
+				Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+				Title:     "Still here",
+				Reason:    provider.NotificationReasonMentioned,
+				UpdatedAt: time.Now(),
+			},
+		},
+	})
+	m = updated.(Model)
+
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{Err: errors.New("poll boom")})
+	m = updated.(Model)
+
+	view := m.notificationsView.View()
+	if !strings.Contains(view, "Notifications unavailable:") {
+		t.Errorf("notifications pane view = %q, want the error state after a failed poll", view)
+	}
+	if strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("notifications pane view = %q, must not render the empty-inbox state after a failed poll", view)
+	}
+}
+
 func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1829,6 +1974,114 @@ func TestHasNotificationCapability_AzureOnlyComposite_False(t *testing.T) {
 	}
 }
 
+// hintingProviderStub embeds provider.Provider so only
+// NotificationsPollInterval needs an implementation, mirroring scopeStub's
+// pattern above. It exists solely to make notificationsIntervalHinter
+// satisfiable in tests without a full fake Provider.
+type hintingProviderStub struct {
+	provider.Provider
+	hint time.Duration
+}
+
+func (h hintingProviderStub) NotificationsPollInterval() time.Duration { return h.hint }
+
+// TestNotificationsPollIntervalHint_NonHintingProvider_ReturnsZero pins the
+// "no hint available" branch of notificationsPollIntervalHint: a provider
+// that does not implement notificationsIntervalHinter (e.g. the Azure-only
+// composite, which is capable-shaped for NotificationSource but has no
+// NotificationsPollInterval method) must yield 0, never panic or fall back
+// to some other value.
+func TestNotificationsPollIntervalHint_NonHintingProvider_ReturnsZero(t *testing.T) {
+	p := newNotificationIncapableProvider()
+	if got := notificationsPollIntervalHint(p); got != 0 {
+		t.Errorf("notificationsPollIntervalHint(non-hinting provider) = %v, want 0", got)
+	}
+}
+
+// TestNotificationsPollIntervalHint_HintingProvider_ReturnsHint pins the
+// positive branch: a provider implementing notificationsIntervalHinter must
+// have its value returned verbatim.
+func TestNotificationsPollIntervalHint_HintingProvider_ReturnsHint(t *testing.T) {
+	p := hintingProviderStub{hint: 90 * time.Second}
+	if got := notificationsPollIntervalHint(p); got != 90*time.Second {
+		t.Errorf("notificationsPollIntervalHint(hinting provider) = %v, want 90s", got)
+	}
+}
+
+// TestNotificationsConfiguredInterval_NilConfig_DefaultInterval pins the nil
+// guard.
+func TestNotificationsConfiguredInterval_NilConfig_DefaultInterval(t *testing.T) {
+	if got := notificationsConfiguredInterval(nil); got != polling.DefaultInterval {
+		t.Errorf("notificationsConfiguredInterval(nil) = %v, want %v", got, polling.DefaultInterval)
+	}
+}
+
+// TestNotificationsConfiguredInterval_NotificationsSpecific_TakesPrecedence
+// pins that cfg.Notifications.PollInterval outranks cfg.PollingInterval when
+// both are set, matching the doc comment's stated precedence order.
+func TestNotificationsConfiguredInterval_NotificationsSpecific_TakesPrecedence(t *testing.T) {
+	cfg := &config.Config{
+		PollingInterval: 60,
+		Notifications:   config.NotificationsConfig{PollInterval: 120},
+	}
+	want := 120 * time.Second
+	if got := notificationsConfiguredInterval(cfg); got != want {
+		t.Errorf("notificationsConfiguredInterval() = %v, want %v", got, want)
+	}
+}
+
+// TestNotificationsConfiguredInterval_FallsBackToPollingInterval pins the
+// fallback when notifications.poll_interval is unset (0).
+func TestNotificationsConfiguredInterval_FallsBackToPollingInterval(t *testing.T) {
+	cfg := &config.Config{PollingInterval: 45}
+	want := 45 * time.Second
+	if got := notificationsConfiguredInterval(cfg); got != want {
+		t.Errorf("notificationsConfiguredInterval() = %v, want %v", got, want)
+	}
+}
+
+// TestNotificationsConfiguredInterval_FallsBackToDefaultInterval pins the
+// final fallback when both cfg.Notifications.PollInterval and
+// cfg.PollingInterval are 0.
+func TestNotificationsConfiguredInterval_FallsBackToDefaultInterval(t *testing.T) {
+	cfg := &config.Config{}
+	if got := notificationsConfiguredInterval(cfg); got != polling.DefaultInterval {
+		t.Errorf("notificationsConfiguredInterval() = %v, want %v", got, polling.DefaultInterval)
+	}
+}
+
+// TestNotificationsPollInterval_HintWinsWhenLarger pins Decision 8's cadence
+// formula max(configured, hint) for the case where the server hint exceeds
+// the configured interval.
+func TestNotificationsPollInterval_HintWinsWhenLarger(t *testing.T) {
+	cfg := &config.Config{PollingInterval: 30}
+	p := hintingProviderStub{hint: 300 * time.Second}
+	want := 300 * time.Second
+	if got := notificationsPollInterval(p, cfg); got != want {
+		t.Errorf("notificationsPollInterval() = %v, want %v (hint must win)", got, want)
+	}
+}
+
+// TestNotificationsPollInterval_ConfiguredWinsWhenHintSmallerOrAbsent pins
+// the other half of Decision 8's formula: the configured interval must never
+// be shrunk by a smaller (or absent, i.e. zero) hint.
+func TestNotificationsPollInterval_ConfiguredWinsWhenHintSmallerOrAbsent(t *testing.T) {
+	cfg := &config.Config{PollingInterval: 120}
+	want := 120 * time.Second
+
+	// Hint smaller than configured.
+	small := hintingProviderStub{hint: 10 * time.Second}
+	if got := notificationsPollInterval(small, cfg); got != want {
+		t.Errorf("notificationsPollInterval() = %v, want %v (configured must win over a smaller hint)", got, want)
+	}
+
+	// No hint at all (provider does not implement notificationsIntervalHinter).
+	incapable := newNotificationIncapableProvider()
+	if got := notificationsPollInterval(incapable, cfg); got != want {
+		t.Errorf("notificationsPollInterval() = %v, want %v (configured must win when no hint is available)", got, want)
+	}
+}
+
 // TestModel_NotificationsTab_Absent_WhenIncapable exercises the real NewModel
 // path with the Azure-only composite of Decision 59 (never a nil provider —
 // see newNotificationIncapableProvider): the tab bar must not mention
@@ -1929,8 +2182,15 @@ func TestModel_NotificationsTab_Absent_WhenPaneDisabled_ButCapable(t *testing.T)
 // with a capable provider (Decision 11): the tab must appear first (Decision
 // 6), the *notifications pane* must be what renders in it (Decision 60 — see
 // notificationsPaneMarker for why the tab label alone is not enough), and
-// rendering after a WindowSizeMsg must not panic (convention 8) even though
-// the underlying feed is empty (no Init() populate happened).
+// rendering after a WindowSizeMsg must not panic (convention 8).
+//
+// The pane renders its loading state here, not notificationsPaneMarker's
+// empty-inbox state: NewModel constructs the pane with SetLoading(true)
+// (Decision 64) and this test never calls Init() nor resolves any fetch, so
+// `m.loading` is never cleared. That is deliberately the regression this test
+// now guards instead: before task 15, listview.Init set the spinner visible
+// but never assigned m.loading, so the empty-inbox marker rendered during the
+// window between construction and the first fetch's resolution.
 func TestModel_NotificationsTab_PresentButEmpty_WhenCapable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1953,8 +2213,11 @@ func TestModel_NotificationsTab_PresentButEmpty_WhenCapable(t *testing.T) {
 	if !strings.Contains(view, "1: Notifications") {
 		t.Errorf("expected tab bar to contain '1: Notifications', view:\n%s", view)
 	}
-	if !strings.Contains(view, notificationsPaneMarker) {
-		t.Errorf("expected the notifications pane body (%q) to render in the notifications tab, not a sibling pane; view:\n%s", notificationsPaneMarker, view)
+	if !strings.Contains(view, "Loading notifications...") {
+		t.Errorf("expected the notifications pane's loading state (no fetch has resolved yet), view:\n%s", view)
+	}
+	if strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("notifications pane must not render the empty-inbox marker before its first fetch resolves; view:\n%s", view)
 	}
 	// Negative half: the sibling the content switch falls through to must NOT
 	// be what rendered. Without this, a `default:`-branch render of the
@@ -2009,7 +2272,11 @@ func TestModel_PerTabChrome(t *testing.T) {
 			tab:         TabNotifications,
 			wantKeys:    []string{"f filter reason"},
 			notWantKeys: []string{"S status", "m my items", "m my PRs", "v live/trends"},
-			wantPane:    notificationsPaneMarker,
+			// NewModel constructs the pane with SetLoading(true) (Decision 64)
+			// and this test never resolves a fetch, so the pane renders its
+			// loading state rather than notificationsPaneMarker's empty-inbox
+			// state.
+			wantPane: "Loading notifications...",
 		},
 		{
 			name:        "pullrequests",
@@ -2109,12 +2376,12 @@ func TestModel_WindowSizeMsg_SizesNotificationsPane(t *testing.T) {
 
 	got := m.notificationsView.View()
 
-	sized := notifications.NewModelWithStyles(m.styles, nil)
+	sized := notifications.NewModelWithStyles(m.styles, nil, nil)
 	sized, _ = sized.Update(m.contentViewSize())
 	sized = sized.SetFeed(feed)
 	want := sized.View()
 
-	unsized := notifications.NewModelWithStyles(m.styles, nil)
+	unsized := notifications.NewModelWithStyles(m.styles, nil, nil)
 	unsized = unsized.SetFeed(feed)
 	reference := unsized.View()
 
@@ -2237,7 +2504,7 @@ func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.
 
 	// resizeActiveViewIfNeeded: the pane must be re-measured for the shorter
 	// footer instead of keeping (c)'s height.
-	sized := notifications.NewModelWithStyles(m.styles, nil)
+	sized := notifications.NewModelWithStyles(m.styles, nil, nil)
 	sized, _ = sized.Update(m.contentViewSize())
 	sized = sized.SetFeed(feed)
 	wantHeight := lipgloss.Height(sized.View())
@@ -2758,7 +3025,7 @@ func markRoutingModel(t *testing.T, marker provider.NotificationSource) (Model, 
 	}
 
 	const title = "ROUTE-ME-HOME"
-	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), marker).
+	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), marker, cfg).
 		SetFeed([]provider.Notification{{
 			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
 			Title:     title,
@@ -2936,4 +3203,61 @@ func TestModel_ThemeChange_KeepsTheMarkerWiredToTheRebuiltPane(t *testing.T) {
 	m = updated.(Model)
 
 	assertPaneHasAMarker(t, m, "ThemeSelectedMsg")
+}
+
+// mutableHintProviderStub is a hinter whose hint can change between model
+// construction and a later fetch. That is the whole point: NewModel computes
+// max(configured, hint) up front too, so a stub with a constant hint makes the
+// handler's recompute redundant and the wiring untestable. GitHub only sends
+// X-Poll-Interval on an actual response, so 0-at-construction becoming a real
+// value after the first fetch is the real sequence, not a contrived one.
+type mutableHintProviderStub struct {
+	provider.Provider
+	hint time.Duration
+}
+
+func (h *mutableHintProviderStub) NotificationsPollInterval() time.Duration { return h.hint }
+
+// TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller
+// pins the single SetInterval call in the NotificationsFetchedMsg handler,
+// which is the entirety of task 15's "cadence is max(X-Poll-Interval,
+// configured)" criterion at the app level. Deleting that line leaves the
+// configured interval in force forever while the hint is computed and thrown
+// away — and the suite stayed green, because the pure interval-arithmetic
+// functions are not what breaks.
+//
+// Asserted through polling.NotificationsPoller.Interval(), added as a test
+// seam for exactly this. The hint must be raised *after* NewModel has run, or
+// construction has already applied it and the assertion passes with the
+// handler's call deleted.
+func TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller(t *testing.T) {
+	const configured = 30
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: configured,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	// No hint yet: GitHub has sent no response, so the poller starts on the
+	// configured cadence. The real capable provider is embedded rather than a
+	// nil interface because NewModel calls displayScopes(p, cfg) -> p.Scopes().
+	p := &mutableHintProviderStub{Provider: newNotificationCapableProvider(), hint: 0}
+	m := NewModel(p, client, cfg, "dev", "")
+
+	if got, want := m.notificationsPoller.Interval(), configured*time.Second; got != want {
+		t.Fatalf("precondition: interval at construction = %v, want the configured %v", got, want)
+	}
+
+	// The first response carries X-Poll-Interval: 300, which the adapter now
+	// reports. GitHub asking us to slow down must win over the configured 30s.
+	p.hint = 300 * time.Second
+
+	updated, _ := m.Update(polling.NotificationsFetchedMsg{Items: nil, Err: nil})
+	m = updated.(Model)
+
+	if got, want := m.notificationsPoller.Interval(), 300*time.Second; got != want {
+		t.Errorf("interval after a fetch that raised the hint = %v, want %v — the hint is being computed and discarded, so GitHub's rate-limit request is ignored", got, want)
+	}
 }

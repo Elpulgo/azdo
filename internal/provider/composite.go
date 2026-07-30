@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // CompositeProvider fans out list calls across multiple Provider backends and
@@ -606,6 +607,32 @@ func (cp *CompositeProvider) HasNotifications() bool {
 		}
 	}
 	return false
+}
+
+// NotificationsPollInterval reports the largest polling-cadence hint among
+// capable backends that also implement PollIntervalHinter (Decision 23). It
+// is deliberately a max, not a first-match or an average: task 15's poller
+// treats the hint as a floor to raise the configured interval to, never to
+// lower it below what any single backend asked for, so the composite must
+// surface the most conservative (largest) hint across every backend it fans
+// out to. A capable backend that does not implement PollIntervalHinter
+// simply does not contribute — it is not the same as it contributing 0.
+//
+// Returns 0 when no capable backend implements PollIntervalHinter, which the
+// caller (task 15) must treat as "no hint available" and fall back to the
+// configured interval.
+func (cp *CompositeProvider) NotificationsPollInterval() time.Duration {
+	var max time.Duration
+	for _, b := range cp.capableNotificationBackends() {
+		hinter, ok := b.(PollIntervalHinter)
+		if !ok {
+			continue
+		}
+		if hint := hinter.PollInterval(); hint > max {
+			max = hint
+		}
+	}
+	return max
 }
 
 // List fans out to every backend that implements NotificationSource

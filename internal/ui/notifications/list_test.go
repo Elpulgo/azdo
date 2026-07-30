@@ -3,6 +3,7 @@ package notifications
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -173,7 +174,7 @@ func TestMultiRepo_GatesOnScope_NotScopeDisplay(t *testing.T) {
 // SetFeed → listview.SetItems → setColumnsAndRows → SetRows → UpdateViewport.
 
 func TestView_RendersAfterWindowSizeMsg_SingleRepo(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	defer func() {
@@ -189,7 +190,7 @@ func TestView_RendersAfterWindowSizeMsg_SingleRepo(t *testing.T) {
 }
 
 func TestView_RendersAfterWindowSizeMsg_MultiRepo(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	defer func() {
@@ -453,7 +454,7 @@ func TestPresentReasons_NeverIncludesUnknown(t *testing.T) {
 }
 
 func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Feed order deliberately reversed vs. enum order, and a row carrying
@@ -513,7 +514,7 @@ func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
 // index (1 of 3) is neither zero nor last either. Reset-to-0, clamp-to-last and
 // keep-the-saved-index all land on a different row than the identity restore.
 func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Row 0: id 1, a/repo1, Subscribed
@@ -598,7 +599,7 @@ func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testi
 // 2-row result, so it must clamp to the last row (index 1) — which also pins
 // that the clamp is to len(rows)-1 and not to 0.
 func TestCycleReasonFilter_Collapse_CursorClamped_ItemDropped(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	feed := []provider.Notification{
@@ -635,7 +636,7 @@ func TestCycleReasonFilter_Collapse_CursorClamped_ItemDropped(t *testing.T) {
 // moved (the merge sorts newest-first, so ties and new arrivals reshuffle
 // constantly) must keep the cursor rather than keeping the index.
 func TestSetFeed_PreservesSelectedItemAcrossReorder(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	m = m.SetFeed([]provider.Notification{
@@ -662,7 +663,7 @@ func TestSetFeed_PreservesSelectedItemAcrossReorder(t *testing.T) {
 // ─── f filter: observability (decision 57) ──────────────────────────────────
 
 func TestReasonFilter_Accessor_ReportsCyclePosition(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
@@ -691,7 +692,7 @@ func TestReasonFilter_Accessor_ReportsCyclePosition(t *testing.T) {
 // that reason. Without the indicator the pane renders the plain "no
 // notifications" text while a user-set filter is what hides every row.
 func TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
@@ -722,29 +723,104 @@ func TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox(t *testing.T) {
 	}
 }
 
-// ─── r must not strand the pane on a spinner (decision 58) ──────────────────
+// ─── r now drives a real fetch (task 15 removes decision 58's stopgap) ──────
 
-// TestUpdate_RKey_DoesNotStrandSpinner pins the stopgap: listview's `r` sets
-// loading = true and shows the spinner before batching config.Fetch(), and this
-// pane's Fetch is still a stub returning nil, so nothing would ever call
-// HandleFetchResult. Task 15 removes both the stopgap and this test's reason to
-// exist when the real fetch lands.
-func TestUpdate_RKey_DoesNotStrandSpinner(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+// TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves is
+// TestUpdate_RKey_DoesNotStrandSpinner's replacement: decision 58's stopgap
+// swallowed `r` because the Fetch hook was a stub that would never resolve.
+// Task 15 wires a real Fetch (fetchNotifications), which inverts the
+// premise — pressing `r` legitimately shows the loading spinner immediately
+// (listview's own "r" handling turns it on before batching config.Fetch()),
+// and resolving the returned cmd must clear it again and land the fetch's
+// rows, exactly like the initial Init()-triggered fetch does.
+func TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves(t *testing.T) {
+	marker := &fakeMarker{listItems: []provider.Notification{
+		mkNotification("1", "owner/repo", "Freshly fetched", provider.NotificationReasonMentioned, false, fixedNow),
+	}}
+	m := NewModelWithStyles(styles.DefaultStyles(), marker, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
-		mkNotification("1", "owner/repo", "Still here after r", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("0", "owner/repo", "Stale row before refresh", provider.NotificationReasonMentioned, false, fixedNow),
 	})
 
-	m, _ = m.Update(keyRune('r'))
+	updated, cmd := m.Update(keyRune('r'))
+	m = updated
+
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from r — listview batches config.Fetch() with the spinner tick")
+	}
+	if view := m.View(); !strings.Contains(view, "Loading notifications") {
+		t.Errorf("immediately after r the pane should show the loading state; view:\n%s", view)
+	}
+
+	// Resolve the cmd batch and feed every resulting message back in, the way
+	// bubbletea would (tea.Batch's messages arrive independently).
+	for _, resolved := range flattenBatch(cmd) {
+		m, _ = m.Update(resolved)
+	}
 
 	view := m.View()
 	if strings.Contains(view, "Loading notifications") {
-		t.Errorf("after r the pane renders the loading spinner and nothing will ever clear it:\n%s", view)
+		t.Errorf("after the fetch resolves the pane must not still show loading; view:\n%s", view)
 	}
-	if !strings.Contains(view, "Still here after r") {
-		t.Errorf("after r the pane no longer renders its rows:\n%s", view)
+	if !strings.Contains(view, "Freshly fetched") {
+		t.Errorf("after the fetch resolves the pane should show the fetch's rows; view:\n%s", view)
 	}
+	if strings.Contains(view, "Stale row before refresh") {
+		t.Errorf("after the fetch resolves the pane must not still show the pre-refresh row; view:\n%s", view)
+	}
+	if marker.listCalls != 1 {
+		t.Errorf("marker.List call count = %d, want 1", marker.listCalls)
+	}
+}
+
+// TestUpdate_RKey_NilMarker_ResolvesWithoutStranding pins the nil-marker
+// half: Decision 61's reachable capability-absent/disabled-pane state must
+// not strand the spinner either, even though there is no real fetch to
+// perform — fetchNotifications' nil-marker branch still resolves
+// synchronously to an empty, error-free result.
+func TestUpdate_RKey_NilMarker_ResolvesWithoutStranding(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed(nil)
+
+	updated, cmd := m.Update(keyRune('r'))
+	m = updated
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from r even with a nil marker")
+	}
+
+	for _, resolved := range flattenBatch(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	view := m.View()
+	if strings.Contains(view, "Loading notifications") {
+		t.Errorf("nil-marker refresh must still resolve and clear loading; view:\n%s", view)
+	}
+	if m.list.Err() != nil {
+		t.Errorf("nil-marker refresh must not surface an error, got %v", m.list.Err())
+	}
+}
+
+// flattenBatch runs cmd and, if it produced a tea.BatchMsg, runs every
+// sub-cmd too, returning every resulting tea.Msg. bubbletea's own runtime
+// does this same flattening; tests that assert on the *result* of a batched
+// cmd (rather than merely that it is non-nil) need to reproduce it, since
+// listview's "r" handling returns tea.Batch(config.Fetch(), spinner.Tick()).
+func flattenBatch(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, sub := range batch {
+			out = append(out, flattenBatch(sub)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
 }
 
 // ─── The vanished-reason branch resets to "all", not to present[0] ───────────
@@ -755,7 +831,7 @@ func TestUpdate_RKey_DoesNotStrandSpinner(t *testing.T) {
 // must then return to the "all" position rather than jumping to the first
 // present reason — which would silently move the user's filter sideways.
 func TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
@@ -791,7 +867,7 @@ func TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll(t *testing.T) {
 // sets no FilterFunc, so listview's search mode is unreachable in phase 1 and
 // the ViewList half of the guard is the only testable one.
 func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
@@ -837,7 +913,7 @@ func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
 // hand-written zero constant would keep passing when listview's own contract
 // changes underneath.
 func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
-	base := NewModelWithStyles(styles.DefaultStyles(), nil)
+	base := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	base.list, _ = base.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	base = base.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
@@ -922,7 +998,7 @@ func assertOtherStatesAbsent(t *testing.T, view string, own string) {
 // "you're clear", never as an error, and per decision 58's `r` stopgap must
 // not tell the user to press a key this pane currently swallows.
 func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed(nil)
 
@@ -942,7 +1018,7 @@ func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
 // feed has rows, but the active `f` reason filter matches none of them. This
 // must not render as the plain empty-inbox text.
 func TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
@@ -988,7 +1064,7 @@ func TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows(t *testin
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "Must not render once errored", provider.NotificationReasonMentioned, false, fixedNow),
@@ -1026,7 +1102,7 @@ func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	// No SetFeed call at all: items start at zero.
 
@@ -1049,7 +1125,7 @@ func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
 // directly, rather than as an app-level test that could never fail for the
 // right reason.
 func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetCapabilityUnsupported()
 
@@ -1081,7 +1157,7 @@ func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.HandleFetchResult(nil, listErr)
 	if !strings.Contains(m.View(), errorMarker) {
@@ -1121,7 +1197,7 @@ func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
 // a real Fetch replaces the stub. Task 15 must set loading on the initial
 // fetch, or move this pane off listview's flag.
 func TestView_Loading_DoesNotClaimCaughtUp(t *testing.T) {
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.SetFeed(nil)
 	if !strings.Contains(m.View(), emptyInboxMarker) {
@@ -1154,7 +1230,7 @@ func TestView_CapabilityUnsupported_OutranksError(t *testing.T) {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
 	}
 
-	m := NewModelWithStyles(styles.DefaultStyles(), nil)
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m.HandleFetchResult(nil, listErr)
 	m = m.SetCapabilityUnsupported()
@@ -1177,10 +1253,19 @@ type fakeMarker struct {
 	doneCalls []provider.Identity
 	readErr   error
 	doneErr   error
+
+	// listItems/listErr/listCalls drive fetchNotifications' List call — added
+	// for task 15's real Fetch wiring (the r-key/Init path), which every
+	// pre-task-15 fakeMarker user leaves at their zero value (nil, nil, 0),
+	// unaffected by this addition.
+	listItems []provider.Notification
+	listErr   error
+	listCalls int
 }
 
 func (f *fakeMarker) List(provider.NotifOpts) ([]provider.Notification, error) {
-	return nil, nil
+	f.listCalls++
+	return f.listItems, f.listErr
 }
 
 func (f *fakeMarker) MarkRead(id provider.Identity) error {
@@ -1209,7 +1294,7 @@ func runMarkCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
 
 func newTriagePane(t *testing.T, marker provider.NotificationSource, feed []provider.Notification) Model {
 	t.Helper()
-	m := NewModelWithStyles(styles.DefaultStyles(), marker)
+	m := NewModelWithStyles(styles.DefaultStyles(), marker, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.now = func() time.Time { return fixedNow }
 	return m.SetFeed(feed)
@@ -1812,8 +1897,12 @@ func TestMarkResult_StaleKind_DoesNotRollBackANewerAction(t *testing.T) {
 // hiding the very error that explains why there is no data. That is the lie
 // decisions 57 and 63 exist to prevent.
 //
-// FORWARD: task 15 — unreachable until a real poller can fail; task 15's own
-// criterion does not mention it.
+// This is reachable today (task 15): both this pane's own Init()/`r` fetch and
+// the app-level poller's push land through HandleFetchResult, either of which
+// can fail while a `u`/`d` override is still settling — a poll failing
+// mid-debounce, or an unsolicited 304 surfacing as an error (see
+// TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError below for that exact
+// shape), reach exactly this path.
 func TestMarkResult_DoesNotClearAFailedFetchsErrorState(t *testing.T) {
 	marker := &fakeMarker{}
 	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonMentioned, false, fixedNow)
@@ -1839,6 +1928,98 @@ func TestMarkResult_DoesNotClearAFailedFetchsErrorState(t *testing.T) {
 	}
 	if strings.Contains(view, emptyInboxMarker) {
 		t.Errorf("after a mark result landed on a failed fetch, the pane claims the inbox is clear — the fetch actually failed; view:\n%s", view)
+	}
+}
+
+// unsolicitedNotModifiedErr builds the exact error shape
+// internal/github/notifications.go's client produces for an *unsolicited* 304
+// — one with no matching cached validator, so there is nothing to replay
+// transparently and the response surfaces as a failure rather than the
+// existing list being left intact. *github.APIError is the concrete type
+// errors.As recovers downstream (task 19); the pane itself only ever reads it
+// as a plain error, which is exactly what this fixture exercises.
+func unsolicitedNotModifiedErr() error {
+	return fmt.Errorf("github: notifications: %w", &github.APIError{
+		StatusCode: http.StatusNotModified,
+		Message:    "Not Modified",
+	})
+}
+
+// TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox pins FORWARD
+// item 4 of task 15: widening 304 handling beyond "a matching-cache 304 leaves
+// the list intact". An *unsolicited* 304 reaches this pane exactly like any
+// other failed fetch — through HandleFetchResult's error argument — and must
+// render decision 63's error state, never the empty-inbox text a naive reading
+// of "304 Not Modified" might suggest ("nothing changed" is not "no
+// notifications").
+func TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Must not render once errored", provider.NotificationReasonMentioned, false, fixedNow),
+	})
+
+	m = m.HandleFetchResult(nil, unsolicitedNotModifiedErr())
+
+	view := m.View()
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("unsolicited-304 view = %q, want the error state (%q)", view, errorMarker)
+	}
+	if strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("unsolicited-304 view = %q, must not render as an empty inbox — a 304 is a failed fetch, not zero notifications", view)
+	}
+	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError is
+// TestMarkResult_DoesNotClearAFailedFetchsErrorState's companion using FORWARD
+// item 4's exact error shape (an unsolicited 304) rather than a generic
+// fetch error, so the specific failure mode named in the spec has its own
+// direct regression test rather than relying on a generic error string to
+// stand in for it.
+func TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError(t *testing.T) {
+	marker := &fakeMarker{}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target})
+
+	m, cmd := m.Update(keyRune('d'))
+	if cmd == nil {
+		t.Fatal("want a cmd from d")
+	}
+
+	// An unsolicited 304 surfaces as an error while the DELETE is still in flight.
+	m = m.HandleFetchResult(nil, unsolicitedNotModifiedErr())
+	if !strings.Contains(m.View(), errorMarker) {
+		t.Fatalf("precondition: want the error render, got:\n%s", m.View())
+	}
+
+	// The DELETE result lands — successfully. task 14's mark-rollback path
+	// (handleMarkResult) must decide purely from res.err (nil here), never
+	// from the concurrent 304-shaped fetch error the pane is still displaying,
+	// which arrived on an entirely different message type
+	// (notificationsFetchMsg / polling.NotificationsFetchedMsg, never
+	// MarkResultMsg) and therefore cannot be "read" as this mark's own result.
+	m, _ = m.Update(cmd())
+
+	view := m.View()
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("after a successful mark landed on an unsolicited-304 fetch error, the error render is gone; view:\n%s", view)
+	}
+	if strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("after a successful mark landed on an unsolicited-304 fetch error, the pane claims the inbox is clear; view:\n%s", view)
+	}
+
+	// The commit must still have landed in the held feed (commitOverride),
+	// even though refreshItems' guard kept the error rendered on screen: once
+	// the fetch error clears, the mark must not have reverted.
+	found := false
+	for _, n := range m.feed {
+		if n.Identity.SameItem(target.Identity) {
+			found = true
+		}
+	}
+	if found {
+		t.Errorf("feed = %+v, want the marked-done row committed out of the held feed despite the concurrent fetch error", m.feed)
 	}
 }
 

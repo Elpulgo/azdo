@@ -15,6 +15,24 @@ type PipelineRunsUpdated struct {
 // It signals that it's time to fetch updated data.
 type TickMsg struct{}
 
+// NotificationsTickMsg is a tea.Msg sent on each notifications polling
+// interval tick. It is a distinct type from TickMsg (Decision 69), not the
+// same struct discriminated by a field: app.go's `case polling.TickMsg:`
+// calls the pipeline poller's OnTick unconditionally, so reusing TickMsg
+// here — even with an added field — would still match that case and drive
+// the wrong poller.
+type NotificationsTickMsg struct{}
+
+// NotificationsFetchedMsg is a tea.Msg sent when the notifications poller's
+// background fetch completes. It contains either the fetched notifications
+// or an error; a nil Items with a nil Err is a valid "nothing to update"
+// result (e.g. a transparent 304 replay), and callers must not treat it as a
+// signal to clear an existing list.
+type NotificationsFetchedMsg struct {
+	Items []provider.Notification
+	Err   error
+}
+
 // ConnectionState represents the current state of the API connection.
 type ConnectionState int
 

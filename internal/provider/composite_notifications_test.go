@@ -88,6 +88,41 @@ func TestPartialNotifyBackend_DoesNotSatisfyNotificationSource(t *testing.T) {
 	}
 }
 
+// hintingNotifyBackend embeds *fakeNotifyBackend and additionally implements
+// PollIntervalHinter, so NotificationsPollInterval tests can exercise a mix
+// of hinting and non-hinting capable backends. fakeNotifyBackend itself
+// deliberately does NOT implement PollIntervalHinter (Decision 23: a capable
+// backend need not hint), which is what proves the "falls back" half of the
+// contract below.
+type hintingNotifyBackend struct {
+	*fakeNotifyBackend
+	interval time.Duration
+}
+
+func newHintingNotifyBackend(kind provider.Kind, scopes []string, interval time.Duration) *hintingNotifyBackend {
+	return &hintingNotifyBackend{fakeNotifyBackend: newFakeNotifyBackend(kind, scopes), interval: interval}
+}
+
+func (f *hintingNotifyBackend) PollInterval() time.Duration {
+	return f.interval
+}
+
+// compile-time assertions: hintingNotifyBackend satisfies both
+// NotificationSource and PollIntervalHinter.
+var _ provider.NotificationSource = (*hintingNotifyBackend)(nil)
+var _ provider.PollIntervalHinter = (*hintingNotifyBackend)(nil)
+
+// TestFakeNotifyBackend_DoesNotImplementPollIntervalHinter pins the fixture's
+// own shape: it must NOT satisfy PollIntervalHinter, otherwise the "falls
+// back to 0 when no capable backend hints" test below would not actually
+// exercise the fallback path.
+func TestFakeNotifyBackend_DoesNotImplementPollIntervalHinter(t *testing.T) {
+	var src provider.NotificationSource = newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	if _, ok := src.(provider.PollIntervalHinter); ok {
+		t.Fatal("fakeNotifyBackend must not implement PollIntervalHinter — see hintingNotifyBackend")
+	}
+}
+
 // stubBackendError is a distinguishable error type used to prove errors.As
 // can recover a specific error through both the all-failed (errors.Join)
 // and partial (PartialError.Unwrap) paths.
@@ -131,6 +166,79 @@ func TestCompositeProvider_HasNotifications_TrueWithMix(t *testing.T) {
 
 	if !cp.HasNotifications() {
 		t.Fatal("want true with a mix of capable and incapable backends")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NotificationsPollInterval (Decision 23 / task 15)
+// ---------------------------------------------------------------------------
+
+// TestCompositeProvider_NotificationsPollInterval_ZeroWhenNoCapableBackends
+// pins the "no hint available" floor: a composite with zero capable
+// backends must report 0, not panic or reach for a nonexistent hinter.
+func TestCompositeProvider_NotificationsPollInterval_ZeroWhenNoCapableBackends(t *testing.T) {
+	a := &fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}
+	cp := provider.NewCompositeProvider(a)
+
+	if got := cp.NotificationsPollInterval(); got != 0 {
+		t.Fatalf("NotificationsPollInterval() = %v, want 0 with zero capable backends", got)
+	}
+}
+
+// TestCompositeProvider_NotificationsPollInterval_FallsBackToZero_WhenCapableButNotHinting
+// pins the other half of Decision 23's fallback: a capable backend that does
+// not implement PollIntervalHinter must not be mistaken for one hinting 0 —
+// there is nothing to distinguish here at the composite level, but the
+// caller (task 15's poller) must fall back to the configured interval, and
+// this fixture proves the composite does not panic or misbehave when the
+// only capable backend lacks the hinter.
+func TestCompositeProvider_NotificationsPollInterval_FallsBackToZero_WhenCapableButNotHinting(t *testing.T) {
+	nonHinting := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	cp := provider.NewCompositeProvider(nonHinting)
+
+	if got := cp.NotificationsPollInterval(); got != 0 {
+		t.Fatalf("NotificationsPollInterval() = %v, want 0 when the sole capable backend does not implement PollIntervalHinter", got)
+	}
+}
+
+// TestCompositeProvider_NotificationsPollInterval_ReturnsHint_WhenOneBackendHints
+// pins the positive path: a single capable, hinting backend's value is
+// returned verbatim.
+func TestCompositeProvider_NotificationsPollInterval_ReturnsHint_WhenOneBackendHints(t *testing.T) {
+	hinting := newHintingNotifyBackend(provider.KindGitHub, []string{"o/r"}, 90*time.Second)
+	cp := provider.NewCompositeProvider(hinting)
+
+	if got, want := cp.NotificationsPollInterval(), 90*time.Second; got != want {
+		t.Fatalf("NotificationsPollInterval() = %v, want %v", got, want)
+	}
+}
+
+// TestCompositeProvider_NotificationsPollInterval_MaxAcrossHintingBackends
+// pins the aggregation rule: the composite reports the LARGEST hint among
+// hinting backends, never the first or an average — the poller treats the
+// hint as a floor to raise the configured interval to, so under-reporting it
+// would let one backend's rate limit get exceeded.
+func TestCompositeProvider_NotificationsPollInterval_MaxAcrossHintingBackends(t *testing.T) {
+	small := newHintingNotifyBackend(provider.KindGitHub, []string{"o/r1"}, 30*time.Second)
+	large := newHintingNotifyBackend(provider.KindGitHub, []string{"o/r2"}, 120*time.Second)
+	cp := provider.NewCompositeProvider(small, large)
+
+	if got, want := cp.NotificationsPollInterval(), 120*time.Second; got != want {
+		t.Fatalf("NotificationsPollInterval() = %v, want max hint %v", got, want)
+	}
+}
+
+// TestCompositeProvider_NotificationsPollInterval_IgnoresNonHintingCapableBackend
+// pins that a capable-but-non-hinting backend does not drag the aggregate
+// toward 0 when mixed with a hinting one — the non-hinting backend simply
+// does not participate, it does not count as "hints 0".
+func TestCompositeProvider_NotificationsPollInterval_IgnoresNonHintingCapableBackend(t *testing.T) {
+	nonHinting := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r1"})
+	hinting := newHintingNotifyBackend(provider.KindGitHub, []string{"o/r2"}, 45*time.Second)
+	cp := provider.NewCompositeProvider(nonHinting, hinting)
+
+	if got, want := cp.NotificationsPollInterval(), 45*time.Second; got != want {
+		t.Fatalf("NotificationsPollInterval() = %v, want %v (non-hinting backend must not drag the max toward 0)", got, want)
 	}
 }
 

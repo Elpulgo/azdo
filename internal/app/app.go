@@ -83,29 +83,30 @@ type Model struct {
 	// client was not supplied.
 	metricsClient *azdevops.MultiClient
 
-	config            *config.Config
-	styles            *styles.Styles
-	activeTab         Tab
-	enabledTabs       []Tab // ordered list of enabled tabs
-	pipelinesView     pipelines.Model
-	pullRequestsView  pullrequests.Model
-	workItemsView     workitems.Model
-	metricsView       metrics.Model
-	notificationsView notifications.Model
-	logo              *components.Logo
-	statusBar         *components.StatusBar
-	helpModal         *components.HelpModal
-	errorModal        *components.ErrorModal
-	themePicker       components.ThemePicker
-	poller            *polling.Poller
-	errorHandler      *polling.ErrorHandler
-	currentVersion    string
-	commitHash        string
-	width             int
-	height            int
-	footerRows        int
-	err               error
-	stateStore        *state.Store // optional; nil when persistence is disabled
+	config              *config.Config
+	styles              *styles.Styles
+	activeTab           Tab
+	enabledTabs         []Tab // ordered list of enabled tabs
+	pipelinesView       pipelines.Model
+	pullRequestsView    pullrequests.Model
+	workItemsView       workitems.Model
+	metricsView         metrics.Model
+	notificationsView   notifications.Model
+	logo                *components.Logo
+	statusBar           *components.StatusBar
+	helpModal           *components.HelpModal
+	errorModal          *components.ErrorModal
+	themePicker         components.ThemePicker
+	poller              *polling.Poller
+	notificationsPoller *polling.NotificationsPoller
+	errorHandler        *polling.ErrorHandler
+	currentVersion      string
+	commitHash          string
+	width               int
+	height              int
+	footerRows          int
+	err                 error
+	stateStore          *state.Store // optional; nil when persistence is disabled
 }
 
 // SetStateStore attaches a state store to the model so navigation changes
@@ -317,6 +318,64 @@ func hasNotificationCapability(p provider.Provider) bool {
 func notificationMarker(p provider.Provider) provider.NotificationSource {
 	marker, _ := p.(provider.NotificationSource)
 	return marker
+}
+
+// notificationsIntervalHinter is satisfied by a provider.Provider whose
+// underlying backend(s) can report a server-suggested notifications polling
+// cadence (Decision 23) -- currently only *provider.CompositeProvider, via
+// its NotificationsPollInterval method. This mirrors
+// hasNotificationCapability's and notificationMarker's narrow, per-capability
+// type assertion rather than adding a method to provider.Provider itself.
+type notificationsIntervalHinter interface {
+	NotificationsPollInterval() time.Duration
+}
+
+// notificationsPollIntervalHint returns p's server-suggested notifications
+// polling cadence, or 0 when p does not implement notificationsIntervalHinter.
+// Callers must treat 0 as "no hint available" -- either because no capable
+// backend implements provider.PollIntervalHinter, or because none has
+// completed a fetch yet -- exactly as provider.PollIntervalHinter's own doc
+// comment requires.
+func notificationsPollIntervalHint(p provider.Provider) time.Duration {
+	hinter, ok := p.(notificationsIntervalHinter)
+	if !ok {
+		return 0
+	}
+	return hinter.NotificationsPollInterval()
+}
+
+// notificationsConfiguredInterval returns the configured notifications
+// polling interval: cfg.Notifications.PollInterval if positive, falling back
+// to cfg.PollingInterval, and finally to polling.DefaultInterval. A nil cfg
+// returns polling.DefaultInterval. NewNotificationsPoller and SetInterval
+// both additionally floor the result at polling.MinInterval, which is what
+// keeps a configured notifications.poll_interval: 1 (accepted by config
+// validation -- it only requires >= 0) from producing sub-MinInterval
+// polling against GitHub.
+func notificationsConfiguredInterval(cfg *config.Config) time.Duration {
+	if cfg == nil {
+		return polling.DefaultInterval
+	}
+	if cfg.Notifications.PollInterval > 0 {
+		return time.Duration(cfg.Notifications.PollInterval) * time.Second
+	}
+	if cfg.PollingInterval > 0 {
+		return time.Duration(cfg.PollingInterval) * time.Second
+	}
+	return polling.DefaultInterval
+}
+
+// notificationsPollInterval computes the notifications poller's cadence per
+// Decision 8: max(configured interval, server hint). A hint of 0 (no capable
+// backend, or none has completed a fetch yet) leaves the configured interval
+// untouched.
+func notificationsPollInterval(p provider.Provider, cfg *config.Config) time.Duration {
+	configured := notificationsConfiguredInterval(cfg)
+	hint := notificationsPollIntervalHint(p)
+	if hint > configured {
+		return hint
+	}
+	return configured
 }
 
 // buildEnabledTabs returns the list of enabled tabs based on config.
@@ -573,6 +632,18 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	}
 	poller := polling.NewPoller(p, interval)
 
+	// The notifications poller mirrors the pipeline poller above but is a
+	// distinct type (Decision 69) with its own cadence: Decision 8's
+	// max(configured, hint) is computed once here, up front, and recomputed
+	// after every fetch (see the polling.NotificationsFetchedMsg case in
+	// Update) since a GitHub hint only becomes known once the adapter has
+	// actually observed an X-Poll-Interval response header.
+	notificationsPoller := polling.NewNotificationsPoller(
+		notificationMarker(p),
+		notificationsPollInterval(p, cfg),
+		notifications.NotifOptsFromConfig(cfg),
+	)
+
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
 		themesDir, _ := styles.GetThemesDirectoryPath()
@@ -601,7 +672,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// tasks 15 and 16 deliver messages to this pane from the top-level switch.
 	// Constructing here is measured behaviour-preserving and removes the
 	// hazard instead of documenting it.
-	nv := notifications.NewModelWithStyles(appStyles, notificationMarker(p))
+	nv := notifications.NewModelWithStyles(appStyles, notificationMarker(p), cfg)
 
 	return Model{
 		client:        p,
@@ -612,19 +683,20 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		enabledTabs:   enabledTabs,
 		logo:          logo,
 		// pullRequestsView, workItemsView, and pipelinesView all consume provider.Provider (tasks 7-9).
-		pipelinesView:     pipelines.NewModelWithStyles(p, appStyles),
-		pullRequestsView:  pullrequests.NewModelWithStyles(p, appStyles),
-		workItemsView:     workitems.NewModelWithStyles(p, appStyles),
-		metricsView:       mv,
-		notificationsView: nv,
-		statusBar:         statusBar,
-		helpModal:         helpModal,
-		errorModal:        errorModal,
-		themePicker:       themePicker,
-		poller:            poller,
-		errorHandler:      errorHandler,
-		currentVersion:    currentVersion,
-		commitHash:        commitHash,
+		pipelinesView:       pipelines.NewModelWithStyles(p, appStyles),
+		pullRequestsView:    pullrequests.NewModelWithStyles(p, appStyles),
+		workItemsView:       workitems.NewModelWithStyles(p, appStyles),
+		metricsView:         mv,
+		notificationsView:   nv,
+		statusBar:           statusBar,
+		helpModal:           helpModal,
+		errorModal:          errorModal,
+		themePicker:         themePicker,
+		poller:              poller,
+		notificationsPoller: notificationsPoller,
+		errorHandler:        errorHandler,
+		currentVersion:      currentVersion,
+		commitHash:          commitHash,
 	}
 }
 
@@ -637,8 +709,9 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	initCmds := []tea.Cmd{
-		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
-		m.poller.StartPolling(),      // Start polling timer
+		m.poller.FetchPipelineRuns(),         // Initial fetch - updates connection state
+		m.poller.StartPolling(),              // Start polling timer
+		m.notificationsPoller.StartPolling(), // Start the notifications poller's own timer (Decision 69)
 		checkForUpdate(m.currentVersion),
 	}
 
@@ -652,6 +725,15 @@ func (m Model) Init() tea.Cmd {
 	// entirely when the PR pane is disabled.
 	if m.isTabEnabled(TabPullRequests) && m.activeTab != TabPullRequests {
 		initCmds = append(initCmds, m.pullRequestsView.Init())
+	}
+	// Notifications' own initTabCmd already issues the first fetch when it IS
+	// the active tab; this preload guard covers every other case (a
+	// different active tab, or notifications not the default) so switching
+	// to it later is instant -- mirroring the PR preload immediately above.
+	// Skipped when the tab is absent entirely (Decision 11's capability gate,
+	// or disabled_panes).
+	if m.isTabEnabled(TabNotifications) && m.activeTab != TabNotifications {
+		initCmds = append(initCmds, m.notificationsPoller.FetchNotifications())
 	}
 
 	return tea.Batch(initCmds...)
@@ -888,8 +970,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// from m.client on every reconstruction, same as the other panes; any
 		// in-flight optimistic overrides are discarded here exactly as the
 		// feed itself is, which is consistent with the rest of this block —
-		// task 15's poller will simply repopulate both on the next fetch.
-		m.notificationsView = notifications.NewModelWithStyles(m.styles, notificationMarker(m.client))
+		// the poller simply repopulates both on its next fetch. m.config is
+		// re-supplied too (task 15) so the reconstructed pane's own Fetch
+		// closure keeps deriving NotifOpts/filtering from the same config the
+		// rest of the app uses, rather than reverting to the nil-cfg
+		// fallback.
+		m.notificationsView = notifications.NewModelWithStyles(m.styles, notificationMarker(m.client), m.config)
 
 		// CRITICAL: Set window size for all views before they try to render
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
@@ -970,6 +1056,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case polling.TickMsg:
 		// Time to poll for updates
 		cmds = append(cmds, m.poller.OnTick())
+
+	case polling.NotificationsTickMsg:
+		// A distinct top-level case from polling.TickMsg above (Decision 69):
+		// NotificationsTickMsg is a genuinely different concrete type, not
+		// TickMsg discriminated by a field, because the case above would
+		// still match a shared type and silently drive the pipeline poller
+		// instead of this one.
+		cmds = append(cmds, m.notificationsPoller.OnTick())
+
+	case polling.NotificationsFetchedMsg:
+		// Routed unconditionally, NOT through the delegate-to-active-tab
+		// switch below, for the same reason as notifications.MarkResultMsg
+		// and polling.PipelineRunsUpdated above: a background poll's result
+		// is uncorrelated with which tab is currently showing, and the
+		// notifications pane must still receive it (and re-derive its own
+		// polling cadence) even while some other tab is active.
+		filtered := notifications.FilterNotifications(msg.Items, m.config)
+		m.notificationsView = m.notificationsView.HandleFetchResult(filtered, msg.Err)
+		// Re-derive the cadence after every fetch, success or failure alike
+		// (Decision 8): a GitHub hint only becomes known once the adapter has
+		// actually observed a response's X-Poll-Interval header, so the very
+		// first fetch is what turns a 0 hint into a real one.
+		m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))
+		return m, tea.Batch(cmds...)
 
 	case components.CriticalErrorMsg:
 		m.errorModal.SetSize(m.width, m.height)
@@ -1240,8 +1350,9 @@ func (m Model) pipelinesKeybindings() string {
 }
 
 // notificationsKeybindings returns the keybindings string for the
-// notifications list view. Only lists keys actually wired by task 11's pane
-// — `u`/`d`/`o` triage and the real `r` refresh are tasks 14/15/19's to add.
+// notifications list view. Lists the keys wired by task 11's pane plus the
+// real `r` refresh (task 15, replacing decision 58's stopgap) — `u`/`d`/`o`
+// triage are tasks 14/19's to add.
 func (m Model) notificationsKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.styles.Theme.Border))
@@ -1249,6 +1360,7 @@ func (m Model) notificationsKeybindings() string {
 
 	return m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
 		m.styles.Key.Render("f") + m.styles.Description.Render(" filter reason") + sep +
+		m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
 		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }

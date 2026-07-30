@@ -16,10 +16,9 @@ import (
 type ViewMode int
 
 const (
-	ViewList   ViewMode = iota
+	ViewList ViewMode = iota
 	ViewDetail
 )
-
 
 // ColumnSpec defines a column with percentage-based width and minimum.
 type ColumnSpec struct {
@@ -49,11 +48,11 @@ type Config[T any] struct {
 	// effective column specs. This lets callers vary column count (e.g. a glyph
 	// column) in lock-step with the rows produced by ToRows. When nil, the
 	// static Columns field is used instead, preserving backward compatibility.
-	ToColumns      func(items []T) []ColumnSpec
-	Fetch          func() tea.Cmd
-	EnterDetail    func(item T, s *styles.Styles, w, h int) (DetailView, tea.Cmd)
-	HasContextBar  func(mode ViewMode) bool // nil = always false
-	FilterFunc     func(item T, query string) bool // nil = search disabled
+	ToColumns     func(items []T) []ColumnSpec
+	Fetch         func() tea.Cmd
+	EnterDetail   func(item T, s *styles.Styles, w, h int) (DetailView, tea.Cmd)
+	HasContextBar func(mode ViewMode) bool        // nil = always false
+	FilterFunc    func(item T, query string) bool // nil = search disabled
 }
 
 // searchBarHeight is the vertical space consumed by the search bar when active.
@@ -79,23 +78,23 @@ type Model[T any] struct {
 }
 
 func NormalizeWidths(cols []ColumnSpec) {
-    total := 0
-    for _, c := range cols {
-        total += c.WidthPct
-    }
-    if total == 0 {
-        return
-    }
+	total := 0
+	for _, c := range cols {
+		total += c.WidthPct
+	}
+	if total == 0 {
+		return
+	}
 
-    assigned := 0
-    for i := range cols {
-        if i == len(cols)-1 {
-            cols[i].WidthPct = 100 - assigned // absorb rounding remainder
-        } else {
-            cols[i].WidthPct = cols[i].WidthPct * 100 / total
-            assigned += cols[i].WidthPct
-        }
-    }
+	assigned := 0
+	for i := range cols {
+		if i == len(cols)-1 {
+			cols[i].WidthPct = 100 - assigned // absorb rounding remainder
+		} else {
+			cols[i].WidthPct = cols[i].WidthPct * 100 / total
+			assigned += cols[i].WidthPct
+		}
+	}
 }
 
 // New creates a new generic list model.
@@ -447,6 +446,19 @@ func (m Model[T]) Err() error {
 // field.
 func (m Model[T]) Loading() bool {
 	return m.loading
+}
+
+// SetLoading sets the loading state directly, showing or hiding the spinner
+// to match. It exists because Init() cannot mutate model state (tea.Model's
+// Init has a value receiver): a caller whose first fetch begins the instant
+// the model is constructed — before Init() is ever called — must be able to
+// mark that fetch in flight at construction time instead, or Loading() reads
+// false while the fetch is outstanding and a caller's own "no items yet"
+// render (guarded on !Loading()) fires prematurely.
+func (m Model[T]) SetLoading(loading bool) Model[T] {
+	m.loading = loading
+	m.spinner.SetVisible(loading)
+	return m
 }
 
 // GetContextItems returns context bar items, delegating to detail when in detail mode.

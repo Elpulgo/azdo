@@ -150,6 +150,42 @@ func TestHandleFetchResult_Error(t *testing.T) {
 	}
 }
 
+// TestSetLoading_True pins the SetLoading(true) half: it sets the loading
+// field and shows the spinner, mirroring what Init() does today except that,
+// unlike Init(), SetLoading returns a mutated copy the caller can keep —
+// Init() cannot, because tea.Model.Init has a value receiver.
+func TestSetLoading_True(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+
+	m = m.SetLoading(true)
+
+	if !m.Loading() {
+		t.Error("Loading() = false after SetLoading(true)")
+	}
+	if !m.spinner.IsVisible() {
+		t.Error("spinner.Visible() = false after SetLoading(true)")
+	}
+}
+
+// TestSetLoading_False pins the reverse: hides the spinner and clears
+// loading, so a caller can use SetLoading(false) to cancel a construction-time
+// loading state without going through SetItems/HandleFetchResult.
+func TestSetLoading_False(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m = m.SetLoading(true)
+
+	m = m.SetLoading(false)
+
+	if m.Loading() {
+		t.Error("Loading() = true after SetLoading(false)")
+	}
+	if m.spinner.IsVisible() {
+		t.Error("spinner.Visible() = true after SetLoading(false)")
+	}
+}
+
 func TestView_Loading(t *testing.T) {
 	s := styles.DefaultStyles()
 	m := New(testConfig(), s)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
@@ -181,29 +182,34 @@ var baseColumns = []listview.ColumnSpec{
 // than one distinct Identity.Scope (convention 7).
 var repoColumn = listview.ColumnSpec{Title: "Repo", WidthPct: 20, MinWidth: 10}
 
-// NewModel creates a new notifications pane model with default styles and no
-// marker (u/d are no-ops until a real one is injected).
+// NewModel creates a new notifications pane model with default styles, no
+// marker (u/d are no-ops until a real one is injected), and no config (the
+// fetch derives NotifOpts from a nil config, which NotifOptsFromConfig
+// treats as the zero value).
 func NewModel() Model {
-	return NewModelWithStyles(styles.DefaultStyles(), nil)
+	return NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 }
 
 // NewModelWithStyles creates a new notifications pane model with custom
-// styles and the marker used for `u`/`d` (task 14). marker may be nil — see
-// Model.marker's doc comment; that is a reachable state, not a caller error.
-// Polling wiring (the tab registration, the render states) is owned by later
-// tasks (12, 13, 15) — this constructor builds a pane whose feed data enters
-// exclusively through SetFeed/HandleFetchResult.
-func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource) Model {
-	cfg := listview.Config[provider.Notification]{
+// styles, the marker used for `u`/`d` (task 14), and the config used to
+// derive fetch-time NotifOpts (task 15, decision 52). marker may be nil —
+// see Model.marker's doc comment; that is a reachable state, not a caller
+// error. cfg may also be nil (NotifOptsFromConfig's own nil contract).
+//
+// The constructed pane starts in listview's loading state (decision 64):
+// Init() cannot mutate model state (tea.Model.Init has a value receiver), so
+// the spinner has to be turned on here, at construction, to cover the gap
+// between the model existing and Init()'s own fetch cmd resolving — without
+// this, Loading() reads false and View()'s empty-inbox render fires for the
+// whole of that window.
+func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource, cfg *config.Config) Model {
+	lvCfg := listview.Config[provider.Notification]{
 		LoadingMessage: "Loading notifications...",
 		EntityName:     "notifications",
 		MinWidth:       50,
 		ToRows:         toRows,
 		ToColumns:      toColumns,
-		// Fetching is wired by a later task (12/15); this pane's data enters
-		// through SetFeed, so Init's fetch is a deliberate no-op rather than
-		// nil (listview.Init calls Fetch() unconditionally).
-		Fetch: func() tea.Cmd { return nil },
+		Fetch:          fetchNotifications(marker, cfg),
 		// No detail view in phase 1 (`o` opens the browser per decision 3;
 		// there is nothing else to drill into). A harmless no-op stub avoids
 		// a nil-func panic if enter is pressed, without building real
@@ -214,9 +220,44 @@ func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource) Mo
 	}
 
 	return Model{
-		list:   listview.New(cfg, s),
+		list:   listview.New(lvCfg, s).SetLoading(true),
 		marker: marker,
 		now:    time.Now,
+	}
+}
+
+// notificationsFetchMsg is the private, pane-owned result of the pane's own
+// Fetch closure — the result of Init()'s initial fetch and of a real `r`
+// refresh (FORWARD item 1). It is deliberately unexported, mirroring
+// internal/ui/pipelines/list.go's pipelineRunsMsg: the app-level poller's
+// own fetch result is a separate, exported message
+// (polling.NotificationsFetchedMsg) that reaches this pane through
+// HandleFetchResult directly rather than through this type, so a stale tab
+// switch cannot misroute one kind of result as the other.
+type notificationsFetchMsg struct {
+	items []provider.Notification
+	err   error
+}
+
+// fetchNotifications returns the listview.Config.Fetch closure this pane's
+// own Init()/`r` path uses: it calls marker.List with cfg-derived NotifOpts
+// (decision 52) and applies task 10's config filter to a successful result,
+// mirroring exactly what HandleFetchResult expects a caller to have already
+// done for a poller-driven result. A nil marker (Decision 61's reachable
+// capability-absent/disabled-pane state) fetches nothing and reports no
+// error — there is no capability to report a failure about.
+func fetchNotifications(marker provider.NotificationSource, cfg *config.Config) func() tea.Cmd {
+	return func() tea.Cmd {
+		return func() tea.Msg {
+			if marker == nil {
+				return notificationsFetchMsg{}
+			}
+			items, err := marker.List(NotifOptsFromConfig(cfg))
+			if err != nil {
+				return notificationsFetchMsg{err: err}
+			}
+			return notificationsFetchMsg{items: FilterNotifications(items, cfg)}
+		}
 	}
 }
 
@@ -237,15 +278,20 @@ func (m Model) Init() tea.Cmd {
 }
 
 // Update handles messages. MarkResultMsg (the result of a `u`/`d`
-// API call issued by markCmd) is handled unconditionally, since it can land
-// regardless of view mode or search state. Otherwise: the `f` key cycles the
-// reason filter (decision 53), `u`/`d` mark read/done (task 14) when
-// canTriage allows it, `r` is swallowed while the fetch hook is a stub
-// (decision 58), and every other message is forwarded to the underlying
-// listview.
+// API call issued by markCmd) and notificationsFetchMsg (the result of this
+// pane's own Init()/`r`-triggered fetch) are both handled unconditionally,
+// since either can land regardless of view mode or search state. Otherwise:
+// the `f` key cycles the reason filter (decision 53), `u`/`d` mark read/done
+// (task 14) when canTriage allows it, `r` now reaches listview's own real
+// refresh handling (decision 58's stopgap is gone — fetchNotifications is a
+// real Fetch hook, not a stub), and every other message is forwarded to the
+// underlying listview.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if res, ok := msg.(MarkResultMsg); ok {
 		return m.handleMarkResult(res), nil
+	}
+	if res, ok := msg.(notificationsFetchMsg); ok {
+		return m.HandleFetchResult(res.items, res.err), nil
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok && !m.list.IsSearching() && m.list.GetViewMode() == listview.ViewList {
@@ -262,16 +308,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.markDone()
-		case "r":
-			// STOPGAP — removed by task 15, which wires the real fetch.
-			// listview.updateList sets loading = true and shows the spinner
-			// before batching config.Fetch(), and this pane's Fetch is a stub
-			// returning nil, so nothing would ever call HandleFetchResult and
-			// the spinner would never clear: a permanent one-keypress dead
-			// end (decision 58). Swallowing `r` keeps the rows on screen. Task
-			// 15 deletes this case together with the Fetch stub in
-			// NewModelWithStyles.
-			return m, nil
 		}
 	}
 
@@ -519,7 +555,14 @@ func (m Model) View() string {
 	}
 
 	if !m.list.Loading() && len(m.list.Items()) == 0 {
-		if m.reasonFilterActive {
+		// len(m.feed) > 0, not len(m.list.Items()) == 0 alone: the discriminant
+		// must be "does the underlying feed genuinely have rows the filter is
+		// hiding", not "is the rendered table empty" — the latter is also true
+		// for a genuinely empty inbox with a stale-but-active `f` position
+		// (e.g. the previously-selected reason's last row was marked done),
+		// which must still read as "you're clear", not "a filter is hiding
+		// something" (decisions 57, 63).
+		if m.reasonFilterActive && len(m.feed) > 0 {
 			return filterEmptyBody(m.reasonFilter)
 		}
 		return emptyInboxBody()
@@ -756,8 +799,13 @@ func (m Model) cycleReasonFilter() Model {
 // a previous error is the recovery path, and it is asserted by
 // TestView_SuccessfulFeedAfterError_ClearsErrorState.
 //
-// FORWARD: task 15 — nothing calls HandleFetchResult with an error yet, so this
-// is unreachable today and becomes live the moment the real poller lands.
+// This guard is live, not merely theoretical: task 15 wires both this pane's
+// own Init()/`r` fetch and the app-level poller's push through
+// HandleFetchResult, either of which can now land a failure while a `u`/`d`
+// override is settling. A poll failing mid-debounce, or a real 304 surfacing
+// as an error (an unsolicited 304 — no matching cache — per
+// internal/github/notifications.go), reaches here exactly as the reachability
+// note above describes.
 func (m Model) refreshItems() Model {
 	if m.list.Err() != nil {
 		return m
