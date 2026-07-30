@@ -1,8 +1,10 @@
 package github_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,7 +38,13 @@ var _ pollIntervalHinter = (*github.Adapter)(nil)
 
 // ---------------------------------------------------------------------------
 // nil nc — List/MarkRead/MarkDone must error, never panic (Decision 39).
+//
+// "Descriptive" is only enforced if the message itself is asserted: an
+// err != nil check passes just as happily on errors.New("x"), and task 19
+// renders this text in-view, so each of the three messages is pinned below.
 // ---------------------------------------------------------------------------
+
+const wantNoClientMsg = "no notifications client configured"
 
 func TestAdapter_List_NilNotificationsClient_ReturnsDescriptiveError(t *testing.T) {
 	mc, err := github.NewMultiClient([]string{"o/r"}, "tok", github.DefaultLabelConvention(), nil)
@@ -52,14 +60,21 @@ func TestAdapter_List_NilNotificationsClient_ReturnsDescriptiveError(t *testing.
 	if got != nil {
 		t.Fatalf("List() result = %+v, want nil alongside the error", got)
 	}
+	if want := "github: notifications: " + wantNoClientMsg; err.Error() != want {
+		t.Errorf("List() error = %q, want %q", err.Error(), want)
+	}
 }
 
 func TestAdapter_MarkRead_NilNotificationsClient_ReturnsDescriptiveError(t *testing.T) {
 	a := github.NewAdapter(nil) // nc left nil
 
 	id := provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"}
-	if err := a.MarkRead(id); err == nil {
+	err := a.MarkRead(id)
+	if err == nil {
 		t.Fatal("MarkRead() error = nil, want a descriptive error for a nil notifications client")
+	}
+	if want := "github: mark read: " + wantNoClientMsg; err.Error() != want {
+		t.Errorf("MarkRead() error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -67,8 +82,12 @@ func TestAdapter_MarkDone_NilNotificationsClient_ReturnsDescriptiveError(t *test
 	a := github.NewAdapter(nil) // nc left nil
 
 	id := provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"}
-	if err := a.MarkDone(id); err == nil {
+	err := a.MarkDone(id)
+	if err == nil {
 		t.Fatal("MarkDone() error = nil, want a descriptive error for a nil notifications client")
+	}
+	if want := "github: mark done: " + wantNoClientMsg; err.Error() != want {
+		t.Errorf("MarkDone() error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -186,6 +205,45 @@ func TestAdapter_List_NilMultiClient_StillMapsWithoutPanic(t *testing.T) {
 	}
 }
 
+// TestAdapter_List_ForwardsParticipatingOnlyAndSince pins the adapter→client
+// wiring, which is the only route from config to the server query.
+// TestNotificationsClient_List_ParticipatingAndSince pins buildPath, but it
+// constructs NotificationListOpts itself, so it stays green if Adapter.List
+// stops populating either field — and both drops fail open and silently:
+// dropping Participating disables Decision 10's server-side narrowing (the
+// whole inbox gets fetched), dropping Since turns since_days into a no-op
+// pulling unbounded history. Neither shows up as an error anywhere.
+//
+// The since value is a fixed literal (never time.Now()) so the expected query
+// string is a constant.
+func TestAdapter_List_ForwardsParticipatingOnlyAndSince(t *testing.T) {
+	var capturedParticipating, capturedSince string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedParticipating = r.URL.Query().Get("participating")
+		capturedSince = r.URL.Query().Get("since")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	nc := github.NewNotificationsClient("tok")
+	nc.SetBaseURL(srv.URL)
+	a := github.NewAdapterWithNotifications(nil, nc)
+
+	since := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := a.List(provider.NotifOpts{ParticipatingOnly: true, Since: since}); err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+
+	if capturedParticipating != "true" {
+		t.Errorf("participating query param = %q, want %q — NotifOpts.ParticipatingOnly must reach NotificationListOpts.Participating (Decision 10)", capturedParticipating, "true")
+	}
+	if want := "2026-07-01T12:00:00Z"; capturedSince != want {
+		t.Errorf("since query param = %q, want %q — NotifOpts.Since must reach NotificationListOpts.Since", capturedSince, want)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Decision 31: NotifOpts.Max is honoured by truncating on return, never by
 // stopping nc.List's walk early.
@@ -223,28 +281,130 @@ func TestAdapter_List_MaxSmallerThanOnePageTruncates(t *testing.T) {
 	if got[0].Identity.ID != "1" || got[1].Identity.ID != "2" {
 		t.Fatalf("List(Max: 2) ids = [%s %s], want [1 2]", got[0].Identity.ID, got[1].Identity.ID)
 	}
+	// The truncation must be irreversible, not merely invisible: a plain
+	// out[:Max] leaves cap == 5, so got[:cap(got)] hands the dropped rows back
+	// and append(got, x) overwrites row 3 in place instead of copying. The full
+	// slice expression in Adapter.List caps cap too.
+	if cap(got) != len(got) {
+		t.Errorf("cap(got) = %d, len(got) = %d — want equal: truncation must cap capacity as well as length, so the rows Max removed cannot be recovered or overwritten in place", cap(got), len(got))
+	}
 }
 
+// TestAdapter_List_MaxBoundaries pins the edges around the truncation, in
+// particular Max == len(out) — the off-by-one site, and the only one of these
+// where a >= / > slip changes nothing observable unless it is asserted. Max <= 0
+// means "no cap" per NotifOpts.Max's doc, so a negative value must not be read
+// as a cap of zero (which would empty the feed — Decision 20's worst outcome).
+func TestAdapter_List_MaxBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		max     int
+		wantLen int
+	}{
+		{name: "negative Max is no cap", body: fiveThreadsBodyTemplate, max: -1, wantLen: 5},
+		{name: "zero Max is no cap", body: fiveThreadsBodyTemplate, max: 0, wantLen: 5},
+		{name: "Max equal to result length", body: fiveThreadsBodyTemplate, max: 5, wantLen: 5},
+		{name: "Max larger than result length", body: fiveThreadsBodyTemplate, max: 99, wantLen: 5},
+		{name: "Max against an empty result", body: `[]`, max: 1, wantLen: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			nc := github.NewNotificationsClient("tok")
+			nc.SetBaseURL(srv.URL)
+			a := github.NewAdapterWithNotifications(nil, nc)
+
+			got, err := a.List(provider.NotifOpts{Max: tt.max})
+			if err != nil {
+				t.Fatalf("List(Max: %d) error = %v", tt.max, err)
+			}
+			if len(got) != tt.wantLen {
+				t.Fatalf("List(Max: %d) len = %d, want %d", tt.max, len(got), tt.wantLen)
+			}
+			// An empty inbox is a result, not an absence: List returns an
+			// empty-but-non-nil slice so a caller cannot confuse it with the
+			// nil it returns alongside an error.
+			if got == nil {
+				t.Errorf("List(Max: %d) = nil, want an empty-but-non-nil slice", tt.max)
+			}
+		})
+	}
+}
+
+// threeThreadsPage2Body is the second page of the Decision 31 cache fixture —
+// ids 6..8, no Link rel="next", so the walk ends here.
+const threeThreadsPage2Body = `[
+  {"id":"6","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t6","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}},
+  {"id":"7","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t7","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}},
+  {"id":"8","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t8","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}}
+]`
+
 // TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax is the
-// second, load-bearing Decision 31 test: this is the one that would catch
-// Max being pushed down to stop nc.List's walk early. If Max stopped the
-// walk, the client would cache only the truncated 2-item set under a
-// cachedPath that does not encode Max, and this second call — same request
-// shape, larger Max — would 304 against that truncated cache and still come
-// back with 2 rows instead of 5.
+// second, load-bearing Decision 31 test: this is the one that catches Max being
+// pushed down into NotificationListOpts to bound nc.List's fetch. There are two
+// distinct shapes that mutation can take, and the fixture has to span more than
+// one page to catch both:
+//
+//   - truncate before caching (c.cached = all[:Max]) — caught by any fixture,
+//     single-page included;
+//   - stop the walk at a page boundary (break once len(all) >= Max) — invisible
+//     to a single-page fixture, because there is no rel="next" left to skip.
+//     The walk-stop only diverges from the correct behaviour when the page it
+//     stops on is not the last one.
+//
+// Hence two pages: 5 threads with a rel="next", then 3 without. The first call
+// (Max: 2) must still cache all 8, so the second call (Max: 8) — same request
+// shape, since Max never reaches NotificationListOpts and therefore never
+// reaches buildPath either — is served the whole set back off the 304 and
+// returns 8 rows. A page-boundary stop caches only page 1's 5, and this test
+// then fails on both the request count (2 instead of 3) and the length (5
+// instead of 8).
+//
+// The 304 is driven off the presence of If-Modified-Since rather than a request
+// counter, so the test cannot go tautological the way an earlier test of this
+// shape did: that one failed to echo Last-Modified on its 200, so the client
+// held no validator, never sent If-Modified-Since, and the branch the test
+// existed to exercise was unreachable. Here, a cleared validator means no 304,
+// which means a second full two-page walk, which the request-count assertion
+// catches.
 func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *testing.T) {
-	call := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call++
-		if call == 1 {
-			w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(fiveThreadsBodyTemplate))
+	var srv *httptest.Server
+	var requestedPages []string
+
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		if page == "" {
+			page = "1"
+		}
+		requestedPages = append(requestedPages, page)
+
+		// A conditional request means the client still holds the validator
+		// from the first walk: answer 304 and let it serve its own cache.
+		if r.Header.Get("If-Modified-Since") != "" {
+			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		// Second call: served from nc's cache via 304 — the request shape
-		// (buildPath) is identical, since Max never reaches NotificationListOpts.
-		w.WriteHeader(http.StatusNotModified)
+
+		switch page {
+		case "1":
+			// Last-Modified echoed on every 200 so the client actually keeps a
+			// validator to condition the second call with.
+			w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+			w.Header().Set("Link", `<`+srv.URL+`/notifications?page=2>; rel="next"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(fiveThreadsBodyTemplate))
+		default:
+			w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(threeThreadsPage2Body))
+		}
 	}))
 	defer srv.Close()
 
@@ -260,15 +420,24 @@ func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *te
 		t.Fatalf("first List(Max: 2) len = %d, want 2", len(small))
 	}
 
-	large, err := a.List(provider.NotifOpts{Max: 5})
+	large, err := a.List(provider.NotifOpts{Max: 8})
 	if err != nil {
-		t.Fatalf("second List(Max: 5) error = %v", err)
+		t.Fatalf("second List(Max: 8) error = %v", err)
 	}
-	if call != 2 {
-		t.Fatalf("server was called %d times, want exactly 2 (second call must hit the 304 path, proving it was served from cache)", call)
+	// The load-bearing assertion, checked first so a mutant fails on the
+	// behaviour rather than on the bookkeeping below it.
+	if len(large) != 8 {
+		t.Fatalf("second List(Max: 8) len = %d, want 8 — a smaller Max must neither truncate what nc.List caches nor stop its page walk early (Decision 31)", len(large))
 	}
-	if len(large) != 5 {
-		t.Fatalf("second List(Max: 5) len = %d, want 5 — a smaller Max must not have truncated what nc.List cached (Decision 31)", len(large))
+	for i, want := range []string{"1", "2", "3", "4", "5", "6", "7", "8"} {
+		if large[i].Identity.ID != want {
+			t.Errorf("large[%d].Identity.ID = %q, want %q", i, large[i].Identity.ID, want)
+		}
+	}
+	// 3 requests total: page 1 + page 2 on the first call, then one
+	// conditional request answered 304 on the second.
+	if len(requestedPages) != 3 {
+		t.Errorf("server received %d requests (%v), want exactly 3: both pages on the first call, then one 304 proving the second was served from cache", len(requestedPages), requestedPages)
 	}
 }
 
@@ -276,6 +445,17 @@ func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *te
 // Decision 28: an unsolicited 304 (no matching cache) surfaces as an error
 // from nc.List — Adapter.List must propagate it, never translate it into an
 // empty slice.
+//
+// Both tests below also pin the *shape* of the propagation, not just that an
+// error came back: Adapter.List returns nc.List's error verbatim, so errors.As
+// still recovers the underlying *APIError with its StatusCode and its 403 scope
+// headers intact. Task 19 reads exactly those off this exact path. A later
+// well-meaning wrap here — fmt.Errorf("github: notifications: %w", err), which
+// double-prefixes the user-visible message, or %v, which breaks errors.As
+// outright — would otherwise leave every adapter test green. Mirrors
+// TestNotificationsClient_List_304WithNoCache_ReturnsError and
+// TestNotificationsClient_List_403_MissingScope_RecoversScopeHeaders at the
+// client layer.
 // ---------------------------------------------------------------------------
 
 func TestAdapter_List_PropagatesUnsolicited304Error(t *testing.T) {
@@ -296,6 +476,67 @@ func TestAdapter_List_PropagatesUnsolicited304Error(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("List() result = %+v, want nil alongside the error, not an empty-but-non-nil slice", got)
+	}
+
+	var apiErr *github.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *github.APIError from %v — Adapter.List must return nc.List's error unchanged so task 19 can branch on the 304", err)
+	}
+	if apiErr.StatusCode != http.StatusNotModified {
+		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotModified)
+	}
+
+	// No extra prefix from the adapter. Asserted against the client's own error
+	// for the same response rather than a hardcoded string, so this pins "the
+	// adapter adds nothing" without also pinning nc.List's wording (which
+	// Decision 28 deliberately wraps with %w around an already-"github:"-
+	// prefixed *APIError).
+	direct := github.NewNotificationsClient("tok")
+	direct.SetBaseURL(srv.URL)
+	_, clientErr := direct.List(github.NotificationListOpts{})
+	if clientErr == nil {
+		t.Fatal("nc.List() error = nil for an unsolicited 304, want an error")
+	}
+	if err.Error() != clientErr.Error() {
+		t.Errorf("Adapter.List() error = %q, want nc.List()'s verbatim %q — an added prefix double-prefixes the user-visible message", err.Error(), clientErr.Error())
+	}
+}
+
+func TestAdapter_List_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Accepted-OAuth-Scopes", "notifications")
+		w.Header().Set("X-OAuth-Scopes", "repo, read:org")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
+	}))
+	defer srv.Close()
+
+	nc := github.NewNotificationsClient("tok")
+	nc.SetBaseURL(srv.URL)
+	a := github.NewAdapterWithNotifications(nil, nc)
+
+	got, err := a.List(provider.NotifOpts{})
+	if err == nil {
+		t.Fatal("List() error = nil, want an error for a missing-scope 403")
+	}
+	if got != nil {
+		t.Errorf("List() result = %+v, want nil alongside the error", got)
+	}
+
+	var apiErr *github.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("errors.As did not recover *github.APIError from %v", err)
+	}
+	if apiErr.RequiredScopes != "notifications" {
+		t.Errorf("RequiredScopes = %q, want %q — task 19 names the missing scope from this field", apiErr.RequiredScopes, "notifications")
+	}
+	if apiErr.GrantedScopes != "repo, read:org" {
+		t.Errorf("GrantedScopes = %q, want %q", apiErr.GrantedScopes, "repo, read:org")
+	}
+	// This path returns the bare *APIError, whose Error() already starts with
+	// "github:" — so exactly one occurrence, no adapter-added second prefix.
+	if got := strings.Count(err.Error(), "github:"); got != 1 {
+		t.Errorf("error message %q contains %d occurrences of %q, want 1 (double-prefixed)", err.Error(), got, "github:")
 	}
 }
 
@@ -369,8 +610,12 @@ func TestAdapter_MarkRead_MismatchedKind_ReturnsErrorAndIssuesNoRequest(t *testi
 	// An Azure identity handed to the GitHub adapter — a caller bug Decision
 	// 14 exists to catch, not a wrong-backend request to silently route.
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "o/r", ID: "42"}
-	if err := a.MarkRead(id); err == nil {
+	err := a.MarkRead(id)
+	if err == nil {
 		t.Fatal("MarkRead() error = nil, want an error for a mismatched Identity.Kind")
+	}
+	if want := `github: mark read: identity kind "azure" is not "github"`; err.Error() != want {
+		t.Errorf("MarkRead() error = %q, want %q", err.Error(), want)
 	}
 	if requests != 0 {
 		t.Errorf("server received %d requests, want 0 — a mismatched Kind must be rejected before any network call", requests)
@@ -390,11 +635,70 @@ func TestAdapter_MarkDone_MismatchedKind_ReturnsErrorAndIssuesNoRequest(t *testi
 	a := github.NewAdapterWithNotifications(nil, nc)
 
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "o/r", ID: "42"}
-	if err := a.MarkDone(id); err == nil {
+	err := a.MarkDone(id)
+	if err == nil {
 		t.Fatal("MarkDone() error = nil, want an error for a mismatched Identity.Kind")
+	}
+	if want := `github: mark done: identity kind "azure" is not "github"`; err.Error() != want {
+		t.Errorf("MarkDone() error = %q, want %q", err.Error(), want)
 	}
 	if requests != 0 {
 		t.Errorf("server received %d requests, want 0 — a mismatched Kind must be rejected before any network call", requests)
+	}
+}
+
+// TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind covers the zero Identity.Kind
+// explicitly. Rejecting it is correct — Decision 25 has the composite route by
+// Identity.Kind, so only KindGitHub can legitimately arrive — but the message
+// had a hole in it: Kind.String() returns "" for the zero value and %v uses the
+// Stringer, so the rendered text was "identity kind  is not github", two spaces
+// where the kind belongs. %q makes the empty kind visible as "" instead.
+func TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*github.Adapter, provider.Identity) error
+		want string
+	}{
+		{
+			name: "MarkRead",
+			call: func(a *github.Adapter, id provider.Identity) error { return a.MarkRead(id) },
+			want: `github: mark read: identity kind "" is not "github"`,
+		},
+		{
+			name: "MarkDone",
+			call: func(a *github.Adapter, id provider.Identity) error { return a.MarkDone(id) },
+			want: `github: mark done: identity kind "" is not "github"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusResetContent)
+			}))
+			defer srv.Close()
+
+			nc := github.NewNotificationsClient("tok")
+			nc.SetBaseURL(srv.URL)
+			a := github.NewAdapterWithNotifications(nil, nc)
+
+			// Kind deliberately left at its zero value.
+			err := tt.call(a, provider.Identity{ID: "42"})
+			if err == nil {
+				t.Fatalf("%s() error = nil, want an error for a zero Identity.Kind", tt.name)
+			}
+			if err.Error() != tt.want {
+				t.Errorf("%s() error = %q, want %q", tt.name, err.Error(), tt.want)
+			}
+			if strings.Contains(err.Error(), "kind  is") {
+				t.Errorf("%s() error = %q — the zero Kind rendered as a blank hole; format it with %%q, not %%v", tt.name, err.Error())
+			}
+			if requests != 0 {
+				t.Errorf("server received %d requests, want 0 — a zero Kind must be rejected before any network call", requests)
+			}
+		})
 	}
 }
 

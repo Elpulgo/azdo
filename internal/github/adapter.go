@@ -605,8 +605,17 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 
 	// Decision 31: truncate on return, after the full walk and its caching
 	// already happened inside nc.List above — never stop the walk early.
+	//
+	// The full slice expression (capping cap, not just len) makes the
+	// truncation irreversible rather than merely invisible: a plain
+	// out[:opts.Max] leaves cap(out) == len(wire), so a caller could recover
+	// the dropped rows with out[:cap(out)] and — worse — an append would write
+	// over the first dropped row in place instead of copying. Nothing does
+	// that today, but tasks 8 (append into a merged slice), 10 (filter in
+	// place) and 11 (sort) all take this slice, so "what Max removed is gone"
+	// is worth having structurally.
 	if opts.Max > 0 && len(out) > opts.Max {
-		out = out[:opts.Max]
+		out = out[:opts.Max:opts.Max]
 	}
 	return out, nil
 }
@@ -620,7 +629,12 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 // 14 exists so a bare native id from one backend can never be mistaken for
 // another's, and silently issuing id.ID against GitHub's API for an identity
 // that does not actually belong to GitHub would be exactly that mistake, just
-// deferred to runtime instead of caught here.
+// deferred to runtime instead of caught here. The zero Kind is rejected by the
+// same check — Decision 25 has the composite route by Identity.Kind, so only
+// KindGitHub should ever arrive here and an unstamped identity is the same
+// caller bug. Both kinds are formatted with %q rather than %v: Kind.String()
+// returns "" for the zero value, so %v renders it as a blank hole in the
+// middle of the sentence ("identity kind  is not github").
 //
 // This method takes no lock of its own, and in particular never the fetch
 // mutex nc.List holds for the duration of its (possibly multi-page) walk —
@@ -633,7 +647,7 @@ func (a *Adapter) MarkRead(id provider.Identity) error {
 		return fmt.Errorf("github: mark read: no notifications client configured")
 	}
 	if id.Kind != provider.KindGitHub {
-		return fmt.Errorf("github: mark read: identity kind %v is not %v", id.Kind, provider.KindGitHub)
+		return fmt.Errorf("github: mark read: identity kind %q is not %q", id.Kind, provider.KindGitHub)
 	}
 	return a.nc.MarkRead(id.ID)
 }
@@ -647,7 +661,7 @@ func (a *Adapter) MarkDone(id provider.Identity) error {
 		return fmt.Errorf("github: mark done: no notifications client configured")
 	}
 	if id.Kind != provider.KindGitHub {
-		return fmt.Errorf("github: mark done: identity kind %v is not %v", id.Kind, provider.KindGitHub)
+		return fmt.Errorf("github: mark done: identity kind %q is not %q", id.Kind, provider.KindGitHub)
 	}
 	return a.nc.MarkDone(id.ID)
 }
