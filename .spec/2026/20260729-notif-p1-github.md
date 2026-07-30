@@ -169,6 +169,10 @@ accepted value.
 
 | 72 | Task 15's cadence criterion is one `SetInterval` call in the fetch handler. Why did a green suite with 9 mutations not cover it, and what does? | Because `NewModel` computes `max(configured, hint)` up front **as well**, so a test whose hint never changes passes with the handler's call deleted. The hint must be raised *after* construction — which is the real sequence, since GitHub sends `X-Poll-Interval` only on an actual response. Pinning it also needs a `NotificationsPoller.Interval()` accessor; the pure interval functions are not the thing that breaks | Measured. Deleting `m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))` from `case polling.NotificationsFetchedMsg:` left `go test ./... -count=1` fully green, with the configured interval then in force for the life of the session while the hint was computed and discarded — i.e. GitHub asking us to slow down is silently ignored, which is the one thing decision 8 exists to honour. The implementer disclosed this as a survivor rather than hiding it and declined to add an accessor on grounds of scope creep and symmetry with `Poller`; the scope judgement was wrong (the call *is* the acceptance criterion, so leaving it unobservable leaves the criterion unmet) but the disclosure is what made it cheap to close. `Interval()` was added to `NotificationsPoller` only — `Poller` has no equivalent hint-driven mutation to pin, and adding one for symmetry alone would widen this task into three other panes for no test. The generalisable half is the fixture: a constant-hint stub cannot distinguish "applied at construction" from "applied on every fetch", so the stub needs a mutable hint and the assertion needs a precondition check at the configured value before the hint is raised. Three mutations now die — the deletion, swapping the recompute to `notificationsConfiguredInterval`, and stubbing `Interval()` to 0 |
 
+| 73 | Where does the gate for a background poller belong — the initial fetch, or the timer? | **The timer.** `OnTick` re-arms itself, so one ungated `StartPolling()` is a permanent self-sustaining chain no later gate can stop. The predicate must be the same one that decides the pane exists: capability **and** `IsPaneEnabled`. The poller should additionally be handed a `nil` client when the provider is incapable, so it is self-defending rather than trusting its caller | Measured. `Init()` put `m.notificationsPoller.StartPolling()` in `initCmds` unconditionally while the initial fetch six lines below was correctly gated on `isTabEnabled(TabNotifications)` — so with `disabled_panes: notifications` and a GitHub token the app issued a real `GET /notifications` page walk every 30s for the life of the process, tab absent and pane unreachable. The waste is the smaller half: decision 16 makes `disabled_panes` the **only** disable mechanism and decision 17 makes "turn the pane off" one of the two exits offered to a user whose token lacks the `notifications` scope, so that exit stopped nothing and on a scope failure the app kept 403ing forever with no surface showing it — and task 19 was about to build its in-view disable action on top of it. The Azure-only case is the same defect one step quieter: `notificationMarker` deliberately does not require `HasNotifications()` (correct for mark routing), and `*CompositeProvider` implements `List` on the type, so the assertion succeeds for any composite and `OnTick`'s nil-client guard never fires — an Azure-only user wakes every 30s forever to call `List`, hit `mergeNotifications`' `total == 0` branch and `SetFeed(nil)` a pane nobody can see. Two independent passes found this from opposite directions: the reviewer that the start is ungated, the validator that **deleting it entirely is green** — `TestModel_Init_StartsPolling` asserts only `cmd != nil`, which the pipeline poller alone satisfies. So the fix needs both halves of the pair: a tick is emitted when the pane is enabled, and none is emitted when it is not |
+| 74 | Is `NotificationsFetchedMsg{Items: nil, Err: nil}` "the inbox is empty" or "nothing changed"? | **Nothing changed.** Recompute the cadence and leave the feed alone. `events.go`'s own doc comment already mandated this and its sole consumer did the opposite | Measured: that message renders `"No notifications found. / You're all caught up."` over a populated feed, because `FilterNotifications(nil, cfg)` returns nil, `HandleFetchResult(nil, nil)` takes the success branch and `SetFeed(nil)` replaces the feed wholesale. Task 15's "a 304 leaves the existing list intact" criterion therefore passed only **incidentally** — `NotificationsClient.List`'s transparent 304 replays `cloneThreads(c.cached)`, which is populated whenever the pane is, so the criterion was met by the client happening not to return nil rather than by the caller honouring the contract, and the more natural reading of "not modified" (return nil, let the caller keep what it has — exactly what `events.go` anticipates) silently wipes a live inbox. Found independently by both passes. Note `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` dispatches precisely `{nil, nil}` and asserts only on the interval, so it walks past the wipe — a test can be correct, non-vacuous, and still shield the defect sitting on its own fixture |
+| 75 | Can the poller capture `NotifOpts` at construction while the pane re-derives them per fetch? | No — one derivation per fetch, shared. Call `SetOpts` alongside the existing `SetInterval` recompute, and truncate `Since` to the day so the cache path is stable by construction | Measured, and it defeats the very mechanism decision 8 exists to protect. `NotifOptsFromConfig` computes `Since: now - since_days` fresh per call; the pane's `fetchNotifications` calls it per fetch while the poller froze one value for the process lifetime. `NotificationsClient.buildPath` embeds `since` and `cacheValid` requires `path == c.cachedPath`, so each side keeps installing a cached path the other misses and **both** do full non-conditional page walks — every tab switch costs two full walks instead of two 304s, against the rate limit conditional requests exist to spare. The user-visible half: with `since_days` set, `r` shows a narrower window than the poller's fixed one, so rows disappear on refresh and reappear on the next poll. `SetOpts` had no caller at all, which is what let this sit |
+
 ## Tasks
 
 - [x] 1. ADR `docs/adr/0001-notifications-capability-interface.md` — decisions 1, 2, 5. → done: file exists, ≤30 lines, `Status: Accepted`, has Context/Decision/Alternatives/Consequences
@@ -1004,3 +1008,155 @@ implementer reported 6/6 no survivors and missed decision 65; the loop driver's 
 reviewer's findings claimed a pin that did not exist. **A clean self-reported mutation ledger is
 evidence, not proof**; the independent pass is where these are actually caught, and its cost has
 been repaid every time in this run.
+
+## Validation: notifications polling (task 15) — 2026-07-30, commit 59047ab
+
+Verdict: **INCOMPLETE**. All four acceptance criteria and all six forwarded items are present in
+the code, but **7 mutation survivors** remain, two of which leave the *actual* polling loop (does
+it start at all, and does the timer use the interval the hint just raised) completely unobserved.
+Task 15's own title is "polling integration"; a green suite with `StartPolling()` deleted from
+`Init` means the pane never polls and nothing notices.
+
+### Acceptance criteria
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Cadence is `max(X-Poll-Interval, configured)` | **Holds, under-pinned** | `notificationsPollInterval` (`app.go`) is `max(configured, hint)`; applied at construction and re-applied in the `NotificationsFetchedMsg` handler. Pinned by `TestNotificationsPollInterval_HintWinsWhenLarger`, `..._ConfiguredWinsWhenHintSmallerOrAbsent`, `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller`. **But** survivors S2 and S7 below mean nothing pins that the timer is ever started or that it schedules at `p.interval` |
+| 2 | Hint arrives via the separate `PollIntervalHinter`, not a new `NotificationSource` method | **Holds** | `provider.PollIntervalHinter` is its own interface in `internal/provider/notifications.go`; `NotificationSource` is unchanged (still `List`/`MarkRead`/`MarkDone`). Compile-time `var _ provider.PollIntervalHinter = (*github.Adapter)(nil)` in `adapter_notifications_test.go`; app asserts a narrow local `notificationsIntervalHinter`, never a `Provider` method. Adding a 4th method to `NotificationSource` would break `fakeNotifyBackend`/`hintingNotifyBackend` at compile time |
+| 3 | A non-hinting backend falls back to the configured interval | **Holds** | `TestNotificationsPollIntervalHint_NonHintingProvider_ReturnsZero`, `TestCompositeProvider_NotificationsPollInterval_FallsBackToZero_WhenCapableButNotHinting`, `..._IgnoresNonHintingCapableBackend`, plus the fixture guard `TestFakeNotifyBackend_DoesNotImplementPollIntervalHinter` |
+| 4 | A 304 leaves the existing list intact rather than clearing it | **Holds (pinned at the client, not at task 15's layer)** | The matching-304 path returns `cloneThreads(c.cached)`, so the poller re-supplies identical rows. Mutating it to `return nil, nil` dies in 5 task-4/7 tests. **Caveat:** `polling.NotificationsFetchedMsg`'s new doc comment states "a nil Items with a nil Err … callers must not treat it as a signal to clear an existing list", and app.go — its only caller — does exactly that (`HandleFetchResult(nil, nil)` → `SetFeed(nil)` → empty-inbox render, measured). Latent contract violation; harmless only because the client never produces that shape today |
+
+### Forwarded items
+
+| # | Item | Verdict |
+|---|---|---|
+| 1 | Decision 58's `r` stopgap removed | **Holds.** `case "r": return m, nil` is gone; `Fetch` is the real `fetchNotifications`. Re-adding the swallow kills `TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves` + `TestUpdate_RKey_NilMarker_ResolvesWithoutStranding` |
+| 2 | `loading` set on the initial fetch (decision 64) | **Holds.** `listview.New(...).SetLoading(true)` at construction; pinned at app level by `TestModel_NotificationsTab_PresentButEmpty_WhenCapable` and `TestModel_PerTabChrome`. Note: **no pane-level (`internal/ui/notifications`) test pins it** — dropping `.SetLoading(true)` leaves that package green |
+| 3 | Filter-empty keyed off `len(m.feed) > 0` | **Implemented, unpinned** — see survivor S1 |
+| 4 | Unsolicited 304 renders as an error, not an empty inbox; mark-rollback cannot read a 304 as "the mark failed" | **Holds.** `TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox`; and `TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError` is *not* redundant — it is the sole killer of "`handleMarkResult` also rolls back when `m.list.Err() != nil`" |
+| 5 | A floor so `poll_interval: 1` cannot produce 1-second polling | **Holds.** `MinInterval` floored in both `NewNotificationsPoller` and `SetInterval`; pinned by `TestNotificationsPoller_MinimumInterval_FloorsPollIntervalOne` (`!=`, not `<`) |
+| 6 | `refreshItems`' error guard documented as now-reachable | **Holds.** Comment rewritten; the guard itself is pinned (removing it kills two mark-result tests) |
+
+### Mutation ledger
+
+Required eight — all killed:
+
+| Mutation | Killed by |
+|---|---|
+| delete `m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))` from the `NotificationsFetchedMsg` handler | `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` |
+| that recompute → `notificationsConfiguredInterval(m.config)` only | same test |
+| notifications tick type → `polling.TickMsg` | `TestNotificationsPoller_StartPolling_EmitsNotificationsTickMsg` |
+| `case polling.NotificationsTickMsg:` → `m.poller.OnTick()` | `TestModel_Update_NotificationsTickMsg_DrivesNotificationsPollerNotPipelinePoller` |
+| remove the `MinInterval` floor (both sites) | `TestNotificationsPoller_MinimumInterval`, `..._MinimumInterval_FloorsPollIntervalOne`, `..._SetInterval_EnforcesMinimum` |
+| `notificationsPollIntervalHint` returns 0 unconditionally | `TestNotificationsPollIntervalHint_HintingProvider_ReturnsHint`, `TestNotificationsPollInterval_HintWinsWhenLarger`, `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` |
+| initial-fetch `SetLoading(true)` → no-op (both at the call site and inside `listview.SetLoading`) | `TestModel_NotificationsTab_PresentButEmpty_WhenCapable`, `TestModel_PerTabChrome`, `TestSetLoading_True` |
+| unsolicited 304 falls through to the empty-inbox render (`return nil, nil` in `notifications.go`) | `TestNotificationsClient_List_304WithNoCache_ReturnsError`, `TestNotificationsClient_MarkRead_DuringInFlightList_304IsNotServedFromCache`, `TestAdapter_List_PropagatesUnsolicited304Error` |
+
+**Decision 72 precondition check — the precondition IS load-bearing.** Measured: with the fixture
+changed to a constant hint (`hint: 300 * time.Second` at construction) *and* the `SetInterval` line
+deleted, the precondition fires (`precondition: interval at construction = 5m0s, want the
+configured 30s`). With the precondition assertion removed, that same pair goes **green**. So the
+precondition is what stops the test degrading into decision 72's vacuity class.
+
+Fourteen further mutations of my own — killed:
+
+| Mutation | Killed by |
+|---|---|
+| composite `NotificationsPollInterval` first-match instead of max | `TestCompositeProvider_NotificationsPollInterval_MaxAcrossHintingBackends` |
+| composite `NotificationsPollInterval` always 0 | 3 composite hint tests |
+| `notificationsConfiguredInterval` precedence swapped (global before notifications-specific) | `TestNotificationsConfiguredInterval_NotificationsSpecific_TakesPrecedence` |
+| `notificationsPollInterval` never lets the hint win | `TestNotificationsPollInterval_HintWinsWhenLarger` + the app wiring test |
+| app handler drops `notifications.FilterNotifications` | `TestModel_Update_NotificationsFetchedMsg_AppliesFilterAndFeed` |
+| app handler never calls `HandleFetchResult` | `..._AppliesFilterAndFeed`, `..._ErrorDoesNotClearFeed` |
+| matching 304 → `return nil, nil` (clears the list) | `TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged` + 4 more |
+| `NotificationsPoller.Interval()` stubbed to 0 | `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` |
+| `SetInterval` made a no-op | same test |
+| pane `Update` ignores `notificationsFetchMsg` | both `TestUpdate_RKey_*` tests |
+| `Fetch` reverted to the `func() tea.Cmd { return nil }` stub | both `TestUpdate_RKey_*` tests |
+| re-add the `case "r": return m, nil` swallow | both `TestUpdate_RKey_*` tests |
+| `Adapter.PollInterval` stubbed to 0 | `TestAdapter_PollInterval_ForwardsClientValue` |
+| `handleMarkResult` also rolls back when `m.list.Err() != nil` | `TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError` (sole killer) |
+
+### Survivors — all disclosed
+
+| # | Mutation that stays green on `go test ./... -count=1` | Why it matters |
+|---|---|---|
+| **S1** | `if m.reasonFilterActive && len(m.feed) > 0 {` → `if m.reasonFilterActive {` in `View()` | Forwarded item 3 is implemented but **unpinned**. No test covers "active `f` position + genuinely empty feed", so reverting to the exact shape the item was forwarded to fix is invisible. Needs a `SetFeed(nil)` + active-filter case asserting the *empty-inbox* body |
+| **S2** | delete `m.notificationsPoller.StartPolling(),` from `Init()` | **The most serious.** The notifications timer is never armed, so no `NotificationsTickMsg` is ever emitted and the pane never polls — the whole of "polling integration". `TestModel_Init_StartsPolling` only asserts `cmd != nil`, which the pipeline poller alone satisfies. Also undermines criterion 1: a cadence that is computed and applied but never used |
+| **S3** | delete the `isTabEnabled(TabNotifications) && activeTab != TabNotifications` preload `FetchNotifications()` from `Init()` | The non-active-tab preload is unpinned (the active-tab case is covered by `initTabCmd`) |
+| **S4** | pane `fetchNotifications`: `FilterNotifications(items, cfg)` → `items` | Config filters (`unread_only`, `exclude_repos`, …) silently stop applying on the pane's own `Init`/`r` path. The poller path *is* pinned; this new second path is not |
+| **S5** | pane `fetchNotifications`: `marker.List(NotifOptsFromConfig(cfg))` → `marker.List(provider.NotifOpts{})` | `participating_only`/`since_days`/`max_items` silently stop reaching the wire on the `r` path. `NotifOptsFromConfig` is unit-tested in isolation; its call site is not |
+| **S6** | `NewModel`: `notifications.NotifOptsFromConfig(cfg)` → `provider.NotifOpts{}` | Same class, for the poller's own opts |
+| **S7** | `StartPolling`: `interval := p.interval` → `interval := DefaultInterval` | The timer ignores the interval `SetInterval` just raised. `Interval()` still reports the right value, so the criterion-1 test passes while the real cadence is wrong — precisely decision 72's failure shape, one layer further down. (`Poller` has the same untested gap, so this is a pre-existing pattern, not a task-15 regression — but task 15 is the task that made the interval mutable) |
+
+S4/S5/S6 share one root cause and are the generalisation of decision 72: **the pure function is
+tested, the call site is not.** Three of the seven survivors are that exact shape.
+
+### Gates
+
+- `go test ./... -count=1` — **green**, 27/27 packages (run against a clean tree at 59047ab).
+- `gofmt -l` on all 16 files the commit touched — **clean**.
+- `go vet ./...` — **clean**.
+- **Convention 17 / decision 71** — no violation. The only `Save()` route in `internal/app` is
+  `case components.ThemeSelectedMsg:` → `m.config.UpdateTheme`; no test added or touched by this
+  commit dispatches it. The new `&config.Config{...}` literals drive only `WindowSizeMsg`,
+  `NotificationsTickMsg` and `NotificationsFetchedMsg`, none of which can reach `Save()`.
+- **`listview.SetLoading` is genuinely additive** — verified by inspection: the only non-test
+  caller anywhere is `internal/ui/notifications/list.go:223`. The `listview.go` diff is otherwise
+  pure gofmt (the `ViewList` const alignment, the `Config` struct field alignment, and
+  `NormalizeWidths`' spaces→tabs reindent), so pullrequests/workitems/pipelines `Loading()`
+  behaviour is byte-identical.
+- **Convention 6** — not implicated; the new tests assert content and message types, no rendered
+  style substrings.
+- **Vacuity sweep** — no vacuous test found. `TestCompositeProvider_NotificationsPollInterval_FallsBackToZero_WhenCapableButNotHinting`
+  is the weakest (it cannot distinguish "skip the backend" from "count it as 0"), but its sibling
+  `..._IgnoresNonHintingCapableBackend` supplies that discrimination, and it does die under the
+  always-0 mutation. `TestModel_Update_NotificationsFetchedMsg_ErrorDoesNotClearFeed`'s name
+  overstates what it pins (the error body outranks the feed render either way), but it is not
+  vacuous — it dies when the handler stops calling `HandleFetchResult`.
+
+### To close task 15
+
+1. Pin S2: assert `Init()`'s batch actually arms the notifications timer (resolve the batch and
+   look for a `polling.NotificationsTickMsg`, or split the poller start into an observable helper).
+   `cmd != nil` is not enough — the pipeline poller alone satisfies it.
+2. Pin S1: `SetFeed(nil)` with `reasonFilterActive` true must render `emptyInboxBody`, not
+   `filterEmptyBody`.
+3. Pin S4/S5/S6: assert the config actually reaches the wire on the pane's own `r`/`Init` path
+   (a `fakeMarker` recording the `NotifOpts` it received, plus one row the config must filter out),
+   and that `NewModel` hands the poller cfg-derived opts.
+4. Pin S7 if cheap: assert `StartPolling` schedules at `p.interval` (e.g. two different intervals
+   producing measurably different fire times), or state in a decision that the timer read is
+   deliberately left unpinned and why.
+5. Optional: reconcile `polling.NotificationsFetchedMsg`'s doc comment with app.go's handler —
+   either make the handler honour "nil Items + nil Err does not clear", or drop that sentence.
+   Right now the comment documents a contract the only caller breaks.
+
+## Review feedback: notifications polling (task 15) — 2026-07-30, commit `59047ab`
+
+Independent opus reviewer: **REQUEST_CHANGES** (1 🔴, 5 🟡, 1 🟢). Validator: **INCOMPLETE**
+(7 mutation survivors). The two passes ran concurrently and overlapped on the two most serious
+items from opposite directions, which is the strongest signal in this run so far that the
+independent stage earns its cost. Task 15 stays unticked.
+
+| # | Sev | Finding | Owner |
+|---|---|---|---|
+| R1 + S2 | 🔴 | `StartPolling()` is ungated in `Init()` (reviewer) **and** deleting it entirely is green (validator). A disabled or incapable pane polls GitHub forever; nothing pins that the timer is armed at all | Decision 73. Fix + the test **pair**: a tick when enabled, none when disabled |
+| R3 + validator's flagged contract break | 🟡 | `{Items: nil, Err: nil}` wipes a populated feed, against `events.go`'s explicit instruction | Decision 74 |
+| R4 + S6 | 🟡 | Poller's `NotifOpts` frozen at construction; `SetOpts` has no caller; `Since` drift breaks the conditional-request cache both ways | Decision 75 |
+| S7 | 🟡 | `StartPolling`'s `interval := p.interval` → `DefaultInterval` survives: `Interval()` reports the field, not what the timer was armed with. Decision 72's shape one layer down | Needs a seam on the `tea.Every` call — an injectable `every` func, mirroring the pane's `now` clock seam — since a `tea.Every` duration is otherwise unobservable |
+| S1 | 🟡 | Forwarded item 3 (`len(m.feed) > 0`) is implemented but unpinned — no test covers active filter + genuinely empty feed | Test only |
+| S4, S5 | 🟡 | The pane's `fetchNotifications` closure dropping `FilterNotifications` / `NotifOptsFromConfig` both survive. Same root cause as decision 72: the pure function is tested, the call site is not | Tests only |
+| S3 | 🟡 | `Init()`'s non-active-tab `FetchNotifications()` preload is unpinned | Test only |
+| R5 | 🟡 | `m.notificationsPoller.Stop()` is never called; `Stop()`/`IsStopped()` have zero production callers, so three tests pin an unexercised path | Fix + assert after `q` |
+| R6 | 🟡 | The status bar omits the shipped `u`/`d` keys and its comment claims they are unshipped. Task 14's miss, restated by this commit | Fix here |
+| R7 | 🟢 | `StartPolling` lacks the `client == nil` guard its two siblings have | Fix |
+
+Confirmed sound by the reviewer, not to be re-litigated: no lock is held across the `List` call
+(`FetchNotifications` copies `opts` under `RLock` and releases before returning the closure); the
+poller's `mu` never touches the marker's lock-free path, so decision 37's 50-page stall is not
+reinstated; the two tick types cannot cross and each tick arms exactly one `tea.Every`;
+`listview.SetLoading` is additive with a single non-test caller; convention 17 holds throughout
+the commit; nothing here belongs to task 16, 17, 19 or 20, and nothing is done twice. Both passes
+independently confirmed decision 72's precondition assertion is load-bearing. Gates: suite green
+27/27, `gofmt -l` clean on all 16 touched files, `go vet` clean.
