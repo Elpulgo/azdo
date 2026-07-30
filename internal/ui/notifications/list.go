@@ -340,9 +340,21 @@ func toRows(items []provider.Notification, s *styles.Styles) []table.Row {
 	return rows
 }
 
-// titleStyle returns the named style the Title cell is rendered with: unread
-// rows get styles.Styles.Title (Primary + Bold — the unread emphasis), read
-// rows get styles.Styles.Value (plain foreground, not bold).
+// titleStyle returns the style the Title cell is rendered with: unread rows get
+// the named styles.Styles.Title (Primary + Bold — the unread emphasis), read
+// rows get an empty style, whose Render is the identity function and emits no
+// escape sequence at all.
+//
+// The read branch must stay empty rather than resolve to a named foreground
+// style. Every sibling pane emits its title cell bare (pullrequests/list.go:531)
+// and lets the table style it, and that is not merely convention: table.renderRow
+// wraps each cell in styles.Cell, inheriting styles.Selected on the cursor row,
+// so an inner foreground SGR overrides the selection's own foreground for that
+// one cell. styles.Value is Foreground(theme.Foreground), which is invisible on
+// the selected row of any theme where Foreground equals SelectBackground — the
+// Matrix theme sets both to #00ff41 (themes.go:467, :474). Unread rows accept
+// that trade deliberately, because persisting the emphasis is the point; read
+// rows have nothing to gain from it.
 //
 // This is split out from titleCell on purpose (decision 56). lipgloss resolves
 // the Ascii profile in a test binary, so Render is the identity function there
@@ -351,13 +363,11 @@ func toRows(items []provider.Notification, s *styles.Styles) []table.Row {
 // lipgloss.Style itself makes convention 6 assertable on the *style object*
 // (GetBold/GetForeground against styles.Styles' own fields, plus that the two
 // branches resolve to different styles), which no color profile can flatten.
-// Both branches are named styles from styles.Styles — never an inline
-// lipgloss.NewStyle().
 func titleStyle(n provider.Notification, s *styles.Styles) lipgloss.Style {
 	if !n.Read {
 		return s.Title
 	}
-	return s.Value
+	return lipgloss.NewStyle()
 }
 
 // titleCell returns the Title column's cell text for a notification, rendered

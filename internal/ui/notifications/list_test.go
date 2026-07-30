@@ -232,12 +232,17 @@ func TestTitleStyle_ReadVsUnread_NamedStyles(t *testing.T) {
 		t.Errorf("titleStyle(unread) foreground = %v, want %v (styles.Styles.Title)", got, want)
 	}
 
-	// Read == styles.Styles.Value: not bold, plain foreground.
+	// Read == the empty style: no bold, and no foreground at all, so Render emits
+	// nothing and the cell inherits table.renderRow's Cell/Selected styling. A
+	// named foreground here would override the selection's own foreground for
+	// this one cell, which is invisible on any theme where Foreground equals
+	// SelectBackground (Matrix sets both to #00ff41).
 	if readStyle.GetBold() {
 		t.Errorf("titleStyle(read).GetBold() = true, want false (read rows carry no emphasis)")
 	}
-	if got, want := readStyle.GetForeground(), s.Value.GetForeground(); got != want {
-		t.Errorf("titleStyle(read) foreground = %v, want %v (styles.Styles.Value)", got, want)
+	var unset lipgloss.TerminalColor = lipgloss.NoColor{}
+	if got := readStyle.GetForeground(); got != unset {
+		t.Errorf("titleStyle(read) foreground = %v, want unset (%v) — read cells must not override the table's Selected foreground", got, unset)
 	}
 
 	// The two must be distinguishable at all — a single shared style would
@@ -270,8 +275,11 @@ func TestTitleCell_RendersThroughTitleStyle(t *testing.T) {
 
 	read := mkNotification("2", "owner/repo", "Read title", provider.NotificationReasonOther, true, fixedNow)
 	gotRead := titleCell(read, s)
-	if want := titleStyle(read, s).Render(read.Title); gotRead != want {
-		t.Errorf("titleCell(read) = %q, want %q (titleStyle applied)", gotRead, want)
+	// The read branch is the empty style, so this asserts the *absence* of any
+	// escape sequence even with TrueColor forced — a named style slipped into
+	// that branch would fail here, which is the regression this pins.
+	if gotRead != read.Title {
+		t.Errorf("titleCell(read) = %q, want the bare Title %q — read cells must emit no escape sequence", gotRead, read.Title)
 	}
 	if gotRead == got {
 		t.Errorf("read and unread title cells are byte-identical (%q); unread emphasis is not rendered", got)
@@ -297,8 +305,8 @@ func TestToRows_TitleCell_UsesTitleStyleForBothStates(t *testing.T) {
 	if got, want := rows[0][titleCol], s.Title.Render("Same title"); got != want {
 		t.Errorf("unread title cell = %q, want %q (styles.Styles.Title)", got, want)
 	}
-	if got, want := rows[1][titleCol], s.Value.Render("Same title"); got != want {
-		t.Errorf("read title cell = %q, want %q (styles.Styles.Value)", got, want)
+	if got, want := rows[1][titleCol], "Same title"; got != want {
+		t.Errorf("read title cell = %q, want the bare title %q (empty style, no escape sequence)", got, want)
 	}
 	if rows[0][titleCol] == rows[1][titleCol] {
 		t.Errorf("read and unread cells for the same title are identical (%q); unread emphasis is missing from toRows", rows[0][titleCol])
