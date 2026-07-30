@@ -179,7 +179,7 @@ accepted value.
 - [ ] 15. Polling integration honouring decisions 8 and 23 (blocked by: 12). → done: cadence is `max(X-Poll-Interval, configured)`; the hint reaches the poller via the separate `PollIntervalHinter` optional interface, **not** a new `NotificationSource` method (decision 23); a backend that does not implement the hinter falls back to the configured interval; a 304 response leaves the existing list intact rather than clearing it
 - [ ] 16. Unread-count footer badge (decision 21) (blocked by: 12). → done: count is unread *after* config filters; the badge is hidden entirely at zero; visible from every tab
 - [ ] 17. Help-modal section + `RemoveSection` wiring when the pane is disabled (blocked by: 12). → done: section lists `u`/`d`/`o`/`f`; disabling the pane removes it; the tabs binding line reflects the new order
-- [ ] 18. `config`: regression test pinning `Save()` preservation — seed a file containing `metrics:` and `notifications:`, change only the theme, assert both blocks survive with every value intact (blocked by: 9). → done: the new test fails if `ReadInConfig()` is removed from `Save()` (verify by deleting it locally, watching the test fail, restoring it); fixtures go through `LoadFrom(<t.TempDir() path>)`, never a bare `Config` literal (convention 17)
+- [x] 18. `config`: regression test pinning `Save()` preservation — seed a file containing `metrics:` and `notifications:`, change only the theme, assert both blocks survive with every value intact (blocked by: 9). → done: the new test fails if `ReadInConfig()` is removed from `Save()` (verify by deleting it locally, watching the test fail, restoring it); fixtures go through `LoadFrom(<t.TempDir() path>)`, never a bare `Config` literal (convention 17). Also pinned: a key the `Config` struct does not model at all survives — the general form of the requirement, and the only assertion here that can see such a key, since every other check reads the reloaded typed `Config` and is blind to sections outside it
 - [ ] 19. Token-scope error state (decision 17) (blocked by: 13,18). → done: a 403 missing-scope response renders in-view naming the `notifications` scope and how to add it; 401-expired and generic failures render differently; the disable action writes `disabled_panes` via `Config.Save()` behind a confirm, on a key that is not `d` or `u`; its test uses a temp-path config (convention 17)
 - [ ] 20. Docs: README (required `notifications` scope, upgrade note for existing tokens, how to disable), Architecture.md, config.yaml.example, FAQ (blocked by: 17,19). → done: every config key from decision 19 is documented; the required token scope and the upgrade path for existing tokens are stated; `exclude_reasons` values are documented as lowercase snake_case and **case-sensitive** (`Subscribed` warns and is dropped — viper lowercases config *keys*, never list values), `unknown` is documented as reserved and not accepted, and `since_days` is named as the knob for very large inboxes per decision 48. **Do not reproduce the Config-shape arrow chain as if it were a pipeline** — measured, all five knobs are independent row predicates and every stage order is observationally identical, so "precedence" describes exactly one thing: the two *selection* knobs override each other (`only_configured_repos` wins, decision 50). `exclude_repos`/`exclude_reasons`/`unread_only` are an order-independent AND and must be documented as such
 - [ ] 21. Fold phase-1 answers into `20260729-notif-p2-azdo.md` "Inputs from Phase 1" (blocked by: 20). → done: no `TBD` remains in that section
@@ -809,3 +809,46 @@ during validation (`internal/config/config_save_test.go` modified, plus a transi
 transient `internal/config` build failure observed mid-run came from that edit, not from
 task 14 — the clean full-suite run above predates it and the four packages this task can
 affect (`ui/notifications`, `app`, `provider`, `github`) were re-run green afterwards.
+
+## Validation: `Save()` preservation regression test (task 18) — 2026-07-30
+
+Verified by the loop driver. This is the user's most emphatic constraint in the whole
+spec ("it's very important that writeconfig don't destroy any config already existing…
+Comments is okay, but it should NOT destroy any other configs"), so the teeth were
+checked directly rather than taken on report.
+
+Two tests in `internal/config/config_save_test.go`:
+
+- `TestConfigSave_PreservesMetricsAndNotifications` — seeds a YAML fixture with all 8
+  `metrics:` fields (including the nested `states`/`state_labels` maps) and all 9
+  `notifications:` keys at non-default values, loads via `LoadFrom`, asserts the fixture
+  parsed as seeded **before** mutating, changes only `Theme`, saves, reloads, and compares
+  both sections with `reflect.DeepEqual` against hardcoded expected structs.
+- `TestConfigSave_PreservesKeysOutsideTheConfigStruct` — seeds `some_future_section` with a
+  scalar and a nested child, and re-reads the **raw YAML** after the save.
+
+Why the second test is not redundant: every assertion in the first reads the reloaded
+`*Config`, so a section with no struct field is invisible to it — it would survive or be
+destroyed with the suite equally green. `Save()`'s own doc comment promises preservation for
+"navigation state, future additions", and this is the only test that can observe it. It also
+covers nesting specifically: viper flattens on read, so a round-trip that mishandled nesting
+would keep the parent key and drop its children.
+
+Teeth confirmed by mutation, not by inspection. Deleting the five-line `v.ReadInConfig()`
+round-trip at `internal/config/config.go:744-748` fails **both** tests: metrics and
+notifications come back as all-defaults (`Enabled:false IntervalDays:14 …`, `SinceDays:0
+MaxItems:0 PollInterval:0`) and the unmanaged section is gone from the file entirely. Restored
+and re-verified green, with `git diff internal/config/config.go` empty afterwards.
+
+Isolation (convention 17), the user's other hard constraint — checked structurally rather
+than assumed. Fixtures are written to `t.TempDir()/config.yaml` and loaded with `LoadFrom`,
+which sets `cfg.configPath`. `Save()` only calls `GetPath()` — which resolves to the real
+`~/.config/azdo-tui/config.yaml` — when `configPath == ""` (`config.go:725-732`). Since every
+`Config` in both tests comes from `LoadFrom` with an explicit temp path, that branch is
+unreachable, so neither test can read or write a real user config.
+
+Standing gap this closes for task 19: `Save()` never calls `v.Set("notifications", …)` or
+`v.Set("metrics", …)`, so both sections persist **only** via the round-trip. Task 19 writes
+`disabled_panes` through `Save()`, which makes that round-trip a live path rather than a
+latent one. Comments are still lost on save — viper rewrites the file rather than patching
+it — which is the one loss the user accepted explicitly.
