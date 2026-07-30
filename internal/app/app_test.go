@@ -6,16 +6,31 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
+	"github.com/Elpulgo/azdo/internal/github"
 	"github.com/Elpulgo/azdo/internal/polling"
 	"github.com/Elpulgo/azdo/internal/provider"
+	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// newNotificationCapableProvider returns a provider whose sole backend is a
+// GitHub adapter, satisfying Decision 11's capability check
+// (hasNotificationCapability → CompositeProvider.HasNotifications) without a
+// live token or network access: *github.Adapter implements
+// provider.NotificationSource at compile time regardless of whether mc/nc
+// are nil (see internal/github/adapter.go's NewAdapterWithNotifications doc
+// comment), so nil, nil is sufficient to make the tab presence check true
+// for tests that only exercise wiring/layout, never real API calls.
+func newNotificationCapableProvider() provider.Provider {
+	return provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil))
+}
 
 func TestFormatVersionInfo(t *testing.T) {
 	tests := []struct {
@@ -1464,7 +1479,7 @@ func TestModel_DisabledPanes_EnabledTabs_AllEnabled(t *testing.T) {
 		Theme:           "dark",
 	}
 
-	tabs := buildEnabledTabs(cfg, true)
+	tabs := buildEnabledTabs(cfg, true, false)
 	if len(tabs) != 3 {
 		t.Fatalf("expected 3 enabled tabs, got %d", len(tabs))
 	}
@@ -1482,7 +1497,7 @@ func TestModel_DisabledPanes_EnabledTabs_BothDisabled(t *testing.T) {
 		DisabledPanes:   []string{"pipelines", "workitems"},
 	}
 
-	tabs := buildEnabledTabs(cfg, true)
+	tabs := buildEnabledTabs(cfg, true, false)
 	if len(tabs) != 1 {
 		t.Fatalf("expected 1 enabled tab, got %d", len(tabs))
 	}
@@ -1544,7 +1559,7 @@ func TestModel_DisabledPanes_EnabledTabs_PullRequestsDisabled(t *testing.T) {
 		DisabledPanes:   []string{"pullrequests"},
 	}
 
-	tabs := buildEnabledTabs(cfg, false)
+	tabs := buildEnabledTabs(cfg, false, false)
 	if len(tabs) != 2 {
 		t.Fatalf("expected 2 enabled tabs, got %d", len(tabs))
 	}
@@ -1669,5 +1684,297 @@ func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {
 				t.Errorf("expected key %q to be typed into tag search, got %q", tc.key, got)
 			}
 		})
+	}
+}
+
+// --- Task 12: notifications tab registration (Decisions 6, 9, 11) ---------
+
+// TestBuildEnabledTabs_NotificationsFirst_WhenCapable pins Decision 6:
+// notifications lands at enabledTabs[0] whenever it is present at all.
+func TestBuildEnabledTabs_NotificationsFirst_WhenCapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	tabs := buildEnabledTabs(cfg, false, true)
+	if len(tabs) != 4 {
+		t.Fatalf("expected 4 enabled tabs, got %d: %v", len(tabs), tabs)
+	}
+	if tabs[0] != TabNotifications {
+		t.Fatalf("expected TabNotifications first, got %v", tabs[0])
+	}
+	if tabs[1] != TabPullRequests || tabs[2] != TabWorkItems || tabs[3] != TabPipelines {
+		t.Errorf("unexpected tab order after notifications: %v", tabs)
+	}
+}
+
+// TestBuildEnabledTabs_NotificationsAbsent_WhenIncapable pins Decision 11:
+// the tab is gated on capability, never on config alone — an Azure-only
+// provider (notifCapable=false) must never surface it even though
+// "notifications" is not in DisabledPanes.
+func TestBuildEnabledTabs_NotificationsAbsent_WhenIncapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+
+	tabs := buildEnabledTabs(cfg, false, false)
+	for _, tab := range tabs {
+		if tab == TabNotifications {
+			t.Fatalf("expected no TabNotifications when incapable, got tabs: %v", tabs)
+		}
+	}
+	if len(tabs) != 3 {
+		t.Fatalf("expected 3 enabled tabs, got %d: %v", len(tabs), tabs)
+	}
+}
+
+// TestBuildEnabledTabs_NotificationsAbsent_WhenPaneDisabled confirms
+// disabled_panes still applies on top of capability, same as every other pane.
+func TestBuildEnabledTabs_NotificationsAbsent_WhenPaneDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"notifications"},
+	}
+
+	tabs := buildEnabledTabs(cfg, false, true)
+	for _, tab := range tabs {
+		if tab == TabNotifications {
+			t.Fatalf("expected no TabNotifications when pane disabled, got tabs: %v", tabs)
+		}
+	}
+}
+
+// TestModel_NotificationsTab_Absent_WhenIncapable exercises the real NewModel
+// path with an Azure-only provider (p=nil, same shape every existing test in
+// this file already uses): the tab bar must not mention notifications at all,
+// and Pull Requests must keep its "1:" slot exactly as before this task.
+func TestModel_NotificationsTab_Absent_WhenIncapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "Notifications") {
+		t.Error("tab bar should not mention Notifications when no backend implements provider.NotificationSource")
+	}
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Error("expected '1: Pull Requests' to remain the first tab when notifications is absent")
+	}
+}
+
+// TestModel_NotificationsTab_PresentButEmpty_WhenCapable exercises NewModel
+// with a capable provider (Decision 11): the tab must appear first (Decision
+// 6) and rendering it after a WindowSizeMsg must not panic (convention 8),
+// even though the underlying feed is empty (no Init() populate happened).
+func TestModel_NotificationsTab_PresentButEmpty_WhenCapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	if m.activeTab != TabNotifications {
+		t.Fatalf("expected default activeTab to be TabNotifications (first enabled), got %d", m.activeTab)
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View() // must not panic
+	if !strings.Contains(view, "1: Notifications") {
+		t.Errorf("expected tab bar to contain '1: Notifications', view:\n%s", view)
+	}
+}
+
+// TestModel_DigitKeys_MapToNewOrder_AllFiveTabs presses "1".."5" with every
+// tab enabled (notifications, PR, work items, pipelines, metrics) and
+// confirms each digit lands on the tab at its purely positional index in
+// enabledTabs — pinning that notifications-first (Decision 6) shifts every
+// other tab's number without any dedicated per-tab key-mapping logic.
+func TestModel_DigitKeys_MapToNewOrder_AllFiveTabs(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Metrics:         config.MetricsConfig{Enabled: true},
+	}
+	client, err := azdevops.NewMultiClient("testorg", []string{"testproject"}, "dummy-pat", nil)
+	if err != nil {
+		t.Fatalf("NewMultiClient() error = %v", err)
+	}
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+
+	want := []Tab{TabNotifications, TabPullRequests, TabWorkItems, TabPipelines, TabMetrics}
+	if len(m.enabledTabs) != len(want) {
+		t.Fatalf("expected %d enabled tabs, got %d: %v", len(want), len(m.enabledTabs), m.enabledTabs)
+	}
+
+	for i, tab := range want {
+		key := string(rune('1' + i))
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		m = updated.(Model)
+		if m.activeTab != tab {
+			t.Errorf("after pressing %q, activeTab = %v, want %v", key, m.activeTab, tab)
+		}
+	}
+}
+
+// TestModel_HelpModal_ReflectsNotificationsFirst pins the correctness fix
+// called out alongside Decision 6: components/help.go seeds the Tabs section
+// with the hard-coded default "1/2/3 — PR / Work Items / Pipelines"
+// (internal/ui/components/help.go's NewHelpModal), which would otherwise go
+// stale the moment notifications is registered first. NewModel's
+// UpdateTabsBinding call must overwrite it to include Notifications in slot
+// 1 whenever the tab is capability-present.
+func TestModel_HelpModal_ReflectsNotificationsFirst(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	// Open the help modal.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	if !strings.Contains(view, "1/2/3/4") {
+		t.Error("help modal Tabs line should list keys '1/2/3/4' once notifications is enabled")
+	}
+	if !strings.Contains(view, "Notifications / PR / Work Items / Pipelines") {
+		t.Errorf("help modal Tabs line should read 'Notifications / PR / Work Items / Pipelines', view:\n%s", view)
+	}
+}
+
+// TestModel_NotificationsTab_KeyDelegatesToNotificationsView pins that, once
+// notifications is the active tab, key messages actually reach
+// notificationsView.Update rather than silently falling through a
+// switch-on-activeTab's `default:` branch (which every other such switch in
+// this file routes to pipelinesView). Pressing 'f' (decision 57's reason
+// filter cycle) is used as the observable signal: it only advances
+// notificationsView's own ReasonFilter() state, never pipelinesView's.
+func TestModel_NotificationsTab_KeyDelegatesToNotificationsView(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	if m.activeTab != TabNotifications {
+		t.Fatalf("expected default activeTab TabNotifications, got %d", m.activeTab)
+	}
+
+	// Seed a feed with a reason present, directly via the exported SetFeed
+	// method (Update-message-based population is a later task's concern).
+	m.notificationsView = m.notificationsView.SetFeed([]provider.Notification{
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"},
+			Title:     "Something",
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		},
+	})
+	if _, active := m.notificationsView.ReasonFilter(); active {
+		t.Fatal("precondition failed: reason filter should start inactive")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = updated.(Model)
+
+	if reason, active := m.notificationsView.ReasonFilter(); !active || reason != provider.NotificationReasonMentioned {
+		t.Errorf("after 'f' on notifications tab, ReasonFilter() = (%v, %v), want (Mentioned, true) — key was not delegated to notificationsView", reason, active)
+	}
+}
+
+// TestModel_TabID_NotificationsRoundTripsThroughState confirms
+// state.TabNotifications round-trips: switching to the notifications tab
+// persists it via the state store, and a fresh, equally-capable model
+// restores onto it via ApplyState (Decision 9).
+func TestModel_TabID_NotificationsRoundTripsThroughState(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	store, err := state.NewStore(filepath.Join(t.TempDir(), "state.yaml"))
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	store.SetDebounce(5 * time.Millisecond)
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.SetStateStore(store)
+	m.width = 100
+	m.height = 30
+
+	// Move to PR tab, then back to notifications, so the persisted value is
+	// genuinely written by the tab-switch path rather than being the
+	// zero-value default already sitting in the store.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(Model)
+
+	if got := store.State().ActiveTab; got != state.TabNotifications {
+		t.Fatalf("store ActiveTab = %v, want %v", got, state.TabNotifications)
+	}
+
+	// A fresh model (simulating relaunch) with the same capability restores
+	// onto the persisted tab.
+	fresh := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	fresh.width = 100
+	fresh.height = 30
+	fresh.ApplyState(store.State())
+
+	if fresh.activeTab != TabNotifications {
+		t.Errorf("after ApplyState, activeTab = %v, want TabNotifications", fresh.activeTab)
 	}
 }

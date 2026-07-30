@@ -318,7 +318,8 @@ func runTUI() error {
 		if err != nil {
 			return fmt.Errorf("failed to create GitHub client: %w", err)
 		}
-		backends = append(backends, github.NewAdapter(ghMC))
+		ghNC := github.NewNotificationsClient(token)
+		backends = append(backends, github.NewAdapterWithNotifications(ghMC, ghNC))
 	}
 
 	// Defense-in-depth: config.Validate() already requires ≥1 backend, but guard

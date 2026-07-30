@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
+	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/components/table"
 	"github.com/Elpulgo/azdo/internal/ui/display"
@@ -150,6 +151,37 @@ func (m Model) filterIndicator() string {
 // every row without it.
 func (m Model) ReasonFilter() (provider.NotificationReason, bool) {
 	return m.reasonFilter, m.reasonFilterActive
+}
+
+// GetContextItems returns context bar items for the current view. Phase 1
+// has no detail view (EnterDetail is a no-op stub), so this forwards straight
+// to the underlying listview with no branching, unlike pullrequests.Model's
+// diff-view special case.
+func (m Model) GetContextItems() []components.ContextItem {
+	return m.list.GetContextItems()
+}
+
+// GetScrollPercent returns the scroll percentage for the current view.
+func (m Model) GetScrollPercent() float64 {
+	return m.list.GetScrollPercent()
+}
+
+// GetStatusMessage returns the status message for the current view.
+func (m Model) GetStatusMessage() string {
+	return m.list.GetStatusMessage()
+}
+
+// HasContextBar returns true if the current view should show a context bar.
+func (m Model) HasContextBar() bool {
+	return m.list.HasContextBar()
+}
+
+// IsSearching returns true if the view has an active text input that should
+// suppress global keyboard shortcuts. Decision 57 sets no FilterFunc in
+// phase 1, so this always forwards false — kept for symmetry with every
+// other pane's app.isActiveViewCapturingInput wiring.
+func (m Model) IsSearching() bool {
+	return m.list.IsSearching()
 }
 
 // SetFeed sets the config-filtered feed (task 10's FilterNotifications

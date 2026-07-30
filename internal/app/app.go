@@ -12,6 +12,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/metrics"
+	"github.com/Elpulgo/azdo/internal/ui/notifications"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
@@ -37,10 +38,16 @@ func (e *ThemeNotFoundError) Error() string {
 type Tab int
 
 const (
-	TabPullRequests Tab = iota // Pull Requests tab (key '1')
-	TabWorkItems               // Work Items tab (key '2')
-	TabPipelines               // Pipelines tab (key '3')
-	TabMetrics                 // Metrics dashboard tab (opt-in via metrics.enabled)
+	// TabNotifications is the "what needs me now" pane (Decision 6) and is
+	// always registered first in enabledTabs when a configured backend
+	// implements provider.NotificationSource (Decision 11) — capability
+	// gated, never config gated. Its number key therefore shifts with
+	// whatever else is enabled, same as every other tab; see enabledTabs.
+	TabNotifications Tab = iota
+	TabPullRequests
+	TabWorkItems
+	TabPipelines
+	TabMetrics // Metrics dashboard tab (opt-in via metrics.enabled)
 )
 
 // Layout constants for the bordered content area.
@@ -75,28 +82,29 @@ type Model struct {
 	// client was not supplied.
 	metricsClient *azdevops.MultiClient
 
-	config           *config.Config
-	styles           *styles.Styles
-	activeTab        Tab
-	enabledTabs      []Tab // ordered list of enabled tabs
-	pipelinesView    pipelines.Model
-	pullRequestsView pullrequests.Model
-	workItemsView    workitems.Model
-	metricsView      metrics.Model
-	logo             *components.Logo
-	statusBar        *components.StatusBar
-	helpModal        *components.HelpModal
-	errorModal       *components.ErrorModal
-	themePicker      components.ThemePicker
-	poller           *polling.Poller
-	errorHandler     *polling.ErrorHandler
-	currentVersion   string
-	commitHash       string
-	width            int
-	height           int
-	footerRows       int
-	err              error
-	stateStore       *state.Store // optional; nil when persistence is disabled
+	config            *config.Config
+	styles            *styles.Styles
+	activeTab         Tab
+	enabledTabs       []Tab // ordered list of enabled tabs
+	pipelinesView     pipelines.Model
+	pullRequestsView  pullrequests.Model
+	workItemsView     workitems.Model
+	metricsView       metrics.Model
+	notificationsView notifications.Model
+	logo              *components.Logo
+	statusBar         *components.StatusBar
+	helpModal         *components.HelpModal
+	errorModal        *components.ErrorModal
+	themePicker       components.ThemePicker
+	poller            *polling.Poller
+	errorHandler      *polling.ErrorHandler
+	currentVersion    string
+	commitHash        string
+	width             int
+	height            int
+	footerRows        int
+	err               error
+	stateStore        *state.Store // optional; nil when persistence is disabled
 }
 
 // SetStateStore attaches a state store to the model so navigation changes
@@ -109,6 +117,8 @@ func (m *Model) SetStateStore(s *state.Store) {
 // tabIDForTab maps the internal Tab iota to the on-disk TabID.
 func tabIDForTab(t Tab) state.TabID {
 	switch t {
+	case TabNotifications:
+		return state.TabNotifications
 	case TabPullRequests:
 		return state.TabPullRequests
 	case TabWorkItems:
@@ -120,9 +130,15 @@ func tabIDForTab(t Tab) state.TabID {
 }
 
 // tabFromID resolves a persisted TabID back to the internal Tab iota.
-// Unknown IDs return (0, false) so the caller can fall back gracefully.
+// Unknown IDs return (0, false) so the caller can fall back gracefully. This
+// also covers a TabID that is currently disabled or capability-absent (e.g.
+// "notifications" persisted from a prior GitHub-capable run, restored
+// against today's Azure-only config): ApplyState's isTabEnabled check still
+// rejects it and NewModel's default (enabledTabs[0]) stands (Decision 9).
 func tabFromID(id state.TabID) (Tab, bool) {
 	switch id {
+	case state.TabNotifications:
+		return TabNotifications, true
 	case state.TabPullRequests:
 		return TabPullRequests, true
 	case state.TabWorkItems:
@@ -254,11 +270,41 @@ func equalSlices(a, b []string) bool {
 	return true
 }
 
+// notificationCapableProvider is the minimal shape *provider.CompositeProvider
+// exposes for Decision 11's capability check. Asserting p directly against
+// provider.NotificationSource does not work here: the composite satisfies
+// that interface unconditionally (see its HasNotifications doc comment), so
+// such an assertion would report capability even for an Azure-only config
+// with no GitHub backend at all. HasNotifications performs the real
+// per-backend type assertion and is what must be called instead.
+type notificationCapableProvider interface {
+	HasNotifications() bool
+}
+
+// hasNotificationCapability reports whether p — or nil, in which case it is
+// false — has at least one backend implementing provider.NotificationSource
+// (Decision 11). This is the sole gate for the notifications tab's presence;
+// it is never derived from config and never from whether the feed is empty.
+func hasNotificationCapability(p provider.Provider) bool {
+	nc, ok := p.(notificationCapableProvider)
+	if !ok {
+		return false
+	}
+	return nc.HasNotifications()
+}
+
 // buildEnabledTabs returns the list of enabled tabs based on config.
 // azurePresent must be true when a live Azure MultiClient is available;
 // the metrics tab requires both cfg.Metrics.Enabled AND azurePresent.
-func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
+// notifCapable must be true when at least one configured backend implements
+// provider.NotificationSource (Decision 11) — see hasNotificationCapability.
+// Notifications is registered first (Decision 6) so it lands at enabledTabs[0]
+// whenever it is present at all.
+func buildEnabledTabs(cfg *config.Config, azurePresent bool, notifCapable bool) []Tab {
 	var tabs []Tab
+	if cfg.IsPaneEnabled("notifications") && notifCapable {
+		tabs = append(tabs, TabNotifications)
+	}
 	if cfg.IsPaneEnabled("pullrequests") {
 		tabs = append(tabs, TabPullRequests)
 	}
@@ -278,6 +324,8 @@ func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
 // (which is populated by the poller).
 func (m Model) initTabCmd(tab Tab) tea.Cmd {
 	switch tab {
+	case TabNotifications:
+		return m.notificationsView.Init()
 	case TabPullRequests:
 		return m.pullRequestsView.Init()
 	case TabWorkItems:
@@ -370,6 +418,13 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// so it must only be enabled when a concrete MultiClient is present.
 	metricsEnabled := cfg.Metrics.Enabled && mc != nil
 
+	// Gate notifications on capability alone (Decision 11), never on config:
+	// the tab is absent unless a configured backend implements
+	// provider.NotificationSource, and present (possibly empty) whenever one
+	// does. disabled_panes still applies on top, same as every other pane.
+	notifCapable := hasNotificationCapability(p)
+	notifTabEnabled := cfg.IsPaneEnabled("notifications") && notifCapable
+
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
@@ -388,8 +443,12 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		helpModal.RemoveBindingsByDescription("pipelines")
 	}
 
-	// Update tab description in help modal based on enabled tabs
+	// Update tab description in help modal based on enabled tabs. Notifications
+	// is listed first (Decision 6) to mirror enabledTabs' own order below.
 	enabledTabNames := []string{}
+	if notifTabEnabled {
+		enabledTabNames = append(enabledTabNames, cfg.TermFor("notifications", "Notifications"))
+	}
 	if cfg.IsPaneEnabled("pullrequests") {
 		enabledTabNames = append(enabledTabNames, "PR")
 	}
@@ -467,11 +526,19 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		errorHandler.SetError(themeNotFoundErr)
 	}
 
-	enabledTabs := buildEnabledTabs(cfg, mc != nil)
+	enabledTabs := buildEnabledTabs(cfg, mc != nil, notifCapable)
 
 	var mv metrics.Model
 	if metricsEnabled {
 		mv = metrics.NewModelWithStyles(mc, cfg, appStyles)
+	}
+
+	// The notifications pane is only constructed when the tab is actually
+	// enabled; its zero value is never reached (Init/Update/View), matching
+	// the metrics view's pattern above.
+	var nv notifications.Model
+	if notifTabEnabled {
+		nv = notifications.NewModelWithStyles(appStyles)
 	}
 
 	return Model{
@@ -483,18 +550,19 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		enabledTabs:   enabledTabs,
 		logo:          logo,
 		// pullRequestsView, workItemsView, and pipelinesView all consume provider.Provider (tasks 7-9).
-		pipelinesView:    pipelines.NewModelWithStyles(p, appStyles),
-		pullRequestsView: pullrequests.NewModelWithStyles(p, appStyles),
-		workItemsView:    workitems.NewModelWithStyles(p, appStyles),
-		metricsView:      mv,
-		statusBar:        statusBar,
-		helpModal:        helpModal,
-		errorModal:       errorModal,
-		themePicker:      themePicker,
-		poller:           poller,
-		errorHandler:     errorHandler,
-		currentVersion:   currentVersion,
-		commitHash:       commitHash,
+		pipelinesView:     pipelines.NewModelWithStyles(p, appStyles),
+		pullRequestsView:  pullrequests.NewModelWithStyles(p, appStyles),
+		workItemsView:     workitems.NewModelWithStyles(p, appStyles),
+		metricsView:       mv,
+		notificationsView: nv,
+		statusBar:         statusBar,
+		helpModal:         helpModal,
+		errorModal:        errorModal,
+		themePicker:       themePicker,
+		poller:            poller,
+		errorHandler:      errorHandler,
+		currentVersion:    currentVersion,
+		commitHash:        commitHash,
 	}
 }
 
@@ -653,8 +721,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themePicker.SetSize(m.width, m.height)
 			m.themePicker.Show()
 			return m, nil
-		case "1", "2", "3", "4":
-			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2, "4"→3
+		case "1", "2", "3", "4", "5":
+			// Up to five tabs can now be enabled at once (notifications, PR,
+			// work items, pipelines, metrics), so "5" joins the digit set.
+			// The mapping stays purely positional into m.enabledTabs, which
+			// is why notifications landing first (Decision 6) automatically
+			// shifts every other tab's number without a dedicated case here.
+			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2, "4"→3, "5"→4
 			if idx >= 0 && idx < len(m.enabledTabs) {
 				target := m.enabledTabs[idx]
 				if target != m.activeTab {
@@ -748,6 +821,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// recreating would erase its loaded snapshots, sprint selection and
 		// fetched rows, blanking the section on theme change.
 		m.metricsView.SetStyles(m.styles)
+		// notificationsView has no client dependency (task 12's Fetch is a
+		// stub, task 15 wires the real one) and no accumulated state worth
+		// preserving yet, so it is recreated like pipelines/PR/WI rather than
+		// restyled in place like metrics.
+		m.notificationsView = notifications.NewModelWithStyles(m.styles)
 
 		// CRITICAL: Set window size for all views before they try to render
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
@@ -758,6 +836,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 			m.workItemsView, _ = m.workItemsView.Update(contentSize)
 			m.metricsView, _ = m.metricsView.Update(contentSize)
+			m.notificationsView, _ = m.notificationsView.Update(contentSize)
 		}
 
 		// Re-initialize views to fetch data again
@@ -767,6 +846,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.activeTab == TabWorkItems {
 			cmds = append(cmds, m.workItemsView.Init())
+		}
+		if m.activeTab == TabNotifications {
+			cmds = append(cmds, m.notificationsView.Init())
 		}
 		// The metrics view is re-styled in place (SetStyles above), not
 		// recreated, so it must NOT be re-initialized here — re-running its
@@ -790,6 +872,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
 		m.metricsView, _ = m.metricsView.Update(contentSize)
+		m.notificationsView, _ = m.notificationsView.Update(contentSize)
 		return m, nil
 
 	case updateCheckMsg:
@@ -850,6 +933,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Delegate to active view
 	var cmd tea.Cmd
 	switch m.activeTab {
+	case TabNotifications:
+		m.notificationsView, cmd = m.notificationsView.Update(msg)
 	case TabPullRequests:
 		m.pullRequestsView, cmd = m.pullRequestsView.Update(msg)
 	case TabWorkItems:
@@ -879,6 +964,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // isActiveViewSearching returns true if the currently active tab's view is in search mode.
 func (m Model) isActiveViewSearching() bool {
 	switch m.activeTab {
+	case TabNotifications:
+		return m.notificationsView.IsSearching()
 	case TabPipelines:
 		return m.pipelinesView.IsSearching()
 	case TabPullRequests:
@@ -954,6 +1041,8 @@ func (m *Model) resizeActiveViewIfNeeded() {
 	m.footerRows = newFooterRows
 	contentSize := m.contentViewSize()
 	switch m.activeTab {
+	case TabNotifications:
+		m.notificationsView, _ = m.notificationsView.Update(contentSize)
 	case TabPullRequests:
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 	case TabWorkItems:
@@ -973,6 +1062,9 @@ func (m *Model) syncStatusBarContext() {
 	var contextItems []components.ContextItem
 
 	switch m.activeTab {
+	case TabNotifications:
+		hasContextBar = m.notificationsView.HasContextBar()
+		contextItems = m.notificationsView.GetContextItems()
 	case TabPullRequests:
 		hasContextBar = m.pullRequestsView.HasContextBar()
 		contextItems = m.pullRequestsView.GetContextItems()
@@ -1063,6 +1155,20 @@ func (m Model) pipelinesKeybindings() string {
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }
 
+// notificationsKeybindings returns the keybindings string for the
+// notifications list view. Only lists keys actually wired by task 11's pane
+// — `u`/`d`/`o` triage and the real `r` refresh are tasks 14/15/19's to add.
+func (m Model) notificationsKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" filter reason") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
 // measureFooterHeight measures the actual footer height. The footer is always
 // just the status bar (context items are now rendered inline in the status bar).
 func (m Model) measureFooterHeight() int {
@@ -1077,10 +1183,11 @@ func (m Model) renderTabBar(innerWidth int) string {
 	// Terms map keys arrive lowercase. A capitalised lookup key would never match.
 	type tabLabel struct{ key, def string }
 	tabLabels := map[Tab]tabLabel{
-		TabPullRequests: {"pull_requests", "Pull Requests"},
-		TabWorkItems:    {"work_items", "Work Items"},
-		TabPipelines:    {"pipelines", "Pipelines"},
-		TabMetrics:      {"metrics", "Metrics"},
+		TabNotifications: {"notifications", "Notifications"},
+		TabPullRequests:  {"pull_requests", "Pull Requests"},
+		TabWorkItems:     {"work_items", "Work Items"},
+		TabPipelines:     {"pipelines", "Pipelines"},
+		TabMetrics:       {"metrics", "Metrics"},
 	}
 
 	var renderedTabs []string
@@ -1172,6 +1279,12 @@ func (m Model) View() string {
 	var statusMessage string
 
 	switch m.activeTab {
+	case TabNotifications:
+		content = m.notificationsView.View()
+		hasContextBar = m.notificationsView.HasContextBar()
+		contextItems = m.notificationsView.GetContextItems()
+		scrollPercent = m.notificationsView.GetScrollPercent()
+		statusMessage = m.notificationsView.GetStatusMessage()
 	case TabPullRequests:
 		content = m.pullRequestsView.View()
 		hasContextBar = m.pullRequestsView.HasContextBar()
@@ -1199,7 +1312,9 @@ func (m Model) View() string {
 	}
 
 	// Set tab-specific keybindings on status bar
-	if m.activeTab == TabPullRequests && !hasContextBar {
+	if m.activeTab == TabNotifications && !hasContextBar {
+		m.statusBar.SetKeybindings(m.notificationsKeybindings())
+	} else if m.activeTab == TabPullRequests && !hasContextBar {
 		m.statusBar.SetKeybindings(m.pullRequestsKeybindings())
 	} else if m.activeTab == TabWorkItems && !hasContextBar {
 		m.statusBar.SetKeybindings(m.workItemsKeybindings())
