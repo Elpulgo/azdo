@@ -200,7 +200,7 @@ accepted value.
 - [x] 16. Unread-count footer badge (decision 21) (blocked by: 12). → done: count is unread *after* config filters; the badge is hidden entirely at zero; visible from every tab
 - [x] 17. Help-modal section + `RemoveSection` wiring when the pane is disabled (blocked by: 12). → done: section lists `u`/`d`/`o`/`f`; disabling the pane removes it; the tabs binding line reflects the new order
 - [x] 18. `config`: regression test pinning `Save()` preservation — seed a file containing `metrics:` and `notifications:`, change only the theme, assert both blocks survive with every value intact (blocked by: 9). → done: the new test fails if `ReadInConfig()` is removed from `Save()` (verify by deleting it locally, watching the test fail, restoring it); fixtures go through `LoadFrom(<t.TempDir() path>)`, never a bare `Config` literal (convention 17). Also pinned: a key the `Config` struct does not model at all survives — the general form of the requirement, and the only assertion here that can see such a key, since every other check reads the reloaded typed `Config` and is blind to sections outside it
-- [ ] 19. Token-scope error state (decision 17) (blocked by: 13,18). → done: a 403 missing-scope response renders in-view naming the `notifications` scope and how to add it; 401-expired and generic failures render differently; the disable action writes `disabled_panes` via `Config.Save()` behind a confirm, on a key that is not `d` or `u`; its test uses a temp-path config (convention 17)
+- [x] 19. Token-scope error state (decision 17) (blocked by: 13,18). → done: a 403 missing-scope response renders in-view naming the `notifications` scope and how to add it; 401-expired and generic failures render differently; the disable action writes `disabled_panes` via `Config.Save()` behind a confirm, on a key that is not `d` or `u`; its test uses a temp-path config (convention 17)
 - [ ] 20. Docs: README (required `notifications` scope, upgrade note for existing tokens, how to disable), Architecture.md, config.yaml.example, FAQ (blocked by: 17,19). → done: every config key from decision 19 is documented; the required token scope and the upgrade path for existing tokens are stated; `exclude_reasons` values are documented as lowercase snake_case and **case-sensitive** (`Subscribed` warns and is dropped — viper lowercases config *keys*, never list values), `unknown` is documented as reserved and not accepted, and `since_days` is named as the knob for very large inboxes per decision 48. **Do not reproduce the Config-shape arrow chain as if it were a pipeline** — measured, all five knobs are independent row predicates and every stage order is observationally identical, so "precedence" describes exactly one thing: the two *selection* knobs override each other (`only_configured_repos` wins, decision 50). `exclude_repos`/`exclude_reasons`/`unread_only` are an order-independent AND and must be documented as such
 - [ ] 21. Fold phase-1 answers into `20260729-notif-p2-azdo.md` "Inputs from Phase 1" (blocked by: 20). → done: no `TBD` remains in that section
 
@@ -1382,3 +1382,54 @@ A width sweep is only evidence at widths where the thing under test actually cha
 hardcoded `false`, so its status messages ("Snapshot saved", "Failed to load metrics", "Backfill
 failed") are computed and rendered nowhere. This is how the defect entered task 17: the implementer was
 told to mirror the existing panes and did so faithfully, bug included. Left untouched.
+
+| 83 | A 403 means two different things on GitHub — missing scope and exhausted rate limit. Which gets the scope banner? | **Only the non-rate-limited 403.** A rate-limited 403 falls through to the generic body | Telling a rate-limited user to add a scope sends them to rewrite a token that is already correct, and the pane keeps failing until the window resets regardless. Verified by mutation: dropping `!apiErr.RateLimited` from the case originally **survived** — every other 403 test constructs an `APIError` with `RateLimited` false, so they all kept passing. Closed with `TestView_Error_RateLimited403_DoesNotClaimMissingScope`, which asserts both that the scope banner is absent and that neither token-settings URL appears |
+| 84 | A test that clears state via an intervening call cannot pin the clear it names | `TestMarkResult_Success_ClearsAnyPriorFailureMessage` called `HandleFetchResult` between the failed mark and the successful one. `HandleFetchResult` resets `statusMessage` unconditionally, so *the fetch* was doing the clearing, and deleting `handleMarkResult`'s own `m.statusMessage = ""` left the test green | The test's own comment described the intervening fetch as setup, which is what made the gap invisible on review. Removing the fetch also makes the test match the real path: a user who sees "Mark read failed" presses `u` again, they do not wait out a poll cycle. Same class as task 17's disclosed non-discriminating test — **when a test asserts "X clears Y", check that nothing between the two steps also clears Y** |
+| 85 | Can the in-view disable action write a config that then refuses to load? | **No — `Save()` validates before writing.** Measured, not reasoned | The hazard is real on paper: a GitHub-only user with `pullrequests,workitems,pipelines` already disabled is a *valid* config (pinned by `config_notifications_test.go:384`), and appending `notifications` to it trips the zero-navigable-tabs rule. Driven directly: `Save()` returns `cannot save invalid config: cannot disable all panes: …`, `disablePane` rolls the in-memory slice back, the file on disk is byte-unchanged, and the reason reaches the status bar. The user is told why rather than being handed a TUI that will not start |
+
+## Review feedback: token-scope error state and in-view disable (task 19) — 2026-07-30, commit 0c69acf
+
+Verification was performed by the loop driver, not an independent reviewer agent.
+
+| # | Finding | Severity | Outcome |
+|---|---|---|---|
+| 1 | Rate-limited 403s were rendered correctly but nothing pinned it — `!apiErr.RateLimited` was a surviving mutation | 🟡 | Fixed: decision 83, new test |
+| 2 | `TestMarkResult_Success_ClearsAnyPriorFailureMessage` did not discriminate the mutation it was named for | 🟡 | Fixed: decision 84, intervening fetch removed |
+| 3 | Hypothesised: the disable action could write a config that fails validation on next start, bricking the app for exactly the users the error targets | — | **Not a defect.** `Save()` validates first; see decision 85 |
+
+### Independent verification by the loop driver
+
+Config safety, which is the user's stated red line ("it should NOT be tested on the users config … had one
+session where it rewrote my ACTUAL config"):
+
+| Check | Result |
+|---|---|
+| Real config at `~/.config/azdo-tui/config.yaml` planted as a canary, full suite run, hash compared | **Byte-identical.** Canary removed afterwards; the path is absent again |
+| Every `LoadFrom`/`NewWithPath`/`Save()` in test files audited for its path origin | All new paths derive from `t.TempDir()`. The one literal (`/tmp/x.yaml`, `internal/demo/metrics_test.go:155`) is pre-existing and never calls `Save()` |
+| A *rich* config (organization, projects, terms map, github token+repos, all six notifications knobs, metrics, a pre-existing `disabled_panes: pipelines`) driven through the real disable action | Every field survived; `pipelines` preserved alongside the new `notifications`. Only the leading comment was dropped, which the user explicitly permitted |
+
+Mutations run by the driver, each with a build check first (an earlier task had a "survivor" that was
+really a compile failure hidden by a `grep` on test output):
+
+| Mutation | Result |
+|---|---|
+| `append(next, …)` → `[]string{"notifications"}` (overwrite instead of append) | killed |
+| idempotency guard → `if false` | killed |
+| 401 case → `case false:` (falls through to generic) | killed by 2 |
+| `!apiErr.RateLimited` removed | **survived** → decision 83 |
+| confirm-arm branch deleted (single press writes) | killed by 2 |
+| cancel-on-other-key → `if false` | killed |
+| `m.statusMessage = ""` on mark success removed | **survived** → decision 84 |
+| rollback-on-Save-failure removed | killed |
+| `syncNotificationsActionMessage()` removed from `MarkResultMsg` (app.go) | killed by 9 |
+
+Behaviours driven end-to-end rather than taken on report:
+
+- **`x` is actually reachable.** Task 17 shipped a criterion naming a key that did nothing, so this was
+  checked through the real `Update` path on an errored pane rather than by calling `handleDisableKey`
+  directly: the error body advertises `x`, the first press renders the confirm overlay, the second
+  writes and preserves the pre-existing entry, and `x`/`f`/`x` cancels without writing.
+- **No key collision.** `x` is claimed by neither `listview` (`r`/`enter`/`f`/`esc`/arrows) nor app.go's
+  top-level switch (`q`/`ctrl+c`/`?`/`t`/`1`-`5`/`left`/`right`).
+- **All six error renders are pairwise distinct**, and the scope banner appears on exactly the two
+  non-rate-limited 403 variants (classic-with-headers and fine-grained-without).
