@@ -28,6 +28,7 @@ type StatusBar struct {
 	warningMessage string
 	contextItems   []ContextItem
 	contextStatus  string
+	unreadCount    int
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -133,6 +134,16 @@ func (s *StatusBar) SetWarningMessage(message string) {
 	s.warningMessage = message
 }
 
+// SetUnreadCount sets the notifications unread-count footer badge (decision
+// 21). It renders from every tab, not just the notifications one, because
+// the caller sets it unconditionally in View() rather than inside a
+// per-tab branch. A count of 0 (or less) renders nothing at all —
+// renderUnreadBadge returns "" — so hitting zero removes the badge and its
+// separator entirely rather than leaving an empty pill behind.
+func (s *StatusBar) SetUnreadCount(count int) {
+	s.unreadCount = count
+}
+
 // ClearWarningMessage clears the persistent warning message.
 func (s *StatusBar) ClearWarningMessage() {
 	s.warningMessage = ""
@@ -186,6 +197,10 @@ func (s *StatusBar) View() string {
 			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
 			Bold(true)
 		parts = append(parts, warningStyle.Render("⚠ "+s.warningMessage))
+	}
+
+	if badge := s.renderUnreadBadge(); badge != "" {
+		parts = append(parts, badge)
 	}
 
 	if s.filterLabel != "" {
@@ -328,6 +343,25 @@ func (s *StatusBar) formatScopes() string {
 	visible := strings.Join(s.scopes[:scopesDisplayCap], ", ")
 	extra := len(s.scopes) - scopesDisplayCap
 	return fmt.Sprintf("%s +%d more", visible, extra)
+}
+
+// renderUnreadBadge renders the notifications unread-count footer badge
+// (decision 21). Hidden entirely at zero (or less) — an empty string here
+// means the caller's parts slice never gains an entry, so there is no empty
+// pill and no stray separator, matching filterLabel's own hide-when-empty
+// idiom just below.
+func (s *StatusBar) renderUnreadBadge() string {
+	if s.unreadCount <= 0 {
+		return ""
+	}
+
+	badgeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Background)).
+		Background(lipgloss.Color(s.styles.Theme.Warning)).
+		Bold(true).
+		Padding(0, 1)
+
+	return badgeStyle.Render(fmt.Sprintf("%d unread", s.unreadCount))
 }
 
 // renderScrollPercent renders the scroll percentage indicator.

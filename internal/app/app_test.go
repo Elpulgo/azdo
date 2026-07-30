@@ -2533,7 +2533,16 @@ func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.
 	}
 
 	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	// 130 columns, not 120: wide enough that the unread badge (task 16,
+	// decision 21) — which now renders on every tab, including pipelines'
+	// detail view entered in step (b) below — does not by itself tip the
+	// *notifications* tab's single-line footer onto a second line, while
+	// still leaving pipelines' longer detail-context keybindings line (with
+	// the same badge) wrapped onto two. At 120 columns the badge's added
+	// width wraps both alike, at 150+ neither wraps, and either way the two
+	// footer heights this test differentiates would come out equal — a
+	// vacuous fixture that can't exercise the actual resize/sync logic.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
 	m = updated.(Model)
 	m.notificationsView = m.notificationsView.SetFeed(feed)
 
@@ -2562,7 +2571,7 @@ func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.
 
 	// (c) resize while the detail context bar is open: the WindowSizeMsg handler
 	// sizes every pane, so the notifications pane picks up the shorter height.
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
 	m = updated.(Model)
 	staleHeight := lipgloss.Height(m.notificationsView.View())
 
@@ -3695,5 +3704,219 @@ func TestModel_Init_PreloadsNotifications_WhenNotActiveTab(t *testing.T) {
 	got := last()
 	if _, ok := got.(polling.NotificationsFetchedMsg); !ok {
 		t.Errorf("Init()'s last batch entry resolved to %T, want polling.NotificationsFetchedMsg — the notifications preload must still fire when notifications is not the active tab", got)
+	}
+}
+
+// ─── task 16: unread-count footer badge (decision 21, decision 68) ─────────
+
+// seedUnreadNotifications wires n unread rows into m's notifications pane,
+// wholly replacing its feed via SetFeed (the pane's marker, if any, is left
+// intact).
+func seedUnreadNotifications(m Model, n int) Model {
+	feed := make([]provider.Notification, 0, n)
+	for i := 0; i < n; i++ {
+		feed = append(feed, provider.Notification{
+			Identity: provider.Identity{
+				Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo",
+				ID: fmt.Sprintf("%d", i+1),
+			},
+			Title:     fmt.Sprintf("Row %d", i+1),
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		})
+	}
+	m.notificationsView = m.notificationsView.SetFeed(feed)
+	return m
+}
+
+// TestModel_UnreadBadge_VisibleFromNotificationsTab is the base case: with
+// the notifications tab active (Decision 6's default landing tab) and two
+// unread rows seeded, the footer shows the badge.
+func TestModel_UnreadBadge_VisibleFromNotificationsTab(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	if m.activeTab != TabNotifications {
+		t.Fatalf("precondition: activeTab = %d, want TabNotifications", m.activeTab)
+	}
+	m = seedUnreadNotifications(m, 2)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "2 unread") {
+		t.Errorf("view should contain the unread badge '2 unread' while on the notifications tab; view:\n%s", view)
+	}
+}
+
+// TestModel_UnreadBadge_VisibleFromNonNotificationsTab pins decision 21's
+// "visible from every tab" half: the badge must still render in the footer
+// after switching away to another tab, since the footer is shared across all
+// tabs rather than being part of notificationsKeybindings (which is per-tab
+// and never runs for another active tab).
+func TestModel_UnreadBadge_VisibleFromNonNotificationsTab(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m = seedUnreadNotifications(m, 3)
+
+	// Wide enough that the PR tab's longer keybindings line plus the badge,
+	// org and connection state do not wrap onto a second line — this test
+	// asserts presence of the badge text, not the footer's line-wrap
+	// behaviour under width pressure.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 220, Height: 40})
+	m = updated.(Model)
+
+	// Switch away from notifications (key "2" is the tab immediately after
+	// notifications in enabledTabs — PullRequests, since notifications is
+	// always enabledTabs[0] per Decision 6).
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+	if m.activeTab == TabNotifications {
+		t.Fatal("precondition: want a non-notifications tab active")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "3 unread") {
+		t.Errorf("view should contain the unread badge '3 unread' even while a different tab (%d) is active; view:\n%s", m.activeTab, view)
+	}
+}
+
+// TestModel_UnreadBadge_AbsentWhenZero pins decision 21's other half: hidden
+// entirely at zero, asserted as the absence of the badge's own word rather
+// than merely the digit "0" (a stray "0 unread" residue would still fail the
+// literal criterion even though it contains no bare "0" check).
+func TestModel_UnreadBadge_AbsentWhenZero(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m = seedUnreadNotifications(m, 0)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "unread") {
+		t.Errorf("view should NOT contain the unread badge when the count is 0; view:\n%s", view)
+	}
+}
+
+// TestModel_UnreadBadge_AbsentWhenPaneDisabled pins the capability/pane-
+// disabled gate: even with a capable provider and an unread row seeded
+// directly into the (unconstructed-into-a-tab) pane, disabling the pane via
+// config must hide the badge, exactly like it hides the tab itself.
+func TestModel_UnreadBadge_AbsentWhenPaneDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"notifications"},
+	}
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	if m.isTabEnabled(TabNotifications) {
+		t.Fatal("precondition: TabNotifications should be disabled")
+	}
+	m = seedUnreadNotifications(m, 5)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "unread") {
+		t.Errorf("view should NOT contain the unread badge when the notifications pane is disabled; view:\n%s", view)
+	}
+}
+
+// TestModel_UnreadBadge_ClearedWhenThePaneIsDisabledAfterRendering pins the
+// `else { SetUnreadCount(0) }` half of syncStatusBarContext's gate, which the
+// two tests above cannot reach: both build a model whose pane is already
+// absent, so the status bar's count is still at its zero value and deleting
+// the else branch changes nothing. Measured — with that branch removed the
+// whole suite stayed green.
+//
+// The count lives on the status bar, not the pane, so once a non-zero value
+// has been pushed it persists until something overwrites it. Disabling the
+// pane must therefore actively clear it, not merely stop refreshing it.
+//
+// The branch is dead today (enabledTabs is fixed at construction) but is
+// about to become live: task 19's in-view disable action writes
+// disabled_panes through Config.Save(). Pinning it now is Decision 64's
+// shape — a currently-dead guard must still be pinned, or it will be
+// "simplified" away exactly when it starts to matter.
+func TestModel_UnreadBadge_ClearedWhenThePaneIsDisabledAfterRendering(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m = seedUnreadNotifications(m, 5)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	if view := m.View(); !strings.Contains(view, "unread") {
+		t.Fatalf("precondition: want the badge rendered while the pane is enabled; view:\n%s", view)
+	}
+
+	// Disable the pane the way task 19's action will: drop it from the
+	// enabled set. The stale count is still sitting on the status bar.
+	filtered := make([]Tab, 0, len(m.enabledTabs))
+	for _, tab := range m.enabledTabs {
+		if tab != TabNotifications {
+			filtered = append(filtered, tab)
+		}
+	}
+	m.enabledTabs = filtered
+	m.activeTab = TabPullRequests
+
+	if view := m.View(); strings.Contains(view, "unread") {
+		t.Errorf("want the badge gone once the pane is disabled — a stale count must be cleared, not merely left unrefreshed; view:\n%s", view)
+	}
+}
+
+// TestModel_UnreadBadge_AbsentWhenProviderIncapable mirrors the disabled-pane
+// case for the other half of isTabEnabled's predicate: an Azure-only
+// provider that implements no notifications capability at all.
+func TestModel_UnreadBadge_AbsentWhenProviderIncapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationIncapableProvider(), client, cfg, "dev", "")
+	if m.isTabEnabled(TabNotifications) {
+		t.Fatal("precondition: TabNotifications should be absent for an incapable provider")
+	}
+	m = seedUnreadNotifications(m, 5)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "unread") {
+		t.Errorf("view should NOT contain the unread badge when the provider implements no notifications capability; view:\n%s", view)
 	}
 }

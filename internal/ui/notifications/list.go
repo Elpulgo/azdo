@@ -84,13 +84,10 @@ type Model struct {
 	// presentation detail that must never split one logical row's override
 	// in two.
 	//
-	// FORWARD: task 16 — the unread-count footer badge must decide whether it
-	// counts m.feed's raw Read field or this pane's override-adjusted view.
-	// Nothing here exposes an "effective unread count" accessor; visibleItems
-	// is unexported and is the only place the two are currently combined.
-	// Without deciding this, a successful `u` would optimistically clear the
-	// row on screen while the badge still counted it, which reads as the
-	// count and the rows disagreeing.
+	// Task 16's UnreadCount() applies these same overrides (via applyOverrides)
+	// over m.feed, so a successful `u` clears the row on screen and decrements
+	// the footer badge in the same tick — the count and the rows never
+	// disagree, per decision 68.
 	overrides map[identityKey]override
 
 	// now lets tests replace time.Now for deterministic debounce-window
@@ -897,7 +894,22 @@ func (m Model) selectedIdentity() (provider.Identity, bool) {
 // reason reasonFiltered is: the pane's held feed must never be aliased or
 // mutated by a later step.
 func (m Model) visibleItems() []provider.Notification {
-	base := m.reasonFiltered()
+	return m.applyOverrides(m.reasonFiltered())
+}
+
+// applyOverrides folds Model.overrides on top of base: an overrideHidden
+// entry drops the row, an overrideRead entry forces Read to true, and an
+// expired entry (past its debounce window) is skipped entirely so the
+// underlying data wins again. Factored out of visibleItems so UnreadCount
+// (task 16, decision 68) can apply the exact same override semantics over
+// m.feed directly, without going through reasonFiltered's `f`-cycle
+// narrowing — reusing this logic rather than re-deriving it is what keeps
+// the two call sites from silently drifting apart.
+//
+// Always a freshly allocated slice when any override is active, mirroring
+// reasonFiltered: the pane's held feed must never be aliased or mutated by a
+// later step.
+func (m Model) applyOverrides(base []provider.Notification) []provider.Notification {
 	if len(m.overrides) == 0 {
 		return base
 	}
@@ -917,6 +929,30 @@ func (m Model) visibleItems() []provider.Notification {
 		out = append(out, n)
 	}
 	return out
+}
+
+// UnreadCount returns the number of unread rows in m.feed — the
+// config-filtered inbox (decision 21: filters from decision 19's
+// exclude_reasons/exclude_repos/unread_only/only_configured_repos are
+// already applied before the feed reaches the pane) — with any active `u`/`d`
+// override folded on top via applyOverrides, so a row the user has just
+// cleared with `u` (or removed with `d`) is reflected immediately, before the
+// next poll lands.
+//
+// Deliberately over m.feed, never reasonFiltered(): the `f` cycle is an
+// interactive, local view narrowing, not a config filter, and decision 68
+// requires the badge to ignore it — otherwise the count would drop to a
+// per-reason subtotal the moment the user pressed `f`, and since the badge
+// is meant to be visible from every tab, that wrong number would follow the
+// user to a tab where the `f` filter producing it is invisible.
+func (m Model) UnreadCount() int {
+	count := 0
+	for _, n := range m.applyOverrides(m.feed) {
+		if !n.Read {
+			count++
+		}
+	}
+	return count
 }
 
 // reasonFiltered returns the rows visible under the current `f` position: the

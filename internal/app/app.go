@@ -1301,10 +1301,112 @@ func (m *Model) resizeActiveViewIfNeeded() {
 	}
 }
 
+// keybindingsForTab returns the status bar keybindings string for the active
+// tab, or "" when hasContextBar is true (a context bar replaces the default
+// per-tab keybindings in detail views). Factored out of View()'s old inline
+// switch purely to give View() and any other caller a single place to get
+// this text, rather than for use during premeasurement: syncStatusBarContext
+// deliberately does NOT call this (see its own comment) because the status
+// bar's connection state, error/warning messages, and other message-driven
+// fields are themselves only ever updated by handlers that skip the resize
+// path (e.g. polling.PipelineRunsUpdated), so syncing keybindings alone
+// during premeasure would make the mismatch between "what's stale" and
+// "what's fresh" worse, not better, for tabs that carry no unread badge.
+func (m Model) keybindingsForTab(hasContextBar bool) string {
+	if hasContextBar {
+		return ""
+	}
+	switch m.activeTab {
+	case TabNotifications:
+		return m.notificationsKeybindings()
+	case TabPullRequests:
+		return m.pullRequestsKeybindings()
+	case TabWorkItems:
+		return m.workItemsKeybindings()
+	case TabPipelines:
+		return m.pipelinesKeybindings()
+	case TabMetrics:
+		return m.metricsKeybindings()
+	default:
+		return ""
+	}
+}
+
+// filterLabelForTab returns the status bar filter-label text for the active
+// tab and whether it is active at all. Factored out alongside
+// keybindingsForTab for the same reason: syncStatusBarContext must compute
+// the identical filter label that View() will render, so the premeasured
+// footer height matches the real one.
+func (m Model) filterLabelForTab() (label string, active bool) {
+	switch m.activeTab {
+	case TabWorkItems:
+		var labels []string
+		if m.workItemsView.IsMyItemsActive() {
+			labels = append(labels, "My Items")
+		}
+		if m.workItemsView.IsTagFilterActive() {
+			labels = append(labels, "Tag: "+m.workItemsView.ActiveTag())
+		}
+		if m.workItemsView.IsStateFilterActive() {
+			labels = append(labels, "State: "+m.workItemsView.ActiveState())
+		}
+		if len(labels) > 0 {
+			return strings.Join(labels, " + "), true
+		}
+		return "", false
+	case TabPipelines:
+		if m.pipelinesView.IsStatusFilterActive() {
+			return "Status: " + m.pipelinesView.ActiveStatus(), true
+		}
+		return "", false
+	case TabPullRequests:
+		switch {
+		case m.pullRequestsView.IsMyPRsActive():
+			return "My PRs", true
+		case m.pullRequestsView.IsAsReviewerActive():
+			return "Reviewer", true
+		default:
+			return "", false
+		}
+	case TabMetrics:
+		if m.metricsView.IsTagFilterActive() {
+			return "Tag: " + m.metricsView.ActiveTag(), true
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}
+
 // syncStatusBarContext reads context items from the active view and updates
 // the status bar. This ensures measureFooterHeight uses the correct state
 // during Update, not stale state from the previous View call.
+//
+// Deliberately narrow in scope: it syncs only the unread badge (task 16,
+// decision 21) and context items, not keybindings or the filter label. Those
+// two are left for View() to set on the next real render. Syncing them here
+// too was tried and reverted: connection state, error and warning messages
+// are set directly by message handlers that skip this premeasurement path
+// entirely (e.g. polling.PipelineRunsUpdated returns before reaching
+// resizeActiveViewIfNeeded), so they can already be stale at premeasure time
+// independent of anything below. Making keybindings exactly right here while
+// leaving state/error/warning wrong does not fix that pre-existing gap — it
+// just trades the direction of the mismatch, and did so in a way that broke
+// TestModel_View_OutputHeightMatchesTerminal, a test with no notifications
+// pane in play at all. The unread badge is exempt from this concern because
+// it does not depend on connection state, error messages, or warnings — only
+// on the notifications pane's own feed, which this method already reads
+// fresh on every call.
 func (m *Model) syncStatusBarContext() {
+	// Keep the unread badge in sync too (task 16): it renders unconditionally
+	// from every tab, so measureFooterHeight must see its real value here,
+	// not whatever was left over from the previous tab's View() call.
+	if m.isTabEnabled(TabNotifications) {
+		m.statusBar.SetUnreadCount(m.notificationsView.UnreadCount())
+	} else {
+		m.statusBar.SetUnreadCount(0)
+	}
+
 	var hasContextBar bool
 	var contextItems []components.ContextItem
 
@@ -1558,7 +1660,6 @@ func (m Model) View() string {
 	// Render content based on active tab
 	var content string
 	var hasContextBar bool
-	var contextItems []components.ContextItem
 	var scrollPercent float64
 	var statusMessage string
 
@@ -1566,104 +1667,53 @@ func (m Model) View() string {
 	case TabNotifications:
 		content = notificationsTabContent(m.notificationsView.View(), m.config.Warnings)
 		hasContextBar = m.notificationsView.HasContextBar()
-		contextItems = m.notificationsView.GetContextItems()
 		scrollPercent = m.notificationsView.GetScrollPercent()
 		statusMessage = m.notificationsView.GetStatusMessage()
 	case TabPullRequests:
 		content = m.pullRequestsView.View()
 		hasContextBar = m.pullRequestsView.HasContextBar()
-		contextItems = m.pullRequestsView.GetContextItems()
 		scrollPercent = m.pullRequestsView.GetScrollPercent()
 		statusMessage = m.pullRequestsView.GetStatusMessage()
 	case TabWorkItems:
 		content = m.workItemsView.View()
 		hasContextBar = m.workItemsView.HasContextBar()
-		contextItems = m.workItemsView.GetContextItems()
 		scrollPercent = m.workItemsView.GetScrollPercent()
 		statusMessage = m.workItemsView.GetStatusMessage()
 	case TabMetrics:
 		content = m.metricsView.View()
 		hasContextBar = m.metricsView.HasContextBar()
-		contextItems = m.metricsView.GetContextItems()
 		scrollPercent = m.metricsView.GetScrollPercent()
 		statusMessage = m.metricsView.GetStatusMessage()
 	default:
 		content = m.pipelinesView.View()
 		hasContextBar = m.pipelinesView.HasContextBar()
-		contextItems = m.pipelinesView.GetContextItems()
 		scrollPercent = m.pipelinesView.GetScrollPercent()
 		statusMessage = m.pipelinesView.GetStatusMessage()
 	}
 
-	// Set tab-specific keybindings on status bar
-	if m.activeTab == TabNotifications && !hasContextBar {
-		m.statusBar.SetKeybindings(m.notificationsKeybindings())
-	} else if m.activeTab == TabPullRequests && !hasContextBar {
-		m.statusBar.SetKeybindings(m.pullRequestsKeybindings())
-	} else if m.activeTab == TabWorkItems && !hasContextBar {
-		m.statusBar.SetKeybindings(m.workItemsKeybindings())
-	} else if m.activeTab == TabPipelines && !hasContextBar {
-		m.statusBar.SetKeybindings(m.pipelinesKeybindings())
-	} else if m.activeTab == TabMetrics && !hasContextBar {
-		m.statusBar.SetKeybindings(m.metricsKeybindings())
-	} else {
-		m.statusBar.SetKeybindings("")
+	// Sync the unread badge and context items on the status bar through the
+	// same syncStatusBarContext that resizeActiveViewIfNeeded uses to
+	// premeasure the footer height, so those two never disagree about the
+	// badge or context items. Keybindings and the filter label are set
+	// separately just below, through the same keybindingsForTab/
+	// filterLabelForTab helpers, but NOT via syncStatusBarContext — see that
+	// method's comment for why.
+	m.syncStatusBarContext()
+
+	// Context status (detail-view status message) is set here rather than in
+	// syncStatusBarContext because it depends on statusMessage, which is only
+	// available once the active view's content has actually been rendered
+	// above.
+	if hasContextBar && statusMessage != "" {
+		m.statusBar.SetContextStatus(statusMessage)
 	}
 
-	// Update filter label badge on status bar
-	if m.activeTab == TabWorkItems {
-		var labels []string
-		if m.workItemsView.IsMyItemsActive() {
-			labels = append(labels, "My Items")
-		}
-		if m.workItemsView.IsTagFilterActive() {
-			labels = append(labels, "Tag: "+m.workItemsView.ActiveTag())
-		}
-		if m.workItemsView.IsStateFilterActive() {
-			labels = append(labels, "State: "+m.workItemsView.ActiveState())
-		}
-		if len(labels) > 0 {
-			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
-		} else {
-			m.statusBar.ClearFilterLabel()
-		}
-	} else if m.activeTab == TabPipelines {
-		var labels []string
-		if m.pipelinesView.IsStatusFilterActive() {
-			labels = append(labels, "Status: "+m.pipelinesView.ActiveStatus())
-		}
-		if len(labels) > 0 {
-			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
-		} else {
-			m.statusBar.ClearFilterLabel()
-		}
-	} else if m.activeTab == TabPullRequests {
-		switch {
-		case m.pullRequestsView.IsMyPRsActive():
-			m.statusBar.SetFilterLabel("My PRs")
-		case m.pullRequestsView.IsAsReviewerActive():
-			m.statusBar.SetFilterLabel("Reviewer")
-		default:
-			m.statusBar.ClearFilterLabel()
-		}
-	} else if m.activeTab == TabMetrics {
-		if m.metricsView.IsTagFilterActive() {
-			m.statusBar.SetFilterLabel("Tag: " + m.metricsView.ActiveTag())
-		} else {
-			m.statusBar.ClearFilterLabel()
-		}
+	m.statusBar.SetKeybindings(m.keybindingsForTab(hasContextBar))
+
+	if label, active := m.filterLabelForTab(); active {
+		m.statusBar.SetFilterLabel(label)
 	} else {
 		m.statusBar.ClearFilterLabel()
-	}
-
-	// Pass context items to status bar (replaces default keybindings in detail views)
-	if hasContextBar {
-		m.statusBar.SetContextItems(contextItems)
-		if statusMessage != "" {
-			m.statusBar.SetContextStatus(statusMessage)
-		}
-	} else {
-		m.statusBar.ClearContextItems()
 	}
 
 	// Pass scroll percent to status bar

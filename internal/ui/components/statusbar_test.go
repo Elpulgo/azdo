@@ -639,6 +639,84 @@ func TestStatusBar_SetScopes_MultiScopeWithinCap(t *testing.T) {
 	}
 }
 
+// ─── task 16: SetUnreadCount footer badge (decision 21) ────────────────────
+
+func TestStatusBar_SetUnreadCount(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(5)
+
+	if sb.unreadCount != 5 {
+		t.Errorf("expected unreadCount 5, got %d", sb.unreadCount)
+	}
+}
+
+// TestStatusBar_View_ContainsUnreadCount checks the badge is present and
+// carries the count when set to a positive value.
+func TestStatusBar_View_ContainsUnreadCount(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(7)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "7") {
+		t.Error("view should contain the unread count '7'")
+	}
+	if !strings.Contains(view, "unread") {
+		t.Error("view should contain the word 'unread'")
+	}
+}
+
+// TestStatusBar_View_UnreadCountHiddenAtZero pins decision 21's "hidden
+// entirely at zero": not merely the absence of the digit 0, but the absence
+// of any residue at all — no stray "unread" word and no empty badge/
+// separator left over from an unconditionally-appended part.
+func TestStatusBar_View_UnreadCountHiddenAtZero(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(0)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if strings.Contains(view, "unread") {
+		t.Error("view should NOT contain the word 'unread' when the count is 0")
+	}
+}
+
+// TestStatusBar_View_UnreadCountHiddenWhenNegative guards the same zero-hide
+// path against a negative value (e.g. a bad accessor), since <= 0 is the
+// actual guard rather than == 0.
+func TestStatusBar_View_UnreadCountHiddenWhenNegative(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(-1)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if strings.Contains(view, "unread") {
+		t.Error("view should NOT contain the word 'unread' when the count is negative")
+	}
+}
+
+// TestStatusBar_View_UnreadCountRendersAlongsideKeybindings makes sure the
+// badge does not replace or hide the default keybindings section — it is an
+// additional part, not a state that overrides everything else the way the
+// error message does.
+func TestStatusBar_View_UnreadCountRendersAlongsideKeybindings(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(3)
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "3 unread") {
+		t.Error("view should contain the unread badge text '3 unread'")
+	}
+	if !strings.Contains(view, "quit") {
+		t.Error("view should still contain default keybindings alongside the unread badge")
+	}
+}
+
 // TestStatusBar_SetScopes_Truncation checks that scopes beyond the cap are
 // truncated and a "+N more" suffix is shown.
 func TestStatusBar_SetScopes_Truncation(t *testing.T) {
@@ -673,4 +751,3 @@ func TestStatusBar_SetScopes_Truncation(t *testing.T) {
 		t.Error("view should contain '+2 more' truncation suffix")
 	}
 }
-

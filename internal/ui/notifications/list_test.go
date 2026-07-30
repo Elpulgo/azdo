@@ -2168,3 +2168,161 @@ func TestSetFeed_PrunesExpiredOverrides_ButKeepsLiveOnes(t *testing.T) {
 		t.Errorf("the LIVE override for %q was pruned — a poll reporting stale unread will now flicker the row back", fresh.Identity.ID)
 	}
 }
+
+// ─── task 16: UnreadCount() footer badge accessor (decision 68) ────────────
+
+// TestUnreadCount_CountsUnreadRowsInFeed pins the base case: three rows, two
+// unread, one read — UnreadCount reports 2, not len(feed) and not the read
+// count.
+func TestUnreadCount_CountsUnreadRowsInFeed(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Unread one", provider.NotificationReasonReviewRequested, false, fixedNow),
+		mkNotification("2", "owner/repo", "Unread two", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("3", "owner/repo", "Already read", provider.NotificationReasonSubscribed, true, fixedNow),
+	})
+
+	if got := m.UnreadCount(); got != 2 {
+		t.Errorf("UnreadCount() = %d, want 2", got)
+	}
+}
+
+// TestUnreadCount_ZeroWhenEverythingRead pins the hidden-at-zero source: an
+// all-read feed reports 0, not len(feed) and not a negative/garbage value.
+func TestUnreadCount_ZeroWhenEverythingRead(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Read one", provider.NotificationReasonReviewRequested, true, fixedNow),
+		mkNotification("2", "owner/repo", "Read two", provider.NotificationReasonMentioned, true, fixedNow),
+	})
+
+	if got := m.UnreadCount(); got != 0 {
+		t.Errorf("UnreadCount() = %d, want 0", got)
+	}
+}
+
+// TestUnreadCount_ZeroOnEmptyFeed covers the zero-row case distinctly from
+// the all-read case above, since a mutant returning len(feed) instead of the
+// unread subset would still pass an all-read fixture that happens to have
+// zero rows, but would fail this one only if it also mishandled an empty
+// slice — belt and suspenders alongside the all-read test.
+func TestUnreadCount_ZeroOnEmptyFeed(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m = m.SetFeed(nil)
+
+	if got := m.UnreadCount(); got != 0 {
+		t.Errorf("UnreadCount() = %d, want 0 for an empty feed", got)
+	}
+}
+
+// TestUnreadCount_ReflectsOptimisticMarkRead_BeforeAnyPoll is decision 68's
+// first half: `u` applies the mark synchronously inside Update (task 14), so
+// UnreadCount must decrement immediately — before the tea.Cmd carrying the
+// actual MarkRead call ever runs, let alone before any poll lands. A version
+// of UnreadCount that reads m.feed's raw Read field (ignoring
+// Model.overrides) would still report the pre-mark count here.
+func TestUnreadCount_ReflectsOptimisticMarkRead_BeforeAnyPoll(t *testing.T) {
+	marker := &fakeMarker{}
+	feed := []provider.Notification{
+		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+		mkNotification("2", "owner/repo", "PR two", provider.NotificationReasonMentioned, false, fixedNow),
+	}
+	m := newTriagePane(t, marker, feed)
+
+	if got := m.UnreadCount(); got != 2 {
+		t.Fatalf("precondition: UnreadCount() = %d, want 2 before any mark", got)
+	}
+
+	m, cmd := m.Update(keyRune('u'))
+
+	if len(marker.readCalls) != 0 {
+		t.Fatalf("MarkRead calls = %d before the cmd runs, want 0 (the call happens inside the tea.Cmd)", len(marker.readCalls))
+	}
+	if got := m.UnreadCount(); got != 1 {
+		t.Errorf("UnreadCount() = %d immediately after u (before the API call resolves), want 1 — the optimistic mark must be reflected before any poll", got)
+	}
+
+	// Resolving the cmd must not change the count again: it was already
+	// applied optimistically.
+	m = runMarkCmd(t, m, cmd)
+	if got := m.UnreadCount(); got != 1 {
+		t.Errorf("UnreadCount() = %d after MarkRead resolves, want still 1", got)
+	}
+}
+
+// TestUnreadCount_ReflectsOptimisticMarkDone mirrors the mark-read case for
+// `d`: a row removed via mark-done must stop counting toward the unread
+// total immediately, even though it is still present, unread, in m.feed
+// itself (decision 68 requires overrides applied, not m.feed read raw).
+func TestUnreadCount_ReflectsOptimisticMarkDone(t *testing.T) {
+	marker := &fakeMarker{}
+	feed := []provider.Notification{
+		mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonReviewRequested, false, fixedNow),
+		mkNotification("2", "owner/repo", "Leave me", provider.NotificationReasonMentioned, false, fixedNow),
+	}
+	m := newTriagePane(t, marker, feed)
+
+	if got := m.UnreadCount(); got != 2 {
+		t.Fatalf("precondition: UnreadCount() = %d, want 2 before any mark", got)
+	}
+
+	m, cmd := m.Update(keyRune('d'))
+
+	// Asserted BEFORE the cmd resolves, mirroring the mark-read test above.
+	// This ordering is the whole point: commitOverride folds a server-
+	// confirmed `d` into m.feed itself, physically removing the row, so an
+	// assertion taken after runMarkCmd passes even when UnreadCount ignores
+	// the overrides map entirely — the commit does the work the override was
+	// supposed to be pinning. Measured: with `for _, n := range m.feed`
+	// substituted for `m.applyOverrides(m.feed)`, the post-commit form of
+	// this test stayed green while the mark-read one failed.
+	if len(marker.doneCalls) != 0 {
+		t.Fatalf("MarkDone calls = %d before the cmd runs, want 0 (the call happens inside the tea.Cmd)", len(marker.doneCalls))
+	}
+	if got := m.UnreadCount(); got != 1 {
+		t.Errorf("UnreadCount() = %d immediately after d (before the API call resolves), want 1 — the optimistic mark must be reflected before any poll", got)
+	}
+
+	// Resolving the cmd must not change the count again: commitOverride
+	// removes the row from m.feed, which the override was already hiding.
+	m = runMarkCmd(t, m, cmd)
+	if got := m.UnreadCount(); got != 1 {
+		t.Errorf("UnreadCount() = %d after MarkDone resolves, want still 1", got)
+	}
+}
+
+// TestUnreadCount_IgnoresReasonFilter_CountsOverWholeFeed is decision 68's
+// second half, and the one most likely to regress: cycling `f` to narrow the
+// visible rows to a single reason must NOT change UnreadCount. A version
+// counting over reasonFiltered() instead of m.feed would drop to the
+// per-reason subtotal the moment `f` is pressed, which this test would catch.
+func TestUnreadCount_IgnoresReasonFilter_CountsOverWholeFeed(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Mentioned one", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("2", "owner/repo", "Mentioned two", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("3", "owner/repo", "Subscribed noise", provider.NotificationReasonSubscribed, false, fixedNow),
+	})
+
+	before := m.UnreadCount()
+	if before != 3 {
+		t.Fatalf("precondition: UnreadCount() = %d, want 3 before cycling f", before)
+	}
+
+	// Cycle f to narrow onto a single reason — the interactive `f` filter,
+	// not a config filter.
+	m, _ = m.Update(keyRune('f'))
+	if _, active := m.ReasonFilter(); !active {
+		t.Fatalf("precondition: f did not activate the reason filter")
+	}
+	// reasonFiltered() must actually have narrowed, or this test proves
+	// nothing about UnreadCount ignoring it.
+	if got := len(m.reasonFiltered()); got == len(m.feed) {
+		t.Fatalf("precondition: reasonFiltered() did not narrow (len=%d), f-cycle setup is broken", got)
+	}
+
+	if got := m.UnreadCount(); got != before {
+		t.Errorf("UnreadCount() = %d after pressing f, want unchanged %d — the badge must ignore the interactive f cycle and count over the whole (config-filtered) feed", got, before)
+	}
+}
