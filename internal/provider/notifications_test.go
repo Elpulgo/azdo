@@ -198,10 +198,12 @@ func TestParseNotificationReason_UnparseableYieldsOther(t *testing.T) {
 	}{
 		{"garbage word", "nonsense"},
 		{"empty string", ""},
-		// Case-sensitivity: String() only ever emits lowercase, and config
-		// keys arrive already lowercased by viper (convention 9), so a
-		// mixed-case match is deliberately NOT folded — it is treated the
-		// same as any other unrecognised string.
+		// Case-sensitivity: String() only ever emits lowercase, and nothing
+		// upstream lowercases these strings — `exclude_reasons` entries are
+		// list *values*, and viper lowercases config *keys* only, so they
+		// arrive verbatim. A mixed-case match is deliberately NOT folded: it
+		// is treated the same as any other unrecognised string, surfacing the
+		// typo instead of silently reinterpreting it (Decision 26).
 		{"mixed case", "Review_Requested"},
 		{"upper case", "REVIEW_REQUESTED"},
 		// Decision 26: "unknown" is reserved. The wire mapper never emits

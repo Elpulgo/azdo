@@ -213,6 +213,10 @@ func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 		}
 	}
 
+	// All three rows use -1 on purpose. Decision 44 truncates only when Max >
+	// 0, so -1 is precisely the value that would read as "unlimited" if a
+	// guard were ever loosened from < 0 to, say, < -1 or == 0 — it is the
+	// boundary worth pinning, not an arbitrarily large negative.
 	tests := []struct {
 		name    string
 		mutate  func(*Config)
@@ -225,12 +229,12 @@ func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 		},
 		{
 			name:    "max_items negative",
-			mutate:  func(c *Config) { c.Notifications.MaxItems = -5 },
+			mutate:  func(c *Config) { c.Notifications.MaxItems = -1 },
 			wantErr: "max_items",
 		},
 		{
 			name:    "poll_interval negative",
-			mutate:  func(c *Config) { c.Notifications.PollInterval = -30 },
+			mutate:  func(c *Config) { c.Notifications.PollInterval = -1 },
 			wantErr: "poll_interval",
 		},
 	}
@@ -407,17 +411,111 @@ disabled_panes: pullrequests,workitems,pipelines
 	}
 }
 
+// TestConfig_Validate_PaneGuard_Decision47_GitHubConfigured_AllFourDisabled_Rejected
+// pins the OTHER half of the decision-47 guard. The two tests above vary
+// HasGitHub() while notifications stays enabled, so they only exercise the
+// HasGitHub() conjunct; drop the IsPaneEnabled("notifications") conjunct and
+// they all still pass. This fixture disables all four panes with GitHub
+// configured, which is the only shape that distinguishes
+// `IsPaneEnabled("notifications") && HasGitHub()` from a bare `HasGitHub()`.
+// Without it, a GitHub config that explicitly turns off every pane would
+// validate and the app would start with zero navigable tabs — exactly what the
+// guard exists to prevent.
+func TestConfig_Validate_PaneGuard_Decision47_GitHubConfigured_AllFourDisabled_Rejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+disabled_panes: pullrequests,workitems,pipelines,notifications
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("LoadFrom() should fail: all four panes disabled leaves zero navigable tabs even with GitHub configured")
+	}
+	if !strings.Contains(err.Error(), "cannot disable all panes") {
+		t.Errorf("error should be the at-least-one-pane guard, got: %s", err.Error())
+	}
+}
+
 // --- Decision 26: unrecognised exclude_reasons entries warn and are dropped. ---
 
 // wantElevenAcceptedReasonNames is a hardcoded, independent copy of the
 // eleven accepted values from the spec's Config shape section — deliberately
-// NOT generated from production code, so this test cannot pass merely
-// because the implementation and the test share the same (possibly wrong)
-// source.
+// NOT generated from production code (never by calling
+// acceptedNotificationReasons(), which would be tautological), so these tests
+// cannot pass merely because the implementation and the test share the same
+// (possibly wrong) source.
+//
+// The order is the enum declaration order from decision 18, which is also the
+// order acceptedNotificationReasons() emits. "unknown" is absent on purpose:
+// it is the enum's twelfth value, reserved and rejected by
+// ParseNotificationReason, so advertising it as accepted would tell the user
+// to write a string the parser refuses.
 var wantElevenAcceptedReasonNames = []string{
 	"review_requested", "mentioned", "assigned", "authored", "commented",
-	"state_changed", "ci_activity", "security_alert", "subscribed",
-	"approval_requested", "other",
+	"state_changed", "ci_activity", "security_alert", "approval_requested",
+	"subscribed", "other",
+}
+
+// acceptedValuesPrefix is the literal separator in the decision-26 warning
+// after which the accepted-values list begins.
+const acceptedValuesPrefix = "accepted values: "
+
+// TestLoad_ExcludeReasons_WarningListsExactlyTheElevenAcceptedValues pins the
+// accepted-values segment of the warning to the eleven names, exactly, in enum
+// order. A per-name strings.Contains check (as the test below does) cannot
+// pin the exclusion of "unknown": in the unknown-value test the string
+// "unknown" is already in the message as the *offending* value, so a
+// containment assertion passes whether or not the accepted list also
+// advertises it. Only an exact comparison of the segment kills that mutant.
+func TestLoad_ExcludeReasons_WarningListsExactlyTheElevenAcceptedValues(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  exclude_reasons:
+    - subscibed
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+
+	msg := cfg.Warnings[0]
+	parts := strings.SplitN(msg, acceptedValuesPrefix, 2)
+	if len(parts) != 2 {
+		t.Fatalf("warning %q does not contain %q", msg, acceptedValuesPrefix)
+	}
+	segment := parts[1]
+
+	want := strings.Join(wantElevenAcceptedReasonNames, ", ")
+	if segment != want {
+		t.Errorf("accepted-values segment = %q, want %q", segment, want)
+	}
+	if got := len(strings.Split(segment, ", ")); got != 11 {
+		t.Errorf("accepted-values segment lists %d values, want exactly 11", got)
+	}
+	if strings.Contains(segment, "unknown") {
+		t.Errorf("accepted-values segment must not advertise the reserved 'unknown' value, got: %s", segment)
+	}
 }
 
 func TestLoad_ExcludeReasons_UnrecognisedValue_WarnsAndDropped(t *testing.T) {
@@ -492,6 +590,52 @@ notifications:
 	}
 	if len(cfg.Notifications.ExcludeReasons) != 0 {
 		t.Errorf("ExcludeReasons = %v, want empty ('unknown' dropped)", cfg.Notifications.ExcludeReasons)
+	}
+}
+
+// TestLoad_ExcludeReasons_TwoUnrecognisedValues_WarnOnceEach pins that
+// warnings accumulate rather than collapsing to the last one. Every other
+// fixture in this file has at most one bad entry, so replacing the append with
+// an assignment would go unnoticed here — and task 13 renders the whole slice,
+// so a collapse-to-one regression would silently hide typos the user needs to
+// see.
+func TestLoad_ExcludeReasons_TwoUnrecognisedValues_WarnOnceEach(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  exclude_reasons:
+    - subscibed
+    - ci_activty
+    - subscribed
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() should not fail on unrecognised exclude_reasons entries (decision 26): %v", err)
+	}
+
+	if len(cfg.Warnings) != 2 {
+		t.Fatalf("Warnings = %v, want exactly 2 (one per unrecognised entry)", cfg.Warnings)
+	}
+	// Each warning names its own offending value and only its own — a single
+	// warning listing both, or two copies of the same one, is a regression.
+	if !strings.Contains(cfg.Warnings[0], "subscibed") || strings.Contains(cfg.Warnings[0], "ci_activty") {
+		t.Errorf("Warnings[0] should name only \"subscibed\", got: %s", cfg.Warnings[0])
+	}
+	if !strings.Contains(cfg.Warnings[1], "ci_activty") || strings.Contains(cfg.Warnings[1], "subscibed") {
+		t.Errorf("Warnings[1] should name only \"ci_activty\", got: %s", cfg.Warnings[1])
+	}
+	// The one good entry survives both drops.
+	if len(cfg.Notifications.ExcludeReasons) != 1 || cfg.Notifications.ExcludeReasons[0] != "subscribed" {
+		t.Errorf("ExcludeReasons = %v, want [subscribed]", cfg.Notifications.ExcludeReasons)
 	}
 }
 

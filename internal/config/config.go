@@ -144,11 +144,21 @@ type NotificationsConfig struct {
 // provider.NotificationReason.String() rather than a second hardcoded table
 // — provider is the single source of truth for the enum (decision 19), and
 // a duplicated string list here would silently drift from it.
-// NotificationReasonUnknown is deliberately excluded: it is not a
-// configurable value (see spec's Config shape section).
+//
+// The range starts at NotificationReasonReviewRequested to skip the
+// NotificationReasonUnknown zero value: "unknown" is reserved and
+// ParseNotificationReason rejects it (decision 26), so including it here would
+// make the warning self-contradicting — it would advertise as accepted a
+// string the parser refuses.
+//
+// The upper bound comes from provider.NotificationReasonCount(), the sentinel
+// that exists for exactly this purpose, rather than from a hardcoded last
+// member: a value inserted after NotificationReasonOther is then listed
+// automatically instead of being silently omitted from the warning. The
+// capacity is derived from the same sentinel, less the excluded Unknown.
 func acceptedNotificationReasons() []string {
-	names := make([]string, 0, 11)
-	for r := provider.NotificationReasonReviewRequested; r <= provider.NotificationReasonOther; r++ {
+	names := make([]string, 0, provider.NotificationReasonCount()-1)
+	for r := provider.NotificationReasonReviewRequested; r < provider.NotificationReason(provider.NotificationReasonCount()); r++ {
 		names = append(names, r.String())
 	}
 	return names
@@ -311,6 +321,11 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
 	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
 	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
+	// These nine registrations are currently no-ops — every notifications
+	// default is a Go zero value, which mapstructure leaves in place anyway —
+	// and are kept deliberately (decision 48) so the first genuinely non-zero
+	// default has a correct landing site instead of being bolted on ad hoc.
+	// max_items and since_days stay unbounded on purpose: see decision 48.
 	v.SetDefault("notifications.only_configured_repos", false)
 	v.SetDefault("notifications.exclude_repos", []string{})
 	v.SetDefault("notifications.include_repos", []string{})

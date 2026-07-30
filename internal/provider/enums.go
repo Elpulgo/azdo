@@ -215,9 +215,13 @@ func (r NotificationReason) String() string {
 // ParseNotificationReason maps a stable string identifier (see
 // NotificationReason.String) back to a NotificationReason, reporting via the
 // second return value whether the string was recognised. The match is
-// case-sensitive against the lowercase snake_case form String() emits —
-// config keys arrive already lowercased by viper (convention 9), so this
-// never needs to fold case itself.
+// case-sensitive against the lowercase snake_case form String() emits, and it
+// deliberately does not fold case: a mixed-case value such as "Subscribed" or
+// "CI_ACTIVITY" is treated exactly like any other unrecognised string, so the
+// user is shown their typo rather than getting silently reinterpreted
+// behaviour (Decision 26). Note that `exclude_reasons` entries are list
+// *values*, and viper lowercases config *keys* only — they reach this function
+// verbatim, so nothing upstream normalises them either.
 //
 // Per Decision 26, the returned value always degrades to
 // NotificationReasonOther when the bool is false — an unrecognised string
