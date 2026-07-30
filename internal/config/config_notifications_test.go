@@ -168,7 +168,13 @@ notifications:
 	// exclude_reasons entries above are both valid, so this is the only
 	// warning expected.
 	if len(cfg.Warnings) != 1 {
-		t.Errorf("Warnings = %v, want exactly 1 entry (only_configured_repos + include_repos both set, decision 50)", cfg.Warnings)
+		t.Fatalf("Warnings = %v, want exactly 1 entry (only_configured_repos + include_repos both set, decision 50)", cfg.Warnings)
+	}
+	// Assert the content too, not just the count: a count-only check passes
+	// if the decision-50 warning disappears while some unrelated warning
+	// appears in its place.
+	if !strings.Contains(cfg.Warnings[0], "include_repos") || !strings.Contains(cfg.Warnings[0], "ignored") {
+		t.Errorf("warning should say include_repos is ignored, got: %s", cfg.Warnings[0])
 	}
 }
 
@@ -716,6 +722,12 @@ notifications:
 	if !strings.Contains(msg, "notifications.exclude_repos") {
 		t.Errorf("warning should name the key notifications.exclude_repos, got: %s", msg)
 	}
+	// The pattern and the error state the cause; the warning must also state
+	// the consequence, otherwise the user is told a pattern was dropped but
+	// not what their feed will now do (task 13 renders these lines).
+	if !strings.Contains(msg, "nothing is excluded by it") {
+		t.Errorf("warning should say nothing is excluded by the dropped pattern, got: %s", msg)
+	}
 }
 
 func TestLoad_IncludeRepos_BadPattern_DroppedWithWarning_ValidEntriesSurvive(t *testing.T) {
@@ -753,6 +765,47 @@ notifications:
 	}
 	if !strings.Contains(msg, "notifications.include_repos") {
 		t.Errorf("warning should name the key notifications.include_repos, got: %s", msg)
+	}
+	// A compilable pattern survived, so the selection still narrows the feed:
+	// the consequence clause must say that, not that the whole inbox is shown.
+	if !strings.Contains(msg, "the remaining include patterns still apply") {
+		t.Errorf("warning should say the surviving include patterns still apply, got: %s", msg)
+	}
+}
+
+// TestLoad_IncludeRepos_AllPatternsBad_WarningSaysWholeInboxIsShown pins the
+// other consequence clause: with no compilable include pattern left the list
+// is empty, and an empty include_repos selects everything (decision 51a), so
+// the user must be told their filter has stopped narrowing anything rather
+// than being left to guess.
+func TestLoad_IncludeRepos_AllPatternsBad_WarningSaysWholeInboxIsShown(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  include_repos:
+    - "[bad"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() should not fail on a malformed include_repos pattern: %v", err)
+	}
+	if len(cfg.Notifications.IncludeRepos) != 0 {
+		t.Fatalf("IncludeRepos = %v, want empty (the only pattern was malformed)", cfg.Notifications.IncludeRepos)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	if !strings.Contains(cfg.Warnings[0], "the whole inbox is shown") {
+		t.Errorf("warning should say the whole inbox is shown, got: %s", cfg.Warnings[0])
 	}
 }
 

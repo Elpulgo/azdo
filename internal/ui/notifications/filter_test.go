@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/provider"
@@ -42,10 +43,22 @@ func assertIDs(t *testing.T, got []provider.Notification, want ...string) {
 
 // --- Nil safety ---
 
-func TestFilterNotifications_NilConfig_ReturnsRowsUnchanged(t *testing.T) {
-	rows := []provider.Notification{row("1", "owner/repo", provider.NotificationReasonOther, false)}
+func TestFilterNotifications_NilConfig_ReturnsCopyOfEveryRow(t *testing.T) {
+	rows := []provider.Notification{
+		row("1", "owner/repo", provider.NotificationReasonOther, false),
+		row("2", "owner/other", provider.NotificationReasonSubscribed, true),
+	}
 	got := FilterNotifications(rows, nil)
-	assertIDs(t, got, "1")
+	assertIDs(t, got, "1", "2")
+
+	// Decision 52a: the nil-cfg path allocates like every other path, so the
+	// caller's slice is not handed back. `return rows` would make this
+	// mutation visible in the caller's feed, which the pane keeps unfiltered
+	// so it can re-apply task 11's interactive `f` filter.
+	got[0].Title = "MUTATED"
+	if rows[0].Title == "MUTATED" {
+		t.Fatal("nil-cfg result aliases the caller's slice (return rows instead of a copy?)")
+	}
 }
 
 func TestFilterNotifications_NilRows_ReturnsNil(t *testing.T) {
@@ -77,6 +90,27 @@ func TestFilterNotifications_ZeroValueConfig_PassesEverythingThrough(t *testing.
 	assertIDs(t, got, "1", "2", "3")
 }
 
+// TestFilterNotifications_ZeroValueConfig_NotAliased pins decision 52a on the
+// zero-knob `default:` selection branch. That branch is the shipped default
+// config -- the most-exercised path in the product -- and it is also the only
+// one where no row is ever dropped, so no length or content assertion can
+// distinguish `out = append(out, rows...)` from `out = rows`. Since no
+// subtraction knob is set, dropWhere never runs to reallocate and mask it,
+// making this the only case that pins the branch's own allocation.
+func TestFilterNotifications_ZeroValueConfig_NotAliased(t *testing.T) {
+	original := []provider.Notification{
+		row("1", "owner/a", provider.NotificationReasonReviewRequested, false),
+		row("2", "owner/b", provider.NotificationReasonSubscribed, true),
+	}
+	got := FilterNotifications(original, &config.Config{})
+	assertIDs(t, got, "1", "2")
+
+	got[0].Title = "MUTATED"
+	if original[0].Title == "MUTATED" {
+		t.Fatal("zero-knob result aliases the caller's slice (out = rows in the default branch?)")
+	}
+}
+
 // --- Each knob alone ---
 
 func TestFilterNotifications_OnlyConfiguredRepos_Alone(t *testing.T) {
@@ -92,6 +126,57 @@ func TestFilterNotifications_OnlyConfiguredRepos_Alone(t *testing.T) {
 	assertIDs(t, got, "1")
 }
 
+// TestFilterNotifications_OnlyConfiguredRepos_CaseInsensitiveBothDirections
+// pins that BOTH sides of the github.repos lookup are lower-cased (decision
+// 51's case rule, applied to the strict-mode selector). One direction per
+// case, because either half alone passes one of them: with only the config
+// key lowered, an uppercase Scope misses; with only the Scope lowered, an
+// uppercase config entry misses. GitHub owner/repo names are
+// case-insensitive while Scope carries the wire's canonical casing, so a user
+// who types `Acme/Repo` must still see their rows.
+func TestFilterNotifications_OnlyConfiguredRepos_CaseInsensitiveBothDirections(t *testing.T) {
+	tests := []struct {
+		name           string
+		configuredRepo string
+		rowScope       string
+	}{
+		{"config entry uppercase, row scope lowercase", "Acme/Repo", "acme/repo"},
+		{"config entry lowercase, row scope uppercase", "acme/repo", "Acme/Repo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := []provider.Notification{
+				row("match", tt.rowScope, provider.NotificationReasonOther, false),
+				row("other", "unrelated/repo", provider.NotificationReasonOther, false),
+			}
+			cfg := &config.Config{
+				GitHub:        config.GitHubConfig{Repos: []string{tt.configuredRepo}},
+				Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+			}
+			got := FilterNotifications(rows, cfg)
+			assertIDs(t, got, "match")
+		})
+	}
+}
+
+// TestFilterNotifications_OnlyConfiguredRepos_TrimsConfiguredRepoWhitespace
+// pins that a stray space in github.repos does not silently empty the feed.
+// `Validate()` accepts "acme/repo " today (its slug check only rejects extra
+// slashes and empty entries), and an untrimmed lookup key then matches no row
+// at all -- the strict-mode equivalent of the empty feed decision 51 avoids
+// for globs by trimming them.
+func TestFilterNotifications_OnlyConfiguredRepos_TrimsConfiguredRepoWhitespace(t *testing.T) {
+	rows := []provider.Notification{
+		row("match", "acme/repo", provider.NotificationReasonOther, false),
+	}
+	cfg := &config.Config{
+		GitHub:        config.GitHubConfig{Repos: []string{"  acme/repo "}},
+		Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+	}
+	got := FilterNotifications(rows, cfg)
+	assertIDs(t, got, "match")
+}
+
 func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
 	rows := []provider.Notification{
 		row("1", "acme/repo", provider.NotificationReasonOther, false),
@@ -104,6 +189,115 @@ func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
 	assertIDs(t, got, "1")
 }
 
+// --- Decision 51a: the filter mirrors the load-time sanitizer, so a
+// struct-literal config that bypassed it behaves identically ---
+
+// TestFilterNotifications_IncludeRepos_AllPatternsBad_SelectsEverything pins
+// the fail-open half of decision 51 in the filter itself. Treating an
+// uncompilable pattern as "no match" is fail-OPEN for exclude_repos (nothing
+// is excluded) but fail-CLOSED for include_repos: `["[bad"]` would select
+// zero rows and the user's whole feed would vanish. `LoadFrom` drops the
+// pattern before the filter sees it, leaving an empty list that selects
+// everything -- so the filter reproduces that instead of selecting nothing.
+func TestFilterNotifications_IncludeRepos_AllPatternsBad_SelectsEverything(t *testing.T) {
+	rows := []provider.Notification{
+		row("1", "acme/repo", provider.NotificationReasonOther, false),
+		row("2", "other/repo", provider.NotificationReasonOther, false),
+	}
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{IncludeRepos: []string{"[bad"}},
+	}
+	got := FilterNotifications(rows, cfg)
+	assertIDs(t, got, "1", "2")
+}
+
+// TestFilterNotifications_IncludeRepos_OneBadOneGood_GoodStillSelects pins the
+// other side of the mirror: one compilable pattern is enough to make the list
+// meaningful, so the bad entry is skipped rather than widening the selection
+// back to everything.
+func TestFilterNotifications_IncludeRepos_OneBadOneGood_GoodStillSelects(t *testing.T) {
+	rows := []provider.Notification{
+		row("1", "acme/repo", provider.NotificationReasonOther, false),
+		row("2", "other/repo", provider.NotificationReasonOther, false),
+	}
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{IncludeRepos: []string{"[bad", "acme/*"}},
+	}
+	got := FilterNotifications(rows, cfg)
+	assertIDs(t, got, "1")
+}
+
+// TestFilterNotifications_IncludeRepos_BadPattern_SameResultFromLoadFromAndLiteral
+// is the property decision 51a actually buys: identical output whatever the
+// construction path. The LoadFrom config has been through the sanitizer (the
+// bad pattern is gone from the slice); the struct literal has not (it is still
+// there). Tasks 11-13 build their fixtures the second way, so a divergence
+// here would only show up as an empty pane in a hand-built fixture.
+func TestFilterNotifications_IncludeRepos_BadPattern_SameResultFromLoadFromAndLiteral(t *testing.T) {
+	rows := []provider.Notification{
+		row("1", "acme/repo", provider.NotificationReasonOther, false),
+		row("2", "other/repo", provider.NotificationReasonOther, false),
+	}
+
+	tests := []struct {
+		name     string
+		patterns []string
+		yaml     string
+	}{
+		{
+			name:     "only a bad pattern",
+			patterns: []string{"[bad"},
+			yaml:     "    - \"[bad\"\n",
+		},
+		{
+			name:     "a bad pattern and a good one",
+			patterns: []string{"[bad", "acme/*"},
+			yaml:     "    - \"[bad\"\n    - \"acme/*\"\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			content := `github:
+  repos:
+    - acme/repo
+polling_interval: 60
+theme: dark
+notifications:
+  include_repos:
+` + tt.yaml
+			if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			loaded, err := config.LoadFrom(configPath)
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+			literal := &config.Config{
+				Notifications: config.NotificationsConfig{IncludeRepos: tt.patterns},
+			}
+			// Sanity: the two configs really do differ in their raw lists,
+			// otherwise the comparison below is vacuous.
+			if len(loaded.Notifications.IncludeRepos) == len(literal.Notifications.IncludeRepos) {
+				t.Fatalf("fixture is vacuous: LoadFrom kept %v, same length as the literal's %v",
+					loaded.Notifications.IncludeRepos, literal.Notifications.IncludeRepos)
+			}
+
+			fromLoad := idsOf(FilterNotifications(rows, loaded))
+			fromLiteral := idsOf(FilterNotifications(rows, literal))
+			if len(fromLoad) != len(fromLiteral) {
+				t.Fatalf("LoadFrom gave %v, struct literal gave %v", fromLoad, fromLiteral)
+			}
+			for i := range fromLoad {
+				if fromLoad[i] != fromLiteral[i] {
+					t.Fatalf("LoadFrom gave %v, struct literal gave %v", fromLoad, fromLiteral)
+				}
+			}
+		})
+	}
+}
+
 func TestFilterNotifications_ExcludeRepos_Alone(t *testing.T) {
 	rows := []provider.Notification{
 		row("1", "acme/keep", provider.NotificationReasonOther, false),
@@ -114,6 +308,24 @@ func TestFilterNotifications_ExcludeRepos_Alone(t *testing.T) {
 	}
 	got := FilterNotifications(rows, cfg)
 	assertIDs(t, got, "1")
+}
+
+// TestFilterNotifications_ExcludeRepos_AllPatternsBad_ExcludesNothing is the
+// exclude-side counterpart of the include mirror above. Skipping the pattern
+// already reproduces what the sanitizer would have produced here -- an empty
+// exclude list excludes nothing -- so this list needs no fallback rule, but
+// the outcome is worth pinning: the failure mode to avoid is a bad pattern
+// treated as match-all, which would wipe the feed.
+func TestFilterNotifications_ExcludeRepos_AllPatternsBad_ExcludesNothing(t *testing.T) {
+	rows := []provider.Notification{
+		row("1", "acme/keep", provider.NotificationReasonOther, false),
+		row("2", "other/keep", provider.NotificationReasonOther, false),
+	}
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{ExcludeRepos: []string{"[bad"}},
+	}
+	got := FilterNotifications(rows, cfg)
+	assertIDs(t, got, "1", "2")
 }
 
 func TestFilterNotifications_ExcludeReasons_Alone(t *testing.T) {
@@ -218,9 +430,53 @@ func TestFilterNotifications_ExcludeReasons_OtherOnlyWhenListedExplicitly(t *tes
 	})
 }
 
-// --- Decision 10 compose case: participating_only is fetch-time, not read here ---
+// --- Decision 52: the three knobs the filter must NOT read ---
 
-func TestFilterNotifications_ParticipatingOnly_NotReadByFilter(t *testing.T) {
+// TestFilterNotifications_NonFilterKnobs_NotReadByFilter pins decision 52's
+// knob scope for all three out-of-scope knobs, not just participating_only.
+// participating_only and since_days are fetch-time knobs (provider.NotifOpts)
+// and max_items is applied by the composite after the merge sort (decisions
+// 31, 44); honouring any of them here would double-filter -- max_items would
+// truncate a feed the composite already capped, and since_days would re-cut a
+// window the server already applied.
+//
+// The fixture is three rows old enough that any plausible since_days cutoff
+// would drop them, and each case sets a value that would visibly shrink the
+// result if the filter read it (MaxItems: 1 would leave one row, SinceDays: 1
+// would leave none). All three rows must survive every case.
+func TestFilterNotifications_NonFilterKnobs_NotReadByFilter(t *testing.T) {
+	old := time.Now().AddDate(0, 0, -90)
+	rows := []provider.Notification{
+		row("review-row", "acme/repo", provider.NotificationReasonReviewRequested, false),
+		row("subscribed-row", "acme/repo", provider.NotificationReasonSubscribed, false),
+		row("mention-row", "acme/repo", provider.NotificationReasonMentioned, false),
+	}
+	for i := range rows {
+		rows[i].UpdatedAt = old
+	}
+
+	tests := []struct {
+		name string
+		nc   config.NotificationsConfig
+	}{
+		{"no out-of-scope knob set (baseline)", config.NotificationsConfig{}},
+		{"participating_only is fetch-time", config.NotificationsConfig{ParticipatingOnly: true}},
+		{"max_items is the composite's job", config.NotificationsConfig{MaxItems: 1}},
+		{"since_days is fetch-time", config.NotificationsConfig{SinceDays: 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FilterNotifications(rows, &config.Config{Notifications: tt.nc})
+			assertIDs(t, got, "review-row", "subscribed-row", "mention-row")
+		})
+	}
+}
+
+// TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob keeps the
+// original decision 10 compose case: an out-of-scope knob set alongside an
+// in-scope one changes nothing about what the in-scope knob does.
+func TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob(t *testing.T) {
 	rows := []provider.Notification{
 		row("review-row", "acme/repo", provider.NotificationReasonReviewRequested, false),
 		row("subscribed-row", "acme/repo", provider.NotificationReasonSubscribed, false),
@@ -406,11 +662,41 @@ func TestMatchesAnyGlob_Edges(t *testing.T) {
 }
 
 func TestMatchesAnyGlob_BadPattern_NeverMatchesAll(t *testing.T) {
-	// path.Match("[bad", ...) returns ErrBadPattern. The filter must treat
-	// that as no match, never as match-all -- a malformed exclude_repos
-	// entry matching everything would empty the feed.
+	// path.Match("[bad", ...) returns ErrBadPattern. matchesAnyGlob skips such
+	// a pattern, so it never matches -- match-all would be the worse error
+	// here, since a malformed exclude_repos entry matching everything wipes
+	// the feed. Skipping is the whole story for a subtractive list; a
+	// selection list additionally needs compilableGlobs (decision 51a), which
+	// TestFilterNotifications_IncludeRepos_AllPatternsBad_SelectsEverything
+	// pins.
 	got := matchesAnyGlob([]string{"[bad"}, "acme/repo")
 	if got {
-		t.Error("matchesAnyGlob with a malformed pattern = true, want false (must fail open, not match-all)")
+		t.Error("matchesAnyGlob with a malformed pattern = true, want false (a bad pattern is inert, not match-all)")
+	}
+}
+
+func TestCompilableGlobs(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		want     []string
+	}{
+		{"nil stays empty", nil, nil},
+		{"all compilable are kept in order", []string{"acme/*", "other/repo"}, []string{"acme/*", "other/repo"}},
+		{"the bad one is dropped, the good one survives", []string{"[bad", "acme/*"}, []string{"acme/*"}},
+		{"all bad collapses to empty, which callers read as no selection", []string{"[bad", "also[bad"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := compilableGlobs(tt.patterns)
+			if len(got) != len(tt.want) {
+				t.Fatalf("compilableGlobs(%v) = %v, want %v", tt.patterns, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("compilableGlobs(%v) = %v, want %v", tt.patterns, got, tt.want)
+				}
+			}
+		})
 	}
 }

@@ -11,61 +11,78 @@ import (
 )
 
 // FilterNotifications applies the notifications config's filter knobs to
-// rows, per decisions 49-52 of 20260729-notif-p1-github.md.
+// rows, per decisions 49-52a of 20260729-notif-p1-github.md.
 //
 // Selection is an override, not an intersection (decision 50):
 //   - If cfg.Notifications.OnlyConfiguredRepos is true, keep only rows whose
 //     scope is one of cfg.GitHub.Repos, and include_repos is ignored
 //     entirely (a load-time warning already told the user this).
-//   - Otherwise, if include_repos is non-empty, keep only rows matching at
-//     least one of its globs.
-//   - Otherwise keep everything.
+//   - Otherwise, if include_repos holds at least one compilable glob, keep
+//     only rows matching at least one of those globs.
+//   - Otherwise keep everything. That includes an include_repos list whose
+//     every entry is uncompilable, which mirrors what the load-time
+//     sanitizer would have handed us (decision 51a; see compilableGlobs).
 //
-// Subtraction is applied next, in this fixed order (decision 50):
-// exclude_repos -> exclude_reasons -> unread_only. Each stage only removes
-// rows, so the order cannot change the result of any single knob, but it is
-// still pinned so a table test with one fixture per stage stays meaningful.
+// Subtraction is applied next: exclude_repos, exclude_reasons, unread_only.
+// All five knobs are independent per-row predicates, so the stages commute --
+// every permutation, including running the selection stage after the
+// subtractions, is observationally identical. The sequence below is therefore
+// presentational: it follows the order decision 50 lists the knobs in, from
+// most to least specific, so the code reads like the documented precedence
+// chain. Nothing depends on it and no test can pin it, so do not add an
+// assertion that pretends otherwise.
 //
 // It deliberately does not read participating_only, since_days, or
 // max_items (decision 52): participating_only and since_days are fetch-time
 // (provider.NotifOpts) knobs, and max_items is applied by the composite
 // after the merge sort. Re-applying any of them here would double-filter.
 //
-// The result is always a newly allocated slice -- never rows[:0] -- and no
-// element of rows is mutated. Input order is preserved; decision 45's total
+// Every return path allocates a fresh slice -- never rows itself, never
+// rows[:0] -- and no element of rows is mutated (decision 52a). That
+// deliberately includes the nil-cfg path and the zero-knob path, so the
+// contract is unconditional and no caller has to re-derive when the result
+// happens to alias its input. Input order is preserved; decision 45's total
 // order is established upstream in the merge and this function must not
 // fight it. This matters because the pane keeps the unfiltered feed to
 // re-apply task 11's interactive `f` reason filter without refetching; an
-// in-place filter would corrupt that feed the first time a row was dropped.
+// aliasing or in-place filter would corrupt that feed the first time a row
+// was dropped.
 //
-// A nil cfg returns rows unchanged (treated as "no filtering configured").
-// A nil or empty rows returns nil. Neither case panics.
+// A nil or empty rows returns nil. A nil cfg means "no filtering configured"
+// and returns a copy of every row. Neither case panics.
 func FilterNotifications(rows []provider.Notification, cfg *config.Config) []provider.Notification {
-	if cfg == nil {
-		return rows
-	}
 	if len(rows) == 0 {
 		return nil
+	}
+
+	out := make([]provider.Notification, 0, len(rows))
+	if cfg == nil {
+		return append(out, rows...)
 	}
 
 	nc := cfg.Notifications
 
 	// --- Selection (override, not intersection; decision 50) ---
-	out := make([]provider.Notification, 0, len(rows))
+	includeRepos := compilableGlobs(nc.IncludeRepos)
 	switch {
 	case nc.OnlyConfiguredRepos:
 		configured := make(map[string]bool, len(cfg.GitHub.Repos))
 		for _, r := range cfg.GitHub.Repos {
-			configured[strings.ToLower(r)] = true
+			// TrimSpace because Validate only rejects an entry that is
+			// empty or carries extra slashes: "acme/repo " loads clean,
+			// and an untrimmed key would match no row at all and silently
+			// empty the feed -- the exact failure decision 51 avoids for
+			// globs by trimming there.
+			configured[strings.ToLower(strings.TrimSpace(r))] = true
 		}
 		for _, row := range rows {
 			if configured[strings.ToLower(row.Identity.Scope)] {
 				out = append(out, row)
 			}
 		}
-	case len(nc.IncludeRepos) > 0:
+	case len(includeRepos) > 0:
 		for _, row := range rows {
-			if matchesAnyGlob(nc.IncludeRepos, row.Identity.Scope) {
+			if matchesAnyGlob(includeRepos, row.Identity.Scope) {
 				out = append(out, row)
 			}
 		}
@@ -115,11 +132,18 @@ func FilterNotifications(rows []provider.Notification, cfg *config.Config) []pro
 // (decision 51). path is used rather than filepath because filepath's
 // separator is OS-dependent and repo scopes always use "/".
 //
-// A pattern path.Match rejects with ErrBadPattern is treated as no match --
-// never as match-all. This should not occur in practice (decision 51 drops
-// such patterns at load time) but is handled defensively: a malformed
-// pattern matching everything would empty the feed on include_repos or wipe
-// it on exclude_repos, which is worse than the pattern being inert.
+// A pattern path.Match rejects with ErrBadPattern is skipped: it neither
+// matches nor prevents the remaining patterns from matching. The two ways of
+// getting that wrong are not symmetric, and neither is safe on its own
+// (decision 51a): treating a bad pattern as match-all wipes the feed when it
+// sits in exclude_repos, while treating it as no-match empties the feed when
+// it is the only entry in include_repos. Skipping is the whole answer for a
+// subtractive list -- an inert pattern excludes nothing, which is exactly
+// what the load-time drop would have produced -- but not for a selection
+// list, so callers run include_repos through compilableGlobs and fall back to
+// "select everything" when nothing compilable survives. The load-time drop in
+// config.sanitizeRepoGlobs and that mirror rule together are what deliver
+// decision 51's fail-open guarantee, on either construction path.
 func matchesAnyGlob(patterns []string, scope string) bool {
 	lowerScope := strings.ToLower(scope)
 	for _, p := range patterns {
@@ -132,6 +156,38 @@ func matchesAnyGlob(patterns []string, scope string) bool {
 		}
 	}
 	return false
+}
+
+// compilableGlobs returns the patterns path.Match can compile, dropping the
+// ones it rejects as ErrBadPattern. It reproduces config.sanitizeRepoGlobs at
+// match time so that FilterNotifications behaves the same whether its config
+// came through LoadFrom -- where the sanitizer already removed those patterns
+// and left a shorter (possibly empty) list -- or from a &config.Config{}
+// literal, which is how the pane tests build fixtures and which bypasses the
+// sanitizer entirely (decision 51a).
+//
+// The caller must treat an empty result from a non-empty input as "no
+// selection configured" rather than "select nothing": that is what a list of
+// only-bad patterns reduces to at load time, and it is the fail-open half of
+// decision 51.
+//
+// The probe scope "owner/repo" is arbitrary -- ErrBadPattern is a property of
+// the pattern's syntax alone. It probes the lower-cased pattern because that
+// is the exact string matchesAnyGlob will later compile; lower-casing cannot
+// create or remove a syntax error, but probing a different string than the
+// one used for matching could drift.
+func compilableGlobs(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if _, err := path.Match(strings.ToLower(p), "owner/repo"); err != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // dropWhere returns a new slice containing every row in rows for which drop

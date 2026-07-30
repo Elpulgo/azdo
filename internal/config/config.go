@@ -167,11 +167,17 @@ func acceptedNotificationReasons() []string {
 
 // sanitizeRepoGlobs drops any pattern in patterns that path.Match rejects as
 // ErrBadPattern, appending a warning to *warnings naming the offending
-// pattern and the config key it came from (decision 51). This mirrors the
-// exclude_reasons sanitizer above: task 10's filter contract is "every
-// pattern it receives compiles", so a malformed glob is warned about and
-// removed here rather than left for match time, where a naive treatment of
-// the error could make the pattern match everything instead of nothing.
+// pattern, the config key it came from, and the effect the user will actually
+// see (decision 51). This mirrors the exclude_reasons sanitizer above: task
+// 10's filter contract is "every pattern it receives compiles", so a
+// malformed glob is warned about and removed here rather than left for match
+// time, where a naive treatment of the error could make the pattern match
+// everything instead of nothing.
+//
+// The warnings are emitted after the loop rather than inside it because the
+// consequence clause for include_repos depends on whether any compilable
+// pattern survived the whole list, which is only known once it has been
+// walked.
 //
 // The probe scope "owner/repo" is representative but arbitrary --
 // ErrBadPattern is a property of the pattern syntax alone (e.g. an
@@ -181,15 +187,42 @@ func sanitizeRepoGlobs(warnings *[]string, key string, patterns []string) []stri
 		return patterns
 	}
 	sanitized := make([]string, 0, len(patterns))
+	var dropped []string
+	var droppedErrs []error
 	for _, p := range patterns {
 		if _, err := path.Match(p, "owner/repo"); errors.Is(err, path.ErrBadPattern) {
-			*warnings = append(*warnings, fmt.Sprintf(
-				"%s: dropping malformed pattern %q: %v", key, p, err))
+			dropped = append(dropped, p)
+			droppedErrs = append(droppedErrs, err)
 			continue
 		}
 		sanitized = append(sanitized, p)
 	}
+	effect := repoGlobDropEffect(key, len(sanitized) == 0)
+	for i, p := range dropped {
+		*warnings = append(*warnings, fmt.Sprintf(
+			"%s: dropping malformed pattern %q: %v — %s", key, p, droppedErrs[i], effect))
+	}
 	return sanitized
+}
+
+// repoGlobDropEffect returns the one-clause description of what the user will
+// observe after a malformed glob was dropped from key. The pattern and the
+// error name the cause; without this the warning never says what changed, and
+// task 13 renders these lines verbatim, so it stays a clause rather than a
+// second sentence.
+//
+// The two keys differ because the lists are not symmetric (decision 51a): an
+// exclude list with a pattern removed simply stops excluding by it, while an
+// include list that loses its last pattern stops selecting at all and the
+// filter falls back to showing the whole inbox.
+func repoGlobDropEffect(key string, noneLeft bool) string {
+	if strings.HasSuffix(key, "include_repos") {
+		if noneLeft {
+			return "no include pattern is left, so the whole inbox is shown"
+		}
+		return "the remaining include patterns still apply"
+	}
+	return "nothing is excluded by it"
 }
 
 // validDisabledPanes lists the pane names that can be disabled.
