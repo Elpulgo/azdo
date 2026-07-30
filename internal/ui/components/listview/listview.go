@@ -422,6 +422,33 @@ func (m Model[T]) GetViewMode() ViewMode {
 	return m.viewMode
 }
 
+// Err returns the error from the most recent HandleFetchResult call, or nil
+// when it has since been cleared. Exported so a caller building its own
+// render states on top of listview (e.g. internal/ui/notifications' task-13
+// error state) can branch on the error without listview's own generic
+// "Error loading %s: %v" text.
+//
+// Only SetItems clears this field. HandleFetchResult's *success* path does
+// not (it returns early after setting m.err on the error path, and never
+// assigns nil otherwise), which is a pre-existing
+// bug, not a contract: viewList short-circuits on m.err != nil, so a pane
+// that recovers via HandleFetchResult(items, nil) stays pinned to
+// "Error loading …" forever — reachable today in pullrequests, workitems and
+// pipelines. internal/ui/notifications avoids it by routing its success path
+// through SetFeed -> SetItems. Do not rely on HandleFetchResult to reset it.
+func (m Model[T]) Err() error {
+	return m.err
+}
+
+// Loading reports whether a fetch is currently in flight (spinner visible).
+// Exported for the same reason as Err: a caller overriding listview's own
+// View() needs to tell "no items because still loading" apart from "no items
+// because the feed is genuinely empty" without reaching into the unexported
+// field.
+func (m Model[T]) Loading() bool {
+	return m.loading
+}
+
 // GetContextItems returns context bar items, delegating to detail when in detail mode.
 func (m Model[T]) GetContextItems() []components.ContextItem {
 	if m.viewMode == ViewDetail && m.detail != nil {

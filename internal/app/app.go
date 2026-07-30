@@ -1210,6 +1210,38 @@ func (m Model) notificationsKeybindings() string {
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }
 
+// notificationsWarningsBanner renders decision 46's Config.Warnings ahead of
+// the notifications pane's own render state. internal/config populates this
+// slice at load time (currently task 9's unrecognised-exclude_reasons and
+// bad-repo-glob diagnostics) and never prints it itself — a TUI has no safe
+// place to write a line before or after Bubble Tea's alt-screen switch — so
+// this is the one delivery route (decision 46's rationale). Returns "" for an
+// empty (or nil) slice so an unpopulated Warnings field never reserves a
+// blank line ahead of the pane's content; see notificationsTabContent, which
+// is what actually enforces that.
+func notificationsWarningsBanner(warnings []string) string {
+	if len(warnings) == 0 {
+		return ""
+	}
+	return strings.Join(warnings, "\n")
+}
+
+// notificationsTabContent composes the notifications tab's full content:
+// notificationsWarningsBanner's banner (when non-empty) ahead of the pane's
+// own render. Factored out of View() as a pure function so the "an empty
+// Warnings slice must not reserve a blank line" requirement is assertable
+// directly against a plain string, without m.styles.ContentBox's Render()
+// reformatting it first — a version that unconditionally prepends
+// banner+"\n\n" would leave a stray leading blank line in front of paneView
+// whenever warnings is empty, which this shape cannot produce.
+func notificationsTabContent(paneView string, warnings []string) string {
+	banner := notificationsWarningsBanner(warnings)
+	if banner == "" {
+		return paneView
+	}
+	return banner + "\n\n" + paneView
+}
+
 // measureFooterHeight measures the actual footer height. The footer is always
 // just the status bar (context items are now rendered inline in the status bar).
 func (m Model) measureFooterHeight() int {
@@ -1321,7 +1353,7 @@ func (m Model) View() string {
 
 	switch m.activeTab {
 	case TabNotifications:
-		content = m.notificationsView.View()
+		content = notificationsTabContent(m.notificationsView.View(), m.config.Warnings)
 		hasContextBar = m.notificationsView.HasContextBar()
 		contextItems = m.notificationsView.GetContextItems()
 		scrollPercent = m.notificationsView.GetScrollPercent()

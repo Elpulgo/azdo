@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
@@ -41,6 +42,12 @@ type Model struct {
 	// the reset/default position reachable by cycling alone (decision 53).
 	reasonFilterActive bool
 	reasonFilter       provider.NotificationReason
+
+	// capabilityUnsupported puts View() into decision 63's fourth render
+	// state (see capabilityUnsupportedBody's doc comment for why it is
+	// unreachable through the tab in phase 1). Set only by
+	// SetCapabilityUnsupported; nothing in production ever calls it today.
+	capabilityUnsupported bool
 }
 
 // baseColumns are the notifications list's per-row column specs, excluding
@@ -123,11 +130,40 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// View renders the view, appending the `Filter: <reason>` indicator whenever
-// the `f` cycle is off its "all reasons" position (decision 57). Without it,
-// a feed containing no rows of the selected reason renders as the plain
-// empty-inbox text while a user-set filter is what is hiding everything.
+// View renders task 13's four render states, in priority order, per decision
+// 63:
+//
+//  1. capability-unsupported (SetCapabilityUnsupported) — unreachable through
+//     the tab in phase 1; see capabilityUnsupportedBody.
+//  2. error — a failed List (decisions 17, 63); see errorBody.
+//  3. filter-empty — the feed has rows but the active `f` filter matches
+//     none of them (the bug decision 57 measured); see filterEmptyBody.
+//  4. empty inbox — the feed itself has no rows; see emptyInboxBody.
+//
+// Otherwise it delegates to listview's table render, appending the
+// `Filter: <reason>` indicator whenever the `f` cycle is off its "all
+// reasons" position (decision 57): without it, a feed containing no rows of
+// the selected reason would render as the plain empty-inbox text while a
+// user-set filter is what is hiding everything — which is exactly what state
+// 3 above exists to prevent for the *zero-rows* case; the indicator here
+// covers the *non-zero* case, where the table itself is still the right
+// content but needs the same "a filter is active" disclosure.
 func (m Model) View() string {
+	if m.capabilityUnsupported {
+		return capabilityUnsupportedBody()
+	}
+
+	if err := m.list.Err(); err != nil {
+		return errorBody(err)
+	}
+
+	if !m.list.Loading() && len(m.list.Items()) == 0 {
+		if m.reasonFilterActive {
+			return filterEmptyBody(m.reasonFilter)
+		}
+		return emptyInboxBody()
+	}
+
 	view := m.list.View()
 	if !m.reasonFilterActive {
 		return view
@@ -137,11 +173,103 @@ func (m Model) View() string {
 
 // filterIndicator renders the active reason filter, mirroring the
 // `Filter: …` shape internal/ui/metrics/list.go already uses for its own
-// flag filter. Deliberately unstyled: the pane holds no *styles.Styles of its
-// own, and task 13 owns the in-view chrome that will style this line while
-// distinguishing "you're clear" from "your filter hides everything".
+// flag filter. Deliberately unstyled: per convention 6, a state whose text
+// needs no emphasis uses the empty lipgloss.NewStyle() rather than reaching
+// for a foreground color that could collide with a theme's selection
+// background (the Matrix theme sets Foreground == SelectBackground).
 func (m Model) filterIndicator() string {
 	return "Filter: " + display.NotificationReasonLabel(m.reasonFilter)
+}
+
+// SetCapabilityUnsupported puts the pane into decision 63's fourth render
+// state.
+//
+// UNREACHABLE THROUGH THE TAB in phase 1 — nothing in production ever calls
+// this. CompositeProvider.HasNotifications gates the tab itself on
+// capability (decision 11), and the only backend this pane is ever wired to
+// in phase 1 (*github.Adapter, via NewAdapterWithNotifications) satisfies
+// provider.NotificationSource unconditionally once constructed — a nil
+// NotificationsClient is the *error* arm's nil-client message
+// ("github: notifications: no notifications client configured"), not this
+// one (decision 63). This method and capabilityUnsupportedBody exist purely
+// so the state task 13 names is implemented and testable at the pane level,
+// instead of an app-level test that could never fail for the right reason —
+// the same trap decision 59 documents for a nil-provider capability fixture.
+func (m Model) SetCapabilityUnsupported() Model {
+	m.capabilityUnsupported = true
+	return m
+}
+
+// HandleFetchResult forwards a fetch outcome to the underlying listview.
+//
+// On success it behaves like SetFeed (task 10's config-filtered feed,
+// re-applying whatever `f` position is active per decision 54) so a future
+// caller — task 15's poller — gets the same cursor-preserving behavior
+// whichever entry point it uses. On failure it puts the pane into task 13's
+// error render state without touching the held feed, so a transient failure
+// does not discard rows a later successful poll could otherwise have
+// resumed showing.
+func (m Model) HandleFetchResult(items []provider.Notification, err error) Model {
+	if err != nil {
+		m.list = m.list.HandleFetchResult(nil, err)
+		return m
+	}
+	return m.SetFeed(items)
+}
+
+// emptyInboxBody renders decision 63's first state: the config-filtered feed
+// itself has no rows — distinct from filterEmptyBody, where rows exist but
+// the active `f` filter hides all of them. Reads as "you're clear", never as
+// an error, and per decision 58's `r` stopgap must not tell the user to
+// press a key this pane currently swallows.
+//
+// Keeps listview's original "No notifications found." headline on purpose:
+// internal/app/app_test.go's notificationsPaneMarker constant pins that
+// exact string as the discriminator between this pane rendering and a
+// sibling pane's fall-through (decision 60) — only the misleading "Press r
+// to refresh" instruction is removed.
+func emptyInboxBody() string {
+	return "No notifications found.\n\nYou're all caught up."
+}
+
+// filterEmptyBody renders decision 63's second, genuinely reachable state:
+// the feed has rows, but the active `f` reason filter matches none of them.
+// Rendering emptyInboxBody here is the bug decision 57 measured — it tells
+// the user "you're clear" while a filter they set is what is hiding every
+// row. Names the active filter and how to clear it; `f` is never swallowed
+// (decision 58's stopgap is `r`-only), so telling the user to press it is
+// honest.
+func filterEmptyBody(reason provider.NotificationReason) string {
+	return fmt.Sprintf(
+		"No notifications match Filter: %s.\n\nPress f to cycle back to all reasons.",
+		display.NotificationReasonLabel(reason),
+	)
+}
+
+// errorBody renders decision 63's fourth state: a failed List call. It
+// carries decision 17's token-scope skeleton — a static line naming the
+// GitHub scope every List call needs — and folds the underlying error
+// (including the adapter's nil-client message,
+// "github: notifications: no notifications client configured", when no
+// NotificationsClient was wired at construction) into the body verbatim.
+//
+// FORWARD: task 19 replaces this flat skeleton with real differentiation —
+// recovering *github.APIError via errors.As to tell a 403 missing-scope
+// response apart from a 401-expired token and a generic failure, plus the
+// in-view "disable this pane" action that writes disabled_panes via
+// Config.Save(). Do not build that branching here.
+func errorBody(err error) string {
+	return fmt.Sprintf(
+		"Notifications unavailable: %v\n\nGitHub token scope required: notifications",
+		err,
+	)
+}
+
+// capabilityUnsupportedBody renders decision 63's third, unreachable-in-phase-1
+// state. See SetCapabilityUnsupported's doc comment for why nothing in
+// production ever reaches this.
+func capabilityUnsupportedBody() string {
+	return "Notifications are not supported by this configuration.\n\nNo configured backend implements the notifications capability."
 }
 
 // ReasonFilter reports the `f` cycle's current position: the selected

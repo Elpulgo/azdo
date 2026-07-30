@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/github"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
 	"github.com/Elpulgo/azdo/internal/ui/display"
@@ -881,4 +882,179 @@ func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
 			// like coverage.
 		})
 	}
+}
+
+// ─── Task 13: the four render states (decisions 11, 17, 57, 58, 63) ─────────
+//
+// Each state below is asserted by its own test, and every test checks both
+// its own state's discriminating substring AND the absence of the other three
+// states' discriminating substrings — giving all six pairs mutual
+// distinguishability, not merely four positive assertions.
+
+const (
+	emptyInboxMarker    = "You're all caught up."
+	filterEmptyMarker   = "No notifications match Filter:"
+	errorMarker         = "Notifications unavailable:"
+	capabilityMarker    = "not supported by this configuration"
+	tokenScopeSkeleton  = "GitHub token scope required: notifications"
+	nilClientMsgMarker  = "no notifications client configured"
+	pressRToRefreshText = "Press r"
+)
+
+// assertOtherStatesAbsent fails if view contains any of the three markers
+// that do not belong to the state under test.
+func assertOtherStatesAbsent(t *testing.T, view string, own string) {
+	t.Helper()
+	for _, marker := range []string{emptyInboxMarker, filterEmptyMarker, errorMarker, capabilityMarker} {
+		if marker == own {
+			continue
+		}
+		if strings.Contains(view, marker) {
+			t.Errorf("view for state %q also contains state marker %q; states are not mutually distinguishable:\n%s", own, marker, view)
+		}
+	}
+}
+
+// TestView_EmptyInbox_ReadsAsClear_NotError pins decision 63's first state:
+// the feed itself has no rows and no `f` filter is active. It must read as
+// "you're clear", never as an error, and per decision 58's `r` stopgap must
+// not tell the user to press a key this pane currently swallows.
+func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed(nil)
+
+	view := m.View()
+
+	if !strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("empty-inbox view = %q, want to contain %q", view, emptyInboxMarker)
+	}
+	if strings.Contains(view, pressRToRefreshText) {
+		t.Errorf("empty-inbox view = %q, must not tell the user to press r (decision 58: r is swallowed)", view)
+	}
+	assertOtherStatesAbsent(t, view, emptyInboxMarker)
+}
+
+// TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter pins decision
+// 63's second, genuinely reachable state (decision 57's measured bug): the
+// feed has rows, but the active `f` reason filter matches none of them. This
+// must not render as the plain empty-inbox text.
+func TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("2", "owner/repo", "Subscribed noise", provider.NotificationReasonSubscribed, false, fixedNow),
+	})
+
+	m, _ = m.Update(keyRune('f')) // -> Mentioned
+
+	// A poll lands with no Mentioned rows at all: zero rows visible under the
+	// active filter, while the feed itself is non-empty.
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("3", "owner/repo", "Subscribed noise", provider.NotificationReasonSubscribed, false, fixedNow),
+	})
+	if got := len(m.list.Items()); got != 0 {
+		t.Fatalf("precondition: visible items = %d, want 0 (no Mentioned rows in the new feed)", got)
+	}
+
+	view := m.View()
+
+	wantLabel := "Filter: " + display.NotificationReasonLabel(provider.NotificationReasonMentioned)
+	if !strings.Contains(view, filterEmptyMarker) || !strings.Contains(view, wantLabel) {
+		t.Errorf("filter-empty view = %q, want to contain %q and %q", view, filterEmptyMarker, wantLabel)
+	}
+	if !strings.Contains(view, "Press f to cycle back to all reasons.") {
+		t.Errorf("filter-empty view = %q, want to name how to clear the filter", view)
+	}
+	assertOtherStatesAbsent(t, view, filterEmptyMarker)
+}
+
+// TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows pins
+// decision 63's error state and decision 17's token-scope skeleton. The error
+// is constructed from a real *github.Adapter with no NotificationsClient
+// configured, so the nil-client message asserted here is the adapter's
+// actual production string, not a hand-typed guess that could drift from it.
+//
+// The feed is seeded with a row before HandleFetchResult(nil, err) lands, to
+// pin that the error state pre-empts the table view rather than rendering
+// stale rows underneath it.
+func TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows(t *testing.T) {
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Must not render once errored", provider.NotificationReasonMentioned, false, fixedNow),
+	})
+
+	m = m.HandleFetchResult(nil, listErr)
+
+	view := m.View()
+
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("error view = %q, want to contain %q", view, errorMarker)
+	}
+	if !strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("error view = %q, want to contain decision 17's token-scope skeleton %q", view, tokenScopeSkeleton)
+	}
+	if !strings.Contains(view, nilClientMsgMarker) {
+		t.Errorf("error view = %q, want to fold in the adapter's real nil-client message %q", view, nilClientMsgMarker)
+	}
+	if strings.Contains(view, "Must not render once errored") {
+		t.Errorf("error view = %q, must not fall through to stale table rows", view)
+	}
+	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty covers the
+// ordering gap the row-seeded test above cannot: an errored fetch whose feed
+// was never populated at all (items == 0) must still render the error state,
+// not decision 63's empty-inbox text, even though both share the same
+// "len(items) == 0" precondition. View()'s error check must run before its
+// items-emptiness check for this to hold.
+func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	// No SetFeed call at all: items start at zero.
+
+	m = m.HandleFetchResult(nil, listErr)
+
+	view := m.View()
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("error-with-empty-feed view = %q, want to contain %q", view, errorMarker)
+	}
+	if strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("error-with-empty-feed view = %q, must not render the empty-inbox text", view)
+	}
+	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestView_CapabilityUnsupported_DistinctFromOtherThreeStates pins decision
+// 63's third state at the pane level, per its own instruction: this state is
+// unreachable through the tab in phase 1 (see SetCapabilityUnsupported's doc
+// comment), so it is asserted here by putting the pane in that state
+// directly, rather than as an app-level test that could never fail for the
+// right reason.
+func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetCapabilityUnsupported()
+
+	view := m.View()
+
+	if !strings.Contains(view, capabilityMarker) {
+		t.Errorf("capability-unsupported view = %q, want to contain %q", view, capabilityMarker)
+	}
+	assertOtherStatesAbsent(t, view, capabilityMarker)
 }

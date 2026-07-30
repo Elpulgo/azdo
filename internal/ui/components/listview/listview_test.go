@@ -406,6 +406,54 @@ func TestSelectedIndex(t *testing.T) {
 	}
 }
 
+// TestErr_ReflectsHandleFetchResult pins the Err() accessor a caller needs to
+// build its own render states on top of listview (internal/ui/notifications'
+// task-13 error state): it must report the last HandleFetchResult error, and
+// a subsequent successful SetItems/HandleFetchResult call must clear it back
+// to nil rather than leaving the accessor permanently sticky.
+func TestErr_ReflectsHandleFetchResult(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+
+	if m.Err() != nil {
+		t.Fatalf("Err() = %v, want nil before any fetch", m.Err())
+	}
+
+	mockErr := fmt.Errorf("fetch failed")
+	m = m.HandleFetchResult(nil, mockErr)
+	if m.Err() == nil {
+		t.Fatal("Err() = nil after a failing HandleFetchResult, want the error")
+	}
+
+	m = m.SetItems([]testItem{{ID: 1, Name: "Alpha"}})
+	if m.Err() != nil {
+		t.Errorf("Err() = %v after a successful SetItems, want nil", m.Err())
+	}
+}
+
+// TestLoading_ReflectsRefreshState pins the Loading() accessor added for the
+// same reason as Err(): "r" (listview's built-in refresh key) sets loading
+// true before the spinner clears it, and a caller overriding View() needs to
+// tell that apart from a genuinely empty feed.
+func TestLoading_ReflectsRefreshState(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+
+	if m.Loading() {
+		t.Fatal("Loading() = true before any refresh, want false")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if !m.Loading() {
+		t.Fatal("Loading() = false after pressing r, want true")
+	}
+
+	m = m.HandleFetchResult([]testItem{{ID: 1, Name: "Alpha"}}, nil)
+	if m.Loading() {
+		t.Error("Loading() = true after HandleFetchResult, want false")
+	}
+}
+
 func TestEnterDetailView_EmptyItems(t *testing.T) {
 	s := styles.DefaultStyles()
 	m := New(testConfig(), s)

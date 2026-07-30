@@ -2547,3 +2547,171 @@ func TestModel_TabID_NotificationsRoundTripsThroughState(t *testing.T) {
 		t.Errorf("after ApplyState(reloaded), activeTab = %v, want TabNotifications", fresh.activeTab)
 	}
 }
+
+// ─── Task 13: render states through the full app (decisions 17, 46, 57, 63) ─
+//
+// Decision 63 assigns app-level coverage to the empty-inbox, filter-empty and
+// error states (TestModel_NotificationsTab_PresentButEmpty_WhenCapable above
+// already pins the empty-inbox render); capability-unsupported is asserted
+// pane-level only, in internal/ui/notifications, since nothing in production
+// ever puts the real app into that state (see notifications.Model's
+// SetCapabilityUnsupported doc comment).
+
+// TestModel_NotificationsTab_FilterEmpty_DistinctFromEmptyInbox drives the
+// real app through NewModel, seeds a feed, activates the `f` reason filter via
+// a genuine key message (not SetFeed alone), then lands a refreshed feed with
+// none of the filtered reason present — pinning that the full View() renders
+// decision 63's filter-empty text, not the bare empty-inbox marker.
+func TestModel_NotificationsTab_FilterEmpty_DistinctFromEmptyInbox(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	m.notificationsView = m.notificationsView.SetFeed([]provider.Notification{
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"},
+			Title:     "A mention",
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		},
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "2"},
+			Title:     "Subscribed noise",
+			Reason:    provider.NotificationReasonSubscribed,
+			UpdatedAt: time.Now(),
+		},
+	})
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}) // -> Mentioned
+	m = updated.(Model)
+	if reason, active := m.notificationsView.ReasonFilter(); !active || reason != provider.NotificationReasonMentioned {
+		t.Fatalf("precondition: ReasonFilter() = (%v, %v), want (Mentioned, true)", reason, active)
+	}
+
+	// A refresh lands with no Mentioned rows at all.
+	m.notificationsView = m.notificationsView.SetFeed([]provider.Notification{
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "3"},
+			Title:     "Subscribed noise",
+			Reason:    provider.NotificationReasonSubscribed,
+			UpdatedAt: time.Now(),
+		},
+	})
+
+	view := m.View()
+	if !strings.Contains(view, "No notifications match Filter:") {
+		t.Errorf("expected the filter-empty render in the full app View(); view:\n%s", view)
+	}
+	if strings.Contains(view, "You're all caught up.") {
+		t.Errorf("filter-empty state rendered the empty-inbox text instead; view:\n%s", view)
+	}
+}
+
+// TestModel_NotificationsTab_Error_RendersThroughFullView drives the real app
+// through NewModel and lands a fetch failure via notificationsView's exported
+// HandleFetchResult, using the real error internal/github's Adapter returns
+// with no NotificationsClient configured — pinning that the full app View()
+// renders decision 63's error state, carrying decision 17's token-scope
+// skeleton and the adapter's real nil-client message, and not the empty-inbox
+// text.
+func TestModel_NotificationsTab_Error_RendersThroughFullView(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	m.notificationsView = m.notificationsView.HandleFetchResult(nil, listErr)
+
+	view := m.View()
+	if !strings.Contains(view, "Notifications unavailable:") {
+		t.Errorf("expected the error render in the full app View(); view:\n%s", view)
+	}
+	if !strings.Contains(view, "GitHub token scope required: notifications") {
+		t.Errorf("expected decision 17's token-scope skeleton in the full app View(); view:\n%s", view)
+	}
+	if !strings.Contains(view, "no notifications client configured") {
+		t.Errorf("expected the adapter's real nil-client message in the full app View(); view:\n%s", view)
+	}
+	if strings.Contains(view, "You're all caught up.") {
+		t.Errorf("error state rendered the empty-inbox text instead; view:\n%s", view)
+	}
+}
+
+// TestNotificationsTabContent_PopulatedWarnings_RendersBanner pins decision
+// 46: a populated Config.Warnings renders ahead of the pane's own content.
+func TestNotificationsTabContent_PopulatedWarnings_RendersBanner(t *testing.T) {
+	got := notificationsTabContent("PANE BODY", []string{"some warning"})
+
+	if !strings.Contains(got, "some warning") {
+		t.Errorf("notificationsTabContent = %q, want to contain the warning text", got)
+	}
+	if !strings.Contains(got, "PANE BODY") {
+		t.Errorf("notificationsTabContent = %q, want to still contain the pane body", got)
+	}
+	if strings.Index(got, "some warning") > strings.Index(got, "PANE BODY") {
+		t.Errorf("notificationsTabContent = %q, want the warning banner ahead of the pane body", got)
+	}
+}
+
+// TestNotificationsTabContent_EmptyWarnings_NoStrayBlankLine pins decision
+// 46's other half: an empty (or nil) Warnings slice must never reserve a
+// blank line ahead of the pane's content — the output must be exactly the
+// pane body, unchanged.
+func TestNotificationsTabContent_EmptyWarnings_NoStrayBlankLine(t *testing.T) {
+	if got := notificationsTabContent("PANE BODY", nil); got != "PANE BODY" {
+		t.Errorf("notificationsTabContent(nil warnings) = %q, want exactly %q (no stray blank line)", got, "PANE BODY")
+	}
+	if got := notificationsTabContent("PANE BODY", []string{}); got != "PANE BODY" {
+		t.Errorf("notificationsTabContent(empty warnings) = %q, want exactly %q (no stray blank line)", got, "PANE BODY")
+	}
+}
+
+// TestModel_NotificationsTab_Warnings_RenderInFullView pins decision 46 end to
+// end: a Config populated with Warnings at construction renders the banner
+// through the real app's View(), not merely through the pure helper above.
+func TestModel_NotificationsTab_Warnings_RenderInFullView(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Warnings:        []string{"notifications.exclude_reasons: unrecognised value \"bogus\" ignored"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 100
+	m.height = 30
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "notifications.exclude_reasons") {
+		t.Errorf("expected Config.Warnings to render in the notifications tab; view:\n%s", view)
+	}
+}
