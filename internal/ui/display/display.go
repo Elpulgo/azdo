@@ -152,6 +152,25 @@ func MixedKinds(kinds []provider.Kind) bool {
 	return false
 }
 
+// MultiScope reports whether the given scopes span more than one distinct
+// value. Returns false for an empty slice and for a slice where every
+// element is identical (including an all-empty slice). Mirrors MixedKinds's
+// shape: it is the predicate the notifications pane's dynamic repo column
+// gates on (convention 7), driven by Identity.Scope diversity rather than
+// Identity.Kind.
+func MultiScope(scopes []string) bool {
+	if len(scopes) == 0 {
+		return false
+	}
+	first := scopes[0]
+	for _, sc := range scopes[1:] {
+		if sc != first {
+			return true
+		}
+	}
+	return false
+}
+
 // KindStyle returns the lipgloss style for a provider-kind glyph cell.
 // All kinds — including KindAzure and KindGitHub — use a muted/neutral style
 // so the glyph reads as secondary metadata rather than a status indicator.
