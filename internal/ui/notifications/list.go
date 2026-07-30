@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
@@ -14,6 +15,24 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// openURL is a package-level seam so tests can intercept browser launches,
+// mirroring internal/ui/metrics/list.go and pullrequests/detail.go.
+var openURL = browser.Open
+
+// SetOpenURLForTesting substitutes the openURL seam from outside this
+// package, mirroring polling.NotificationsPoller's own SetEveryForTesting.
+// Needed because internal/app's tests drive a real browser-launch failure
+// through the full app.Model to exercise the status-bar visibility and
+// footer-resize behaviour end to end, and openURL is unexported — a
+// same-package test (list_test.go's withOpenURLSpy) has no such need since
+// it can reassign the var directly. The caller must invoke the returned
+// restore func, typically via t.Cleanup.
+func SetOpenURLForTesting(fn func(string) error) (restore func()) {
+	prev := openURL
+	openURL = fn
+	return func() { openURL = prev }
+}
 
 // Model is the notifications pane: a listview.Model[provider.Notification]
 // plus the interactive `f` reason-filter cycle (Decisions 53, 54).
@@ -97,6 +116,25 @@ type Model struct {
 	// latent hazard — never reachable through production code today) cannot
 	// nil-deref here even if some future caller reaches this path.
 	now func() time.Time
+
+	// statusMessage carries the outcome of the last `o` (open in browser)
+	// attempt, mirroring internal/ui/metrics/list.go's own statusMessage
+	// field (metrics has the identical dead-rendering-path bug this field's
+	// own consumer, app.syncNotificationsActionMessage, exists to work
+	// around for this pane — out of scope to also fix for metrics). Phase 1
+	// has no detail view (EnterDetail is a no-op stub), so unlike
+	// pullrequests.DetailModel this is the pane's only status-message
+	// surface — GetStatusMessage returns it in preference to
+	// m.list.GetStatusMessage(), which always reports "" in list mode.
+	//
+	// Only ever non-empty for `o`'s two failure outcomes (empty WebURL, a
+	// failed browser launch) — success sets it back to "", a deliberately
+	// silent outcome (the browser window appearing is the feedback) that
+	// doubles as one of two clearing triggers. The other is HandleFetchResult,
+	// which resets it unconditionally on every fetch, so a stale failure
+	// message never survives "the user navigated away and a poll refreshed
+	// the feed while they were gone."
+	statusMessage string
 }
 
 // markDebounceWindow bounds how long a local u/d override outweighs a poll
@@ -164,6 +202,15 @@ type MarkResultMsg struct {
 	key  identityKey
 	kind overrideKind
 	err  error
+}
+
+// openURLResultMsg reports the outcome of an `o` (open in browser) attempt
+// (decision 3). Unlike MarkResultMsg it needs no cross-tab routing: a
+// browser launch is a near-instant OS call, not an API round trip the user
+// is likely to have switched tabs during, so app forwards it like any other
+// message — only while the notifications tab is active.
+type openURLResultMsg struct {
+	err error
 }
 
 // baseColumns are the notifications list's per-row column specs, excluding
@@ -277,18 +324,35 @@ func (m Model) Init() tea.Cmd {
 // Update handles messages. MarkResultMsg (the result of a `u`/`d`
 // API call issued by markCmd) and notificationsFetchMsg (the result of this
 // pane's own Init()/`r`-triggered fetch) are both handled unconditionally,
-// since either can land regardless of view mode or search state. Otherwise:
-// the `f` key cycles the reason filter (decision 53), `u`/`d` mark read/done
-// (task 14) when canTriage allows it, `r` now reaches listview's own real
-// refresh handling (decision 58's stopgap is gone — fetchNotifications is a
-// real Fetch hook, not a stub), and every other message is forwarded to the
-// underlying listview.
+// since either can land regardless of view mode or search state.
+// openURLResultMsg (the result of an `o` browser-launch attempt) is likewise
+// handled unconditionally here rather than in the key-guarded switch below,
+// since it is not itself a tea.KeyMsg. Otherwise: the `f` key cycles the
+// reason filter (decision 53), `u`/`d` mark read/done (task 14) and `o` opens
+// the selected row's WebURL (decision 3) when canTriage allows it, `r` now
+// reaches listview's own real refresh handling (decision 58's stopgap is
+// gone — fetchNotifications is a real Fetch hook, not a stub), and every
+// other message is forwarded to the underlying listview.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if res, ok := msg.(MarkResultMsg); ok {
 		return m.handleMarkResult(res), nil
 	}
 	if res, ok := msg.(notificationsFetchMsg); ok {
 		return m.HandleFetchResult(res.items, res.err), nil
+	}
+	if res, ok := msg.(openURLResultMsg); ok {
+		if res.err != nil {
+			m.statusMessage = "Failed to open browser: " + res.err.Error()
+		} else {
+			// Silent success (decision 3, reviewer finding): the browser
+			// window appearing is the feedback. Setting statusMessage to ""
+			// here also doubles as "the next successful action clears it" —
+			// one of two clearing triggers, alongside HandleFetchResult's own
+			// unconditional reset on every fetch below — so a prior failure
+			// message never lingers past the next `o` that actually works.
+			m.statusMessage = ""
+		}
+		return m, nil
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok && !m.list.IsSearching() && m.list.GetViewMode() == listview.ViewList {
@@ -305,6 +369,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.markDone()
+		case "o":
+			if !m.canTriage() {
+				return m, nil
+			}
+			return m.openInBrowser()
 		}
 	}
 
@@ -313,7 +382,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// canTriage reports whether `u`/`d` make sense right now: there must be a
+// canTriage reports whether `u`/`d`/`o` make sense right now: there must be a
 // visible row under the cursor, and the pane must not be showing one of
 // View()'s error/capability render states (task 13, decisions 17, 63) — both
 // hide the table entirely, so a keypress reaching m.list in either state
@@ -372,6 +441,33 @@ func (m Model) markDone() (Model, tea.Cmd) {
 	id := item.Identity
 	m = m.withOverride(key, overrideHidden)
 	return m, m.markCmd(id, overrideHidden)
+}
+
+// openInBrowser opens the selected row's WebURL (decision 3). The row comes
+// from selectedItem, which reads m.list.Items() — the filtered/overridden
+// view the user is actually looking at (visibleItems' output), never the raw
+// m.feed — so an active `f` reason filter can never make `o` open something
+// other than the highlighted row. The !ok guard mirrors markRead/markDone's
+// own defensive re-check even though the call site already gated on
+// canTriage.
+//
+// An empty WebURL (types.go's documented "no usable repository URL at all"
+// case, task 5's fallback chain exhausted) is treated as nothing to open,
+// per that field's contract — not attempted, and openURL is never called for
+// it. A status message tells the user why nothing happened rather than
+// staying silent.
+func (m Model) openInBrowser() (Model, tea.Cmd) {
+	item, ok := m.selectedItem()
+	if !ok {
+		return m, nil
+	}
+	if item.WebURL == "" {
+		m.statusMessage = "No URL for this notification"
+		return m, nil
+	}
+	return m, func() tea.Msg {
+		return openURLResultMsg{err: openURL(item.WebURL)}
+	}
 }
 
 // withOverride returns a copy of m with an override recorded for key,
@@ -610,7 +706,16 @@ func (m Model) SetCapabilityUnsupported() Model {
 // error render state without touching the held feed, so a transient failure
 // does not discard rows a later successful poll could otherwise have
 // resumed showing.
+//
+// Also clears statusMessage unconditionally, success or failure alike
+// (decision 3, reviewer finding): a fresh fetch is "the next fetch" clearing
+// trigger for a stale `o` outcome — the scenario the reviewer named
+// explicitly ("after ... a poll refreshes the feed"). Cleared here rather
+// than only on the next successful `o` so the message does not survive
+// indefinitely on an inbox the user has since navigated away from and back
+// to, or one a poll has since moved on from entirely.
 func (m Model) HandleFetchResult(items []provider.Notification, err error) Model {
+	m.statusMessage = ""
 	if err != nil {
 		m.list = m.list.HandleFetchResult(nil, err)
 		return m
@@ -696,7 +801,14 @@ func (m Model) GetScrollPercent() float64 {
 }
 
 // GetStatusMessage returns the status message for the current view.
+// statusMessage (the outcome of the pane's own `o` handling) takes
+// precedence over the underlying listview's, which always reports "" in
+// list mode — phase 1's only view mode for this pane (see the statusMessage
+// field's doc comment).
 func (m Model) GetStatusMessage() string {
+	if m.statusMessage != "" {
+		return m.statusMessage
+	}
 	return m.list.GetStatusMessage()
 }
 

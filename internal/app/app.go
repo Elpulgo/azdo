@@ -107,6 +107,13 @@ type Model struct {
 	footerRows          int
 	err                 error
 	stateStore          *state.Store // optional; nil when persistence is disabled
+
+	// notificationsActionMessage mirrors the last value
+	// notificationsView.GetStatusMessage() had when
+	// syncNotificationsActionMessage last observed it (see that method's doc
+	// comment). Its zero value ("") is exactly right at startup: the pane
+	// reports no message until an `o` outcome sets one.
+	notificationsActionMessage string
 }
 
 // SetStateStore attaches a state store to the model so navigation changes
@@ -622,6 +629,30 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		})
 	}
 
+	// Notifications tab section (task 17). Gated on containsTab(enabledTabs,
+	// TabNotifications) — the single predicate buildEnabledTabs already
+	// computed above (Decision 61) — never a second copy of
+	// cfg.IsPaneEnabled("notifications") && hasNotificationCapability(p); see
+	// the comment above the buildEnabledTabs call for why that predicate must
+	// not be restated here.
+	//
+	// Lists exactly the keys internal/ui/notifications/list.go's Update
+	// switch handles: `f` (reason cycle, decision 53), `u` (mark read,
+	// one-way per decision 13), `d` (mark done), and `o` (open the selected
+	// row's WebURL, decision 3 — list.go's own `o` case). `enter`/`esc` are
+	// left out: EnterDetail's stub makes `enter` a harmless one-keypress
+	// round trip through listview's detail mode with nothing to show (not a
+	// real "expand/view details" action), and both keys are already covered
+	// generically by the Navigation section.
+	if containsTab(enabledTabs, TabNotifications) {
+		helpModal.AddSection("Notifications tab", []components.HelpBinding{
+			{Key: "f", Description: "Cycle reason filter"},
+			{Key: "u", Description: "Mark read (one-way)"},
+			{Key: "d", Description: "Mark done"},
+			{Key: "o", Description: "Open in browser"},
+		})
+	}
+
 	// Set version info in help modal
 	helpModal.SetVersionInfo(formatVersionInfo(currentVersion, commitHash))
 
@@ -1128,6 +1159,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// catch, and guarding here strands a cleared inbox on screen forever.
 		filtered := notifications.FilterNotifications(msg.Items, m.config)
 		m.notificationsView = m.notificationsView.HandleFetchResult(filtered, msg.Err)
+		// HandleFetchResult clears the pane's own statusMessage on every
+		// fetch, success or failure alike (a stale `o` outcome must not
+		// survive "a poll refreshed the feed" — the reviewer-cited scenario
+		// this clearing rule specifically closes). Mirror that onto the
+		// status bar here, before this handler's own resizeActiveViewIfNeeded
+		// call below, so a footer that had widened for a long `o` failure
+		// message shrinks back and gets re-measured in the same render this
+		// fetch produces, not one render late.
+		m.syncNotificationsActionMessage()
 		// Re-derive the cadence after every fetch, success or failure alike
 		// (Decision 8): a GitHub hint only becomes known once the adapter has
 		// actually observed a response's X-Poll-Interval header, so the very
@@ -1197,6 +1237,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.activeTab {
 	case TabNotifications:
 		m.notificationsView, cmd = m.notificationsView.Update(msg)
+		// Covers both of `o`'s message-producing paths: the synchronous
+		// empty-WebURL case (set inline by this very Update call, no tea.Cmd
+		// involved) and the async openURLResultMsg success/failure case
+		// (delivered here on a later call, since that message is
+		// deliberately routed like any other — see its own doc comment).
+		// The re-measure this needs is covered by this switch's shared
+		// resizeActiveViewIfNeeded call just below, which runs for every
+		// message that reaches this path regardless of tab.
+		m.syncNotificationsActionMessage()
 	case TabPullRequests:
 		m.pullRequestsView, cmd = m.pullRequestsView.Update(msg)
 	case TabWorkItems:
@@ -1463,6 +1512,70 @@ func (m *Model) syncStatusBarContext() {
 	}
 }
 
+// syncNotificationsActionMessage surfaces the notifications pane's own
+// status message (today set only by `o`, decision 3) onto the shared status
+// bar. This closes a reviewer-found defect: View()'s ordinary path only
+// calls SetContextStatus when hasContextBar is true, and this pane's
+// HasContextBar() is permanently false in phase 1 (there is no detail view
+// to attach a context bar to) — so GetStatusMessage()'s text, including both
+// of `o`'s failure outcomes, was rendered nowhere at all.
+//
+// SetWarningMessage/ClearWarningMessage were chosen over
+// SetErrorMessage/ClearErrorMessage even though both are named in
+// StatusBar's own doc comments as the two surfaces that render
+// unconditionally: SetErrorMessage's condition in StatusBar.View() is
+// `s.errorMessage != "" && s.state == polling.StateError`, gated on the
+// pipeline poller's connection state, a condition an `o` outcome has no
+// bearing on — reusing it would trade one dead path for another that is
+// dead just as often in practice.
+//
+// Edge-triggered against notificationsActionMessage rather than writing
+// unconditionally: this method is called on every message reaching the
+// delegate-to-active-tab switch below while notifications is the active
+// tab, and also from polling.NotificationsFetchedMsg's handler — not only
+// right after an `o` press. warningMessage is a single, tab-agnostic field
+// also driven independently by polling.PipelineRunsUpdated's own
+// partial-project-load warning (Init() can also seed it at startup).
+// Writing to it on every call, regardless of whether the pane's own message
+// actually changed, would blow away that unrelated warning on the very next
+// arrow-key press on the notifications tab, long after the `o` outcome it
+// belongs to stopped being relevant — reproducing the same "shared field,
+// last write wins, wrong write clobbers the right one" hazard this method
+// exists to avoid, just one level up.
+//
+// That edge-triggering only guards the *set* direction, though: it stops
+// this method from re-asserting its own stale message over someone else's,
+// but does nothing to stop the clear branch from retracting someone else's
+// message outright. warningMessage has exactly one other writer today
+// (polling.PipelineRunsUpdated's partial-load warning), and an unconditional
+// ClearWarningMessage() here — reached the instant the pane's own message
+// goes back to "" on a fetch — deletes whatever that writer put there in
+// the meantime, even though this method never wrote it and has no way to
+// know it belongs to someone else without checking first. So the clear
+// branch reads the status bar back (GetWarningMessage(), the same read-back
+// ThemeSelectedMsg's handler already uses to carry warningMessage across a
+// statusBar rebuild) and only clears if what's showing still matches what
+// this method itself last wrote — retracting only its own message, leaving
+// any other writer's message alone to self-heal on its own next update.
+func (m *Model) syncNotificationsActionMessage() {
+	msg := m.notificationsView.GetStatusMessage()
+	if msg == m.notificationsActionMessage {
+		return
+	}
+	prev := m.notificationsActionMessage
+	m.notificationsActionMessage = msg
+	if msg != "" {
+		m.statusBar.SetWarningMessage(msg)
+		return
+	}
+	// Retract only our own message (see doc comment above) — clearing
+	// unconditionally would delete whatever polling.PipelineRunsUpdated's
+	// partial-load warning wrote in the meantime.
+	if m.statusBar.GetWarningMessage() == prev {
+		m.statusBar.ClearWarningMessage()
+	}
+}
+
 // workItemsKeybindings returns the keybindings string for the work items list view.
 func (m Model) workItemsKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
@@ -1534,9 +1647,9 @@ func (m Model) pipelinesKeybindings() string {
 
 // notificationsKeybindings returns the keybindings string for the
 // notifications list view. Lists the keys wired by task 11's pane plus the
-// real `r` refresh (task 15, replacing decision 58's stopgap) and task 14's
-// `u`/`d` mark-read/mark-done triage keys — `o` (open in browser) remains a
-// later task's to add.
+// real `r` refresh (task 15, replacing decision 58's stopgap), task 14's
+// `u`/`d` mark-read/mark-done triage keys, and `o` (open the selected row's
+// WebURL in the browser, decision 3 — list.go's own `o` case).
 func (m Model) notificationsKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.styles.Theme.Border))
@@ -1546,6 +1659,7 @@ func (m Model) notificationsKeybindings() string {
 		m.styles.Key.Render("f") + m.styles.Description.Render(" filter reason") + sep +
 		m.styles.Key.Render("u") + m.styles.Description.Render(" mark read") + sep +
 		m.styles.Key.Render("d") + m.styles.Description.Render(" mark done") + sep +
+		m.styles.Key.Render("o") + m.styles.Description.Render(" open") + sep +
 		m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
 		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")

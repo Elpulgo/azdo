@@ -76,13 +76,33 @@ func NewHelpModal(s *styles.Styles) *HelpModal {
 			},
 			{
 				Title: "Actions",
+				// The "f" line's parenthetical scope (task 17, decision 70) is
+				// deliberately worded "work-items" (hyphenated) and "pipeline
+				// runs" rather than the plain "work items" / "pipelines" every
+				// other qualifier here uses. RemoveBindingsByDescription only
+				// ever targets this Actions section and matches by substring
+				// ("work items", "work item", "pipelines" — internal/app/app.go
+				// removes those when the corresponding pane is disabled). The
+				// literal wording decision 70 first proposed contains both
+				// substrings, so disabling *either* workitems or pipelines
+				// alone would delete this line entirely — including the "PRs"
+				// meaning that survives when only one of the other two panes is
+				// off. The wording here contains neither substring, so the line
+				// survives both removals; see app_test.go's
+				// TestModel_HelpModal_FLine_Survives* tests.
 				Bindings: []HelpBinding{
-					{Key: "f", Description: "Search / filter"},
+					{Key: "f", Description: "Search / filter (PRs / work-items / pipeline runs)"},
 					{Key: "m", Description: "Toggle my items (PRs / work items)"},
 					{Key: "A", Description: "Toggle as reviewer (PRs)"},
 					{Key: "T", Description: "Filter by tag (work items)"},
 					{Key: "s", Description: "Filter by state (work items)"},
 					{Key: "S", Description: "Filter by status (pipelines)"},
+					// "Refresh data" also holds for the notifications pane (task
+					// 17, decision 70): decision 58's `r` stopgap is gone —
+					// internal/ui/notifications/list.go's fetchNotifications is a
+					// real listview.Config.Fetch hook, not a no-op, so `r`
+					// genuinely refetches and re-filters the inbox there too. No
+					// per-pane scoping needed on this line.
 					{Key: "r", Description: "Refresh data"},
 					{Key: "v", Description: "Vote on PR (detail view)"},
 					{Key: "w", Description: "Change work item state (detail view)"},

@@ -946,7 +946,10 @@ func TestModel_View_OutputHeightMatchesTerminal_AfterNotificationsPoll(t *testin
 	}
 	var client *azdevops.MultiClient
 
-	const termWidth = 120
+	// 130, not 120: task 17 added the `o` (open in browser) key to
+	// notificationsKeybindings(), which no longer fits alongside `u`/`d`'s
+	// mark-read/mark-done text on a single footer line at 120 columns.
+	const termWidth = 130
 	const termHeight = 40
 
 	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
@@ -995,6 +998,349 @@ func TestModel_View_OutputHeightMatchesTerminal_AfterNotificationsPoll(t *testin
 	if h := lipgloss.Height(view); h != termHeight {
 		t.Errorf("after a poll cleared the unread badge, View() rendered %d rows for a %d-row terminal (footerRows=%d) — the footer was not re-measured; view:\n%s",
 			h, termHeight, m.footerRows, view)
+	}
+}
+
+// --- Task 17 follow-up / independent review: `o` outcomes must be visible ---
+//
+// notifications.Model.GetStatusMessage() reported the right text for both of
+// `o`'s failure outcomes all along (see list_test.go's TestOpenInBrowser_*
+// pane-level tests), but nothing carried that text onto the status bar:
+// View()'s "if hasContextBar && statusMessage != ''" guard (app.go) never
+// fires for the notifications pane, since HasContextBar() is permanently
+// false in phase 1 (there is no detail view to attach a context bar to). A
+// test seam that reports a field is not the same as observing the behaviour
+// that consumes it (decision 72) — every test below asserts through
+// m.View(), never through m.notificationsView.GetStatusMessage() alone.
+
+// withOpenURLForTesting substitutes notifications.SetOpenURLForTesting's seam
+// for the duration of the calling test, mirroring list_test.go's own
+// withOpenURLSpy so a second call within the same test (e.g. a failure
+// followed by a retry that succeeds) still unwinds to the real browser.Open
+// afterwards: t.Cleanup runs LIFO, so each call's own restore lands on top of
+// the previous call's substituted function, not on the real one, until the
+// very last cleanup finally reaches it.
+func withOpenURLForTesting(t *testing.T, result error) {
+	t.Helper()
+	restore := notifications.SetOpenURLForTesting(func(string) error { return result })
+	t.Cleanup(restore)
+}
+
+// openInBrowserRoutingModel builds a sized app model (same shape as task 14's
+// own markRoutingModel) whose notifications pane holds one row with webURL as
+// its WebURL, and returns it with that row's title. No marker is needed: `o`
+// never calls MarkRead/MarkDone.
+func openInBrowserRoutingModel(t *testing.T, width, height int, webURL string) (Model, string) {
+	t.Helper()
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	if m.activeTab != TabNotifications {
+		t.Fatalf("activeTab = %d, want TabNotifications", m.activeTab)
+	}
+
+	const title = "OPEN-ME"
+	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), nil, cfg).
+		SetFeed([]provider.Notification{{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+			Title:     title,
+			Reason:    provider.NotificationReasonReviewRequested,
+			UpdatedAt: time.Now(),
+			WebURL:    webURL,
+		}})
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return updated.(Model), title
+}
+
+// dewrapFooterText collapses box-drawing border characters and whitespace
+// runs in a rendered View() so a status-bar message that word-wraps across
+// two physical footer lines at a given terminal width — observed for both of
+// `o`'s failure messages in the 116-130 column band, the footer behaving
+// correctly, not a bug under test — can still be matched as one contiguous
+// phrase, without the test having to know or assert exactly where the wrap
+// point falls.
+func dewrapFooterText(view string) string {
+	replacer := strings.NewReplacer(
+		"\n", " ", "│", " ", "╭", " ", "╮", " ", "╰", " ", "╯", " ", "─", " ",
+	)
+	return strings.Join(strings.Fields(replacer.Replace(view)), " ")
+}
+
+// openInBrowserRoutingFetchMsg returns the polling.NotificationsFetchedMsg a
+// following poll would deliver for the same single row openInBrowserRoutingModel
+// seeded, so a "the next fetch clears it" test can drive that fetch through
+// the real handler rather than SetFeed/HandleFetchResult directly.
+func openInBrowserRoutingFetchMsg(title, webURL string) polling.NotificationsFetchedMsg {
+	return polling.NotificationsFetchedMsg{
+		Items: []provider.Notification{{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+			Title:     title,
+			Reason:    provider.NotificationReasonReviewRequested,
+			UpdatedAt: time.Now(),
+			WebURL:    webURL,
+		}},
+		Err: nil,
+	}
+}
+
+// TestModel_View_ShowsMessage_WhenNotificationHasNoWebURL pins the reviewer
+// finding: an empty WebURL (decision 3's "no usable repository URL at all"
+// case) must render its message somewhere the user can actually see, not just
+// report it via GetStatusMessage().
+func TestModel_View_ShowsMessage_WhenNotificationHasNoWebURL(t *testing.T) {
+	m, title := openInBrowserRoutingModel(t, 130, 40, "")
+	if !strings.Contains(m.View(), title) {
+		t.Fatalf("precondition: want the seeded row %q to render; view:\n%s", title, m.View())
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatal("want a nil cmd for an empty WebURL (nothing to launch)")
+	}
+
+	// Matched against dewrapFooterText(view), not view itself: the footer's
+	// warning text word-wraps onto its own second line at this width — the
+	// footer behaving correctly, not a bug this test is chasing — which
+	// would make a plain Contains check against the raw view fail even
+	// though the message is plainly rendered in full.
+	view := m.View()
+	if !strings.Contains(dewrapFooterText(view), "No URL for this notification") {
+		t.Errorf("View() after o on a row with no WebURL should contain the failure message; view:\n%s", view)
+	}
+}
+
+// TestModel_View_ShowsMessage_WhenBrowserLaunchFails pins the reviewer
+// finding's other failure outcome: a browser.Open error must render its
+// message too, not just report it via GetStatusMessage().
+func TestModel_View_ShowsMessage_WhenBrowserLaunchFails(t *testing.T) {
+	withOpenURLForTesting(t, fmt.Errorf("no browser configured"))
+
+	m, title := openInBrowserRoutingModel(t, 130, 40, "https://github.com/owner/repo/pull/1")
+	if !strings.Contains(m.View(), title) {
+		t.Fatalf("precondition: want the seeded row %q to render; view:\n%s", title, m.View())
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd for a non-empty WebURL")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+
+	// Matched against dewrapFooterText(view), not view itself: at 130 columns
+	// the footer's warning text word-wraps onto its own second line between
+	// "browser:" and "no" — the footer behaving correctly, not a bug this
+	// test is chasing — which would make a plain Contains check against the
+	// raw view fail even though the message is plainly rendered in full.
+	view := m.View()
+	if !strings.Contains(dewrapFooterText(view), "Failed to open browser: no browser configured") {
+		t.Errorf("View() after a failed o should contain the failure message; view:\n%s", view)
+	}
+}
+
+// TestModel_View_SuccessfulOpen_IsSilentAndClearsAPriorFailureMessage pins
+// both halves of the reviewer's "decide and pin what happens on success"
+// requirement: a bare success renders no stray text of its own (the browser
+// window appearing is the feedback), and — since success is also one of the
+// two clearing triggers — a successful retry after a prior failure makes that
+// failure's message disappear from the render, not just from
+// GetStatusMessage().
+func TestModel_View_SuccessfulOpen_IsSilentAndClearsAPriorFailureMessage(t *testing.T) {
+	withOpenURLForTesting(t, fmt.Errorf("no browser configured"))
+
+	m, _ := openInBrowserRoutingModel(t, 130, 40, "https://github.com/owner/repo/pull/1")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if !strings.Contains(dewrapFooterText(m.View()), "Failed to open browser: no browser configured") {
+		t.Fatalf("precondition: want the failure message rendered; view:\n%s", m.View())
+	}
+
+	withOpenURLForTesting(t, nil)
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd for a retry")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+
+	view := dewrapFooterText(m.View())
+	if strings.Contains(view, "Failed to open browser") {
+		t.Errorf("View() after a successful retry should no longer show the prior failure message; view:\n%s", m.View())
+	}
+	if strings.Contains(view, "Opened in browser") {
+		t.Errorf("a successful o must stay silent, not render its own message; view:\n%s", m.View())
+	}
+}
+
+// TestModel_View_NextFetchClearsAFailureMessage pins the clearing rule's other
+// trigger, the one the reviewer named explicitly: "a poll refreshes the feed"
+// while a stale `o` failure message is still showing must not leave it behind.
+func TestModel_View_NextFetchClearsAFailureMessage(t *testing.T) {
+	withOpenURLForTesting(t, fmt.Errorf("no browser configured"))
+
+	const webURL = "https://github.com/owner/repo/pull/1"
+	m, title := openInBrowserRoutingModel(t, 130, 40, webURL)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if !strings.Contains(dewrapFooterText(m.View()), "Failed to open browser: no browser configured") {
+		t.Fatalf("precondition: want the failure message rendered; view:\n%s", m.View())
+	}
+
+	updated, _ = m.Update(openInBrowserRoutingFetchMsg(title, webURL))
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(dewrapFooterText(view), "Failed to open browser") {
+		t.Errorf("View() after a fetch should not still show a stale o failure message; view:\n%s", view)
+	}
+}
+
+// TestModel_View_UnrelatedWarningMessageSurvivesClearing pins the "clear
+// direction" of the shared-warningMessage-field hazard, reported by an
+// independent reviewer: syncNotificationsActionMessage's edge-triggering only
+// ever guarded the *set* direction (stopping it from re-asserting its own
+// stale message over someone else's); nothing stopped its clear branch from
+// retracting someone else's message outright the instant its own message went
+// back to "". Reproduces the reviewer's exact sequence: an `o` failure sets
+// the pane's own warning, an unrelated writer (standing in for
+// polling.PipelineRunsUpdated's partial-project-load warning, which shares the
+// same StatusBar.warningMessage field) sets its own message on top, and the
+// following fetch — which clears the pane's own statusMessage back to "" —
+// must leave the unrelated message alone rather than clobbering it.
+func TestModel_View_UnrelatedWarningMessageSurvivesClearing(t *testing.T) {
+	m, title := openInBrowserRoutingModel(t, 130, 40, "")
+
+	// 1. `o` on a URL-less row sets the pane's own warning.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatal("want a nil cmd for an empty WebURL")
+	}
+	if !strings.Contains(dewrapFooterText(m.View()), "No URL for this notification") {
+		t.Fatalf("precondition: want the o failure message rendered; view:\n%s", m.View())
+	}
+
+	// 2. An unrelated writer sets its own message on the very same shared
+	// field, standing in for polling.PipelineRunsUpdated's own
+	// SetWarningMessage call in production.
+	const pipelineWarning = "PIPELINEWARN partial project load"
+	m.statusBar.SetWarningMessage(pipelineWarning)
+	if !strings.Contains(dewrapFooterText(m.View()), pipelineWarning) {
+		t.Fatalf("precondition: want the unrelated warning rendered; view:\n%s", m.View())
+	}
+
+	// 3. The next fetch clears the pane's own statusMessage back to "".
+	updated, _ = m.Update(openInBrowserRoutingFetchMsg(title, ""))
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(dewrapFooterText(view), pipelineWarning) {
+		t.Errorf("the unrelated warning was clobbered by the notifications pane's own clearing rule; view:\n%s", view)
+	}
+}
+
+// TestModel_View_OutputHeightMatchesTerminal_AfterOpenInBrowserFailure pins
+// decision 77's footer-remeasurement obligation for this reviewer finding's
+// fix: syncNotificationsActionMessage widens the status bar's warning message
+// exactly like any other status-bar field, so a handler that carries it must
+// still leave m.footerRows in sync with what View() actually renders.
+//
+// Sweeps the width band task 16 and its own follow-ups care about (100, 110,
+// 116, 120, 128, 130), plus 150: at every width in the mandated band the
+// footer already wraps to the same number of physical lines with or without
+// this particular message (its own keybindings text plus badge/org/connection
+// segments are long enough on their own to force a wrap there regardless), so
+// while those six widths remain valuable general footer-accounting coverage,
+// none of them can actually distinguish "resized" from "not resized" for
+// *this* message — clearing it does not change the line count they render
+// at. 150 columns is where it does: verified directly against
+// resizeActiveViewIfNeeded's removal that the footer is 4 lines with the
+// message showing and 3 once it clears, only correct if the clearing handler
+// still resizes.
+//
+// Two pre-existing gaps (independent review, reproduced at commit a7de08e)
+// are NOT this test's concern and are deliberately not asserted around: (a)
+// the very first View() after a WindowSizeMsg over-renders by one row at
+// 100/110 columns — worked around by taking that first render here (the
+// pointer-mutation priming View() itself needs — it mutates m.statusBar
+// through its pointer despite a value receiver) without asserting its
+// height, and only asserting height on later renders; (b) a ThemeSelectedMsg
+// is one row over at every width — never sent by this test.
+func TestModel_View_OutputHeightMatchesTerminal_AfterOpenInBrowserFailure(t *testing.T) {
+	const termHeight = 40
+	const webURL = "https://github.com/owner/repo/pull/1"
+	widths := []int{100, 110, 116, 120, 128, 130, 150}
+
+	for _, width := range widths {
+		width := width
+		t.Run(fmt.Sprintf("width=%d", width), func(t *testing.T) {
+			withOpenURLForTesting(t, fmt.Errorf("no browser configured"))
+
+			m, title := openInBrowserRoutingModel(t, width, termHeight, webURL)
+
+			// Prime the pointer-mutation render; deliberately not asserted on
+			// (see doc comment above).
+			_ = m.View()
+			if !strings.Contains(m.View(), title) {
+				t.Fatalf("precondition: want the seeded row %q to render; view:\n%s", title, m.View())
+			}
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+			m = updated.(Model)
+			if cmd == nil {
+				t.Fatal("want a non-nil cmd for a non-empty WebURL")
+			}
+			updated, _ = m.Update(cmd())
+			m = updated.(Model)
+
+			// Matched against dewrapFooterText(view), not view itself: at
+			// 116/120 columns the footer's warning text wraps onto its own
+			// second line mid-message, which would otherwise make an
+			// exact-string Contains check against the raw view fail even
+			// though the message is plainly rendered — that wrap is the
+			// footer behaving correctly, not a bug this test is chasing.
+			view := m.View()
+			if !strings.Contains(dewrapFooterText(view), "Failed to open browser: no browser configured") {
+				t.Fatalf("precondition: want the failure message rendered before measuring height; view:\n%s", view)
+			}
+			if h := strings.Count(view, "\n") + 1; h != termHeight {
+				t.Errorf("width=%d: View() rendered %d rows for a %d-row terminal after the o failure message appeared (footerRows=%d); view:\n%s",
+					width, h, termHeight, m.footerRows, view)
+			}
+
+			// Clear via the next fetch (HandleFetchResult's unconditional
+			// reset, mirrored onto the status bar by
+			// syncNotificationsActionMessage before polling.NotificationsFetchedMsg's
+			// own resizeActiveViewIfNeeded call).
+			updated, _ = m.Update(openInBrowserRoutingFetchMsg(title, webURL))
+			m = updated.(Model)
+
+			view = m.View()
+			if strings.Contains(dewrapFooterText(view), "Failed to open browser") {
+				t.Fatalf("precondition: want the failure message cleared after a fetch; view:\n%s", view)
+			}
+			if h := strings.Count(view, "\n") + 1; h != termHeight {
+				t.Errorf("width=%d: View() rendered %d rows for a %d-row terminal after the o failure message cleared (footerRows=%d); view:\n%s",
+					width, h, termHeight, m.footerRows, view)
+			}
+		})
 	}
 }
 
@@ -2432,7 +2778,7 @@ func TestModel_PerTabChrome(t *testing.T) {
 		{
 			name:        "notifications",
 			tab:         TabNotifications,
-			wantKeys:    []string{"f filter reason"},
+			wantKeys:    []string{"f filter reason", "o open"},
 			notWantKeys: []string{"S status", "m my items", "m my PRs", "v live/trends"},
 			// NewModel constructs the pane with SetLoading(true) (Decision 64)
 			// and this test never resolves a fetch, so the pane renders its
@@ -2614,16 +2960,19 @@ func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.
 	}
 
 	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
-	// 130 columns, not 120: wide enough that the unread badge (task 16,
+	// 140 columns, not 120: wide enough that the unread badge (task 16,
 	// decision 21) — which now renders on every tab, including pipelines'
 	// detail view entered in step (b) below — does not by itself tip the
 	// *notifications* tab's single-line footer onto a second line, while
 	// still leaving pipelines' longer detail-context keybindings line (with
 	// the same badge) wrapped onto two. At 120 columns the badge's added
-	// width wraps both alike, at 150+ neither wraps, and either way the two
-	// footer heights this test differentiates would come out equal — a
-	// vacuous fixture that can't exercise the actual resize/sync logic.
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
+	// width wraps both alike, at 150+ neither wraps (task 17's `o` key
+	// lengthened notificationsKeybindings() enough that the old 130-column
+	// calibration no longer cleared the badge's width at all), and either
+	// way the two footer heights this test differentiates would come out
+	// equal — a vacuous fixture that can't exercise the actual resize/sync
+	// logic.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = updated.(Model)
 	m.notificationsView = m.notificationsView.SetFeed(feed)
 
@@ -2652,7 +3001,7 @@ func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.
 
 	// (c) resize while the detail context bar is open: the WindowSizeMsg handler
 	// sizes every pane, so the notifications pane picks up the shorter height.
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = updated.(Model)
 	staleHeight := lipgloss.Height(m.notificationsView.View())
 
@@ -2855,6 +3204,198 @@ func TestModel_HelpModal_ReflectsNotificationsFirst(t *testing.T) {
 	}
 	if !strings.Contains(view, "Notifications / PR / Work Items / Pipelines") {
 		t.Errorf("help modal Tabs line should read 'Notifications / PR / Work Items / Pipelines', view:\n%s", view)
+	}
+}
+
+// notificationsHelpSection extracts the slice of view between the
+// "Notifications tab" section heading and the next section heading ("Info",
+// which SetScopes/SetVersionInfo/SetConfigPath always populate for these
+// fixtures), so assertions can be scoped to just this section's own bindings
+// rather than the whole modal body.
+func notificationsHelpSection(t *testing.T, view string) string {
+	t.Helper()
+	start := strings.Index(view, "Notifications tab")
+	if start < 0 {
+		t.Fatalf("view does not contain a 'Notifications tab' section:\n%s", view)
+	}
+	rest := view[start:]
+	end := strings.Index(rest, "Info")
+	if end < 0 {
+		t.Fatalf("could not find the 'Info' section following 'Notifications tab':\n%s", view)
+	}
+	return rest[:end]
+}
+
+// TestModel_HelpModal_NotificationsSection_PresentWhenEnabled pins task 17's
+// core criterion: a "Notifications tab" help section is added when the tab is
+// enabled (capable provider, not in disabled_panes), listing exactly the keys
+// internal/ui/notifications/list.go's Update switch actually handles —
+// `f`, `u`, `d`, `o` — and nothing else. `o` (open in browser) is present:
+// list.go now wires a real "o" case (openInBrowser, decision 3), so
+// advertising it here matches the pane's actual behaviour rather than
+// promising a binding that does not exist. `enter`/`esc` remain absent:
+// EnterDetail is still a no-op stub.
+func TestModel_HelpModal_NotificationsSection_PresentWhenEnabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+	section := notificationsHelpSection(t, view)
+
+	for _, want := range []string{"f", "Cycle reason filter", "u", "Mark read", "d", "Mark done", "o", "Open in browser"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("Notifications tab section should contain %q, section:\n%s", want, section)
+		}
+	}
+	if strings.Contains(section, "enter") || strings.Contains(section, "esc") {
+		t.Errorf("Notifications tab section should not advertise 'enter'/'esc' — EnterDetail is a no-op stub, section:\n%s", section)
+	}
+}
+
+// TestModel_HelpModal_NotificationsSection_AbsentWhenPaneDisabled confirms the
+// section is removed (never added at all, in this implementation) when
+// disabled_panes lists notifications, mirroring how the tab itself disappears
+// (TestModel_NotificationsTab_Absent_WhenPaneDisabled_ButCapable).
+func TestModel_HelpModal_NotificationsSection_AbsentWhenPaneDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"notifications"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "Notifications tab") {
+		t.Errorf("help modal should not contain a 'Notifications tab' section when disabled_panes lists notifications, view:\n%s", view)
+	}
+}
+
+// TestModel_HelpModal_NotificationsSection_AbsentWhenIncapable confirms the
+// section is removed when no configured backend implements
+// provider.NotificationSource (Decision 11), using the capable-*shaped*
+// Azure-only fixture per Decision 59 rather than a nil provider.
+func TestModel_HelpModal_NotificationsSection_AbsentWhenIncapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationIncapableProvider(), client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "Notifications tab") {
+		t.Errorf("help modal should not contain a 'Notifications tab' section for an incapable provider, view:\n%s", view)
+	}
+}
+
+// TestModel_HelpModal_FLine_SurvivesWorkItemsDisabled pins the substring
+// collision task 17 was told to check: RemoveBindingsByDescription("work
+// items") / ("work item") strips the Actions section's `T`/`s` lines when
+// workitems is disabled, and — before this test — would also have deleted the
+// global `f` line if its parenthetical scope had used the literal words "work
+// items" (decision 70's first-proposed wording). The wording actually shipped
+// ("work-items", hyphenated) contains neither substring, so the line must
+// still be present.
+func TestModel_HelpModal_FLine_SurvivesWorkItemsDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"workitems"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Sanity: confirm the disable path actually ran and did remove a
+	// work-items-scoped line, or this test would pass vacuously.
+	if strings.Contains(view, "Filter by tag (work items)") {
+		t.Fatalf("precondition failed: 'Filter by tag (work items)' should have been removed when workitems is disabled, view:\n%s", view)
+	}
+
+	if !strings.Contains(view, "Search / filter (PRs / work-items / pipeline runs)") {
+		t.Errorf("the 'f' line should survive workitems being disabled, view:\n%s", view)
+	}
+}
+
+// TestModel_HelpModal_FLine_SurvivesPipelinesDisabled is
+// TestModel_HelpModal_FLine_SurvivesWorkItemsDisabled's twin for the
+// "pipelines" substring: RemoveBindingsByDescription("pipelines") must not
+// remove the `f` line, which is why its wording says "pipeline runs" rather
+// than the bare plural "pipelines".
+func TestModel_HelpModal_FLine_SurvivesPipelinesDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"pipelines"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(nil, client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	view := m.View()
+
+	// Sanity: confirm the disable path actually ran.
+	if strings.Contains(view, "Filter by status (pipelines)") {
+		t.Fatalf("precondition failed: 'Filter by status (pipelines)' should have been removed when pipelines is disabled, view:\n%s", view)
+	}
+
+	if !strings.Contains(view, "Search / filter (PRs / work-items / pipeline runs)") {
+		t.Errorf("the 'f' line should survive pipelines being disabled, view:\n%s", view)
 	}
 }
 
@@ -3204,7 +3745,10 @@ func markRoutingModel(t *testing.T, marker provider.NotificationSource) (Model, 
 			UpdatedAt: time.Now(),
 		}})
 
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	// 130, not 120: task 17 added the `o` key to notificationsKeybindings(),
+	// which no longer fits on a single footer line at 120 columns alongside
+	// `u`/`d`'s mark-read/mark-done text.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 130, Height: 40})
 	return updated.(Model), title
 }
 

@@ -2169,6 +2169,254 @@ func TestSetFeed_PrunesExpiredOverrides_ButKeepsLiveOnes(t *testing.T) {
 	}
 }
 
+// ─── task 17: o open in browser (decision 3) ────────────────────────────────
+
+// withOpenURLSpy substitutes the package-level openURL seam with a spy that
+// records the URL(s) it was called with and returns result, restoring the
+// original on test cleanup. Mirrors internal/ui/metrics/list_test.go's own
+// seam-substitution pattern — never launches a real browser.
+func withOpenURLSpy(t *testing.T, result error) *[]string {
+	t.Helper()
+	var calls []string
+	restore := openURL
+	openURL = func(u string) error {
+		calls = append(calls, u)
+		return result
+	}
+	t.Cleanup(func() { openURL = restore })
+	return &calls
+}
+
+// TestOpenInBrowser_OpensSelectedRowsWebURL pins the happy path: `o` issues
+// exactly one openURL call, for the selected row's own WebURL, and a
+// successful result is silent (decision 3, reviewer finding): the browser
+// window appearing is the feedback, and a persistent "Opened in browser"
+// that never cleared was rejected as its own defect during review.
+func TestOpenInBrowser_OpensSelectedRowsWebURL(t *testing.T) {
+	item := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	item.WebURL = "https://github.com/owner/repo/pull/1"
+	m := newTriagePane(t, nil, []provider.Notification{item})
+
+	calls := withOpenURLSpy(t, nil)
+
+	m, cmd := m.Update(keyRune('o'))
+	if cmd == nil {
+		t.Fatal("want a non-nil tea.Cmd from o")
+	}
+	m = runMarkCmd(t, m, cmd)
+
+	if len(*calls) != 1 || (*calls)[0] != item.WebURL {
+		t.Errorf("openURL calls = %v, want exactly one call with %q", *calls, item.WebURL)
+	}
+	if got := m.GetStatusMessage(); got != "" {
+		t.Errorf("GetStatusMessage() = %q, want \"\" (silent success)", got)
+	}
+}
+
+// TestOpenInBrowser_SuccessClearsAPriorFailureMessage pins the other half of
+// decision 3's clearing rule: a successful `o` clears whatever failure text
+// a previous `o` attempt left behind, so retrying after a transient browser
+// error does not leave stale text on screen once it works.
+func TestOpenInBrowser_SuccessClearsAPriorFailureMessage(t *testing.T) {
+	item := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	item.WebURL = "https://github.com/owner/repo/pull/1"
+	m := newTriagePane(t, nil, []provider.Notification{item})
+
+	withOpenURLSpy(t, fmt.Errorf("no browser configured"))
+	m, cmd := m.Update(keyRune('o'))
+	m = runMarkCmd(t, m, cmd)
+	if got := m.GetStatusMessage(); got == "" {
+		t.Fatal("precondition: a failed o must leave a status message")
+	}
+
+	// A fresh substitution for the retry: openURL now succeeds.
+	withOpenURLSpy(t, nil)
+	m, cmd = m.Update(keyRune('o'))
+	m = runMarkCmd(t, m, cmd)
+
+	if got := m.GetStatusMessage(); got != "" {
+		t.Errorf("GetStatusMessage() after a successful retry = %q, want \"\" (the prior failure must be cleared)", got)
+	}
+}
+
+// TestOpenInBrowser_FailedOpen_SurfacesStatusMessage pins the failure path:
+// openURL erroring must not panic and must surface a message rather than
+// silently doing nothing.
+func TestOpenInBrowser_FailedOpen_SurfacesStatusMessage(t *testing.T) {
+	item := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	item.WebURL = "https://github.com/owner/repo/pull/1"
+	m := newTriagePane(t, nil, []provider.Notification{item})
+
+	withOpenURLSpy(t, errors.New("no browser found"))
+
+	m, cmd := m.Update(keyRune('o'))
+	m = runMarkCmd(t, m, cmd)
+
+	if got := m.GetStatusMessage(); !strings.Contains(got, "no browser found") {
+		t.Errorf("GetStatusMessage() = %q, want it to mention the underlying error", got)
+	}
+}
+
+// TestOpenInBrowser_EmptyWebURL_DoesNotCallOpenURL is the mutation target for
+// "the empty-WebURL guard removed": types.go's WebURL doc comment is explicit
+// that "" means nothing to open, so o must not hand it to openURL at all.
+func TestOpenInBrowser_EmptyWebURL_DoesNotCallOpenURL(t *testing.T) {
+	item := mkNotification("1", "owner/repo", "No URL", provider.NotificationReasonReviewRequested, false, fixedNow)
+	// WebURL left "" deliberately — task 5's fallback chain exhausted.
+	m := newTriagePane(t, nil, []provider.Notification{item})
+
+	calls := withOpenURLSpy(t, nil)
+
+	m, cmd := m.Update(keyRune('o'))
+
+	if cmd != nil {
+		t.Error("o with an empty WebURL must not issue a tea.Cmd")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("openURL calls = %v, want none for an empty WebURL", *calls)
+	}
+	if got := m.GetStatusMessage(); got == "" {
+		t.Error(`GetStatusMessage() = "", want a message explaining why nothing opened`)
+	}
+}
+
+// TestOpenInBrowser_NoRows_DoesNotCallOpenURL is the mutation target for "the
+// no-selection/empty-feed guard removed": an empty feed leaves canTriage
+// (and therefore o) a no-op, mirroring u/d's own TestCanTriage_Blocks_UAndD_WhenNoRows.
+func TestOpenInBrowser_NoRows_DoesNotCallOpenURL(t *testing.T) {
+	m := newTriagePane(t, nil, nil)
+
+	calls := withOpenURLSpy(t, nil)
+
+	_, cmd := m.Update(keyRune('o'))
+
+	if cmd != nil {
+		t.Error("o with no rows must not issue a tea.Cmd")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("openURL calls = %v, want none with no rows", *calls)
+	}
+}
+
+// TestOpenInBrowser_Blocks_WhenErrored mirrors TestCanTriage_Blocks_UAndD_WhenErrored:
+// o is gated by the same canTriage() as u/d, so a pane in decision 63's error
+// render state must swallow o rather than acting on whatever stale items
+// listview.HandleFetchResult left behind — even though selectedItem() itself
+// has no opinion about m.list.Err() and would happily return the stale row.
+func TestOpenInBrowser_Blocks_WhenErrored(t *testing.T) {
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	item := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	item.WebURL = "url-1"
+	m := newTriagePane(t, nil, []provider.Notification{item})
+	m = m.HandleFetchResult(nil, listErr)
+
+	calls := withOpenURLSpy(t, nil)
+
+	if _, cmd := m.Update(keyRune('o')); cmd != nil {
+		t.Error("o while errored must not issue a tea.Cmd")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("openURL calls = %v, want none while errored", *calls)
+	}
+}
+
+// TestOpenInBrowser_Blocks_WhenCapabilityUnsupported mirrors
+// TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported: decision 63's
+// capability-unsupported state must also block o, for the same reason it
+// blocks u/d — canTriage is the single shared gate.
+func TestOpenInBrowser_Blocks_WhenCapabilityUnsupported(t *testing.T) {
+	item := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	item.WebURL = "url-1"
+	m := newTriagePane(t, nil, []provider.Notification{item})
+	m = m.SetCapabilityUnsupported()
+
+	calls := withOpenURLSpy(t, nil)
+
+	if _, cmd := m.Update(keyRune('o')); cmd != nil {
+		t.Error("o while capability-unsupported must not issue a tea.Cmd")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("openURL calls = %v, want none while capability-unsupported", *calls)
+	}
+}
+
+// TestOpenInBrowser_ActiveFilter_OpensHighlightedRow_NotRawFeedIndex is the
+// mutation target for "o reads m.feed instead of the filtered/visible list":
+// with the `f` reason filter narrowing the feed and the cursor at a non-zero
+// filtered index, o must open the row actually highlighted — not
+// m.feed[cursor], which sits at a different row once the raw feed order and
+// the filtered order diverge.
+func TestOpenInBrowser_ActiveFilter_OpensHighlightedRow_NotRawFeedIndex(t *testing.T) {
+	mentioned1 := mkNotification("1", "owner/repo", "Mentioned one", provider.NotificationReasonMentioned, false, fixedNow)
+	mentioned1.WebURL = "url-mentioned-1"
+	review1 := mkNotification("2", "owner/repo", "Review one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	review1.WebURL = "url-review-1"
+	review2 := mkNotification("3", "owner/repo", "Review two", provider.NotificationReasonReviewRequested, false, fixedNow)
+	review2.WebURL = "url-review-2"
+	mentioned2 := mkNotification("4", "owner/repo", "Mentioned two", provider.NotificationReasonMentioned, false, fixedNow)
+	mentioned2.WebURL = "url-mentioned-2"
+
+	// Raw feed order deliberately interleaves the two reasons, so the
+	// post-filter order (review1, review2) diverges from m.feed's own index
+	// order at index 1: m.feed[1] is review1, but the filtered list's index 1
+	// is review2.
+	m := newTriagePane(t, nil, []provider.Notification{mentioned1, review1, review2, mentioned2})
+
+	m, _ = m.Update(keyRune('f'))
+	if !m.reasonFilterActive || m.reasonFilter != provider.NotificationReasonReviewRequested {
+		t.Fatalf("precondition: after 1st f, active=%v reason=%v, want ReviewRequested", m.reasonFilterActive, m.reasonFilter)
+	}
+	if got := len(m.list.Items()); got != 2 {
+		t.Fatalf("precondition: filtered items = %d, want 2 (review1, review2)", got)
+	}
+
+	m.list.SetCursor(1)
+	if item, ok := m.selectedItem(); !ok || item.Identity.ID != review2.Identity.ID {
+		t.Fatalf("precondition: selected item = %+v, ok=%v, want review2 under the cursor", item, ok)
+	}
+
+	calls := withOpenURLSpy(t, nil)
+
+	m, cmd := m.Update(keyRune('o'))
+	if cmd == nil {
+		t.Fatal("want a non-nil tea.Cmd from o")
+	}
+	m = runMarkCmd(t, m, cmd)
+
+	if len(*calls) != 1 || (*calls)[0] != review2.WebURL {
+		t.Errorf("openURL calls = %v, want exactly one call with %q (the highlighted row, not m.feed[1] = %q)", *calls, review2.WebURL, review1.WebURL)
+	}
+}
+
+// TestOpenInBrowser_NextFetchClearsAFailureMessage pins the clearing rule's
+// other trigger (decision 3, reviewer finding): "a poll refreshes the feed"
+// must clear a stale `o` failure message just as reliably as a subsequent
+// successful `o` does, so a message about a browser launch that failed
+// minutes ago does not survive an inbox refresh the user has moved on to.
+func TestOpenInBrowser_NextFetchClearsAFailureMessage(t *testing.T) {
+	item := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	item.WebURL = "https://github.com/owner/repo/pull/1"
+	m := newTriagePane(t, nil, []provider.Notification{item})
+
+	withOpenURLSpy(t, fmt.Errorf("no browser configured"))
+	m, cmd := m.Update(keyRune('o'))
+	m = runMarkCmd(t, m, cmd)
+	if got := m.GetStatusMessage(); got == "" {
+		t.Fatal("precondition: a failed o must leave a status message")
+	}
+
+	m = m.HandleFetchResult([]provider.Notification{item}, nil)
+
+	if got := m.GetStatusMessage(); got != "" {
+		t.Errorf("GetStatusMessage() after a fetch = %q, want \"\" (the next fetch must clear a stale o message)", got)
+	}
+}
+
 // ─── task 16: UnreadCount() footer badge accessor (decision 68) ────────────
 
 // TestUnreadCount_CountsUnreadRowsInFeed pins the base case: three rows, two

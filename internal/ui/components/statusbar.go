@@ -61,7 +61,14 @@ func (s *StatusBar) SetState(state polling.ConnectionState) {
 	s.state = state
 }
 
-// GetWarningMessage returns the current warning message.
+// GetWarningMessage returns the current warning message. A read-back rather
+// than a general getter: today it has two callers, both needing to know
+// warningMessage's live value because something else may have written it
+// since they last touched it — ThemeSelectedMsg's handler carries it across
+// a statusBar rebuild, and app.syncNotificationsActionMessage compares it
+// against what it itself last wrote before clearing, so it retracts only its
+// own message and never one a concurrent writer (polling.PipelineRunsUpdated's
+// partial-load warning) put there in the meantime.
 func (s *StatusBar) GetWarningMessage() string {
 	return s.warningMessage
 }
