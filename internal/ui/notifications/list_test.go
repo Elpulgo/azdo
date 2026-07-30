@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1145,20 +1147,29 @@ func TestView_ActiveFilter_GenuinelyEmptyFeed_ReadsAsClear_NotFilterEmpty(t *tes
 	assertOtherStatesAbsent(t, view, emptyInboxMarker)
 }
 
-// TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows pins
-// decision 63's error state and decision 17's token-scope skeleton. The error
-// is constructed from a real *github.Adapter with no NotificationsClient
-// configured, so the nil-client message asserted here is the adapter's
-// actual production string, not a hand-typed guess that could drift from it.
+// TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner pins
+// decision 63's error state for the generic-failure branch task 19
+// introduces. The error is constructed from a real *github.Adapter with no
+// NotificationsClient configured, so the nil-client message asserted here is
+// the adapter's actual production string, not a hand-typed guess that could
+// drift from it. That error is a plain fmt.Errorf, not a *github.APIError, so
+// errors.As in errorBody cannot recover one — this is exactly the generic
+// case task 19 requires must never show decision 17's scope banner, since
+// doing so here would misleadingly blame a missing scope for what is
+// actually a wiring gap.
 //
 // The feed is seeded with a row before HandleFetchResult(nil, err) lands, to
 // pin that the error state pre-empts the table view rather than rendering
 // stale rows underneath it.
-func TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows(t *testing.T) {
+func TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner(t *testing.T) {
 	adapter := github.NewAdapterWithNotifications(nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+	var apiErr *github.APIError
+	if errors.As(listErr, &apiErr) {
+		t.Fatal("precondition: nil-client error must not be a *github.APIError")
 	}
 
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
@@ -1174,16 +1185,198 @@ func TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows(t *testin
 	if !strings.Contains(view, errorMarker) {
 		t.Errorf("error view = %q, want to contain %q", view, errorMarker)
 	}
-	if !strings.Contains(view, tokenScopeSkeleton) {
-		t.Errorf("error view = %q, want to contain decision 17's token-scope skeleton %q", view, tokenScopeSkeleton)
-	}
 	if !strings.Contains(view, nilClientMsgMarker) {
 		t.Errorf("error view = %q, want to fold in the adapter's real nil-client message %q", view, nilClientMsgMarker)
+	}
+	if strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("error view = %q, must NOT carry decision 17's scope banner for a generic/nil-client failure", view)
 	}
 	if strings.Contains(view, "Must not render once errored") {
 		t.Errorf("error view = %q, must not fall through to stale table rows", view)
 	}
 	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestView_Error_ScopeError_WithHeaders_NamesGrantedAndRequiredScopes pins
+// the 403-with-headers branch: a classic PAT's response carries
+// X-Accepted-OAuth-Scopes/X-OAuth-Scopes, and this render must name both the
+// granted and required scopes concretely, plus a classic-token settings URL.
+func TestView_Error_ScopeError_WithHeaders_NamesGrantedAndRequiredScopes(t *testing.T) {
+	apiErr := &github.APIError{
+		StatusCode:     http.StatusForbidden,
+		RequiredScopes: "notifications",
+		GrantedScopes:  "repo,read:org",
+	}
+
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, apiErr)
+
+	view := m.View()
+
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("scope-error view = %q, want to contain %q", view, errorMarker)
+	}
+	if !strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("scope-error view = %q, want decision 17's scope skeleton naming notifications", view)
+	}
+	if !strings.Contains(view, "repo,read:org") {
+		t.Errorf("scope-error view = %q, want the granted scopes named concretely", view)
+	}
+	if !strings.Contains(view, classicTokenSettingsURL) {
+		t.Errorf("scope-error view = %q, want the classic token settings URL", view)
+	}
+	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestView_Error_ScopeError_Headerless_NamesFineGrainedTokenCaveat pins the
+// other, genuinely reachable 403 shape: a fine-grained PAT never sends
+// X-Accepted-OAuth-Scopes/X-OAuth-Scopes at all, so RequiredScopes and
+// GrantedScopes are both empty even though the token may or may not actually
+// lack the scope. This render must not pretend the (absent) headers confirm
+// anything, and must point at the fine-grained token settings page rather
+// than only the classic one.
+func TestView_Error_ScopeError_Headerless_NamesFineGrainedTokenCaveat(t *testing.T) {
+	apiErr := &github.APIError{StatusCode: http.StatusForbidden}
+
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, apiErr)
+
+	view := m.View()
+
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("headerless-scope-error view = %q, want to contain %q", view, errorMarker)
+	}
+	if !strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("headerless-scope-error view = %q, want decision 17's scope skeleton naming notifications", view)
+	}
+	if !strings.Contains(view, "fine-grained") {
+		t.Errorf("headerless-scope-error view = %q, want an honest caveat that fine-grained tokens never send scope headers", view)
+	}
+	if !strings.Contains(view, fineGrainedTokenSettingsURL) {
+		t.Errorf("headerless-scope-error view = %q, want the fine-grained token settings URL", view)
+	}
+	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestView_Error_ExpiredToken_DistinctFromScopeError_AndGeneric pins the 401
+// branch: distinct wording from both the 403 scope error (no scope banner —
+// re-adding a scope to a rejected token would not fix anything) and the
+// generic branch.
+//
+// Does NOT assert on "expired or invalid" alone: *github.APIError's own
+// Error() text for a 401 already reads "token may be expired or invalid", so
+// that phrase survives even through genericErrorBody's plain %v fold-in and
+// cannot tell expiredTokenErrorBody's own branch apart from a mutation that
+// deletes it and falls through to generic (verified directly: deleting the
+// 401 case and re-running this test left it green before this URL assertion
+// was added). The token-settings URLs are genuinely unique to
+// expiredTokenErrorBody — genericErrorBody never includes them — so those are
+// what this test pins.
+func TestView_Error_ExpiredToken_DistinctFromScopeError_AndGeneric(t *testing.T) {
+	apiErr := &github.APIError{StatusCode: http.StatusUnauthorized}
+
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, apiErr)
+
+	view := m.View()
+
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("expired-token view = %q, want to contain %q", view, errorMarker)
+	}
+	if !strings.Contains(view, "expired or invalid") {
+		t.Errorf("expired-token view = %q, want the expired/invalid wording", view)
+	}
+	if !strings.Contains(view, classicTokenSettingsURL) {
+		t.Errorf("expired-token view = %q, want the classic token settings URL — unique to expiredTokenErrorBody, unlike genericErrorBody", view)
+	}
+	if !strings.Contains(view, fineGrainedTokenSettingsURL) {
+		t.Errorf("expired-token view = %q, want the fine-grained token settings URL — unique to expiredTokenErrorBody, unlike genericErrorBody", view)
+	}
+	if strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("expired-token view = %q, must NOT carry the scope skeleton — a rejected token is not a scope gap", view)
+	}
+	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// TestView_Error_ThreeVariants_ArePairwiseDistinguishable restates decision
+// 63's mutual-distinguishability rule across the three error-body variants
+// task 19 introduces: the 403-scope render, the 401-expired render, and the
+// generic render must each carry content the other two do not, even though
+// all three share errorMarker and disableHint's common suffix.
+func TestView_Error_ThreeVariants_ArePairwiseDistinguishable(t *testing.T) {
+	newModel := func() Model {
+		m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+		m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+		return m
+	}
+
+	scopeView := newModel().HandleFetchResult(nil, &github.APIError{
+		StatusCode: http.StatusForbidden, RequiredScopes: "notifications", GrantedScopes: "repo",
+	}).View()
+	expiredView := newModel().HandleFetchResult(nil, &github.APIError{StatusCode: http.StatusUnauthorized}).View()
+	genericView := newModel().HandleFetchResult(nil, errors.New("boom")).View()
+
+	// expiredOnly is deliberately NOT "expired or invalid": *github.APIError's
+	// own Error() text for a 401 already contains that phrase, so it would
+	// still appear even if expiredTokenErrorBody's own branch were deleted and
+	// the 401 fell through to genericErrorBody's plain %v fold-in (a real
+	// mutation verified directly to survive against that weaker marker).
+	// classicTokenSettingsURL is scopeView's own marker (the headers-present
+	// branch only ever names the classic URL), so fineGrainedTokenSettingsURL
+	// is the one string genuinely unique to expiredTokenErrorBody here.
+	scopeOnly := tokenScopeSkeleton
+	expiredOnly := fineGrainedTokenSettingsURL
+	genericMarkerText := "boom"
+
+	views := map[string]string{"scope": scopeView, "expired": expiredView, "generic": genericView}
+	uniques := map[string]string{"scope": scopeOnly, "expired": expiredOnly, "generic": genericMarkerText}
+
+	for name, view := range views {
+		for otherName, marker := range uniques {
+			contains := strings.Contains(view, marker)
+			if otherName == name {
+				if !contains {
+					t.Errorf("%s view = %q, want its own marker %q present", name, view, marker)
+				}
+				continue
+			}
+			if contains {
+				t.Errorf("%s view = %q, must not contain %s's marker %q", name, view, otherName, marker)
+			}
+		}
+	}
+}
+
+// TestView_Error_RateLimited403_DoesNotClaimMissingScope pins the one
+// condition in errorBody's 403 branch that no other test exercises: a
+// rate-limited 403 must fall through to genericErrorBody, not
+// scopeErrorBody. GitHub returns 403 for both "your token lacks the
+// notifications scope" and "you have exhausted your rate limit", and only
+// the first is fixable by editing the token. Telling a rate-limited user to
+// add a scope they already have sends them to rewrite a working token, and
+// the pane keeps failing until the window resets regardless.
+//
+// Dropping `!apiErr.RateLimited` from that case is otherwise a surviving
+// mutation: every other 403 test constructs an APIError with RateLimited
+// false, so they all keep passing.
+func TestView_Error_RateLimited403_DoesNotClaimMissingScope(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, &github.APIError{
+		StatusCode:  http.StatusForbidden,
+		RateLimited: true,
+	})
+
+	view := m.View()
+	if strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("rate-limited 403 view = %q, must not claim a missing scope", view)
+	}
+	if strings.Contains(view, classicTokenSettingsURL) || strings.Contains(view, fineGrainedTokenSettingsURL) {
+		t.Errorf("rate-limited 403 view = %q, must not send the user to the token settings pages", view)
+	}
 }
 
 // TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty covers the
@@ -1213,6 +1406,222 @@ func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
 		t.Errorf("error-with-empty-feed view = %q, must not render the empty-inbox text", view)
 	}
 	assertOtherStatesAbsent(t, view, errorMarker)
+}
+
+// newDisableTestConfig builds a config.Config backed by a t.TempDir() path
+// (convention 17, binding: never call Save() on a config that did not come
+// from LoadFrom(<t.TempDir() path>)). preDisabled sets disabled_panes in the
+// on-disk YAML before load, letting tests pin that disabling notifications
+// appends to whatever is already there rather than replacing it.
+func newDisableTestConfig(t *testing.T, preDisabled string) (*config.Config, string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	content := "organization: test-org\nprojects:\n  - test-project\npolling_interval: 60\ntheme: dark\n"
+	if preDisabled != "" {
+		content += "disabled_panes: " + preDisabled + "\n"
+	}
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	return cfg, configPath
+}
+
+// errorPane builds a Model already in decision 63's error state, wired to
+// cfg, ready to receive disablePaneKey presses.
+func errorPane(t *testing.T, cfg *config.Config) Model {
+	t.Helper()
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, cfg)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return m.HandleFetchResult(nil, errors.New("boom"))
+}
+
+// TestDisableAction_FirstPress_ArmsConfirm_NoWriteYet pins that a single
+// disablePaneKey press only arms the confirm overlay — errorBody's own
+// error text is replaced by disableConfirmBody, and nothing is written to
+// disk yet.
+func TestDisableAction_FirstPress_ArmsConfirm_NoWriteYet(t *testing.T) {
+	cfg, _ := newDisableTestConfig(t, "")
+	m := errorPane(t, cfg)
+
+	m, cmd := m.Update(keyRune('x'))
+	if cmd != nil {
+		t.Error("arming the confirm must not issue a tea.Cmd")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Press x again to confirm") {
+		t.Errorf("view after first x = %q, want the confirm overlay", view)
+	}
+	if strings.Contains(view, errorMarker) {
+		t.Errorf("view after first x = %q, must not still show the plain error body", view)
+	}
+	if len(cfg.DisabledPanes) != 0 {
+		t.Errorf("DisabledPanes = %v after only the first press, want unchanged (no write yet)", cfg.DisabledPanes)
+	}
+}
+
+// TestDisableAction_AnyOtherKey_CancelsArm_NoWrite pins that pressing any key
+// other than disablePaneKey while armed cancels the confirm without writing.
+func TestDisableAction_AnyOtherKey_CancelsArm_NoWrite(t *testing.T) {
+	cfg, _ := newDisableTestConfig(t, "")
+	m := errorPane(t, cfg)
+
+	m, _ = m.Update(keyRune('x'))
+	m, cmd := m.Update(keyRune('z'))
+	if cmd != nil {
+		t.Error("cancelling the arm must not issue a tea.Cmd")
+	}
+
+	if m.disableConfirmPending {
+		t.Error("disableConfirmPending must be false after a non-x key")
+	}
+	view := m.View()
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("view after cancelling = %q, want back to the plain error body", view)
+	}
+	if len(cfg.DisabledPanes) != 0 {
+		t.Errorf("DisabledPanes = %v after cancelling, want unchanged (no write occurred)", cfg.DisabledPanes)
+	}
+}
+
+// TestDisableAction_SecondPress_WritesConfig_AppendingToExistingEntries pins
+// the confirmed write: disabled_panes gains "notifications" via Config.Save()
+// while preserving a pre-existing entry (task 18's round-trip preservation
+// must not be bypassed by a second write path), verified by reloading the
+// file from disk rather than trusting the in-memory struct alone.
+func TestDisableAction_SecondPress_WritesConfig_AppendingToExistingEntries(t *testing.T) {
+	cfg, configPath := newDisableTestConfig(t, "pipelines")
+	m := errorPane(t, cfg)
+
+	m, _ = m.Update(keyRune('x'))
+	m, cmd := m.Update(keyRune('x'))
+	if cmd != nil {
+		t.Error("the confirmed disable must not issue a tea.Cmd")
+	}
+
+	if m.disableConfirmPending {
+		t.Error("disableConfirmPending must be false after the confirming press")
+	}
+	if got := m.GetStatusMessage(); !strings.Contains(got, "disabled") {
+		t.Errorf("GetStatusMessage() after disabling = %q, want it to say the pane was disabled", got)
+	}
+
+	reloaded, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom after save failed: %v", err)
+	}
+	if reloaded.IsPaneEnabled("notifications") {
+		t.Error("want notifications disabled on disk after the confirmed press")
+	}
+	if reloaded.IsPaneEnabled("pipelines") {
+		t.Error("want the pre-existing pipelines disable preserved, not replaced")
+	}
+}
+
+// TestDisableAction_AlreadyDisabled_IsIdempotent_NoDuplicateEntry pins that
+// confirming disable twice (e.g. a second session after a restart, or a
+// stray double press before this pane's construction-time tab list catches
+// up) never appends a second "notifications" entry.
+func TestDisableAction_AlreadyDisabled_IsIdempotent_NoDuplicateEntry(t *testing.T) {
+	cfg, configPath := newDisableTestConfig(t, "notifications")
+	m := errorPane(t, cfg)
+
+	m, _ = m.Update(keyRune('x'))
+	m, _ = m.Update(keyRune('x'))
+
+	if got := m.GetStatusMessage(); !strings.Contains(got, "already disabled") {
+		t.Errorf("GetStatusMessage() = %q, want an already-disabled message", got)
+	}
+
+	reloaded, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	count := 0
+	for _, p := range reloaded.DisabledPanes {
+		if p == "notifications" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("disabled_panes on disk = %v, want exactly one \"notifications\" entry", reloaded.DisabledPanes)
+	}
+}
+
+// TestDisableAction_SaveFailure_SurfacesVisibly_AndRollsBack pins that a
+// Save() failure is never silent: DisabledPanes must roll back to its
+// pre-attempt value and the failure must be visible via GetStatusMessage(),
+// not look like the write succeeded. Forces the failure by pointing configPath
+// at a location Save() cannot write to (a directory, not a file).
+func TestDisableAction_SaveFailure_SurfacesVisibly_AndRollsBack(t *testing.T) {
+	tmpDir := t.TempDir()
+	unwritableDir := filepath.Join(tmpDir, "config.yaml")
+	if err := os.Mkdir(unwritableDir, 0755); err != nil {
+		t.Fatalf("failed to create directory standing in for the config path: %v", err)
+	}
+	cfg := config.NewWithPath("test-org", []string{"test-project"}, 60, "dark", unwritableDir)
+
+	m := errorPane(t, cfg)
+	m, _ = m.Update(keyRune('x'))
+	m, cmd := m.Update(keyRune('x'))
+	if cmd != nil {
+		t.Error("a failed disable must not issue a tea.Cmd")
+	}
+
+	if len(cfg.DisabledPanes) != 0 {
+		t.Errorf("DisabledPanes = %v after a failed Save(), want rolled back to empty", cfg.DisabledPanes)
+	}
+	got := m.GetStatusMessage()
+	if !strings.Contains(got, "Failed to disable") {
+		t.Errorf("GetStatusMessage() after a failed Save() = %q, want a visible failure message", got)
+	}
+}
+
+// TestDisableAction_NilConfig_SurfacesVisibly_NeverPanics covers the
+// hand-built-Model case (never true in production — app.go always passes its
+// own config pointer — but reachable from a test that omits cfg).
+func TestDisableAction_NilConfig_SurfacesVisibly_NeverPanics(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, errors.New("boom"))
+
+	m, _ = m.Update(keyRune('x'))
+	m, _ = m.Update(keyRune('x'))
+
+	got := m.GetStatusMessage()
+	if !strings.Contains(got, "no config available") {
+		t.Errorf("GetStatusMessage() with a nil cfg = %q, want a visible explanation", got)
+	}
+}
+
+// TestDisableAction_UnreachableOutsideErrorState pins that disablePaneKey
+// does nothing when the pane is not in an error state — it is reachable only
+// from the error render, not globally.
+func TestDisableAction_UnreachableOutsideErrorState(t *testing.T) {
+	cfg, _ := newDisableTestConfig(t, "")
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, cfg)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "Row", provider.NotificationReasonMentioned, false, fixedNow),
+	})
+
+	m, cmd := m.Update(keyRune('x'))
+	if cmd != nil {
+		t.Error("x outside the error state must not issue a tea.Cmd")
+	}
+	if m.disableConfirmPending {
+		t.Error("x outside the error state must not arm the confirm")
+	}
+	if len(cfg.DisabledPanes) != 0 {
+		t.Errorf("DisabledPanes = %v, want unchanged", cfg.DisabledPanes)
+	}
 }
 
 // TestView_CapabilityUnsupported_DistinctFromOtherThreeStates pins decision
@@ -1457,6 +1866,15 @@ func TestMarkRead_Failure_RollsBackOptimisticUpdate(t *testing.T) {
 	if !ok || item.Read {
 		t.Errorf("after a failed MarkRead result, item = %+v, ok=%v, want Read rolled back to false", item, ok)
 	}
+
+	// Part C of task 19: the rollback above must not be silent — closes
+	// reviewer finding 6, where a failed u/d used to roll back with nothing
+	// telling the user why. GetStatusMessage() is the pane-level half of
+	// decisions 81/82; app_test.go covers the app-level status-bar half.
+	got := m.GetStatusMessage()
+	if !strings.Contains(got, "Mark read failed") || !strings.Contains(got, "boom") {
+		t.Errorf("GetStatusMessage() after failed MarkRead = %q, want it to name the action and the error", got)
+	}
 }
 
 // TestMarkRead_AlreadyRead_IsOneWay_NoSecondCall is the mutation target for
@@ -1564,6 +1982,43 @@ func TestMarkDone_Failure_RestoresRow(t *testing.T) {
 	}
 	if !foundTarget {
 		t.Errorf("Items() = %+v, want the rolled-back row's own Identity restored", m.list.Items())
+	}
+
+	got := m.GetStatusMessage()
+	if !strings.Contains(got, "Mark done failed") || !strings.Contains(got, "boom") {
+		t.Errorf("GetStatusMessage() after failed MarkDone = %q, want it to name the action and the error", got)
+	}
+}
+
+// TestMarkResult_Success_ClearsAnyPriorFailureMessage pins that a success
+// clears m.statusMessage rather than leaving an earlier action's failure
+// message stuck on screen forever once a later action succeeds.
+//
+// Deliberately does NOT call HandleFetchResult between the failed mark and
+// the successful one. An earlier version did, and could not discriminate the
+// mutation it exists to catch: HandleFetchResult resets statusMessage
+// unconditionally, so the intervening fetch — not handleMarkResult's own
+// `m.statusMessage = ""` — was doing the clearing, and deleting that line
+// left this test passing. Retrying straight after the failure is also the
+// realistic path: a user who sees "Mark read failed" presses `u` again, they
+// do not wait out a poll cycle first.
+func TestMarkResult_Success_ClearsAnyPriorFailureMessage(t *testing.T) {
+	marker := &fakeMarker{readErr: errors.New("boom")}
+	want := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{want})
+
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+	if m.GetStatusMessage() == "" {
+		t.Fatal("precondition: want a failure message set after the failed MarkRead")
+	}
+
+	marker.readErr = nil
+	m, cmd = m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+
+	if got := m.GetStatusMessage(); got != "" {
+		t.Errorf("GetStatusMessage() after a successful mark = %q, want empty (the retry itself must clear the prior failure, without waiting for a fetch)", got)
 	}
 }
 

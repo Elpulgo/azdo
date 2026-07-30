@@ -1116,12 +1116,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if markCmd != nil {
 			cmds = append(cmds, markCmd)
 		}
+		// A failed `u`/`d` sets the pane's statusMessage (task 19 Part C,
+		// closing reviewer finding 6's silent rollback); a success clears it.
+		// syncNotificationsActionMessage is the one place decisions 81/82 are
+		// implemented — mirror it here exactly as NotificationsFetchedMsg
+		// below does, rather than reading m.notificationsView.GetStatusMessage()
+		// directly.
+		m.syncNotificationsActionMessage()
 		// The mark can flip the unread badge (a success clears it; a
 		// failure rolls the optimistic override back, re-raising it), and
 		// the badge is rendered from every tab regardless of which one is
 		// active. Re-measure here — same as NotificationsFetchedMsg below —
 		// so m.footerRows does not go stale relative to the badge's new
-		// digit width.
+		// digit width. Must come after syncNotificationsActionMessage, not
+		// before: the status message can itself add a wrapped footer row,
+		// and resizeActiveViewIfNeeded needs the status bar's fields settled
+		// first (decision 77).
 		m.resizeActiveViewIfNeeded()
 		return m, tea.Batch(cmds...)
 

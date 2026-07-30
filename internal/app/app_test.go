@@ -3602,9 +3602,17 @@ func TestModel_NotificationsTab_FilterEmpty_DistinctFromEmptyInbox(t *testing.T)
 // through NewModel and lands a fetch failure via notificationsView's exported
 // HandleFetchResult, using the real error internal/github's Adapter returns
 // with no NotificationsClient configured — pinning that the full app View()
-// renders decision 63's error state, carrying decision 17's token-scope
-// skeleton and the adapter's real nil-client message, and not the empty-inbox
-// text.
+// renders decision 63's error state and the adapter's real nil-client
+// message, and not the empty-inbox text.
+//
+// Task 19 recovers *github.APIError via errors.As to differentiate a 403
+// missing-scope response from other failures; the adapter's nil-client error
+// here is a plain fmt.Errorf, not a *github.APIError, so it falls into the
+// generic branch, which must NOT carry decision 17's scope banner — showing
+// it here would misleadingly blame a missing scope for what is actually a
+// wiring gap. See internal/ui/notifications/list_test.go's own
+// TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner for the
+// pane-level twin of this same assertion.
 func TestModel_NotificationsTab_Error_RendersThroughFullView(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -3632,11 +3640,11 @@ func TestModel_NotificationsTab_Error_RendersThroughFullView(t *testing.T) {
 	if !strings.Contains(view, "Notifications unavailable:") {
 		t.Errorf("expected the error render in the full app View(); view:\n%s", view)
 	}
-	if !strings.Contains(view, "GitHub token scope required: notifications") {
-		t.Errorf("expected decision 17's token-scope skeleton in the full app View(); view:\n%s", view)
-	}
 	if !strings.Contains(view, "no notifications client configured") {
 		t.Errorf("expected the adapter's real nil-client message in the full app View(); view:\n%s", view)
+	}
+	if strings.Contains(view, "GitHub token scope required: notifications") {
+		t.Errorf("expected NO scope banner for a generic/nil-client failure; view:\n%s", view)
 	}
 	if strings.Contains(view, "You're all caught up.") {
 		t.Errorf("error state rendered the empty-inbox text instead; view:\n%s", view)
@@ -3863,6 +3871,123 @@ func TestModel_View_OutputHeightMatchesTerminal_AfterMarkResultRollback(t *testi
 		t.Errorf("after MarkResultMsg's failure rollback re-raised the unread count, View() rendered %d rows for a %d-row terminal (footerRows=%d) — the footer was not re-measured; view:\n%s",
 			h, termHeight, m.footerRows, view)
 	}
+}
+
+// TestModel_MarkResultMsg_FailureMessage_ReachesStatusBar_ThroughView pins
+// task 19 Part C's decision-81 compliance: a failed mark's message must be
+// observable through app.Model's own View(), not merely through the pane's
+// GetStatusMessage() (which internal/ui/notifications/list_test.go already
+// covers, but per decision 81 that field is not itself a render surface).
+// This is what proves the new m.syncNotificationsActionMessage() call in the
+// MarkResultMsg case is actually wired, not just present in the diff.
+func TestModel_MarkResultMsg_FailureMessage_ReachesStatusBar_ThroughView(t *testing.T) {
+	marker := &appMarkerStub{markErr: errors.New("403 missing scope")}
+	m, title := markRoutingModel(t, marker)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from d")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(notifications.MarkResultMsg); !ok {
+		t.Fatalf("cmd produced %T, want notifications.MarkResultMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+
+	view := dewrapFooterText(m.View())
+	if !strings.Contains(view, "Mark done failed") || !strings.Contains(view, "403 missing scope") {
+		t.Errorf("view after a failed MarkDone = %q, want it to name the action and the error via the status bar; row title %q", view, title)
+	}
+}
+
+// TestModel_View_OutputHeightMatchesTerminal_AfterMarkFailureMessage pins
+// decision 77's footer-remeasurement obligation for the new
+// m.syncNotificationsActionMessage() call added to the MarkResultMsg case: it
+// widens the status bar's warning message exactly like `o`'s own failure
+// message does, so the handler must still leave m.footerRows in sync with
+// what View() actually renders.
+//
+// Sweeps the same width band TestModel_View_OutputHeightMatchesTerminal_AfterOpenInBrowserFailure
+// does, but this message's own width-to-wrap behavior was instrumented
+// directly rather than assumed to match that test's: with
+// resizeActiveViewIfNeeded's call removed from the MarkResultMsg branch
+// (verified by temporarily deleting it and re-running this exact sweep before
+// writing this test), 100/110/116/120 do NOT discriminate — the message's
+// wrap happens to land on a footer-row count the stale m.footerRows already
+// matched by coincidence at those widths — while 128/130/150 do, overflowing
+// the terminal by one row when the resize call is missing. 130 doubles as
+// markRoutingModel's own fixed construction width, so it is included even
+// though a second, independently-built model is used per sub-test here for
+// the wider band.
+func TestModel_View_OutputHeightMatchesTerminal_AfterMarkFailureMessage(t *testing.T) {
+	const termHeight = 40
+	widths := []int{100, 110, 116, 120, 128, 130, 150}
+
+	for _, width := range widths {
+		width := width
+		t.Run(fmt.Sprintf("width=%d", width), func(t *testing.T) {
+			marker := &appMarkerStub{markErr: errors.New("403 missing scope")}
+			m, title := markRoutingModelAtWidth(t, marker, width)
+
+			// Prime the pointer-mutation render; deliberately not asserted on
+			// (mirrors TestModel_View_OutputHeightMatchesTerminal_AfterOpenInBrowserFailure's
+			// own workaround for the same first-render-after-WindowSizeMsg gap).
+			_ = m.View()
+			if !strings.Contains(m.View(), title) {
+				t.Fatalf("precondition: want the seeded row %q to render; view:\n%s", title, m.View())
+			}
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+			m = updated.(Model)
+			if cmd == nil {
+				t.Fatal("want a non-nil cmd from d")
+			}
+			msg := cmd()
+			updated, _ = m.Update(msg)
+			m = updated.(Model)
+
+			view := m.View()
+			if !strings.Contains(dewrapFooterText(view), "Mark done failed") {
+				t.Fatalf("precondition: want the failure message rendered before measuring height; view:\n%s", view)
+			}
+			if h := strings.Count(view, "\n") + 1; h != termHeight {
+				t.Errorf("width=%d: View() rendered %d rows for a %d-row terminal after the mark-failure message appeared (footerRows=%d); view:\n%s",
+					width, h, termHeight, m.footerRows, view)
+			}
+		})
+	}
+}
+
+// markRoutingModelAtWidth is markRoutingModel with a caller-supplied width,
+// so TestModel_View_OutputHeightMatchesTerminal_AfterMarkFailureMessage can
+// sweep the footer width band without re-deriving the seeded row/marker
+// wiring at each width.
+func markRoutingModelAtWidth(t *testing.T, marker provider.NotificationSource, width int) (Model, string) {
+	t.Helper()
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	const title = "ROUTE-ME-HOME"
+	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), marker, cfg).
+		SetFeed([]provider.Notification{{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+			Title:     title,
+			Reason:    provider.NotificationReasonReviewRequested,
+			UpdatedAt: time.Now(),
+		}})
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+	return updated.(Model), title
 }
 
 // TestModel_NotificationMarker_IsWiredToThePane closes the gap the task-14

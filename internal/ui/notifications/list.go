@@ -1,11 +1,14 @@
 package notifications
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/browser"
 	"github.com/Elpulgo/azdo/internal/config"
+	"github.com/Elpulgo/azdo/internal/github"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
@@ -128,13 +131,33 @@ type Model struct {
 	// m.list.GetStatusMessage(), which always reports "" in list mode.
 	//
 	// Only ever non-empty for `o`'s two failure outcomes (empty WebURL, a
-	// failed browser launch) — success sets it back to "", a deliberately
-	// silent outcome (the browser window appearing is the feedback) that
-	// doubles as one of two clearing triggers. The other is HandleFetchResult,
-	// which resets it unconditionally on every fetch, so a stale failure
-	// message never survives "the user navigated away and a poll refreshed
-	// the feed while they were gone."
+	// failed browser launch), a failed `u`/`d` (task 19, task 14 reviewer
+	// finding 6), and the disable action's outcome (task 19, decision 17) —
+	// success sets it back to "" for `o` and for a mark (see handleMarkResult),
+	// a deliberately silent outcome for `o` (the browser window appearing is
+	// the feedback) that doubles as one of two clearing triggers. The other is
+	// HandleFetchResult, which resets it unconditionally on every fetch, so a
+	// stale failure message never survives "the user navigated away and a
+	// poll refreshed the feed while they were gone."
 	statusMessage string
+
+	// cfg is the config the disable action (task 19, decision 17, Part B)
+	// mutates and saves. It is the same *config.Config the rest of app.Model
+	// holds — NewModelWithStyles never copies it — so a successful disable is
+	// visible to the rest of the app immediately, even though (per disablePane's
+	// doc comment) it only changes what the *next* restart's tab list looks
+	// like. May be nil (NewModel's zero-config path, and any pane built before
+	// a config existed); disablePane reports failure rather than panicking.
+	cfg *config.Config
+
+	// disableConfirmPending is the confirm gate for the `x` disable action
+	// (task 19, decision 17, Part B): true only in the window between the
+	// first (arming) press and the second (confirming) press, so a single
+	// keypress can never write the user's config. Reset by any key other than
+	// a second x, and unconditionally by HandleFetchResult, so an arm can
+	// never survive past the error occurrence that raised it into some later,
+	// unrelated error.
+	disableConfirmPending bool
 }
 
 // markDebounceWindow bounds how long a local u/d override outweighs a poll
@@ -267,6 +290,7 @@ func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource, cf
 		list:   listview.New(lvCfg, s).SetLoading(true),
 		marker: marker,
 		now:    time.Now,
+		cfg:    cfg,
 	}
 }
 
@@ -356,6 +380,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok && !m.list.IsSearching() && m.list.GetViewMode() == listview.ViewList {
+		if m.disableConfirmPending && key.String() != disablePaneKey {
+			// Any key other than a second disablePaneKey cancels the arm.
+			// Falls through to whatever that key would otherwise do below —
+			// harmless in practice, since u/d/o are already refused by
+			// canTriage while the pane is errored, which is the only state
+			// this arm is reachable from.
+			m.disableConfirmPending = false
+		}
+
 		switch key.String() {
 		case "f":
 			return m.cycleReasonFilter(), nil
@@ -374,6 +407,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.openInBrowser()
+		case disablePaneKey:
+			return m.handleDisableKey(), nil
 		}
 	}
 
@@ -531,17 +566,20 @@ func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
 	}
 }
 
-// FORWARD: task 19 — a failed `u`/`d` is currently silent. res.err is carried
-// here intact and then discarded, so a user pressing `d` against a 403 sees the
-// row vanish and silently reappear a round trip later, indistinguishable from a
-// rendering glitch. Task 19 owns 403/401 differentiation for the *List* path;
-// the mark path has no owner in the spec and needs at least a status-bar
-// message on rollback.
-//
 // handleMarkResult applies the outcome of a markCmd: failure rolls the
 // optimistic change back by dropping the override, success commits it into the
 // held feed via commitOverride while deliberately leaving the override entry
 // in place.
+//
+// Part C of task 19 closes reviewer finding 6 here: a failed `u`/`d` used to
+// roll back silently, so a user pressing `d` against a 403 saw the row vanish
+// and silently reappear a round trip later, indistinguishable from a
+// rendering glitch. Failure now sets m.statusMessage to a message naming the
+// action and the underlying error; app.go's syncNotificationsActionMessage
+// (which already implements decisions 81/82 correctly) mirrors it onto the
+// status bar. A success clears statusMessage rather than leaving a stale
+// failure message from an earlier action lingering after a later one
+// succeeds.
 //
 // Success must not be a no-op. The override alone is a *finite* debounce
 // buffer, so leaving the confirmed mark resting on it means the row reappears
@@ -565,13 +603,26 @@ func (m Model) handleMarkResult(res MarkResultMsg) Model {
 		return m
 	}
 	if res.err != nil {
+		m.statusMessage = markFailureMessage(res.kind, res.err)
 		return m.dropOverride(res.key)
 	}
 	// Deliberately also commits when no entry remains: a success means the
 	// server accepted the change, so correcting the feed is right even if the
 	// entry was pruned or the user has since acted elsewhere. Erring the other
 	// way would resurrect a row the server has already dropped.
+	m.statusMessage = ""
 	return m.commitOverride(res.key, res.kind)
+}
+
+// markFailureMessage names the failed action (mark read vs. mark done) and
+// folds in the underlying error, so the status bar tells a `u` failure apart
+// from a `d` failure rather than a single generic "mark failed".
+func markFailureMessage(kind overrideKind, err error) string {
+	action := "Mark done"
+	if kind == overrideRead {
+		action = "Mark read"
+	}
+	return fmt.Sprintf("%s failed: %v", action, err)
 }
 
 // commitOverride folds a server-confirmed `u`/`d` into m.feed itself:
@@ -625,7 +676,10 @@ func (m Model) commitOverride(key identityKey, kind overrideKind) Model {
 //
 //  1. capability-unsupported (SetCapabilityUnsupported) — unreachable through
 //     the tab in phase 1; see capabilityUnsupportedBody.
-//  2. error — a failed List (decisions 17, 63); see errorBody.
+//  2. error — a failed List (decisions 17, 63), differentiated per task 19
+//     into a 403-missing-scope, a 401-expired-token and a generic render (see
+//     errorBody) — or, while the `x` disable action's confirm is armed, task
+//     19/decision 17's confirmation overlay instead (see disableConfirmBody).
 //  3. filter-empty — the feed has rows but the active `f` filter matches
 //     none of them (the bug decision 57 measured); see filterEmptyBody.
 //  4. empty inbox — the feed itself has no rows; see emptyInboxBody.
@@ -644,6 +698,9 @@ func (m Model) View() string {
 	}
 
 	if err := m.list.Err(); err != nil {
+		if m.disableConfirmPending {
+			return disableConfirmBody()
+		}
 		return errorBody(err)
 	}
 
@@ -714,8 +771,16 @@ func (m Model) SetCapabilityUnsupported() Model {
 // than only on the next successful `o` so the message does not survive
 // indefinitely on an inbox the user has since navigated away from and back
 // to, or one a poll has since moved on from entirely.
+//
+// Also resets disableConfirmPending unconditionally (task 19, decision 17,
+// Part B): a fresh fetch means whichever error occurrence armed the confirm
+// is over — success clears the error state outright, and even a repeat
+// failure deserves its own fresh confirm rather than letting a stale arm from
+// a *previous* failure silently confirm on the next `x` press against an
+// unrelated one.
 func (m Model) HandleFetchResult(items []provider.Notification, err error) Model {
 	m.statusMessage = ""
+	m.disableConfirmPending = false
 	if err != nil {
 		m.list = m.list.HandleFetchResult(nil, err)
 		return m
@@ -752,23 +817,114 @@ func filterEmptyBody(reason provider.NotificationReason) string {
 	)
 }
 
-// errorBody renders decision 63's fourth state: a failed List call. It
-// carries decision 17's token-scope skeleton — a static line naming the
-// GitHub scope every List call needs — and folds the underlying error
-// (including the adapter's nil-client message,
-// "github: notifications: no notifications client configured", when no
-// NotificationsClient was wired at construction) into the body verbatim.
+// classicTokenSettingsURL and fineGrainedTokenSettingsURL are named per
+// GitHub's two PAT flavors: classic tokens send scope-check headers
+// (X-Accepted-OAuth-Scopes / X-OAuth-Scopes) on a 403, fine-grained tokens
+// never do. scopeErrorBody points the user at whichever page matches what
+// the response actually told us.
+const (
+	classicTokenSettingsURL     = "https://github.com/settings/tokens"
+	fineGrainedTokenSettingsURL = "https://github.com/settings/personal-access-tokens"
+)
+
+// errorBody renders decision 63's fourth state: a failed List call. Task 19
+// recovers *github.APIError via errors.As to tell three cases apart, each
+// with its own distinct render so decision 63's mutual-distinguishability
+// rule holds pairwise:
 //
-// FORWARD: task 19 replaces this flat skeleton with real differentiation —
-// recovering *github.APIError via errors.As to tell a 403 missing-scope
-// response apart from a 401-expired token and a generic failure, plus the
-// in-view "disable this pane" action that writes disabled_panes via
-// Config.Save(). Do not build that branching here.
+//   - A 403 that is not rate-limiting: scopeErrorBody — names the
+//     "notifications" scope and how to add it.
+//   - A 401: expiredTokenErrorBody — the token itself is rejected, not a
+//     scope gap; re-adding a scope would not fix this.
+//   - Everything else, including a non-*APIError (e.g. the adapter's
+//     nil-client message, "github: notifications: no notifications client
+//     configured", when no NotificationsClient was wired at construction):
+//     genericErrorBody. This case must never show the scope banner — doing
+//     so for, say, a network timeout or a missing client would be actively
+//     misleading.
+//
+// All three end with disableHint, the shared "press x to disable this pane"
+// pointer into task 19's Part B — a shared suffix does not erase each
+// variant's distinct, unique-substring identifying content above it.
 func errorBody(err error) string {
+	var apiErr *github.APIError
+	if errors.As(err, &apiErr) {
+		switch {
+		case !apiErr.RateLimited && apiErr.StatusCode == http.StatusForbidden:
+			return scopeErrorBody(apiErr)
+		case apiErr.StatusCode == http.StatusUnauthorized:
+			return expiredTokenErrorBody(err)
+		}
+	}
+	return genericErrorBody(err)
+}
+
+// scopeErrorBody renders a 403 that is not rate-limiting. GitHub sends
+// X-Accepted-OAuth-Scopes/X-OAuth-Scopes only for classic PATs; fine-grained
+// tokens return a bare 403 with neither header. Rather than pretend the
+// headers confirm anything in that case, this names the ambiguity honestly:
+// the required scope either way, but a different, hedged sentence about
+// where to check it depending on whether GitHub told us anything.
+func scopeErrorBody(apiErr *github.APIError) string {
+	if apiErr.RequiredScopes == "" && apiErr.GrantedScopes == "" {
+		return fmt.Sprintf(
+			"Notifications unavailable: %v\n\n"+
+				"GitHub token scope required: notifications\n\n"+
+				"GitHub did not report token scopes with this response — this is "+
+				"expected for fine-grained personal access tokens, which never send "+
+				"scope headers. Check the token's notifications permission at %s, or "+
+				"switch to a classic token with the notifications scope at %s.\n\n%s",
+			apiErr, fineGrainedTokenSettingsURL, classicTokenSettingsURL, disableHint(),
+		)
+	}
 	return fmt.Sprintf(
-		"Notifications unavailable: %v\n\nGitHub token scope required: notifications",
-		err,
+		"Notifications unavailable: %v\n\n"+
+			"GitHub token scope required: notifications\n\n"+
+			"Granted scopes: %s\nRequired scopes: %s\n\n"+
+			"Add the notifications scope to this classic token at %s.\n\n%s",
+		apiErr, orNone(apiErr.GrantedScopes), orNone(apiErr.RequiredScopes),
+		classicTokenSettingsURL, disableHint(),
 	)
+}
+
+// expiredTokenErrorBody renders a 401: the token itself was rejected
+// (expired, revoked, or malformed), not a scope gap. Deliberately does not
+// mention scopes at all — telling the user to add a scope to a token GitHub
+// no longer accepts at all would be wrong.
+func expiredTokenErrorBody(err error) string {
+	return fmt.Sprintf(
+		"Notifications unavailable: %v\n\n"+
+			"Your GitHub token appears to be expired or invalid. Generate a new "+
+			"one at %s (classic) or %s (fine-grained) and update your config.\n\n%s",
+		err, classicTokenSettingsURL, fineGrainedTokenSettingsURL, disableHint(),
+	)
+}
+
+// genericErrorBody renders every other failure: non-*APIError errors (the
+// nil-client message chief among them), rate-limited 403s, and any status
+// code that is neither 403 nor 401. Never shows the scope banner — this is
+// exactly the case task 19 stops attaching it to falsely.
+func genericErrorBody(err error) string {
+	return fmt.Sprintf("Notifications unavailable: %v\n\n%s", err, disableHint())
+}
+
+// disableHint is the shared closing line across all three error renders,
+// pointing at task 19 Part B's in-view disable action. Takes effect at the
+// next restart (decision 61: buildEnabledTabs computes the tab list once at
+// NewModel construction), which this sentence says outright rather than
+// implying the tab disappears immediately.
+func disableHint() string {
+	return fmt.Sprintf("Press %s to disable this pane (takes effect on next restart).", disablePaneKey)
+}
+
+// orNone renders an empty header value as "none" rather than a blank
+// string, so scopeErrorBody's "Granted scopes: " line never looks like a
+// rendering bug when GitHub reports an empty (but present) scope list.
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 // capabilityUnsupportedBody renders decision 63's third, unreachable-in-phase-1
@@ -776,6 +932,100 @@ func errorBody(err error) string {
 // production ever reaches this.
 func capabilityUnsupportedBody() string {
 	return "Notifications are not supported by this configuration.\n\nNo configured backend implements the notifications capability."
+}
+
+// disablePaneKey is task 19 Part B's in-view disable action, reachable only
+// from the error state (see errorBody's disableHint and View()'s
+// disableConfirmPending branch). Chosen deliberately free of every key this
+// pane and app.go's top-level switch already reserve: not d/u/o (triage),
+// not f (reason filter), not r (decision 58's refresh stopgap), and not
+// app.go's q/ctrl+c/?/t/1-5/left/right.
+const disablePaneKey = "x"
+
+// disableConfirmBody renders the one-press-armed, confirm-on-second-press
+// overlay shown in place of errorBody while m.disableConfirmPending is true.
+// No existing confirm pattern was found elsewhere in this codebase to model
+// this on (setupwizard.go's stepConfirm is a full-screen step, not a
+// single-pane keypress action), so this is a minimal invented two-press
+// arm/confirm: pressing disablePaneKey again writes disabled_panes; any
+// other key cancels (see Update()'s disableConfirmPending reset).
+func disableConfirmBody() string {
+	return fmt.Sprintf(
+		"Disable the Notifications pane?\n\n"+
+			"This writes disabled_panes: notifications to your config file. It "+
+			"takes effect the next time azdo-tui starts — this session keeps the "+
+			"tab as-is.\n\nPress %s again to confirm, or any other key to cancel.",
+		disablePaneKey,
+	)
+}
+
+// handleDisableKey implements the arm/confirm state machine driven by
+// disablePaneKey. Only reachable while the pane is in an error state (the
+// caller in Update() only routes here from that branch, but this guard
+// keeps the method safe to call directly from a test without depending on
+// that routing). The first press arms disableConfirmPending; the second
+// press (this method being called again while already armed) commits the
+// write via disablePane.
+func (m Model) handleDisableKey() Model {
+	if m.list.Err() == nil {
+		return m
+	}
+	if !m.disableConfirmPending {
+		m.disableConfirmPending = true
+		return m
+	}
+	return m.disablePane()
+}
+
+// disablePane commits task 19 Part B's confirmed disable action: it
+// idempotently appends "notifications" to m.cfg.DisabledPanes and calls
+// Config.Save() — the same *config.Config pointer app.go holds (see the cfg
+// field's doc comment), never a second write path, so task 18's round-trip
+// preservation guarantees apply here too. Existing entries (e.g. a prior
+// "metrics" disable) are preserved, not replaced.
+//
+// A nil m.cfg (never true in production, since app.go always passes its own
+// config pointer, but possible in a hand-built test Model) and a Save()
+// failure both surface visibly through m.statusMessage rather than looking
+// like they worked — Part C's routing of statusMessage to the status bar via
+// app.go's syncNotificationsActionMessage applies here identically.
+func (m Model) disablePane() Model {
+	m.disableConfirmPending = false
+
+	if m.cfg == nil {
+		m.statusMessage = "Cannot disable notifications: no config available."
+		return m
+	}
+	if containsString(m.cfg.DisabledPanes, "notifications") {
+		m.statusMessage = "Notifications pane is already disabled. Restart azdo-tui for it to take effect."
+		return m
+	}
+
+	original := m.cfg.DisabledPanes
+	next := make([]string, len(original), len(original)+1)
+	copy(next, original)
+	m.cfg.DisabledPanes = append(next, "notifications")
+
+	if err := m.cfg.Save(); err != nil {
+		m.cfg.DisabledPanes = original
+		m.statusMessage = fmt.Sprintf("Failed to disable notifications pane: %v", err)
+		return m
+	}
+
+	m.statusMessage = "Notifications pane disabled. Restart azdo-tui for this to take effect."
+	return m
+}
+
+// containsString reports whether s is present in list. Small local helper —
+// not worth pulling in a dependency for one linear scan over a handful of
+// pane names.
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // ReasonFilter reports the `f` cycle's current position: the selected
