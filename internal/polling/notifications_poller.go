@@ -34,6 +34,13 @@ type NotificationsPoller struct {
 	opts     provider.NotifOpts
 	stopped  bool
 	mu       sync.RWMutex
+
+	// every is the tea.Every-shaped seam StartPolling schedules its timer
+	// through. It defaults to tea.Every itself; tests substitute a fast
+	// stand-in via SetEveryForTesting so the interval StartPolling actually
+	// arms (e.g. a hint-driven value vs DefaultInterval) is observable
+	// without waiting on a real timer.
+	every func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 }
 
 // NewNotificationsPoller creates a new NotificationsPoller with the given
@@ -54,7 +61,19 @@ func NewNotificationsPoller(client NotificationsClient, interval time.Duration, 
 		interval: interval,
 		opts:     opts,
 		stopped:  false,
+		every:    tea.Every,
 	}
+}
+
+// SetEveryForTesting overrides the tea.Every-shaped seam StartPolling
+// schedules its timer through. It exists solely for tests (including
+// cross-package tests in internal/app) that need to observe the interval or
+// message StartPolling arms without waiting on a real timer; production
+// callers never call this.
+func (p *NotificationsPoller) SetEveryForTesting(every func(time.Duration, func(time.Time) tea.Msg) tea.Cmd) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.every = every
 }
 
 // SetInterval updates the polling interval.
@@ -98,6 +117,20 @@ func (p *NotificationsPoller) SetOpts(opts provider.NotifOpts) {
 	p.opts = opts
 }
 
+// Opts reports the fetch options the next poll will use.
+//
+// It exists as a test seam, mirroring Interval() above: task 15's review fix
+// re-derives NotifOpts once per fetch (app's NotificationsFetchedMsg handler
+// calls SetOpts alongside SetInterval) instead of freezing it at poller
+// construction. With no way to observe the poller's opts there is nothing to
+// assert against, and deleting that SetOpts call is invisible — the pure
+// NotifOptsFromConfig function is not what broke.
+func (p *NotificationsPoller) Opts() provider.NotifOpts {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.opts
+}
+
 // Stop stops the poller from making further API calls.
 func (p *NotificationsPoller) Stop() {
 	p.mu.Lock()
@@ -138,16 +171,23 @@ func (p *NotificationsPoller) FetchNotifications() tea.Cmd {
 
 // StartPolling returns a tea.Cmd that starts the polling timer.
 // It will send a NotificationsTickMsg after the configured interval.
+// Returns nil when no client is configured (a defensive guard; callers
+// always pass a capable composite) — this also stops the timer from ever
+// being armed for a provider that can't be polled.
 func (p *NotificationsPoller) StartPolling() tea.Cmd {
+	if p.client == nil {
+		return nil
+	}
 	if p.IsStopped() {
 		return nil
 	}
 
 	p.mu.RLock()
 	interval := p.interval
+	every := p.every
 	p.mu.RUnlock()
 
-	return tea.Every(interval, func(t time.Time) tea.Msg {
+	return every(interval, func(t time.Time) tea.Msg {
 		return NotificationsTickMsg{}
 	})
 }

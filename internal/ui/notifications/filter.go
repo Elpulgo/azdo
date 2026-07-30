@@ -152,7 +152,13 @@ func NotifOptsFromConfig(cfg *config.Config) provider.NotifOpts {
 		Max:               nc.MaxItems,
 	}
 	if nc.SinceDays > 0 {
-		opts.Since = time.Now().AddDate(0, 0, -nc.SinceDays)
+		since := time.Now().AddDate(0, 0, -nc.SinceDays)
+		// Truncate to the start of the day so repeated calls within the same
+		// day (task 15: NotifOpts is now derived once per fetch, not frozen
+		// at poller construction) produce an identical Since value, which
+		// keeps the GitHub request path (buildPath) stable instead of
+		// changing on every single poll tick.
+		opts.Since = time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, since.Location())
 	}
 	return opts
 }

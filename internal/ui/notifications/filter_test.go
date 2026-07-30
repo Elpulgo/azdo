@@ -737,12 +737,36 @@ func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
 		Notifications: config.NotificationsConfig{SinceDays: 7},
 	}
 
-	before := time.Now().AddDate(0, 0, -7)
-	got := NotifOptsFromConfig(cfg)
-	after := time.Now().AddDate(0, 0, -7)
+	want := time.Now().AddDate(0, 0, -7)
+	want = time.Date(want.Year(), want.Month(), want.Day(), 0, 0, 0, 0, want.Location())
 
-	if got.Since.Before(before.Add(-time.Minute)) || got.Since.After(after.Add(time.Minute)) {
-		t.Errorf("Since = %v, want approximately 7 days ago (between %v and %v)", got.Since, before, after)
+	got := NotifOptsFromConfig(cfg)
+
+	if !got.Since.Equal(want) {
+		t.Errorf("Since = %v, want start-of-day 7 days ago %v", got.Since, want)
+	}
+}
+
+// TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls
+// pins task 15's decision 75: NotifOpts is now re-derived on every fetch
+// (not frozen at poller construction), so Since must be truncated to the day
+// boundary — otherwise two calls a second apart would each compute a
+// slightly different Since, changing the GitHub request path (buildPath) on
+// every single poll tick.
+func TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{SinceDays: 3},
+	}
+
+	first := NotifOptsFromConfig(cfg)
+	time.Sleep(time.Second)
+	second := NotifOptsFromConfig(cfg)
+
+	if !first.Since.Equal(second.Since) {
+		t.Errorf("Since differed across same-day calls a second apart: first=%v second=%v, want identical truncated-to-day values", first.Since, second.Since)
+	}
+	if first.Since.Hour() != 0 || first.Since.Minute() != 0 || first.Since.Second() != 0 || first.Since.Nanosecond() != 0 {
+		t.Errorf("Since = %v, want truncated to start of day (00:00:00)", first.Since)
 	}
 }
 

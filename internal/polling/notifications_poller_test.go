@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // MockNotificationsClient implements a minimal interface for testing.
@@ -258,14 +259,52 @@ func TestNotificationsPoller_NilClient_OnTick_ReturnsNil(t *testing.T) {
 	}
 }
 
-func TestNotificationsPoller_NilClient_StartPolling_StillWorks(t *testing.T) {
-	// StartPolling only sets a timer; it does not touch client.
-	// It must still return a non-nil cmd when the poller is not stopped.
+// TestNotificationsPoller_NilClient_StartPolling_ReturnsNil pins the review
+// fix: a nil client means the provider has no notifications-capable backend
+// at all (app.go now constructs the poller with a nil client whenever
+// hasNotificationCapability(p) is false), and arming a timer that will only
+// ever tick into a no-op OnTick is a permanent, pointless poll loop. Previous
+// behaviour (arming the timer regardless of client) is intentionally
+// reversed here.
+func TestNotificationsPoller_NilClient_StartPolling_ReturnsNil(t *testing.T) {
 	var nc NotificationsClient
 	p := NewNotificationsPoller(nc, 30*time.Second, provider.NotifOpts{})
 
 	cmd := p.StartPolling()
+	if cmd != nil {
+		t.Error("StartPolling should return nil when client is nil")
+	}
+}
+
+// TestNotificationsPoller_StartPolling_UsesInjectedEverySeam is the
+// mutation-guarding test for the interval-arithmetic mutant that survived
+// review: `interval := p.interval` silently replaced by `interval :=
+// DefaultInterval` inside StartPolling. Without an injectable seam, the
+// interval tea.Every is actually called with is unobservable short of
+// waiting out a real timer, so this substitutes a fast stand-in and asserts
+// on the duration it was invoked with.
+func TestNotificationsPoller_StartPolling_UsesInjectedEverySeam(t *testing.T) {
+	client := &MockNotificationsClient{}
+	// Deliberately distinct from DefaultInterval (30s): if the mutation this
+	// test guards against (interval := p.interval silently replaced by
+	// interval := DefaultInterval) were present, using 30s here would not
+	// distinguish the two and the mutation would survive undetected.
+	const configured = 90 * time.Second
+	p := NewNotificationsPoller(client, configured, provider.NotifOpts{})
+
+	var gotDuration time.Duration
+	p.SetEveryForTesting(func(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
+		gotDuration = d
+		return func() tea.Msg { return fn(time.Now()) }
+	})
+
+	cmd := p.StartPolling()
 	if cmd == nil {
-		t.Error("StartPolling should return a timer command even when client is nil")
+		t.Fatal("expected non-nil command")
+	}
+	cmd()
+
+	if gotDuration != configured {
+		t.Errorf("StartPolling armed every() with %v, want the poller's configured interval %v (not DefaultInterval)", gotDuration, configured)
 	}
 }

@@ -273,6 +273,50 @@ func TestModel_Update_NotificationsFetchedMsg_ErrorDoesNotClearFeed(t *testing.T
 	}
 }
 
+// TestModel_Update_NotificationsFetchedMsg_NilNilDoesNotClearFeed pins the
+// review fix for Decision 74: Items == nil && Err == nil means "nothing
+// changed" (a FetchNotifications call skipped or short-circuited before
+// calling the client), not "the feed is now empty". Before this fix, the
+// handler always called HandleFetchResult(filtered, msg.Err) unconditionally,
+// and filtered is nil for a nil msg.Items, so HandleFetchResult's success path
+// (SetFeed) wiped an otherwise-healthy feed on every such message.
+func TestModel_Update_NotificationsFetchedMsg_NilNilDoesNotClearFeed(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{
+		Items: []provider.Notification{
+			{
+				Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+				Title:     "Still here after a nil,nil message",
+				Reason:    provider.NotificationReasonMentioned,
+				UpdatedAt: time.Now(),
+			},
+		},
+	})
+	m = updated.(Model)
+
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{Items: nil, Err: nil})
+	m = updated.(Model)
+
+	view := m.notificationsView.View()
+	if !strings.Contains(view, "Still here after a nil,nil message") {
+		t.Errorf("notifications pane view = %q, want the existing row still present after a nil,nil fetch result", view)
+	}
+	if strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("notifications pane view = %q, must not render the empty-inbox state: a nil,nil result means nothing changed, not that the feed is now empty", view)
+	}
+}
+
 func TestModel_HandlesPipelineRunsUpdated_Success(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1974,6 +2018,33 @@ func TestHasNotificationCapability_AzureOnlyComposite_False(t *testing.T) {
 	}
 }
 
+// TestNotificationsPollerClient_ReturnsNilWhenIncapable pins the review fix's
+// belt-and-braces half at the poller-construction call site: passing nil as
+// the client whenever the provider is not notification-capable, even though
+// notificationMarker(p) alone would still return a non-nil
+// *provider.CompositeProvider (notificationMarker deliberately does not call
+// HasNotifications(), by its own doc comment — correct for the pane's mark
+// routing, wrong for a poller that must never arm its timer against an
+// incapable backend). This is independent of and in addition to Init()'s own
+// isTabEnabled gate: a capable-shaped composite over an Azure-only backend
+// must still yield a nil client here, regardless of what any caller checks
+// before constructing the poller.
+func TestNotificationsPollerClient_ReturnsNilWhenIncapable(t *testing.T) {
+	azureOnly := newNotificationIncapableProvider()
+
+	if _, ok := azureOnly.(provider.NotificationSource); !ok {
+		t.Fatal("fixture is not capable-shaped: this test needs a composite that satisfies provider.NotificationSource unconditionally, to distinguish the capability-checked helper from a bare notificationMarker call")
+	}
+
+	if got := notificationsPollerClient(azureOnly); got != nil {
+		t.Errorf("notificationsPollerClient(Azure-only composite) = %v, want nil — the poller must never be constructed with a client for a non-notification-capable provider", got)
+	}
+
+	if got := notificationsPollerClient(newNotificationCapableProvider()); got == nil {
+		t.Error("notificationsPollerClient(GitHub composite) = nil, want a non-nil client")
+	}
+}
+
 // hintingProviderStub embeds provider.Provider so only
 // NotificationsPollInterval needs an implementation, mirroring scopeStub's
 // pattern above. It exists solely to make notificationsIntervalHinter
@@ -3259,5 +3330,348 @@ func TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller(
 
 	if got, want := m.notificationsPoller.Interval(), 300*time.Second; got != want {
 		t.Errorf("interval after a fetch that raised the hint = %v, want %v — the hint is being computed and discarded, so GitHub's rate-limit request is ignored", got, want)
+	}
+}
+
+// TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig pins
+// Decision 75 for the nil,nil ("nothing changed") branch: NotifOpts must be
+// re-derived once per fetch, not frozen at poller construction (which is
+// what NewModel's own notifications.NotifOptsFromConfig(cfg) call would
+// otherwise leave in place forever). cfg.Notifications.MaxItems is mutated
+// through the same *config.Config pointer m.config aliases *after*
+// construction, so a poller whose opts were only ever set once at startup
+// would still report the old value here; only the handler's own SetOpts
+// call turns the config change into an observable difference.
+func TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Notifications:   config.NotificationsConfig{MaxItems: 10},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	if got, want := m.notificationsPoller.Opts().Max, 10; got != want {
+		t.Fatalf("precondition: opts.Max at construction = %d, want %d", got, want)
+	}
+
+	cfg.Notifications.MaxItems = 99
+
+	updated, _ := m.Update(polling.NotificationsFetchedMsg{Items: nil, Err: nil})
+	m = updated.(Model)
+
+	if got, want := m.notificationsPoller.Opts().Max, 99; got != want {
+		t.Errorf("opts.Max after a nil,nil fetch following a config change = %d, want %d — SetOpts must be called alongside SetInterval in the nil,nil branch too", got, want)
+	}
+}
+
+// TestModel_NotificationsFetchedMsg_RealResult_ReDerivesOptsFromConfig is
+// TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig's sibling
+// for the ordinary (non-nil,nil) branch, which has its own separate SetOpts
+// call — deleting that one leaves the nil,nil branch's call intact and the
+// sibling test above green, so this needs its own, independent assertion.
+func TestModel_NotificationsFetchedMsg_RealResult_ReDerivesOptsFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Notifications:   config.NotificationsConfig{MaxItems: 10},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	if got, want := m.notificationsPoller.Opts().Max, 10; got != want {
+		t.Fatalf("precondition: opts.Max at construction = %d, want %d", got, want)
+	}
+
+	cfg.Notifications.MaxItems = 99
+
+	updated, _ := m.Update(polling.NotificationsFetchedMsg{
+		Items: []provider.Notification{
+			{
+				Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+				Title:     "Real result",
+				Reason:    provider.NotificationReasonMentioned,
+				UpdatedAt: time.Now(),
+			},
+		},
+	})
+	m = updated.(Model)
+
+	if got, want := m.notificationsPoller.Opts().Max, 99; got != want {
+		t.Errorf("opts.Max after a real fetch result following a config change = %d, want %d — SetOpts must be called alongside SetInterval in the ordinary branch too", got, want)
+	}
+}
+
+// TestModel_QuitKey_StopsNotificationsPollerToo pins the review fix: quitting
+// must stop both pollers, not just the pipeline one. Before this fix,
+// m.notificationsPoller kept running (IsStopped() stayed false forever),
+// which is invisible in practice only because the whole process exits
+// straight after — but any in-flight cmd (e.g. a fetch already scheduled)
+// would still complete and could still call back into a torn-down model in
+// a longer-lived host.
+func TestModel_QuitKey_StopsNotificationsPollerToo(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	if m.notificationsPoller.IsStopped() {
+		t.Fatal("precondition: notificationsPoller must not be stopped yet")
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("want tea.Quit cmd from q")
+	}
+
+	if !m.notificationsPoller.IsStopped() {
+		t.Error("notificationsPoller.IsStopped() = false after q, want true — quitting must stop both pollers")
+	}
+}
+
+// TestModel_NotificationsKeybindings_IncludesMarkReadAndMarkDone pins the
+// review fix: task 14 already ships the `u` (mark read) and `d` (mark done)
+// keys in the pane's own Update switch, but the status bar's
+// notificationsKeybindings() never listed them, so the pane's own keys were
+// undiscoverable from the chrome every other tab uses for this.
+func TestModel_NotificationsKeybindings_IncludesMarkReadAndMarkDone(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+	m.activeTab = TabNotifications
+	m.resizeActiveViewIfNeeded()
+
+	view := m.View()
+	if !strings.Contains(view, "u mark read") {
+		t.Errorf("notifications tab view = %q, want the u mark-read keybinding listed", view)
+	}
+	if !strings.Contains(view, "d mark done") {
+		t.Errorf("notifications tab view = %q, want the d mark-done keybinding listed", view)
+	}
+}
+
+// ─── Init()'s notifications-poller-timer gate (mutation survivors S2, S3) ──
+
+// TestModel_NotificationsStartPollingCmd_EnabledAndCapable_ArmsTimer and
+// TestModel_NotificationsStartPollingCmd_DisabledOrIncapable_ReturnsNil pin
+// the fix-1 gate as a pair, distinguishing polling.NotificationsTickMsg from
+// polling.TickMsg via NotificationsPoller's every seam (SetEveryForTesting) so
+// the arm case can be resolved without waiting on a real tea.Every timer or
+// invoking any other, unsafe leaf of Init()'s batch.
+
+func TestModel_NotificationsStartPollingCmd_EnabledAndCapable_ArmsTimer(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	if !m.isTabEnabled(TabNotifications) {
+		t.Fatal("precondition: notifications tab must be enabled+capable")
+	}
+
+	var everyCalled bool
+	m.notificationsPoller.SetEveryForTesting(func(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
+		everyCalled = true
+		return func() tea.Msg { return fn(time.Now()) }
+	})
+
+	cmd := m.notificationsStartPollingCmd()
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd when the notifications tab is enabled and capable")
+	}
+
+	msg := cmd()
+	if !everyCalled {
+		t.Fatal("want the injected every seam to have been invoked")
+	}
+	if _, ok := msg.(polling.NotificationsTickMsg); !ok {
+		t.Errorf("notificationsStartPollingCmd() resolved to %T, want polling.NotificationsTickMsg", msg)
+	}
+	if _, ok := msg.(polling.TickMsg); ok {
+		t.Fatal("notificationsStartPollingCmd() must never resolve to polling.TickMsg (Decision 69)")
+	}
+}
+
+func TestModel_NotificationsStartPollingCmd_DisabledOrIncapable_ReturnsNil(t *testing.T) {
+	tests := []struct {
+		name string
+		p    provider.Provider
+		cfg  *config.Config
+	}{
+		{
+			name: "incapable provider",
+			p:    newNotificationIncapableProvider(),
+			cfg: &config.Config{
+				Organization:    "testorg",
+				Projects:        []string{"testproject"},
+				PollingInterval: 60,
+				Theme:           "dark",
+			},
+		},
+		{
+			name: "capable provider, pane disabled",
+			p:    newNotificationCapableProvider(),
+			cfg: &config.Config{
+				Organization:    "testorg",
+				Projects:        []string{"testproject"},
+				PollingInterval: 60,
+				Theme:           "dark",
+				DisabledPanes:   []string{"notifications"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var client *azdevops.MultiClient
+			m := NewModel(tt.p, client, tt.cfg, "dev", "")
+			if m.isTabEnabled(TabNotifications) {
+				t.Fatal("precondition: notifications tab must be absent")
+			}
+
+			cmd := m.notificationsStartPollingCmd()
+			if cmd != nil {
+				t.Error("notificationsStartPollingCmd() must return nil when the notifications tab is disabled or incapable")
+			}
+		})
+	}
+}
+
+// batchLen returns the number of leaves cmd's tea.BatchMsg holds without
+// invoking any of them, by resolving cmd exactly one level. bubbletea's own
+// tea.Batch (see compactCmds in commands.go) never calls any sub-cmd to
+// build the BatchMsg it returns, so this one call is always safe — even
+// when, as in Init()'s own batch, some leaves are unresolvable real timers
+// or real network calls. A single non-nil cmd (len(validCmds) == 1) is
+// returned directly rather than wrapped in a BatchMsg, which is why this
+// helper is only used where the batch is known to hold more than one
+// command (Init()'s batch always does).
+func batchLen(cmd tea.Cmd) int {
+	if cmd == nil {
+		return 0
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		return len(batch)
+	}
+	return 1
+}
+
+// TestModel_Init_NotificationsTimerGate_WiredIn pins that Init() actually
+// includes notificationsStartPollingCmd()'s result: comparing the batch
+// length between an enabled+capable model and a disabled one isolates
+// exactly the one extra (or missing) cmd fix 1 gates, without invoking any
+// other leaf of Init()'s batch (m.poller.StartPolling() is a real,
+// un-gated tea.Every timer, and checkForUpdate performs real network I/O —
+// both are out of scope here and unsafe to resolve).
+//
+// activeTab is forced to TabNotifications on both models before Init() runs
+// so Init()'s separate notifications preload append (`m.activeTab !=
+// TabNotifications`, gated by the same isTabEnabled predicate but pinned
+// independently by TestModel_Init_PreloadsNotifications_WhenNotActiveTab)
+// evaluates false either way — isolating the diff to exactly the timer-arm
+// cmd this test targets. Forcing activeTab is safe here: batchLen only
+// resolves Init()'s outer tea.Batch one level (per its own doc comment), so
+// whatever m.initTabCmd(TabNotifications) itself returns is never invoked.
+func TestModel_Init_NotificationsTimerGate_WiredIn(t *testing.T) {
+	var client *azdevops.MultiClient
+
+	enabledCfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	mEnabled := NewModel(newNotificationCapableProvider(), client, enabledCfg, "dev", "")
+	if !mEnabled.isTabEnabled(TabNotifications) {
+		t.Fatal("precondition: notifications tab must be enabled+capable")
+	}
+	mEnabled.activeTab = TabNotifications
+
+	disabledCfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"notifications"},
+	}
+	mDisabled := NewModel(newNotificationCapableProvider(), client, disabledCfg, "dev", "")
+	if mDisabled.isTabEnabled(TabNotifications) {
+		t.Fatal("precondition: notifications tab must be disabled")
+	}
+	mDisabled.activeTab = TabNotifications
+
+	gotEnabled := batchLen(mEnabled.Init())
+	gotDisabled := batchLen(mDisabled.Init())
+
+	if gotEnabled != gotDisabled+1 {
+		t.Errorf("Init() batch length enabled=%d disabled=%d, want exactly one more cmd when the notifications tab is enabled+capable (notificationsStartPollingCmd wired in)", gotEnabled, gotDisabled)
+	}
+}
+
+// TestModel_Init_PreloadsNotifications_WhenNotActiveTab pins mutation
+// survivor S3: Init()'s notifications preload
+// (m.notificationsPoller.FetchNotifications()) fires even when notifications
+// is not the active tab, so switching to it later is instant. m.activeTab is
+// forced to TabPullRequests before Init() runs (mirroring the same
+// direct-field-assignment trick other tests in this file already use to force
+// a scenario), which guarantees FetchNotifications()'s cmd is the very last
+// non-nil entry appended to initCmds — the one safe leaf to invoke, since
+// every earlier entry may be a real timer or real network call.
+func TestModel_Init_PreloadsNotifications_WhenNotActiveTab(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.activeTab = TabPullRequests
+	if !m.isTabEnabled(TabNotifications) {
+		t.Fatal("precondition: notifications tab must be enabled+capable")
+	}
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from Init()")
+	}
+
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatal("want Init() to resolve to a non-empty tea.BatchMsg")
+	}
+
+	last := batch[len(batch)-1]
+	got := last()
+	if _, ok := got.(polling.NotificationsFetchedMsg); !ok {
+		t.Errorf("Init()'s last batch entry resolved to %T, want polling.NotificationsFetchedMsg — the notifications preload must still fire when notifications is not the active tab", got)
 	}
 }

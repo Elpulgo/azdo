@@ -320,6 +320,23 @@ func notificationMarker(p provider.Provider) provider.NotificationSource {
 	return marker
 }
 
+// notificationsPollerClient returns notificationMarker(p) as a
+// polling.NotificationsClient, but only when p has real notifications
+// capability (hasNotificationCapability); otherwise it returns nil. This is
+// belt-and-braces alongside gating the poller's timer in Init(): notifiedMarker
+// alone would hand *provider.CompositeProvider to the poller unconditionally,
+// since notificationMarker deliberately does not call HasNotifications() —
+// documented in notificationMarker's own comment as correct for the pane's
+// mark routing, but wrong for the poller's construction, which must self-defend
+// even if some future caller ever starts the timer without checking
+// hasNotificationCapability first.
+func notificationsPollerClient(p provider.Provider) polling.NotificationsClient {
+	if !hasNotificationCapability(p) {
+		return nil
+	}
+	return notificationMarker(p)
+}
+
 // notificationsIntervalHinter is satisfied by a provider.Provider whose
 // underlying backend(s) can report a server-suggested notifications polling
 // cadence (Decision 23) -- currently only *provider.CompositeProvider, via
@@ -639,7 +656,7 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// Update) since a GitHub hint only becomes known once the adapter has
 	// actually observed an X-Poll-Interval response header.
 	notificationsPoller := polling.NewNotificationsPoller(
-		notificationMarker(p),
+		notificationsPollerClient(p),
 		notificationsPollInterval(p, cfg),
 		notifications.NotifOptsFromConfig(cfg),
 	)
@@ -709,9 +726,9 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	initCmds := []tea.Cmd{
-		m.poller.FetchPipelineRuns(),         // Initial fetch - updates connection state
-		m.poller.StartPolling(),              // Start polling timer
-		m.notificationsPoller.StartPolling(), // Start the notifications poller's own timer (Decision 69)
+		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
+		m.poller.StartPolling(),      // Start polling timer
+		m.notificationsStartPollingCmd(),
 		checkForUpdate(m.currentVersion),
 	}
 
@@ -737,6 +754,22 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	return tea.Batch(initCmds...)
+}
+
+// notificationsStartPollingCmd arms the notifications poller's own timer, but
+// only when the notifications tab is actually present: m.isTabEnabled
+// checks membership in m.enabledTabs, which buildEnabledTabs only includes
+// the notifications tab into when both Decision 11's capability gate
+// (notifCapable) and cfg.IsPaneEnabled("notifications") hold — exactly the
+// "capability AND pane-enabled" predicate the timer must be gated on. Without
+// this gate, m.notificationsPoller.StartPolling() ran unconditionally in
+// Init(), permanently re-arming a GitHub poll loop even when the tab is
+// disabled or the provider has no notifications-capable backend at all.
+func (m Model) notificationsStartPollingCmd() tea.Cmd {
+	if !m.isTabEnabled(TabNotifications) {
+		return nil
+	}
+	return m.notificationsPoller.StartPolling()
 }
 
 // checkForUpdate returns a tea.Cmd that checks GitHub for a newer version.
@@ -851,6 +884,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.poller.Stop()
+			m.notificationsPoller.Stop()
 			return m, tea.Quit
 		case "?":
 			m.helpModal.SetSize(m.width, m.height)
@@ -1072,6 +1106,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is uncorrelated with which tab is currently showing, and the
 		// notifications pane must still receive it (and re-derive its own
 		// polling cadence) even while some other tab is active.
+		//
+		// Items == nil && Err == nil means "nothing changed" (see
+		// polling.NotificationsFetchedMsg's doc comment, Decision 74) — a
+		// FetchNotifications call that was skipped or short-circuited before
+		// ever calling the client. This must NOT be treated as "the feed is
+		// now empty": HandleFetchResult's success path unconditionally
+		// replaces the feed via SetFeed, so passing it nil here would wipe an
+		// otherwise-healthy feed for no reason. The cadence and fetch options
+		// must still be re-derived, exactly as the normal path below does, so
+		// this is a fall-through to that recompute, not an early return that
+		// skips it.
+		if msg.Items == nil && msg.Err == nil {
+			m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))
+			m.notificationsPoller.SetOpts(notifications.NotifOptsFromConfig(m.config))
+			return m, tea.Batch(cmds...)
+		}
 		filtered := notifications.FilterNotifications(msg.Items, m.config)
 		m.notificationsView = m.notificationsView.HandleFetchResult(filtered, msg.Err)
 		// Re-derive the cadence after every fetch, success or failure alike
@@ -1079,6 +1129,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// actually observed a response's X-Poll-Interval header, so the very
 		// first fetch is what turns a 0 hint into a real one.
 		m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))
+		// NotifOpts must be re-derived once per fetch, not frozen at poller
+		// construction (Decision 75): since_days is computed from time.Now()
+		// at derivation time, so a poller that only ever got its opts once at
+		// startup would silently fetch an ever-staler window as real time
+		// passes.
+		m.notificationsPoller.SetOpts(notifications.NotifOptsFromConfig(m.config))
 		return m, tea.Batch(cmds...)
 
 	case components.CriticalErrorMsg:
@@ -1351,8 +1407,9 @@ func (m Model) pipelinesKeybindings() string {
 
 // notificationsKeybindings returns the keybindings string for the
 // notifications list view. Lists the keys wired by task 11's pane plus the
-// real `r` refresh (task 15, replacing decision 58's stopgap) — `u`/`d`/`o`
-// triage are tasks 14/19's to add.
+// real `r` refresh (task 15, replacing decision 58's stopgap) and task 14's
+// `u`/`d` mark-read/mark-done triage keys — `o` (open in browser) remains a
+// later task's to add.
 func (m Model) notificationsKeybindings() string {
 	sepStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.styles.Theme.Border))
@@ -1360,6 +1417,8 @@ func (m Model) notificationsKeybindings() string {
 
 	return m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
 		m.styles.Key.Render("f") + m.styles.Description.Render(" filter reason") + sep +
+		m.styles.Key.Render("u") + m.styles.Description.Render(" mark read") + sep +
+		m.styles.Key.Render("d") + m.styles.Description.Render(" mark done") + sep +
 		m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
 		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")

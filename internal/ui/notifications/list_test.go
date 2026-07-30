@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Elpulgo/azdo/internal/config"
 	"github.com/Elpulgo/azdo/internal/github"
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/ui/components/listview"
@@ -803,6 +804,66 @@ func TestUpdate_RKey_NilMarker_ResolvesWithoutStranding(t *testing.T) {
 	}
 }
 
+// TestUpdate_RKey_RealFetch_AppliesFilterNotifications pins fetchNotifications'
+// call to FilterNotifications (mutation survivor S4): the closure must not
+// hand the marker's raw rows straight to the pane, or a repo the config
+// excludes would flash back onto screen on every refresh, undoing the
+// initial-load filtering task 10 already guarantees.
+func TestUpdate_RKey_RealFetch_AppliesFilterNotifications(t *testing.T) {
+	marker := &fakeMarker{listItems: []provider.Notification{
+		mkNotification("1", "owner/repo", "Keep me", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("2", "acme/excluded", "Filter me out", provider.NotificationReasonMentioned, false, fixedNow),
+	}}
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			ExcludeRepos: []string{"acme/*"},
+		},
+	}
+	m := NewModelWithStyles(styles.DefaultStyles(), marker, cfg)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	updated, cmd := m.Update(keyRune('r'))
+	m = updated
+	for _, resolved := range flattenBatch(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Keep me") {
+		t.Errorf("view = %q, want the non-excluded row present", view)
+	}
+	if strings.Contains(view, "Filter me out") {
+		t.Errorf("view = %q, must not contain the excluded row: fetchNotifications must apply FilterNotifications to the marker's raw result", view)
+	}
+}
+
+// TestUpdate_RKey_RealFetch_ForwardsNotifOptsFromConfig pins fetchNotifications'
+// call to NotifOptsFromConfig (mutation survivor S5): the closure must derive
+// opts from cfg and forward them to marker.List, not call List with a zero
+// value — otherwise participating_only/since_days/max_items configuration
+// would silently stop reaching the fetch.
+func TestUpdate_RKey_RealFetch_ForwardsNotifOptsFromConfig(t *testing.T) {
+	marker := &fakeMarker{}
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			ParticipatingOnly: true,
+			MaxItems:          7,
+		},
+	}
+	m := NewModelWithStyles(styles.DefaultStyles(), marker, cfg)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	_, cmd := m.Update(keyRune('r'))
+	for _, resolved := range flattenBatch(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	want := NotifOptsFromConfig(cfg)
+	if marker.listOpts != want {
+		t.Errorf("marker.List received opts %+v, want %+v (NotifOptsFromConfig(cfg)) — got the zero value instead", marker.listOpts, want)
+	}
+}
+
 // flattenBatch runs cmd and, if it produced a tea.BatchMsg, runs every
 // sub-cmd too, returning every resulting tea.Msg. bubbletea's own runtime
 // does this same flattening; tests that assert on the *result* of a batched
@@ -1048,6 +1109,42 @@ func TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter(t *testing.T)
 	assertOtherStatesAbsent(t, view, filterEmptyMarker)
 }
 
+// TestView_ActiveFilter_GenuinelyEmptyFeed_ReadsAsClear_NotFilterEmpty pins
+// the `len(m.feed) > 0` conjunct in View()'s empty-state branch (mutation
+// survivor S1): an active `f` reason filter with a feed that has since gone
+// genuinely empty (e.g. the last row under any reason was marked done, or a
+// poll returned zero rows) must still read as "you're clear", not as "a
+// filter is hiding something" — the latter would be misleading since there
+// is nothing left for any reason filter to hide.
+func TestView_ActiveFilter_GenuinelyEmptyFeed_ReadsAsClear_NotFilterEmpty(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "A mention", provider.NotificationReasonMentioned, false, fixedNow),
+	})
+
+	m, _ = m.Update(keyRune('f')) // -> Mentioned, active
+	if !m.reasonFilterActive {
+		t.Fatalf("precondition: expected reasonFilterActive=true after f, got %v", m.reasonFilterActive)
+	}
+
+	// The feed itself goes genuinely empty while the filter stays active.
+	m = m.SetFeed(nil)
+	if len(m.feed) != 0 {
+		t.Fatalf("precondition: expected len(m.feed)=0, got %d", len(m.feed))
+	}
+
+	view := m.View()
+
+	if !strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("active-filter-empty-feed view = %q, want %q (feed itself has no rows)", view, emptyInboxMarker)
+	}
+	if strings.Contains(view, filterEmptyMarker) {
+		t.Errorf("active-filter-empty-feed view = %q, must not contain %q: a genuinely empty feed has nothing for the filter to hide", view, filterEmptyMarker)
+	}
+	assertOtherStatesAbsent(t, view, emptyInboxMarker)
+}
+
 // TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows pins
 // decision 63's error state and decision 17's token-scope skeleton. The error
 // is constructed from a real *github.Adapter with no NotificationsClient
@@ -1261,10 +1358,15 @@ type fakeMarker struct {
 	listItems []provider.Notification
 	listErr   error
 	listCalls int
+	// listOpts records the opts passed on the most recent List call — added
+	// to pin fetchNotifications' NotifOptsFromConfig(cfg) forwarding (task
+	// 15's mutation survivor S5).
+	listOpts provider.NotifOpts
 }
 
-func (f *fakeMarker) List(provider.NotifOpts) ([]provider.Notification, error) {
+func (f *fakeMarker) List(opts provider.NotifOpts) ([]provider.Notification, error) {
 	f.listCalls++
+	f.listOpts = opts
 	return f.listItems, f.listErr
 }
 
