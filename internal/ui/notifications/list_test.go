@@ -1058,3 +1058,108 @@ func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
 	}
 	assertOtherStatesAbsent(t, view, capabilityMarker)
 }
+
+// TestView_SuccessfulFeedAfterError_ClearsErrorState pins the recovery path,
+// which is the pane's only protection against a pre-existing listview bug and
+// is otherwise held by nothing.
+//
+// listview.HandleFetchResult's success path never assigns m.err = nil (it
+// returns early on the error path and leaves the field alone otherwise) while
+// listview.viewList short-circuits on m.err != nil — so a pane that recovers
+// through it stays pinned to the error render forever. This pane escapes that
+// only because HandleFetchResult routes its *success* path through SetFeed ->
+// SetItems, and SetItems does clear the field. Rewriting that forward as
+// `m.list = m.list.HandleFetchResult(items, nil)` looks like a harmless
+// simplification, keeps the whole suite green without this test, and silently
+// makes one failed fetch permanent. Task 15's poller is what calls this.
+func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, listErr)
+	if !strings.Contains(m.View(), errorMarker) {
+		t.Fatalf("precondition: view = %q, want the error state before recovery", m.View())
+	}
+
+	m = m.HandleFetchResult([]provider.Notification{
+		mkNotification("1", "owner/repo", "Recovered row", provider.NotificationReasonMentioned, false, fixedNow),
+	}, nil)
+
+	view := m.View()
+	if strings.Contains(view, errorMarker) {
+		t.Errorf("view after a successful feed = %q, must not still render the error state", view)
+	}
+	if strings.Contains(view, tokenScopeSkeleton) {
+		t.Errorf("view after a successful feed = %q, must not still carry the token-scope skeleton", view)
+	}
+	if !strings.Contains(view, "Recovered row") {
+		t.Errorf("view after a successful feed = %q, want the recovered row rendered", view)
+	}
+}
+
+// TestView_Loading_DoesNotClaimCaughtUp pins View()'s !m.list.Loading()
+// conjunct: a fetch in flight with zero rows so far must show listview's
+// spinner, never decision 63's "you're all caught up" text, which would be an
+// outright lie while data is still on the way.
+//
+// The `r` message goes to m.list directly rather than through m.Update,
+// because the pane deliberately swallows `r` at its own level while the Fetch
+// hook is a stub (decision 58) — the state under test here is listview's
+// loading flag, not the pane's key handling.
+//
+// FORWARD: task 15 — this conjunct does NOT currently protect the *initial*
+// fetch. listview.Init sets the spinner visible but never sets m.loading
+// (listview.go's Init), so Loading() is false while the first fetch is in
+// flight and this pane will render "you're all caught up" during startup once
+// a real Fetch replaces the stub. Task 15 must set loading on the initial
+// fetch, or move this pane off listview's flag.
+func TestView_Loading_DoesNotClaimCaughtUp(t *testing.T) {
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.SetFeed(nil)
+	if !strings.Contains(m.View(), emptyInboxMarker) {
+		t.Fatalf("precondition: view = %q, want the empty-inbox state before the refresh", m.View())
+	}
+
+	m.list, _ = m.list.Update(keyRune('r'))
+	if !m.list.Loading() {
+		t.Fatal("precondition: listview must be loading after r")
+	}
+
+	view := m.View()
+	if strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("view while loading = %q, must not claim the user is caught up mid-fetch", view)
+	}
+	assertOtherStatesAbsent(t, view, "")
+}
+
+// TestView_CapabilityUnsupported_OutranksError pins the documented priority
+// order between decision 63's first two states. Every other state pair is
+// already distinguished by assertOtherStatesAbsent, but capability and error
+// are the one pair no other fixture sets *together*, so swapping their two
+// checks in View() is otherwise a genuine equivalent that no test can see.
+// Capability wins because it describes the configuration, whereas an error
+// describes an attempt that configuration should never have made.
+func TestView_CapabilityUnsupported_OutranksError(t *testing.T) {
+	adapter := github.NewAdapterWithNotifications(nil, nil)
+	_, listErr := adapter.List(provider.NotifOpts{})
+	if listErr == nil {
+		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
+	}
+
+	m := NewModelWithStyles(styles.DefaultStyles())
+	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m.HandleFetchResult(nil, listErr)
+	m = m.SetCapabilityUnsupported()
+
+	view := m.View()
+	if !strings.Contains(view, capabilityMarker) {
+		t.Errorf("view with both capability-unsupported and an error = %q, want the capability state to win", view)
+	}
+	assertOtherStatesAbsent(t, view, capabilityMarker)
+}

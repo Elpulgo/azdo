@@ -157,6 +157,8 @@ accepted value.
 | 62 | What must the `main.go` wiring test pin — the callee or the argument? | Both. Asserting the callee is `NewAdapterWithNotifications` is half the mutation space; the test must also assert the second argument is not `nil` and that a `github.NewNotificationsClient` call appears at the call site | Measured: the AST walk matches only `sel.Sel.Name`, so deleting the `ghNC := github.NewNotificationsClient(token)` line and passing `nil` keeps the suite green — exactly the state the test's own doc comment says it prevents ("`a.nc` stays nil forever… every List call returns 'no notifications client configured'"). Reverting to `NewAdapter` is the easy half and *is* killed; the hard half was unguarded. Note this is a gap in the **test**, not a live bug: `NewNotificationsClient` always returns non-nil with no error, `GetGitHubToken()` has already errored out upstream, and `GitHubConfig` carries no base-URL/GHE field, so `nc == nil` is unreachable from any real config. The value of pinning the argument is that it stays unreachable |
 | 63 | Task 13 names "capability-unsupported" as one of three render states — is it reachable, and what is the third state if not? | **Not reachable through the tab**, and the genuinely reachable third state is **filter-empty**. Task 13 renders four states — empty inbox, filter-empty, capability-unsupported, error — but the capability arm is asserted at the **pane** level with its unreachability stated in the doc comment, and the app-level tests cover empty / filter-empty / error. Every pair must be asserted mutually distinguishable | Measured: `CompositeProvider.HasNotifications()` (`internal/provider/composite.go:602`) is a per-backend type assertion, and `*github.Adapter` satisfies `NotificationSource` unconditionally — `NewAdapter` leaves `nc` nil on purpose and `List` returns `"no notifications client configured"` rather than failing the assertion (`internal/github/adapter.go:55-65`, `:584-587`). So the only incapable configuration is Azure-only, which decision 11 hides the tab for, and phase 2 makes even that capable. An app-level "capability-unsupported renders X" test is therefore a test that cannot fail for the right reason, and shipping one would be the same vacuity class as task 12's `nil`-provider fixture (decision 59). What *is* reachable — and measured in decision 57 — is a user-set `f` filter matching zero rows rendering the empty-inbox "you're clear" text, actively lying to the user. That is the state worth a distinct render, and it is why decision 57 put `ReasonFilter()` in task 11. The nil-client message stays reachable-in-principle and belongs to the error arm, not the capability arm: it is a failed `List`, not an absent capability |
 
+| 64 | Does `View()`'s `!m.list.Loading()` conjunct actually protect the initial fetch? | **No.** `listview.Init` sets the spinner visible but never sets `m.loading`, so `Loading()` is false while the first fetch is in flight. The conjunct guards only the `r`-refresh path, which this pane swallows — it is dead today and correct-in-intent, so it stays, pinned by a test. **Task 15 must set `loading` on the initial fetch** (or move this pane off listview's flag) or the pane renders "you're all caught up" during startup | Measured: `listview.Init` (`internal/ui/components/listview/listview.go:151-154`) does `m.spinner.SetVisible(true)` and batches `config.Fetch()`, with no assignment to `m.loading`; only `updateList`'s `case "r"` sets it (`:202-205`). So today the only way to reach `Loading() == true` on this pane is to send `r` to the inner listview directly, because the pane intercepts `r` at its own level (decision 58's stopgap). Dropping the conjunct therefore survived the whole suite. It is kept rather than deleted because it becomes load-bearing the moment task 15 wires a real fetch, and deleting-then-restoring it is how the lie ships: an empty-inbox "you're clear" render while the first request is still outstanding is strictly worse than a spinner, and it is the same class of error decision 57 already caught once |
+
 ## Tasks
 
 - [x] 1. ADR `docs/adr/0001-notifications-capability-interface.md` — decisions 1, 2, 5. → done: file exists, ≤30 lines, `Status: Accepted`, has Context/Decision/Alternatives/Consequences
@@ -614,3 +616,65 @@ marked _(manual)_ needs a human with a real token before merge. Do not report th
 - Read state may be eventually consistent: a poll landing right after a `PATCH` could still
   return `unread`, flickering the optimistic update back. Task 14 holds the local intent until
   the server agrees rather than trusting the first poll that contradicts it.
+
+## Review feedback: notifications render states (task 13) — 2026-07-30, commit `26c2870`
+
+Reviewed at opus. **Not an independent review**: three consecutive `529 Overloaded`
+failures made an opus reviewer subagent unobtainable, and `.claude/skills/afk`
+forbids downgrading the reviewer to sonnet, so the loop driver performed it.
+Recorded here because the independence loss is a real weakening of the protocol,
+not a formality — every task from 5 through 12 in this run had findings the
+validator missed, so this task's review carries less assurance than theirs.
+
+Mutation ledger — 9 mutations, 6 killed on arrival, **3 survived** and are now
+closed by tests added in the follow-up commit:
+
+| Mutation | Result |
+|---|---|
+| `filterEmptyBody` → `emptyInboxBody()` | KILLED (3 tests) |
+| `errorBody` → `emptyInboxBody()` | KILLED (3 tests) |
+| `capabilityUnsupportedBody` → `emptyInboxBody()` | KILLED |
+| `View()`: error check moved after the empty/filter-empty block | KILLED (2 tests) |
+| `notificationsTabContent` prepends the banner unconditionally | KILLED (2 tests) |
+| `notificationsWarningsBanner` → `""` | KILLED (2 tests) |
+| **`HandleFetchResult` success path → `m.list.HandleFetchResult(items, nil)`** | **SURVIVED** → now killed by `TestView_SuccessfulFeedAfterError_ClearsErrorState` |
+| **`View()`: drop the `!m.list.Loading()` conjunct** | **SURVIVED** → now killed by `TestView_Loading_DoesNotClaimCaughtUp`; root cause recorded as decision 64 |
+| **`View()`: swap the capability and error arms** | **SURVIVED** → now killed by `TestView_CapabilityUnsupported_OutranksError` |
+
+Findings, in severity order:
+
+1. 🟡 **The recovery path was held by nothing, and the pane's immunity to a
+   pre-existing listview bug was incidental.** `listview.HandleFetchResult`'s
+   success path never assigns `m.err = nil` (`listview.go:388-402`) while
+   `viewList` short-circuits on `m.err != nil` (`:341`), so a pane recovering
+   through it stays pinned to the error render permanently. This pane escapes
+   only because its success path routes through `SetFeed → SetItems`, which does
+   clear the field. Rewriting that one line as a forward to
+   `m.list.HandleFetchResult` reads as a harmless simplification and kept the
+   entire suite green. Task 15's poller is the caller. **Fixed** by a test that
+   errors, recovers, and asserts the error text and token-scope skeleton are both
+   gone and the new row renders.
+2. 🟡 **`!m.list.Loading()` is dead code today and unpinned** — see decision 64.
+   Kept and pinned rather than deleted, with a `FORWARD: task 15` on the test.
+3. 🟢 **Capability-vs-error priority was unobservable.** `assertOtherStatesAbsent`
+   already gives five of the six state pairs mutual distinguishability; capability
+   and error were the one pair no fixture set *together*, making the arm order a
+   genuine equivalent. **Fixed** by a fixture that sets both.
+
+Verified sound, not to be re-litigated: `assertOtherStatesAbsent` is a real
+six-pair distinguishability harness, not four positive assertions; the error
+fixture derives its message from a real `github.NewAdapterWithNotifications(nil, nil)`
+rather than a hand-typed string, so it cannot drift from the adapter; neither
+empty body mentions `r` (decision 58); `Err()`/`Loading()` are additive getters
+that changed no write path for the four existing panes; and decision 63's
+pane-level placement of the capability assertion is honoured — there is no
+app-level test claiming to exercise an unreachable state.
+
+Judgment calls left as-specified: `errorBody`'s blanket "GitHub token scope
+required: notifications" line is misleading for a transient network failure, but
+task 13's criterion explicitly defers 403/401/generic differentiation to task 19,
+which is where it gets narrowed. And the filter-empty message can appear when the
+whole feed is empty and a filter happens to be active — unreachable by cycling
+today (task 11's `f` offers only reasons present in the feed) and it becomes
+reachable at task 15, where the fix is `len(m.feed) > 0` rather than
+`len(m.list.Items()) == 0`. `FORWARD: task 15` for both.
