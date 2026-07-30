@@ -300,8 +300,14 @@ func hasNotificationCapability(p provider.Provider) bool {
 
 // notificationMarker returns p as a provider.NotificationSource for the
 // notifications pane's u/d mark actions (task 14), or nil when p does not
-// implement it — including when p is nil, since a nil interface value type
-// asserted against an interface simply fails the assertion. Unlike
+// implement it — including when p is an *untyped* nil interface, which fails
+// the assertion. A *typed* nil does not: `var cp *provider.CompositeProvider;
+// NewModel(cp, ...)` satisfies the assertion and yields a non-nil interface
+// wrapping a nil pointer, so the pane's `m.marker == nil` guard is false and
+// markCmd derefs it (learned convention 15's shape). Unreachable today —
+// cmd/azdo-tui/main.go always constructs a real *CompositeProvider and
+// internal/demo/demo.go a concrete adapter — and hasNotificationCapability
+// above has the identical exposure, which predates this task. Unlike
 // hasNotificationCapability, this does not additionally require
 // HasNotifications(): *provider.CompositeProvider.MarkRead/MarkDone already
 // route by Identity.Kind (Decisions 25, 43) and report a descriptive
@@ -940,6 +946,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		return m, nil
+
+	case notifications.MarkResultMsg:
+		// Routed unconditionally, NOT through the delegate-to-active-tab switch
+		// below. A `u`/`d` is issued from the notifications tab but its result
+		// lands one HTTP round trip later, and tab switching is handled earlier
+		// in this function and returns early — so pressing 2 while a mark is in
+		// flight is trivially reachable. Delegating by active tab would hand the
+		// result to the pull-requests pane, which discards it, leaving the
+		// optimistic override as the sole holder of the mark and re-opening
+		// decision 65's resurrection defect by a second route: 30s later any
+		// re-derivation brings back a row the server already accepted as done.
+		//
+		// polling.PipelineRunsUpdated below is the same shape — a pane-bound
+		// message whose arrival is uncorrelated with which tab is showing.
+		var markCmd tea.Cmd
+		m.notificationsView, markCmd = m.notificationsView.Update(msg)
+		if markCmd != nil {
+			cmds = append(cmds, markCmd)
+		}
+		return m, tea.Batch(cmds...)
 
 	case polling.TickMsg:
 		// Time to poll for updates

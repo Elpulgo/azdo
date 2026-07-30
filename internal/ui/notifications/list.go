@@ -72,7 +72,9 @@ type Model struct {
 	// An entry outliving its own API call is the point, not an oversight: once
 	// the call succeeds commitOverride writes the mark into feed and the entry
 	// stays only to outweigh a lagging poll, which replaces feed wholesale.
-	// Rollback on API failure is dropping the entry here —
+	// Nothing removes a successful entry at the time it settles, so SetFeed
+	// sweeps expired ones (prunedOverrides) to stop the map growing for the
+	// life of the session. Rollback on API failure is dropping the entry here —
 	// never deleting/re-inserting a row — so decision 45's merge-sort total
 	// order is never reproduced by hand and can never be gotten wrong.
 	//
@@ -144,11 +146,23 @@ func keyOf(id provider.Identity) identityKey {
 	return identityKey{kind: id.Kind, scope: id.Scope, id: id.ID}
 }
 
-// notificationMarkResultMsg reports the outcome of an in-flight
-// MarkRead/MarkDone call issued by markCmd. err is carried through untouched
-// — never flattened into a string — so a caller can still errors.As it apart
-// (e.g. *github.APIError) rather than pattern-matching rendered text.
-type notificationMarkResultMsg struct {
+// MarkResultMsg reports the outcome of an in-flight MarkRead/MarkDone call
+// issued by markCmd. err is carried through untouched — never flattened into a
+// string — so a caller can still errors.As it apart (e.g. *github.APIError)
+// rather than pattern-matching rendered text.
+//
+// Exported for one reason only: app must route this message to the pane
+// *unconditionally*, not through its delegate-to-the-active-tab switch. A mark
+// is issued from the notifications tab but its result lands one HTTP round trip
+// later, by which point the user may well have pressed 2 — and a result handed
+// to the pull-requests pane is silently discarded, leaving the override as the
+// sole holder of the mark and re-opening decision 65's resurrection defect.
+// `polling.PipelineRunsUpdated` is the existing precedent for a pane-bound
+// message the top-level switch must handle regardless of active tab.
+//
+// Its fields stay unexported deliberately: app needs to *recognise* and forward
+// this message, never construct or inspect one. The pane owns the payload.
+type MarkResultMsg struct {
 	key  identityKey
 	kind overrideKind
 	err  error
@@ -222,7 +236,7 @@ func (m Model) Init() tea.Cmd {
 	return m.list.Init()
 }
 
-// Update handles messages. notificationMarkResultMsg (the result of a `u`/`d`
+// Update handles messages. MarkResultMsg (the result of a `u`/`d`
 // API call issued by markCmd) is handled unconditionally, since it can land
 // regardless of view mode or search state. Otherwise: the `f` key cycles the
 // reason filter (decision 53), `u`/`d` mark read/done (task 14) when
@@ -230,7 +244,7 @@ func (m Model) Init() tea.Cmd {
 // (decision 58), and every other message is forwarded to the underlying
 // listview.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	if res, ok := msg.(notificationMarkResultMsg); ok {
+	if res, ok := msg.(MarkResultMsg); ok {
 		return m.handleMarkResult(res), nil
 	}
 
@@ -344,7 +358,7 @@ func (m Model) withOverride(key identityKey, kind overrideKind) Model {
 	}
 	next[key] = override{kind: kind, expiresAt: m.clock().Add(markDebounceWindow)}
 	m.overrides = next
-	return m.setItemsPreservingSelection()
+	return m.refreshItems()
 }
 
 // dropOverride returns a copy of m with key's override removed — the
@@ -366,12 +380,12 @@ func (m Model) dropOverride(key identityKey) Model {
 		}
 	}
 	m.overrides = next
-	return m.setItemsPreservingSelection()
+	return m.refreshItems()
 }
 
 // markCmd returns the tea.Cmd that performs the actual API call for kind
 // (overrideRead -> MarkRead, overrideHidden -> MarkDone) against id, and
-// reports the outcome via notificationMarkResultMsg. m.marker is captured by
+// reports the outcome via MarkResultMsg. m.marker is captured by
 // value into the closure at call time, not m itself, so the goroutine
 // bubbletea runs this in can never race a later Update on the model.
 func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
@@ -384,10 +398,17 @@ func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
 		} else {
 			err = marker.MarkDone(id)
 		}
-		return notificationMarkResultMsg{key: key, kind: kind, err: err}
+		return MarkResultMsg{key: key, kind: kind, err: err}
 	}
 }
 
+// FORWARD: task 19 — a failed `u`/`d` is currently silent. res.err is carried
+// here intact and then discarded, so a user pressing `d` against a 403 sees the
+// row vanish and silently reappear a round trip later, indistinguishable from a
+// rendering glitch. Task 19 owns 403/401 differentiation for the *List* path;
+// the mark path has no owner in the spec and needs at least a status-bar
+// message on rollback.
+//
 // handleMarkResult applies the outcome of a markCmd: failure rolls the
 // optimistic change back by dropping the override, success commits it into the
 // held feed via commitOverride while deliberately leaving the override entry
@@ -400,10 +421,27 @@ func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
 // local re-render past the window (an `f` cycle, a resize) resurrects a row the
 // server already accepted as read or done. Committing to the feed is what makes
 // a confirmed mark durable for as long as the pane holds that feed.
-func (m Model) handleMarkResult(res notificationMarkResultMsg) Model {
+func (m Model) handleMarkResult(res MarkResultMsg) Model {
+	if ov, ok := m.overrides[res.key]; ok && ov.kind != res.kind {
+		// A newer action on this same row has already replaced the entry this
+		// result owned — reachable as `u` then `d` on one row, since the row is
+		// still in Items() with Read=true after the `u` and markDone's
+		// already-hidden guard only rejects a live overrideHidden.
+		//
+		// Neither outcome may be applied on the newer action's behalf. A
+		// rollback would drop the entry the `d` owns and un-hide a row whose
+		// DELETE is still in flight; a commit would fold the older intent into
+		// the feed. The newer action's own result is still coming and owns the
+		// entry, so dropping this one loses nothing.
+		return m
+	}
 	if res.err != nil {
 		return m.dropOverride(res.key)
 	}
+	// Deliberately also commits when no entry remains: a success means the
+	// server accepted the change, so correcting the feed is right even if the
+	// entry was pruned or the user has since acted elsewhere. Erring the other
+	// way would resurrect a row the server has already dropped.
 	return m.commitOverride(res.key, res.kind)
 }
 
@@ -445,10 +483,12 @@ func (m Model) commitOverride(key identityKey, kind overrideKind) Model {
 	}
 
 	m.feed = next
-	// Idempotent while the override is still live (visibleItems already applied
-	// the same change), but keeps the rendered list derived from the committed
-	// feed rather than relying on the override to keep reproducing it.
-	return m.setItemsPreservingSelection()
+	// Idempotent with respect to the visible row set while the override is still
+	// live (visibleItems already applied the same change) — but not with respect
+	// to listview's err/loading flags, which SetItems resets, hence refreshItems
+	// rather than a direct call. Kept so the rendered list derives from the
+	// committed feed instead of relying on the override to keep reproducing it.
+	return m.refreshItems()
 }
 
 // View renders task 13's four render states, in priority order, per decision
@@ -638,7 +678,34 @@ func (m Model) IsSearching() bool {
 // top of it, routing the result through listview.SetItems per decision 54.
 func (m Model) SetFeed(feed []provider.Notification) Model {
 	m.feed = feed
+	m.overrides = prunedOverrides(m.overrides, m.clock())
 	return m.setItemsPreservingSelection()
+}
+
+// prunedOverrides drops entries whose debounce window has already elapsed.
+// visibleItems and markDone both already skip an expired entry, so this changes
+// no behaviour — it exists so the map does not grow monotonically for the life
+// of the session, since the success path keeps its entry and only a failure
+// removes one. SetFeed is the hook because it already rebuilds everything.
+//
+// Returns nil for an empty result rather than an empty map, so visibleItems'
+// len(m.overrides) == 0 fast path (which aliases m.feed instead of copying it)
+// comes back once every mark has settled.
+func prunedOverrides(overrides map[identityKey]override, now time.Time) map[identityKey]override {
+	if len(overrides) == 0 {
+		return overrides
+	}
+	var next map[identityKey]override
+	for k, v := range overrides {
+		if !now.Before(v.expiresAt) {
+			continue
+		}
+		if next == nil {
+			next = make(map[identityKey]override, len(overrides))
+		}
+		next[k] = v
+	}
+	return next
 }
 
 // cycleReasonFilter advances the `f` cycle by one step and re-applies it.
@@ -688,6 +755,35 @@ func (m Model) cycleReasonFilter() Model {
 // When the previously selected item did not survive the filter there is
 // nothing to restore to, and listview's clamp is the correct behaviour — so
 // this deliberately leaves it alone in that case.
+// refreshItems re-derives the visible rows from feed+overrides, unless the pane
+// is currently showing listview's error state.
+//
+// listview.SetItems assigns m.err = nil and m.loading = false as a side effect
+// (internal/ui/components/listview/listview.go:379-392), so an override-driven
+// re-derivation landing while a fetch has failed silently replaces the error
+// render with "No notifications found. / You're all caught up." — telling the
+// user their inbox is clear when the fetch actually failed. That is precisely
+// the lie decisions 57 and 63 exist to prevent, and it is worse than either,
+// because the error it hides is the one explaining why there is no data.
+//
+// Reachable as: press `d`, a poll fails, then the DELETE result lands. Only the
+// mark-result paths need this — canTriage already refuses `u`/`d` while
+// m.list.Err() != nil, so withOverride cannot be entered in the error state;
+// it routes through here anyway so no future caller has to rediscover the rule.
+//
+// SetFeed deliberately does NOT route through here: a successful fetch clearing
+// a previous error is the recovery path, and it is asserted by
+// TestView_SuccessfulFeedAfterError_ClearsErrorState.
+//
+// FORWARD: task 15 — nothing calls HandleFetchResult with an error yet, so this
+// is unreachable today and becomes live the moment the real poller lands.
+func (m Model) refreshItems() Model {
+	if m.list.Err() != nil {
+		return m
+	}
+	return m.setItemsPreservingSelection()
+}
+
 func (m Model) setItemsPreservingSelection() Model {
 	prev, hadSelection := m.selectedIdentity()
 
@@ -733,10 +829,19 @@ func (m Model) selectedIdentity() (provider.Identity, bool) {
 // buffer, not persisted local state) — this is exactly what makes "the
 // debounce window" a real, finite window rather than a permanent override.
 //
-// Expiry is therefore only safe because a *confirmed* mark is no longer held
-// here at all: commitOverride has already folded it into m.feed, so what
-// expiry gives back is a genuinely newer poll's answer, never the pre-mark row
-// this pane was already told to drop.
+// Expiry is safe for a mark whose result has been *applied*: commitOverride
+// folded it into m.feed, so the entry left here is redundant with the feed and
+// letting it lapse changes nothing. The entry is deliberately kept until then
+// (see commitOverride) — it is what outweighs a poll replacing the feed with
+// stale `unread`.
+//
+// Expiry is NOT safe for a mark whose result never arrived. Such an override is
+// the sole holder of the mark, so lapsing it re-derives the pre-mark row from an
+// unchanged m.feed with no poll involved. For an *in-flight* mark that is
+// correct — an unconfirmed action reverting after 30s is the intended contract
+// (Decision 5: no persisted local state). It is a defect only if a confirmed
+// result was dropped in transit, which is why app must route MarkResultMsg
+// unconditionally rather than through its active-tab delegate switch.
 //
 // Always a freshly allocated slice when any override is active, for the same
 // reason reasonFiltered is: the pane's held feed must never be aliased or

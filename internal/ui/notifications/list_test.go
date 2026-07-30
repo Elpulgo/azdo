@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1685,26 +1686,158 @@ func TestMarkRead_NilMarker_IsNoop(t *testing.T) {
 	}
 }
 
-// TestMarkDone_CursorSurvives_OnPreviouslySelectedNeighbor pins decision 55's
-// identity-based cursor restore for d's own removal: with the cursor on the
-// middle row of three, marking it done must land the cursor on the row that
-// was its neighbor, not wherever listview's positional clamp would leave it
-// by accident.
-func TestMarkDone_CursorSurvives_OnPreviouslySelectedNeighbor(t *testing.T) {
-	marker := &fakeMarker{}
-	first := mkNotification("1", "owner/repo", "First", provider.NotificationReasonReviewRequested, false, fixedNow)
-	middle := mkNotification("2", "owner/repo", "Middle", provider.NotificationReasonMentioned, false, fixedNow)
-	last := mkNotification("3", "owner/repo", "Last", provider.NotificationReasonReviewRequested, false, fixedNow)
-	m := newTriagePane(t, marker, []provider.Notification{first, middle, last})
-	m.list.SetCursor(1)
-
-	m, _ = m.Update(keyRune('d'))
-
-	item, ok := m.selectedItem()
-	if !ok {
-		t.Fatal("want a selection to remain after removing the middle row")
+// TestMarkDone_CursorLandsOnAConcreteRow pins where the cursor actually ends up
+// after `d`, for every position in the list plus the single-row case.
+//
+// It deliberately does NOT claim to pin decision 55's identity-based restore,
+// and an earlier version of this test that did was vacuous: after `d` the
+// removed row is no longer in Items(), so its only assertion ("the selected id
+// is not the removed one") held for every possible cursor value and could not
+// fail. Proof: replacing setItemsPreservingSelection's whole `if hadSelection`
+// block with a no-op left it passing.
+//
+// The deeper reason is structural. markDone always removes the row *under the
+// cursor*, so the previously selected identity is by construction absent from
+// the new slice, FindIndex returns -1, and listview's positional clamp is the
+// only mechanism in play — the identity restore is unreachable through `d` and
+// cannot be pinned here at all. It is genuinely pinned by
+// TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives and
+// TestSetFeed_PreservesSelectedItemAcrossReorder, both of which the same
+// no-op mutation does fail.
+//
+// So what this test is for is the clamp's concrete outcomes: a silent change in
+// where the cursor jumps after a dismissal is a real regression (the next `d`
+// would hit a different row than the user expects), and the single-row case
+// pins that an emptied list yields SelectedIndex() == -1 with selectedItem
+// reporting ok == false rather than panicking.
+func TestMarkDone_CursorLandsOnAConcreteRow(t *testing.T) {
+	tests := []struct {
+		name    string
+		rows    int
+		cursor  int
+		wantID  string // "" means: expect no selection at all
+		wantIdx int
+	}{
+		{"middle of three, clamp keeps index 1", 3, 1, "3", 1},
+		{"first of three, clamp keeps index 0", 3, 0, "2", 0},
+		{"last of three, clamp drops to new last", 3, 2, "2", 1},
+		{"only row, list becomes empty", 1, 0, "", -1},
 	}
-	if item.Identity.ID == "2" {
-		t.Fatalf("selected item = %+v, the removed row must not still be selectable", item)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			feed := make([]provider.Notification, 0, tc.rows)
+			for i := 1; i <= tc.rows; i++ {
+				feed = append(feed, mkNotification(
+					fmt.Sprintf("%d", i), "owner/repo", fmt.Sprintf("Row %d", i),
+					provider.NotificationReasonMentioned, false, fixedNow))
+			}
+			m := newTriagePane(t, &fakeMarker{}, feed)
+			m.list.SetCursor(tc.cursor)
+
+			m, _ = m.Update(keyRune('d'))
+
+			if got := m.list.SelectedIndex(); got != tc.wantIdx {
+				t.Errorf("SelectedIndex() = %d, want %d (items now %d)", got, tc.wantIdx, len(m.list.Items()))
+			}
+			item, ok := m.selectedItem()
+			if tc.wantID == "" {
+				if ok {
+					t.Errorf("selectedItem() returned %+v, want no selection once the list is empty", item)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("want a selection to remain after removing row %d of %d", tc.cursor, tc.rows)
+			}
+			if item.Identity.ID != tc.wantID {
+				t.Errorf("selected id = %q, want %q", item.Identity.ID, tc.wantID)
+			}
+		})
+	}
+}
+
+// TestMarkResult_StaleKind_DoesNotRollBackANewerAction pins that a result is
+// matched against the override it actually owns, not just its key.
+//
+// Reachable as `u` then `d` on one row: after the `u` the row is still in
+// Items() (with Read=true), and markDone's already-hidden guard only rejects a
+// *live* overrideHidden, so the `d` proceeds and overwrites the same map entry
+// with {hidden}. If the failing PATCH's result then rolled back by key alone, it
+// would delete the entry the `d` owns and un-hide a row whose DELETE is still in
+// flight — the user watches a notification they just dismissed reappear, then
+// vanish again when the DELETE lands.
+func TestMarkResult_StaleKind_DoesNotRollBackANewerAction(t *testing.T) {
+	// The PATCH fails, the DELETE succeeds.
+	marker := &fakeMarker{readErr: errors.New("patch boom")}
+	target := mkNotification("1", "owner/repo", "Two actions", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target})
+
+	m, readCmd := m.Update(keyRune('u'))
+	if readCmd == nil {
+		t.Fatal("want a cmd from u")
+	}
+	m, doneCmd := m.Update(keyRune('d'))
+	if doneCmd == nil {
+		t.Fatal("want a cmd from d — the row is still selectable after u")
+	}
+	if len(m.list.Items()) != 0 {
+		t.Fatalf("precondition: Items() = %+v, want the row hidden by d", m.list.Items())
+	}
+
+	// The older, failing PATCH result lands first.
+	m, _ = m.Update(readCmd())
+	if len(m.list.Items()) != 0 {
+		t.Fatalf("Items() = %+v, want the row to stay hidden: the failed u must not roll back the d's override, whose DELETE is still in flight", m.list.Items())
+	}
+
+	// Then the DELETE succeeds and the dismissal becomes durable.
+	m, _ = m.Update(doneCmd())
+	if len(m.list.Items()) != 0 {
+		t.Errorf("Items() = %+v, want the row gone after the successful MarkDone", m.list.Items())
+	}
+	m.now = func() time.Time { return fixedNow.Add(markDebounceWindow + time.Second) }
+	m, _ = m.Update(keyRune('f'))
+	if len(m.list.Items()) != 0 {
+		t.Errorf("Items() = %+v, want the row still gone past the window — the successful d must have been committed to the feed", m.list.Items())
+	}
+}
+
+// TestMarkResult_DoesNotClearAFailedFetchsErrorState pins that an override-driven
+// re-derivation cannot overwrite the error render with "you're all caught up".
+//
+// listview.SetItems assigns m.err = nil and m.loading = false as a side effect,
+// so routing a mark result through it while a fetch has failed silently replaces
+// "Notifications unavailable: …" with "No notifications found. / You're all
+// caught up." — telling the user their inbox is clear when the fetch failed, and
+// hiding the very error that explains why there is no data. That is the lie
+// decisions 57 and 63 exist to prevent.
+//
+// FORWARD: task 15 — unreachable until a real poller can fail; task 15's own
+// criterion does not mention it.
+func TestMarkResult_DoesNotClearAFailedFetchsErrorState(t *testing.T) {
+	marker := &fakeMarker{}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target})
+
+	m, cmd := m.Update(keyRune('d'))
+	if cmd == nil {
+		t.Fatal("want a cmd from d")
+	}
+
+	// A poll fails while the DELETE is still in flight.
+	m = m.HandleFetchResult(nil, errors.New("fetch boom"))
+	if !strings.Contains(m.View(), errorMarker) {
+		t.Fatalf("precondition: want the error render, got:\n%s", m.View())
+	}
+
+	// The DELETE result lands.
+	m, _ = m.Update(cmd())
+
+	view := m.View()
+	if !strings.Contains(view, errorMarker) {
+		t.Errorf("after a mark result landed on a failed fetch, the error render is gone; view:\n%s", view)
+	}
+	if strings.Contains(view, emptyInboxMarker) {
+		t.Errorf("after a mark result landed on a failed fetch, the pane claims the inbox is clear — the fetch actually failed; view:\n%s", view)
 	}
 }

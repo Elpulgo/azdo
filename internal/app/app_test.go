@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/notifications"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
+	"github.com/Elpulgo/azdo/internal/ui/styles"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
@@ -2713,5 +2715,172 @@ func TestModel_NotificationsTab_Warnings_RenderInFullView(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "notifications.exclude_reasons") {
 		t.Errorf("expected Config.Warnings to render in the notifications tab; view:\n%s", view)
+	}
+}
+
+// --- Task 14 / decision 65: MarkResultMsg routing ------------------------
+
+// appMarkerStub is a provider.NotificationSource for the app-level mark-routing
+// tests. markErr is returned by both mutators so the *failure* path can be
+// driven, which is what makes TestModel_MarkResultMsg_ReachesPane_WhileAnotherTabIsActive
+// clock-free — see its doc comment.
+type appMarkerStub struct {
+	markErr   error
+	doneCalls []provider.Identity
+}
+
+func (s *appMarkerStub) List(provider.NotifOpts) ([]provider.Notification, error) {
+	return nil, nil
+}
+
+func (s *appMarkerStub) MarkRead(provider.Identity) error { return s.markErr }
+
+func (s *appMarkerStub) MarkDone(id provider.Identity) error {
+	s.doneCalls = append(s.doneCalls, id)
+	return s.markErr
+}
+
+// markRoutingModel builds a sized app model whose notifications pane holds one
+// unread row wired to marker, and returns it with that row's title.
+func markRoutingModel(t *testing.T, marker provider.NotificationSource) (Model, string) {
+	t.Helper()
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	if m.activeTab != TabNotifications {
+		t.Fatalf("activeTab = %d, want TabNotifications", m.activeTab)
+	}
+
+	const title = "ROUTE-ME-HOME"
+	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), marker).
+		SetFeed([]provider.Notification{{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+			Title:     title,
+			Reason:    provider.NotificationReasonReviewRequested,
+			UpdatedAt: time.Now(),
+		}})
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return updated.(Model), title
+}
+
+// TestModel_MarkResultMsg_ReachesPane_WhileAnotherTabIsActive is the regression
+// test for the 🔴 that survived decision 65's first fix: notifications.MarkResultMsg
+// matched no case in the top-level switch, so it reached the pane only via
+// `case TabNotifications:` in the delegate-to-active-view switch. A mark is
+// issued from the notifications tab but its result lands one HTTP round trip
+// later, and tab switching is handled earlier and returns early — so pressing 2
+// mid-flight handed the result to the pull-requests pane, which discarded it.
+//
+// The override was then the sole holder of the mark, which is exactly the
+// pre-decision-65 state: 30s later any re-derivation resurrects a row the server
+// already accepted as done.
+//
+// The assertion uses the *failure* path deliberately. A dropped success and an
+// applied success are indistinguishable inside the debounce window (both leave
+// the row hidden), and the pane's clock seam is unexported so this package
+// cannot advance it. A failure is different: routing it produces a visible
+// rollback, so "the row came back" proves delivery with no clock involved.
+func TestModel_MarkResultMsg_ReachesPane_WhileAnotherTabIsActive(t *testing.T) {
+	marker := &appMarkerStub{markErr: errors.New("403 missing scope")}
+	m, title := markRoutingModel(t, marker)
+
+	if !strings.Contains(m.View(), title) {
+		t.Fatalf("precondition: want the seeded row %q to render; view:\n%s", title, m.View())
+	}
+
+	// d hides the row optimistically and returns the cmd carrying the API call.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from d")
+	}
+	if strings.Contains(m.View(), title) {
+		t.Fatalf("precondition: want %q hidden immediately after d; view:\n%s", title, m.View())
+	}
+
+	// The user switches to another tab while the DELETE is still in flight.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+	if m.activeTab == TabNotifications {
+		t.Fatal("precondition: want a non-notifications tab active before the result lands")
+	}
+
+	// The API call resolves and bubbletea delivers the result.
+	msg := cmd()
+	if _, ok := msg.(notifications.MarkResultMsg); !ok {
+		t.Fatalf("cmd produced %T, want notifications.MarkResultMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+	if len(marker.doneCalls) != 1 {
+		t.Fatalf("MarkDone calls = %d, want 1", len(marker.doneCalls))
+	}
+
+	// Back to notifications: the failed mark must have been rolled back, which
+	// can only have happened if the result actually reached the pane.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(Model)
+	if m.activeTab != TabNotifications {
+		t.Fatalf("activeTab = %d, want TabNotifications", m.activeTab)
+	}
+
+	if !strings.Contains(m.View(), title) {
+		t.Errorf("row %q is still hidden after a FAILED MarkDone whose result landed on another tab — the result was routed to the wrong pane and discarded, leaving the override as the sole holder of the mark (decision 65); view:\n%s", title, m.View())
+	}
+}
+
+// TestModel_NotificationMarker_IsWiredToThePane closes the gap the task-14
+// re-validation flagged: every other app-level notifications test passes a nil
+// marker, so mutating notificationMarker to `return nil` left the whole suite
+// green. This pins the wiring by observing a real API call reaching the marker.
+//
+// It goes through NewModel rather than asserting on notificationMarker directly,
+// because the defect being guarded is the pane being built *without* the marker,
+// not the helper computing the wrong value.
+func TestModel_NotificationMarker_IsWiredToThePane(t *testing.T) {
+	marker := &appMarkerStub{}
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	// A provider that IS the marker, so NewModel's own notificationMarker(p)
+	// type assertion is what has to find it — not a hand-injected pane.
+	m := NewModel(provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil)), client, cfg, "dev", "")
+	if got := notificationMarker(m.client); got == nil {
+		t.Fatal("notificationMarker returned nil for a capable provider — the pane would silently no-op on u/d")
+	}
+
+	// And the pane must actually have been handed one: drive d and require the
+	// marker to be called. A pane built with a nil marker returns no cmd.
+	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), marker).
+		SetFeed([]provider.Notification{{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+			Title:     "wired",
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		}})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if cmd == nil {
+		t.Fatal("d produced no cmd — the pane has no marker")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("the mark cmd produced no message")
+	}
+	if len(marker.doneCalls) != 1 {
+		t.Errorf("MarkDone calls = %d, want 1 — the marker the pane was built with was never called", len(marker.doneCalls))
 	}
 }
