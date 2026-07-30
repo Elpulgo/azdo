@@ -917,6 +917,87 @@ func TestModel_View_OutputHeightMatchesTerminal(t *testing.T) {
 	}
 }
 
+// TestModel_View_OutputHeightMatchesTerminal_AfterNotificationsPoll pins
+// finding 1 of the task 16 independent review: a background poll that
+// changes the unread badge's digit width must not desync m.footerRows from
+// measureFooterHeight(). At width 120 — squarely inside the 116-128 band
+// where a 7-row badge tips the footer onto a second line — the
+// polling.NotificationsFetchedMsg handler used to return early, before ever
+// reaching resizeActiveViewIfNeeded(), so View() kept emitting the old
+// (shorter) footerRows and overflowed the terminal by one line.
+//
+// Routed through the real polling.NotificationsFetchedMsg, not by direct
+// SetFeed/seedUnreadNotifications assignment — those bypass the handler
+// entirely, which is exactly why none of the six TestModel_UnreadBadge_*
+// tests (nor TestModel_View_OutputHeightMatchesTerminal itself, which builds
+// NewModel(nil, ...) and so has no notifications tab at all) could see this
+// bug.
+//
+// Runs the check twice: once after a poll populates the badge, once more
+// after a following poll clears it back to empty (Decision 74's "nil Items
+// with nil Err means genuinely empty" shape) — the reviewer's repro showed
+// the overflow going both directions.
+func TestModel_View_OutputHeightMatchesTerminal_AfterNotificationsPoll(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	const termWidth = 120
+	const termHeight = 40
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: termWidth, Height: termHeight})
+	m = updated.(Model)
+
+	if h := lipgloss.Height(m.View()); h != termHeight {
+		t.Fatalf("precondition: View() rendered %d rows for a %d-row terminal before any poll, want %d", h, termHeight, termHeight)
+	}
+
+	items := make([]provider.Notification, 7)
+	for i := range items {
+		items[i] = provider.Notification{
+			Identity: provider.Identity{
+				Kind: provider.KindGitHub, Scope: "o/r", ScopeDisplay: "o/r",
+				ID: fmt.Sprintf("%d", i+1),
+			},
+			Title:     fmt.Sprintf("notification %d", i+1),
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		}
+	}
+
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{Items: items, Err: nil})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "7 unread") {
+		t.Fatalf("precondition: badge should show '7 unread' after the poll; view:\n%s", view)
+	}
+	if h := lipgloss.Height(view); h != termHeight {
+		t.Errorf("after a poll populated the unread badge, View() rendered %d rows for a %d-row terminal (footerRows=%d) — the footer was not re-measured; view:\n%s",
+			h, termHeight, m.footerRows, view)
+	}
+
+	// A following poll clears the inbox. nil Items with nil Err is the
+	// genuinely-empty shape, not "unchanged" (Decision 74).
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{Items: nil, Err: nil})
+	m = updated.(Model)
+
+	view = m.View()
+	if strings.Contains(view, "unread") {
+		t.Fatalf("precondition: badge should be gone after the inbox is cleared; view:\n%s", view)
+	}
+	if h := lipgloss.Height(view); h != termHeight {
+		t.Errorf("after a poll cleared the unread badge, View() rendered %d rows for a %d-row terminal (footerRows=%d) — the footer was not re-measured; view:\n%s",
+			h, termHeight, m.footerRows, view)
+	}
+}
+
 func TestModel_GlobalShortcutsDisabledDuringSearch(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -3193,6 +3274,53 @@ func TestModel_MarkResultMsg_ReachesPane_WhileAnotherTabIsActive(t *testing.T) {
 	}
 }
 
+// TestModel_View_OutputHeightMatchesTerminal_AfterMarkResultRollback pins the
+// notifications.MarkResultMsg half of finding 1 of the task 16 independent
+// review: a failed mark's rollback re-raises the unread count exactly the
+// same way a poll can, and the handler had the same early return that
+// skipped resizeActiveViewIfNeeded.
+//
+// At width 120 with a single seeded row: pressing 'd' hides it optimistically
+// (the row falls out of applyOverrides entirely, so the badge disappears and
+// the footer correctly shrinks by one row via the ordinary delegate-to-
+// active-tab path). The failed MarkDone then rolls the override back,
+// restoring the row and re-raising the count to 1 — and 120 sits in the band
+// where that reappearance tips the footer back onto a second line, so a
+// stale m.footerRows overflows the 40-row terminal by one line.
+func TestModel_View_OutputHeightMatchesTerminal_AfterMarkResultRollback(t *testing.T) {
+	marker := &appMarkerStub{markErr: errors.New("403 missing scope")}
+	m, title := markRoutingModel(t, marker)
+
+	const termHeight = 40
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("want a non-nil cmd from d")
+	}
+	if strings.Contains(m.View(), "unread") {
+		t.Fatalf("precondition: badge should be gone right after the optimistic hide; view:\n%s", m.View())
+	}
+	if h := lipgloss.Height(m.View()); h != termHeight {
+		t.Fatalf("precondition: View() rendered %d rows for a %d-row terminal right after the optimistic hide, want %d", h, termHeight, termHeight)
+	}
+
+	msg := cmd()
+	if _, ok := msg.(notifications.MarkResultMsg); !ok {
+		t.Fatalf("cmd produced %T, want notifications.MarkResultMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, title) || !strings.Contains(view, "1 unread") {
+		t.Fatalf("precondition: want the row restored and the badge back to '1 unread' after the failed MarkDone rolled back; view:\n%s", view)
+	}
+	if h := lipgloss.Height(view); h != termHeight {
+		t.Errorf("after MarkResultMsg's failure rollback re-raised the unread count, View() rendered %d rows for a %d-row terminal (footerRows=%d) — the footer was not re-measured; view:\n%s",
+			h, termHeight, m.footerRows, view)
+	}
+}
+
 // TestModel_NotificationMarker_IsWiredToThePane closes the gap the task-14
 // re-validation flagged: every other app-level notifications test passes a nil
 // marker, so mutating notificationMarker to `return nil` left the whole suite
@@ -3918,5 +4046,117 @@ func TestModel_UnreadBadge_AbsentWhenProviderIncapable(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "unread") {
 		t.Errorf("view should NOT contain the unread badge when the provider implements no notifications capability; view:\n%s", view)
+	}
+}
+
+// TestModel_UnreadBadge_ReflectsConfigFilteredCount pins decision 21's
+// headline criterion — "count is unread *after config filters*" — with an
+// actual assertion (task 16 independent-review finding 4). Every other
+// app-level badge test seeds the pane by direct assignment
+// (seedUnreadNotifications -> SetFeed), which bypasses the production route
+// entirely: polling.NotificationsFetchedMsg -> notifications.FilterNotifications
+// (msg.Items, m.config) -> HandleFetchResult. So the post-filter claim rested
+// on prose alone until now.
+//
+// exclude_reasons drops the four "subscribed" rows, leaving 3 unread; the
+// badge must show "3 unread", never the raw pre-filter "7 unread". This test
+// would also have caught finding 1 (it routes through the same handler the
+// fix touches), which the reviewer flagged as a good sign it targets the
+// right seam.
+func TestModel_UnreadBadge_ReflectsConfigFilteredCount(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
+	cfg.Notifications.ExcludeReasons = []string{"subscribed"}
+
+	var client *azdevops.MultiClient
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	items := make([]provider.Notification, 0, 7)
+	for i := 0; i < 3; i++ {
+		items = append(items, provider.Notification{
+			Identity: provider.Identity{
+				Kind: provider.KindGitHub, Scope: "o/r", ScopeDisplay: "o/r",
+				ID: fmt.Sprintf("mentioned-%d", i),
+			},
+			Title:     fmt.Sprintf("mentioned %d", i),
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		})
+	}
+	for i := 0; i < 4; i++ {
+		items = append(items, provider.Notification{
+			Identity: provider.Identity{
+				Kind: provider.KindGitHub, Scope: "o/r", ScopeDisplay: "o/r",
+				ID: fmt.Sprintf("subscribed-%d", i),
+			},
+			Title:     fmt.Sprintf("subscribed %d", i),
+			Reason:    provider.NotificationReasonSubscribed,
+			UpdatedAt: time.Now(),
+		})
+	}
+
+	updated, _ = m.Update(polling.NotificationsFetchedMsg{Items: items, Err: nil})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "7 unread") {
+		t.Fatalf("badge shows the raw pre-filter count '7 unread'; exclude_reasons was not applied before counting; view:\n%s", view)
+	}
+	if !strings.Contains(view, "3 unread") {
+		t.Errorf("badge should show '3 unread' (post-filter: exclude_reasons drops the 4 'subscribed' rows); view:\n%s", view)
+	}
+}
+
+// TestModel_UnreadBadge_ResetToZeroOnThemeChange pins the current, deliberate
+// behaviour (task 16 independent-review finding 5, Oscar's decision): a
+// theme change rebuilds m.notificationsView from scratch (app.go's
+// ThemeSelectedMsg handler), which drops the fed-in feed and, with it, the
+// badge count — visible from every tab until the next NotificationsTickMsg
+// repopulates it.
+//
+// The count is deliberately NOT carried across the rebuild. Carrying the
+// count without also carrying the feed would let the badge and the pane
+// disagree (a "4 unread" badge over an empty inbox), which is worse than
+// both being momentarily empty; the reset is transient and self-heals on the
+// next poll. This test exists to make that a recorded choice, not an
+// accident a future refactor silently reverses.
+//
+// Uses config.NewWithPath, never a bare &config.Config{} (convention 17):
+// ThemeSelectedMsg reaches Config.Save(), and Save() resolves a bare
+// literal's GetPath() to the developer's real ~/.config/azdo-tui/config.yaml
+// -- this already happened once and overwrote a live config. A bare literal
+// is also the *unobservant* choice here specifically: Save() would fail
+// against a path that can't be created, the handler would early-return
+// before ever reaching the rebuild this test means to exercise, and the
+// test would pass for the wrong reason.
+func TestModel_UnreadBadge_ResetToZeroOnThemeChange(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	if m.activeTab != TabNotifications {
+		t.Fatalf("precondition: activeTab = %d, want TabNotifications", m.activeTab)
+	}
+	m = seedUnreadNotifications(m, 4)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+
+	if view := m.View(); !strings.Contains(view, "4 unread") {
+		t.Fatalf("precondition: want the badge showing '4 unread' before the theme switch; view:\n%s", view)
+	}
+
+	updated, _ = m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	if got := m.notificationsView.UnreadCount(); got != 0 {
+		t.Errorf("notificationsView.UnreadCount() = %d after theme switch, want 0 — the rebuilt pane should start with an empty feed", got)
+	}
+	if view := m.View(); strings.Contains(view, "unread") {
+		t.Errorf("want the badge gone immediately after a theme switch (until the next poll repopulates it); view:\n%s", view)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/polling"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestStatusBar_New(t *testing.T) {
@@ -650,20 +651,27 @@ func TestStatusBar_SetUnreadCount(t *testing.T) {
 	}
 }
 
-// TestStatusBar_View_ContainsUnreadCount checks the badge is present and
-// carries the count when set to a positive value.
+// TestStatusBar_View_ContainsUnreadCount checks the badge is present,
+// carries the count, and renders alongside the default keybindings section
+// rather than replacing it.
+//
+// Folded from two former tests (task 16 independent-review finding 7):
+// a bare strings.Contains(view, "7") is satisfied by a stray "7" from the
+// width, scroll percent or org string, so it exercised nothing beyond what
+// the "7 unread" substring check below already covers, and was dropped
+// rather than kept as a second, near-vacuous assertion.
 func TestStatusBar_View_ContainsUnreadCount(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
 	sb.SetUnreadCount(7)
-	sb.SetWidth(120)
+	sb.SetWidth(200)
 
 	view := sb.View()
 
-	if !strings.Contains(view, "7") {
-		t.Error("view should contain the unread count '7'")
+	if !strings.Contains(view, "7 unread") {
+		t.Errorf("view should contain the unread badge text '7 unread'; view:\n%s", view)
 	}
-	if !strings.Contains(view, "unread") {
-		t.Error("view should contain the word 'unread'")
+	if !strings.Contains(view, "quit") {
+		t.Error("view should still contain default keybindings alongside the unread badge")
 	}
 }
 
@@ -698,22 +706,35 @@ func TestStatusBar_View_UnreadCountHiddenWhenNegative(t *testing.T) {
 	}
 }
 
-// TestStatusBar_View_UnreadCountRendersAlongsideKeybindings makes sure the
-// badge does not replace or hide the default keybindings section — it is an
-// additional part, not a state that overrides everything else the way the
-// error message does.
-func TestStatusBar_View_UnreadCountRendersAlongsideKeybindings(t *testing.T) {
-	sb := NewStatusBar(styles.DefaultStyles())
-	sb.SetUnreadCount(3)
-	sb.SetWidth(200)
+// TestStatusBar_UnreadBadgeStyle_UsesThemeWarningAsBackground pins the badge's
+// style (task 16 independent-review finding 6) by inspecting the style
+// *object* returned by unreadBadgeStyle, not rendered bytes: lipgloss
+// resolves the Ascii profile in test binaries, which makes Render the
+// identity function there, so a style change would be invisible to any
+// assertion made against sb.View()'s output — exactly the gap that let all
+// four other unread-badge tests assert text substrings only.
+//
+// Compared against s.Theme.Warning/s.Theme.Background themselves, not
+// literal color strings, so a palette change cannot make this pass by
+// accident.
+func TestStatusBar_UnreadBadgeStyle_UsesThemeWarningAsBackground(t *testing.T) {
+	s := styles.DefaultStyles()
+	sb := NewStatusBar(s)
 
-	view := sb.View()
+	badgeStyle := sb.unreadBadgeStyle()
 
-	if !strings.Contains(view, "3 unread") {
-		t.Error("view should contain the unread badge text '3 unread'")
+	if !badgeStyle.GetBold() {
+		t.Error("unread badge style should be bold")
 	}
-	if !strings.Contains(view, "quit") {
-		t.Error("view should still contain default keybindings alongside the unread badge")
+	if got, want := badgeStyle.GetBackground(), lipgloss.Color(s.Theme.Warning); got != want {
+		t.Errorf("unread badge background = %v, want Theme.Warning (%v) — the badge uses Warning as a background, not a foreground", got, want)
+	}
+	if got, want := badgeStyle.GetForeground(), lipgloss.Color(s.Theme.Background); got != want {
+		t.Errorf("unread badge foreground = %v, want Theme.Background (%v)", got, want)
+	}
+	top, right, bottom, left := badgeStyle.GetPadding()
+	if top != 0 || bottom != 0 || right != 1 || left != 1 {
+		t.Errorf("unread badge padding = (top=%d,right=%d,bottom=%d,left=%d), want (0,1,0,1)", top, right, bottom, left)
 	}
 }
 

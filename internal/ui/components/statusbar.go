@@ -345,6 +345,26 @@ func (s *StatusBar) formatScopes() string {
 	return fmt.Sprintf("%s +%d more", visible, extra)
 }
 
+// unreadBadgeStyle returns the notifications unread-count badge's style,
+// factored out of renderUnreadBadge (task 16 independent-review finding 6)
+// so a test can assert on the style *object* rather than rendered bytes:
+// lipgloss resolves the Ascii profile in test binaries, which makes Render
+// the identity function there, so a style change dies to nothing against
+// any assertion made on View()'s output.
+//
+// Deliberately uses Theme.Warning as a *background*, not a foreground — the
+// opposite of warningMessage's style a few parts earlier in View(), which
+// uses Theme.Warning as a foreground against no background at all. Both
+// exist side by side today; that asymmetry was flagged during task 16's
+// review and is left as-is rather than silently "fixed" here.
+func (s *StatusBar) unreadBadgeStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Background)).
+		Background(lipgloss.Color(s.styles.Theme.Warning)).
+		Bold(true).
+		Padding(0, 1)
+}
+
 // renderUnreadBadge renders the notifications unread-count footer badge
 // (decision 21). Hidden entirely at zero (or less) — an empty string here
 // means the caller's parts slice never gains an entry, so there is no empty
@@ -355,13 +375,7 @@ func (s *StatusBar) renderUnreadBadge() string {
 		return ""
 	}
 
-	badgeStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(s.styles.Theme.Background)).
-		Background(lipgloss.Color(s.styles.Theme.Warning)).
-		Bold(true).
-		Padding(0, 1)
-
-	return badgeStyle.Render(fmt.Sprintf("%d unread", s.unreadCount))
+	return s.unreadBadgeStyle().Render(fmt.Sprintf("%d unread", s.unreadCount))
 }
 
 // renderScrollPercent renders the scroll percentage indicator.

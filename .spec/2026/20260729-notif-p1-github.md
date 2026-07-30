@@ -173,6 +173,8 @@ accepted value.
 | 74 | **REVISED — the original ruling was wrong.** Is `NotificationsFetchedMsg{Items: nil, Err: nil}` "the inbox is empty" or "nothing changed"? | **The inbox is empty. Clear the feed.** The guard decision 74 originally mandated has been reverted, and the doc comment that caused it corrected | The original ruling took `polling/events.go`'s doc comment at face value: "a nil Items with a nil Err is a valid 'nothing to update' result (e.g. a transparent 304 replay)". That comment described something no producer emits. `CompositeProvider.List` accumulates into a nil `var all []Notification` (`composite.go:679`) and `mergeNotifications` returns it untouched when nothing errored, so **zero notifications is exactly this shape**. Meanwhile the 304 path never yields nil: the client answers a 304 by replaying `cloneThreads(c.cached)` and `notifications.go:74` states outright that "a 304 must never be read as 'the inbox is now empty'", while an unsolicited 304 with no matching cache surfaces as an *error* (decision 28) — and a skipped fetch emits no message at all, because `FetchNotifications` returns a nil `tea.Cmd`. So the guard caught only the genuine empty-inbox case and stranded it: dismiss every notification in the browser and the pane kept rendering stale rows until restart, permanently, since nothing else clears the feed on that path. The lesson is not about polling — it is that **a doc comment is a claim, not evidence**. Three separate agents (a reviewer, the loop driver, an implementer) reasoned from that one sentence without checking a producer, and shipped a defect *and* a spec decision endorsing it. The comment now carries its own correction inline so the next reader inherits the evidence rather than the claim |
 | 75 | Can the poller capture `NotifOpts` at construction while the pane re-derives them per fetch? | No — one derivation per fetch, shared. Call `SetOpts` alongside the existing `SetInterval` recompute, and truncate `Since` to the day so the cache path is stable by construction | Measured, and it defeats the very mechanism decision 8 exists to protect. `NotifOptsFromConfig` computes `Since: now - since_days` fresh per call; the pane's `fetchNotifications` calls it per fetch while the poller froze one value for the process lifetime. `NotificationsClient.buildPath` embeds `since` and `cacheValid` requires `path == c.cachedPath`, so each side keeps installing a cached path the other misses and **both** do full non-conditional page walks — every tab switch costs two full walks instead of two 304s, against the rate limit conditional requests exist to spare. The user-visible half: with `since_days` set, `r` shows a narrower window than the poller's fixed one, so rows disappear on refresh and reappear on the next poll. `SetOpts` had no caller at all, which is what let this sit |
 | 76 | What happens to a test's coverage when a new branch is added upstream of the assertion it was written for? | It can silently migrate to the new branch and stop pinning what it was built to pin. A branch added to a handler must be checked against the fixtures every existing test for that handler dispatches | Measured twice in one task. `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` dispatches `{nil, nil}`; decision 74's guard intercepted exactly that shape, so the test moved to pinning the guard's branch and deleting the *ordinary* branch's `SetInterval` — task 15's headline cadence criterion, on the only path a live GitHub response takes — went green. Decision 72's failure shape, reintroduced by the fix for an unrelated finding, in the same task that produced decision 72. The durable countermeasure is the one applied here: the test now dispatches a **real, non-empty** result and says in a comment why it must never go back to nil/nil |
+| 77 | The badge changes the footer's rendered width, and `m.footerRows` is written only by `resizeActiveViewIfNeeded`. Which handlers must re-measure? | **Every handler that can change a status-bar field and returns early.** `polling.NotificationsFetchedMsg` and `notifications.MarkResultMsg` both flip the unread count and both `return` before the delegate-to-active-tab path, so neither repaired `m.footerRows`. Measured at height 40 before the fix: widths **116–128 inclusive** render 41 lines into a 40-row terminal once the badge appears. The badge is the worst case of this class rather than an exception to it — `View()` does resync the badge's *digits* on every render, but nothing resyncs the *row count* they feed into, and unlike connection state or error text the badge's producer is a background poll with no following keypress to fix the accounting up. A comment in `syncStatusBarContext` asserting the badge was exempt reasoned about the text and not the measurement; it is corrected in place |
+| 78 | Should the unread badge survive a theme change, which rebuilds `notificationsView` and discards its feed? | **No — it resets to zero and the next poll repopulates it.** Carrying the number across a rebuild that deliberately drops the feed would leave the badge and the pane disagreeing: a footer reading `7 unread` above an empty list. This is the same reasoning the handler already applies to in-flight optimistic overrides, and it is now pinned by a test rather than left as an accident of ordering |
 
 ## Tasks
 
@@ -191,7 +193,7 @@ accepted value.
 - [x] 13. `app`: the render states — empty inbox, **filter-empty**, capability-unsupported, error/token-scope (decisions 11, 17, 63) (blocked by: 12). → done: each state is a distinct render asserted by its own test, and every pair is asserted **mutually distinguishable** (a shared substring is not a distinct render); the empty state reads as "you're clear", never as an error; per decision 63 the **filter-empty** state is separated from the empty inbox using decision 57's `ReasonFilter()` accessor — this is the reachable state, and conflating the two is the measured bug decision 57 documents; the capability-unsupported render is asserted at the **pane** level with its unreachability recorded in the doc comment (decision 63), not smuggled in as an app-level test that cannot fail; the error state carries the token-scope skeleton (decision 17) and the nil-client message, with task 19 owning the 403/401 differentiation; the empty and filter-empty bodies must not advertise a key the pane swallows (decision 58's `r` stopgap); and per decision 46 any `Config.Warnings` entry renders in the pane — asserted with a populated warning, and asserted absent when the slice is empty so an empty warnings list never reserves a blank line
 - [x] 14. `app`: `u` mark-read (one-way, decision 13) / `d` mark-done (blocked by: 13). → done: `u` issues one mark-read and updates the row optimistically, rolling back on API failure; `d` removes the row and restores it on failure; a poll that returns stale `unread` inside the debounce window does not flicker the row back; and per decision 65 a **successful** mark is committed into the held feed while its override entry is kept, so the mark survives the window elapsing with no poll involved — asserted for both `u` and `d`, plus a failure case pinning that the commit is success-only
 - [x] 15. Polling integration honouring decisions 8 and 23 (blocked by: 12). → done: cadence is `max(X-Poll-Interval, configured)`; the hint reaches the poller via the separate `PollIntervalHinter` optional interface, **not** a new `NotificationSource` method (decision 23); a backend that does not implement the hinter falls back to the configured interval; a 304 response leaves the existing list intact rather than clearing it
-- [ ] 16. Unread-count footer badge (decision 21) (blocked by: 12). → done: count is unread *after* config filters; the badge is hidden entirely at zero; visible from every tab
+- [x] 16. Unread-count footer badge (decision 21) (blocked by: 12). → done: count is unread *after* config filters; the badge is hidden entirely at zero; visible from every tab
 - [ ] 17. Help-modal section + `RemoveSection` wiring when the pane is disabled (blocked by: 12). → done: section lists `u`/`d`/`o`/`f`; disabling the pane removes it; the tabs binding line reflects the new order
 - [x] 18. `config`: regression test pinning `Save()` preservation — seed a file containing `metrics:` and `notifications:`, change only the theme, assert both blocks survive with every value intact (blocked by: 9). → done: the new test fails if `ReadInConfig()` is removed from `Save()` (verify by deleting it locally, watching the test fail, restoring it); fixtures go through `LoadFrom(<t.TempDir() path>)`, never a bare `Config` literal (convention 17). Also pinned: a key the `Config` struct does not model at all survives — the general form of the requirement, and the only assertion here that can see such a key, since every other check reads the reloaded typed `Config` and is blind to sections outside it
 - [ ] 19. Token-scope error state (decision 17) (blocked by: 13,18). → done: a 403 missing-scope response renders in-view naming the `notifications` scope and how to add it; 401-expired and generic failures render differently; the disable action writes `disabled_panes` via `Config.Save()` behind a confirm, on a key that is not `d` or `u`; its test uses a temp-path config (convention 17)
@@ -1284,3 +1286,55 @@ Verified by the loop driver, not an independent agent: both mutations (delete ei
 re-introduce the nil/nil guard) confirmed to fail, suite green 27/27, `gofmt` clean, no probe files.
 This is the same disclosure task 13 carries — a third independent pass on task 15 was judged not to
 earn its cost once the defect and its cause were both understood.
+
+## Review feedback: unread-count footer badge (task 16) — 2026-07-30, commits `64ec7ce` + fix
+
+Independent opus review of `64ec7ce` returned REQUEST_CHANGES: 2 🔴, 3 🟡, 3 🟢. All eight judged
+legitimate; seven fixed, one deliberately left.
+
+| # | Sev | Finding | Resolution |
+|---|---|---|---|
+| 1 | 🔴 | `polling.NotificationsFetchedMsg` and `notifications.MarkResultMsg` both flip the unread count and both `return` before the delegate-to-active-tab path, so `m.footerRows` goes stale against the badge's new width. Measured at height 40: widths **116–128 inclusive** render 41 lines into a 40-row terminal | `m.resizeActiveViewIfNeeded()` added before the `return` in both handlers. Decision 77 |
+| 2 | 🔴 | No test could see finding 1 — the height tests in the suite ran at widths where the badge does not push the footer over the wrap boundary | Two new tests at width 120 / height 40, one driving `NotificationsFetchedMsg` (badge appears, then a following poll clears it) and one driving a `MarkResultMsg` rollback |
+| 3 | 🟡 | `filterLabelForTab`'s doc comment claimed it is called during premeasurement; its only caller is `View()` | Comment corrected to state the single caller and why it stays factored out |
+| 4 | 🟡 | Decision 21's "count *after* config filters" criterion was not pinned by any test | `TestModel_UnreadBadge_ReflectsConfigFilteredCount` — `exclude_reasons: [subscribed]`, 3 mentioned + 4 subscribed rows, asserts `3 unread` not `7 unread` |
+| 5 | 🟡 | A theme change rebuilds `notificationsView` and drops its feed; whether the badge resets was unpinned and undocumented | Pinned as reset-to-zero, per decision 78. Test uses `config.NewWithPath` + `t.TempDir()` (convention 17) |
+| 6 | 🟢 | `renderUnreadBadge`'s style was built inline, so no test could assert it — lipgloss's Ascii profile in a test binary makes `Render` the identity function (decision 56) | Extracted `unreadBadgeStyle()`; test asserts the style **object** — `GetBold`, `GetBackground`, `GetForeground`, padding (convention 6) |
+| 7 | 🟢 | `TestStatusBar_View_ContainsUnreadCount` asserted a bare `"7"`, which the scroll percent or a scope count could satisfy | Asserts `"7 unread"`; the redundant sibling test folded into it |
+| 8 | 🟢 | `warningMessage` uses `Theme.Warning` as a *foreground* while the badge uses it as a *background*, and the two render adjacent | **Left as-is deliberately** and recorded in `unreadBadgeStyle`'s doc comment. A colour change is a design call for the user, not a review fix |
+
+### Independent verification by the loop driver
+
+The fix commit was verified by the driver rather than by a fresh agent, and the mutation ledger below
+was re-run rather than taken on report. Every mutation was applied with the `cp`-probe technique and
+reverted; 27 packages `ok` and no `.probe` files remain.
+
+| Mutation | Outcome |
+|---|---|
+| Revert the re-measure in `NotificationsFetchedMsg` | dead — `..._AfterNotificationsPoll` |
+| Revert the re-measure in `MarkResultMsg` | dead — `..._AfterMarkResultRollback` |
+| `syncStatusBarContext` keeps a nonzero count instead of resyncing | dead — `..._AfterNotificationsPoll` |
+| `UnreadCount` ignores overrides (counts `m.feed` raw) | dead — 3 tests, incl. both optimistic-mark pins |
+| App handler drops `FilterNotifications` | dead — `..._ReflectsConfigFilteredCount` |
+| Badge style loses `Bold` + background | dead — `..._UsesThemeWarningAsBackground` |
+| Badge text drops the `" unread"` suffix | dead — 4 tests |
+
+Width sweep at height 40 in the realistic render sequence (`WindowSizeMsg` → render → poll → render),
+after the fix: **40 lines at every width tested** (80/100/110/116/120/128/130/150), both when the
+badge appears and when a following poll clears it.
+
+### Pre-existing gaps confirmed out of scope
+
+Two footer-accounting gaps reproduce **identically at `a7de08e`**, before the badge existed, and are
+therefore not this task's to fix. Both were measured against throwaway worktrees at `64ec7ce` and
+`a7de08e` rather than assumed:
+
+- The first render after a `WindowSizeMsg` is 41 lines at widths 100/110 — the footer is premeasured
+  with default keybindings and rendered with the active tab's longer ones.
+- A `ThemeSelectedMsg` leaves the footer one row over at **every** width tested. Same root cause: the
+  handler premeasures `m.footerRows` directly, without the keybinding state `View()` supplies.
+
+A third observation, not a defect: `View()` has a value receiver but mutates the shared
+`*components.StatusBar` through its pointer, so a discarded `Model` copy still leaves status-bar state
+behind. This is why a probe that skips the initial render measures different footer widths than the
+runtime ever will — bubbletea always renders after every `Update`.

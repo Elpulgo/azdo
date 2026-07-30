@@ -1085,6 +1085,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if markCmd != nil {
 			cmds = append(cmds, markCmd)
 		}
+		// The mark can flip the unread badge (a success clears it; a
+		// failure rolls the optimistic override back, re-raising it), and
+		// the badge is rendered from every tab regardless of which one is
+		// active. Re-measure here — same as NotificationsFetchedMsg below —
+		// so m.footerRows does not go stale relative to the badge's new
+		// digit width.
+		m.resizeActiveViewIfNeeded()
 		return m, tea.Batch(cmds...)
 
 	case polling.TickMsg:
@@ -1132,6 +1139,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// startup would silently fetch an ever-staler window as real time
 		// passes.
 		m.notificationsPoller.SetOpts(notifications.NotifOptsFromConfig(m.config))
+		// A background poll can change the unread count, which changes the
+		// footer's badge digit width — and unlike every other status-bar
+		// field, the badge is driven by this poller, not by a following
+		// keypress, so there is no other point in the control flow that
+		// will ever repair m.footerRows if it goes stale here. Re-measure
+		// and resize before returning, the same as the delegate-to-active-
+		// tab path below does for every other message.
+		m.resizeActiveViewIfNeeded()
 		return m, tea.Batch(cmds...)
 
 	case components.CriticalErrorMsg:
@@ -1333,10 +1348,13 @@ func (m Model) keybindingsForTab(hasContextBar bool) string {
 }
 
 // filterLabelForTab returns the status bar filter-label text for the active
-// tab and whether it is active at all. Factored out alongside
-// keybindingsForTab for the same reason: syncStatusBarContext must compute
-// the identical filter label that View() will render, so the premeasured
-// footer height matches the real one.
+// tab and whether it is active at all. Factored out of View()'s old inline
+// switch for the same reason as keybindingsForTab, and for the same reason
+// NOT called from syncStatusBarContext: see that function's comment. There
+// is exactly one caller today (View()); this stays a separate function
+// rather than being inlined there because it pairs with keybindingsForTab,
+// and both exist to give a future caller (e.g. a premeasurement path that
+// gains a real need for the filter label) a single place to get this text.
 func (m Model) filterLabelForTab() (label string, active bool) {
 	switch m.activeTab {
 	case TabWorkItems:
@@ -1393,10 +1411,20 @@ func (m Model) filterLabelForTab() (label string, active bool) {
 // leaving state/error/warning wrong does not fix that pre-existing gap — it
 // just trades the direction of the mismatch, and did so in a way that broke
 // TestModel_View_OutputHeightMatchesTerminal, a test with no notifications
-// pane in play at all. The unread badge is exempt from this concern because
-// it does not depend on connection state, error messages, or warnings — only
-// on the notifications pane's own feed, which this method already reads
-// fresh on every call.
+// pane in play at all.
+//
+// The unread badge is NOT exempt from this class of bug — it is in fact the
+// worst case: View() does resync the badge's displayed number fresh on every
+// render (below), but m.footerRows, which the badge's digit width feeds
+// into via measureFooterHeight, is only ever written by
+// resizeActiveViewIfNeeded. Every other status-bar field that can change
+// outside a render (connection state, error/warning messages) is at least
+// followed by a keypress that reaches the delegate-to-active-tab path and
+// repairs the accounting. The badge's producer, polling.NotificationsFetchedMsg,
+// is the one status-bar input driven purely by a background poll with no
+// following keypress to fix things up — so its handler (and
+// notifications.MarkResultMsg's, which can also flip the count) must call
+// resizeActiveViewIfNeeded directly rather than relying on this method alone.
 func (m *Model) syncStatusBarContext() {
 	// Keep the unread badge in sync too (task 16): it renders unconditionally
 	// from every tab, so measureFooterHeight must see its real value here,
