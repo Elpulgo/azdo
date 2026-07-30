@@ -1107,21 +1107,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// notifications pane must still receive it (and re-derive its own
 		// polling cadence) even while some other tab is active.
 		//
-		// Items == nil && Err == nil means "nothing changed" (see
-		// polling.NotificationsFetchedMsg's doc comment, Decision 74) — a
-		// FetchNotifications call that was skipped or short-circuited before
-		// ever calling the client. This must NOT be treated as "the feed is
-		// now empty": HandleFetchResult's success path unconditionally
-		// replaces the feed via SetFeed, so passing it nil here would wipe an
-		// otherwise-healthy feed for no reason. The cadence and fetch options
-		// must still be re-derived, exactly as the normal path below does, so
-		// this is a fall-through to that recompute, not an early return that
-		// skips it.
-		if msg.Items == nil && msg.Err == nil {
-			m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))
-			m.notificationsPoller.SetOpts(notifications.NotifOptsFromConfig(m.config))
-			return m, tea.Batch(cmds...)
-		}
+		// A nil Items with a nil Err means the inbox is genuinely EMPTY, and
+		// must clear the feed (Decision 74, as revised). It does not mean
+		// "nothing changed": CompositeProvider.List accumulates into a nil
+		// `var all []Notification` and mergeNotifications returns it untouched
+		// when no backend errored, so zero notifications is exactly this shape.
+		// "Not modified" never reaches this layer as nil — the GitHub client
+		// answers a 304 by replaying cloneThreads(c.cached) (notifications.go's
+		// "a 304 must never be read as 'the inbox is now empty'"), and an
+		// unsolicited 304 with no matching cache is an error (Decision 28). A
+		// skipped fetch emits no message at all, since FetchNotifications
+		// returns a nil tea.Cmd. So there is no shape left for a guard to
+		// catch, and guarding here strands a cleared inbox on screen forever.
 		filtered := notifications.FilterNotifications(msg.Items, m.config)
 		m.notificationsView = m.notificationsView.HandleFetchResult(filtered, msg.Err)
 		// Re-derive the cadence after every fetch, success or failure alike

@@ -25,9 +25,17 @@ type NotificationsTickMsg struct{}
 
 // NotificationsFetchedMsg is a tea.Msg sent when the notifications poller's
 // background fetch completes. It contains either the fetched notifications
-// or an error; a nil Items with a nil Err is a valid "nothing to update"
-// result (e.g. a transparent 304 replay), and callers must not treat it as a
-// signal to clear an existing list.
+// or an error. A nil Items with a nil Err means the inbox is genuinely
+// empty, and callers MUST clear their list.
+//
+// An earlier version of this comment claimed the opposite — that nil/nil was
+// a "nothing to update" result from a transparent 304 replay. That was wrong
+// and cost a review cycle: the GitHub client answers a 304 by replaying its
+// cached threads, never nil (see internal/github/notifications.go, "a 304
+// must never be read as 'the inbox is now empty'"), an unsolicited 304 with
+// no matching cache surfaces as an error (Decision 28), and a skipped fetch
+// emits no message at all because FetchNotifications returns a nil tea.Cmd.
+// No producer emits nil/nil to mean "unchanged".
 type NotificationsFetchedMsg struct {
 	Items []provider.Notification
 	Err   error

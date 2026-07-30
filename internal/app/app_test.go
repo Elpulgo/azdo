@@ -273,14 +273,20 @@ func TestModel_Update_NotificationsFetchedMsg_ErrorDoesNotClearFeed(t *testing.T
 	}
 }
 
-// TestModel_Update_NotificationsFetchedMsg_NilNilDoesNotClearFeed pins the
-// review fix for Decision 74: Items == nil && Err == nil means "nothing
-// changed" (a FetchNotifications call skipped or short-circuited before
-// calling the client), not "the feed is now empty". Before this fix, the
-// handler always called HandleFetchResult(filtered, msg.Err) unconditionally,
-// and filtered is nil for a nil msg.Items, so HandleFetchResult's success path
-// (SetFeed) wiped an otherwise-healthy feed on every such message.
-func TestModel_Update_NotificationsFetchedMsg_NilNilDoesNotClearFeed(t *testing.T) {
+// TestModel_Update_NotificationsFetchedMsg_EmptyInboxClearsTheFeed pins
+// Decision 74 as revised: Items == nil && Err == nil means the inbox is
+// genuinely EMPTY and the feed must be cleared.
+//
+// This test replaces one that asserted the exact opposite. A review round
+// read polling.NotificationsFetchedMsg's doc comment, which claimed nil/nil
+// was a "nothing to update" result from a transparent 304 replay, and had the
+// handler guard against it. The comment was wrong: CompositeProvider.List
+// accumulates into a nil `var all []Notification` so an empty inbox IS
+// nil/nil, while a real 304 replays cached threads and an unsolicited one is
+// an error (Decision 28). The guard therefore stranded a cleared inbox on
+// screen permanently — dismiss everything in the browser and the pane kept
+// showing stale rows until restart. Both the comment and the guard are gone.
+func TestModel_Update_NotificationsFetchedMsg_EmptyInboxClearsTheFeed(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -297,7 +303,7 @@ func TestModel_Update_NotificationsFetchedMsg_NilNilDoesNotClearFeed(t *testing.
 		Items: []provider.Notification{
 			{
 				Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
-				Title:     "Still here after a nil,nil message",
+				Title:     "Row from a populated inbox",
 				Reason:    provider.NotificationReasonMentioned,
 				UpdatedAt: time.Now(),
 			},
@@ -305,15 +311,19 @@ func TestModel_Update_NotificationsFetchedMsg_NilNilDoesNotClearFeed(t *testing.
 	})
 	m = updated.(Model)
 
+	if view := m.notificationsView.View(); !strings.Contains(view, "Row from a populated inbox") {
+		t.Fatalf("precondition: notifications pane view = %q, want the row present before the empty poll", view)
+	}
+
 	updated, _ = m.Update(polling.NotificationsFetchedMsg{Items: nil, Err: nil})
 	m = updated.(Model)
 
 	view := m.notificationsView.View()
-	if !strings.Contains(view, "Still here after a nil,nil message") {
-		t.Errorf("notifications pane view = %q, want the existing row still present after a nil,nil fetch result", view)
+	if strings.Contains(view, "Row from a populated inbox") {
+		t.Errorf("notifications pane view = %q, want the stale row gone: a nil,nil poll result means the inbox is empty, so dismissing everything in the browser must propagate", view)
 	}
-	if strings.Contains(view, notificationsPaneMarker) {
-		t.Errorf("notifications pane view = %q, must not render the empty-inbox state: a nil,nil result means nothing changed, not that the feed is now empty", view)
+	if !strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("notifications pane view = %q, want the empty-inbox state after an empty poll result", view)
 	}
 }
 
@@ -3325,7 +3335,19 @@ func TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller(
 	// reports. GitHub asking us to slow down must win over the configured 30s.
 	p.hint = 300 * time.Second
 
-	updated, _ := m.Update(polling.NotificationsFetchedMsg{Items: nil, Err: nil})
+	// The result is deliberately a real, non-empty one rather than the nil/nil
+	// shape this test used to dispatch. A guard on nil/nil briefly lived in this
+	// handler, and while it stood this test silently migrated to pinning that
+	// guard's branch instead of the branch a live GitHub response takes, leaving
+	// the headline cadence criterion unobserved on the only path that matters.
+	updated, _ := m.Update(polling.NotificationsFetchedMsg{
+		Items: []provider.Notification{{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "hint-1"},
+			Title:     "A real fetch result",
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Now(),
+		}},
+	})
 	m = updated.(Model)
 
 	if got, want := m.notificationsPoller.Interval(), 300*time.Second; got != want {
@@ -3333,7 +3355,7 @@ func TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller(
 	}
 }
 
-// TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig pins
+// TestModel_NotificationsFetchedMsg_EmptyInbox_ReDerivesOptsFromConfig pins
 // Decision 75 for the nil,nil ("nothing changed") branch: NotifOpts must be
 // re-derived once per fetch, not frozen at poller construction (which is
 // what NewModel's own notifications.NotifOptsFromConfig(cfg) call would
@@ -3342,7 +3364,7 @@ func TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller(
 // construction, so a poller whose opts were only ever set once at startup
 // would still report the old value here; only the handler's own SetOpts
 // call turns the config change into an observable difference.
-func TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig(t *testing.T) {
+func TestModel_NotificationsFetchedMsg_EmptyInbox_ReDerivesOptsFromConfig(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
 		Projects:        []string{"testproject"},
@@ -3369,7 +3391,7 @@ func TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig(t *testing
 }
 
 // TestModel_NotificationsFetchedMsg_RealResult_ReDerivesOptsFromConfig is
-// TestModel_NotificationsFetchedMsg_NilNil_ReDerivesOptsFromConfig's sibling
+// TestModel_NotificationsFetchedMsg_EmptyInbox_ReDerivesOptsFromConfig's sibling
 // for the ordinary (non-nil,nil) branch, which has its own separate SetOpts
 // call — deleting that one leaves the nil,nil branch's call intact and the
 // sibling test above green, so this needs its own, independent assertion.

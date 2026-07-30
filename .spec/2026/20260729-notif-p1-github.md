@@ -170,8 +170,9 @@ accepted value.
 | 72 | Task 15's cadence criterion is one `SetInterval` call in the fetch handler. Why did a green suite with 9 mutations not cover it, and what does? | Because `NewModel` computes `max(configured, hint)` up front **as well**, so a test whose hint never changes passes with the handler's call deleted. The hint must be raised *after* construction — which is the real sequence, since GitHub sends `X-Poll-Interval` only on an actual response. Pinning it also needs a `NotificationsPoller.Interval()` accessor; the pure interval functions are not the thing that breaks | Measured. Deleting `m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))` from `case polling.NotificationsFetchedMsg:` left `go test ./... -count=1` fully green, with the configured interval then in force for the life of the session while the hint was computed and discarded — i.e. GitHub asking us to slow down is silently ignored, which is the one thing decision 8 exists to honour. The implementer disclosed this as a survivor rather than hiding it and declined to add an accessor on grounds of scope creep and symmetry with `Poller`; the scope judgement was wrong (the call *is* the acceptance criterion, so leaving it unobservable leaves the criterion unmet) but the disclosure is what made it cheap to close. `Interval()` was added to `NotificationsPoller` only — `Poller` has no equivalent hint-driven mutation to pin, and adding one for symmetry alone would widen this task into three other panes for no test. The generalisable half is the fixture: a constant-hint stub cannot distinguish "applied at construction" from "applied on every fetch", so the stub needs a mutable hint and the assertion needs a precondition check at the configured value before the hint is raised. Three mutations now die — the deletion, swapping the recompute to `notificationsConfiguredInterval`, and stubbing `Interval()` to 0 |
 
 | 73 | Where does the gate for a background poller belong — the initial fetch, or the timer? | **The timer.** `OnTick` re-arms itself, so one ungated `StartPolling()` is a permanent self-sustaining chain no later gate can stop. The predicate must be the same one that decides the pane exists: capability **and** `IsPaneEnabled`. The poller should additionally be handed a `nil` client when the provider is incapable, so it is self-defending rather than trusting its caller | Measured. `Init()` put `m.notificationsPoller.StartPolling()` in `initCmds` unconditionally while the initial fetch six lines below was correctly gated on `isTabEnabled(TabNotifications)` — so with `disabled_panes: notifications` and a GitHub token the app issued a real `GET /notifications` page walk every 30s for the life of the process, tab absent and pane unreachable. The waste is the smaller half: decision 16 makes `disabled_panes` the **only** disable mechanism and decision 17 makes "turn the pane off" one of the two exits offered to a user whose token lacks the `notifications` scope, so that exit stopped nothing and on a scope failure the app kept 403ing forever with no surface showing it — and task 19 was about to build its in-view disable action on top of it. The Azure-only case is the same defect one step quieter: `notificationMarker` deliberately does not require `HasNotifications()` (correct for mark routing), and `*CompositeProvider` implements `List` on the type, so the assertion succeeds for any composite and `OnTick`'s nil-client guard never fires — an Azure-only user wakes every 30s forever to call `List`, hit `mergeNotifications`' `total == 0` branch and `SetFeed(nil)` a pane nobody can see. Two independent passes found this from opposite directions: the reviewer that the start is ungated, the validator that **deleting it entirely is green** — `TestModel_Init_StartsPolling` asserts only `cmd != nil`, which the pipeline poller alone satisfies. So the fix needs both halves of the pair: a tick is emitted when the pane is enabled, and none is emitted when it is not |
-| 74 | Is `NotificationsFetchedMsg{Items: nil, Err: nil}` "the inbox is empty" or "nothing changed"? | **Nothing changed.** Recompute the cadence and leave the feed alone. `events.go`'s own doc comment already mandated this and its sole consumer did the opposite | Measured: that message renders `"No notifications found. / You're all caught up."` over a populated feed, because `FilterNotifications(nil, cfg)` returns nil, `HandleFetchResult(nil, nil)` takes the success branch and `SetFeed(nil)` replaces the feed wholesale. Task 15's "a 304 leaves the existing list intact" criterion therefore passed only **incidentally** — `NotificationsClient.List`'s transparent 304 replays `cloneThreads(c.cached)`, which is populated whenever the pane is, so the criterion was met by the client happening not to return nil rather than by the caller honouring the contract, and the more natural reading of "not modified" (return nil, let the caller keep what it has — exactly what `events.go` anticipates) silently wipes a live inbox. Found independently by both passes. Note `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` dispatches precisely `{nil, nil}` and asserts only on the interval, so it walks past the wipe — a test can be correct, non-vacuous, and still shield the defect sitting on its own fixture |
+| 74 | **REVISED — the original ruling was wrong.** Is `NotificationsFetchedMsg{Items: nil, Err: nil}` "the inbox is empty" or "nothing changed"? | **The inbox is empty. Clear the feed.** The guard decision 74 originally mandated has been reverted, and the doc comment that caused it corrected | The original ruling took `polling/events.go`'s doc comment at face value: "a nil Items with a nil Err is a valid 'nothing to update' result (e.g. a transparent 304 replay)". That comment described something no producer emits. `CompositeProvider.List` accumulates into a nil `var all []Notification` (`composite.go:679`) and `mergeNotifications` returns it untouched when nothing errored, so **zero notifications is exactly this shape**. Meanwhile the 304 path never yields nil: the client answers a 304 by replaying `cloneThreads(c.cached)` and `notifications.go:74` states outright that "a 304 must never be read as 'the inbox is now empty'", while an unsolicited 304 with no matching cache surfaces as an *error* (decision 28) — and a skipped fetch emits no message at all, because `FetchNotifications` returns a nil `tea.Cmd`. So the guard caught only the genuine empty-inbox case and stranded it: dismiss every notification in the browser and the pane kept rendering stale rows until restart, permanently, since nothing else clears the feed on that path. The lesson is not about polling — it is that **a doc comment is a claim, not evidence**. Three separate agents (a reviewer, the loop driver, an implementer) reasoned from that one sentence without checking a producer, and shipped a defect *and* a spec decision endorsing it. The comment now carries its own correction inline so the next reader inherits the evidence rather than the claim |
 | 75 | Can the poller capture `NotifOpts` at construction while the pane re-derives them per fetch? | No — one derivation per fetch, shared. Call `SetOpts` alongside the existing `SetInterval` recompute, and truncate `Since` to the day so the cache path is stable by construction | Measured, and it defeats the very mechanism decision 8 exists to protect. `NotifOptsFromConfig` computes `Since: now - since_days` fresh per call; the pane's `fetchNotifications` calls it per fetch while the poller froze one value for the process lifetime. `NotificationsClient.buildPath` embeds `since` and `cacheValid` requires `path == c.cachedPath`, so each side keeps installing a cached path the other misses and **both** do full non-conditional page walks — every tab switch costs two full walks instead of two 304s, against the rate limit conditional requests exist to spare. The user-visible half: with `since_days` set, `r` shows a narrower window than the poller's fixed one, so rows disappear on refresh and reappear on the next poll. `SetOpts` had no caller at all, which is what let this sit |
+| 76 | What happens to a test's coverage when a new branch is added upstream of the assertion it was written for? | It can silently migrate to the new branch and stop pinning what it was built to pin. A branch added to a handler must be checked against the fixtures every existing test for that handler dispatches | Measured twice in one task. `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller` dispatches `{nil, nil}`; decision 74's guard intercepted exactly that shape, so the test moved to pinning the guard's branch and deleting the *ordinary* branch's `SetInterval` — task 15's headline cadence criterion, on the only path a live GitHub response takes — went green. Decision 72's failure shape, reintroduced by the fix for an unrelated finding, in the same task that produced decision 72. The durable countermeasure is the one applied here: the test now dispatches a **real, non-empty** result and says in a comment why it must never go back to nil/nil |
 
 ## Tasks
 
@@ -189,7 +190,7 @@ accepted value.
 - [x] 12. `app`: register the tab first, remap number keys, `enabledTabs`, `state.TabID` (decisions 6, 9, 11) (blocked by: 11). → done: notifications is `enabledTabs[0]`; number keys map to the new order, and `cmd/azdo-tui`'s CLI help no longer advertises the old three-tab line; `TabID "notifications"` round-trips through `state.yaml` — actually serialising, not just through the in-memory store snapshot; the tab is absent when no backend implements the capability, and present-but-empty when one does — with the incapable fixture being a capable-**shaped** provider per decision 59 (a `nil` provider cannot tell the correct gate from the naive type assertion), presence asserted on **pane content** per decision 60 (the tab-bar label alone passes when the content switch falls through to a sibling pane), the enablement predicate computed **once** and the pane constructed unconditionally per decision 61, and the `main.go` wiring test pinning the **argument** as well as the callee per decision 62
 - [x] 13. `app`: the render states — empty inbox, **filter-empty**, capability-unsupported, error/token-scope (decisions 11, 17, 63) (blocked by: 12). → done: each state is a distinct render asserted by its own test, and every pair is asserted **mutually distinguishable** (a shared substring is not a distinct render); the empty state reads as "you're clear", never as an error; per decision 63 the **filter-empty** state is separated from the empty inbox using decision 57's `ReasonFilter()` accessor — this is the reachable state, and conflating the two is the measured bug decision 57 documents; the capability-unsupported render is asserted at the **pane** level with its unreachability recorded in the doc comment (decision 63), not smuggled in as an app-level test that cannot fail; the error state carries the token-scope skeleton (decision 17) and the nil-client message, with task 19 owning the 403/401 differentiation; the empty and filter-empty bodies must not advertise a key the pane swallows (decision 58's `r` stopgap); and per decision 46 any `Config.Warnings` entry renders in the pane — asserted with a populated warning, and asserted absent when the slice is empty so an empty warnings list never reserves a blank line
 - [x] 14. `app`: `u` mark-read (one-way, decision 13) / `d` mark-done (blocked by: 13). → done: `u` issues one mark-read and updates the row optimistically, rolling back on API failure; `d` removes the row and restores it on failure; a poll that returns stale `unread` inside the debounce window does not flicker the row back; and per decision 65 a **successful** mark is committed into the held feed while its override entry is kept, so the mark survives the window elapsing with no poll involved — asserted for both `u` and `d`, plus a failure case pinning that the commit is success-only
-- [ ] 15. Polling integration honouring decisions 8 and 23 (blocked by: 12). → done: cadence is `max(X-Poll-Interval, configured)`; the hint reaches the poller via the separate `PollIntervalHinter` optional interface, **not** a new `NotificationSource` method (decision 23); a backend that does not implement the hinter falls back to the configured interval; a 304 response leaves the existing list intact rather than clearing it
+- [x] 15. Polling integration honouring decisions 8 and 23 (blocked by: 12). → done: cadence is `max(X-Poll-Interval, configured)`; the hint reaches the poller via the separate `PollIntervalHinter` optional interface, **not** a new `NotificationSource` method (decision 23); a backend that does not implement the hinter falls back to the configured interval; a 304 response leaves the existing list intact rather than clearing it
 - [ ] 16. Unread-count footer badge (decision 21) (blocked by: 12). → done: count is unread *after* config filters; the badge is hidden entirely at zero; visible from every tab
 - [ ] 17. Help-modal section + `RemoveSection` wiring when the pane is disabled (blocked by: 12). → done: section lists `u`/`d`/`o`/`f`; disabling the pane removes it; the tabs binding line reflects the new order
 - [x] 18. `config`: regression test pinning `Save()` preservation — seed a file containing `metrics:` and `notifications:`, change only the theme, assert both blocks survive with every value intact (blocked by: 9). → done: the new test fails if `ReadInConfig()` is removed from `Save()` (verify by deleting it locally, watching the test fail, restoring it); fixtures go through `LoadFrom(<t.TempDir() path>)`, never a bare `Config` literal (convention 17). Also pinned: a key the `Config` struct does not model at all survives — the general form of the requirement, and the only assertion here that can see such a key, since every other check reads the reloaded typed `Config` and is blind to sections outside it
@@ -1160,3 +1161,126 @@ reinstated; the two tick types cannot cross and each tick arms exactly one `tea.
 the commit; nothing here belongs to task 16, 17, 19 or 20, and nothing is done twice. Both passes
 independently confirmed decision 72's precondition assertion is load-bearing. Gates: suite green
 27/27, `gofmt -l` clean on all 16 touched files, `go vet` clean.
+
+## Validation: notifications polling (task 15) — re-check, 2026-07-30, commit 77dd3fb
+
+Verdict: **INCOMPLETE**. Every item the bounce forwarded is genuinely closed — the 🔴 timer gate,
+decisions 74 and 75, the quit-stop, the status-bar `u`/`d`, and `StartPolling`'s nil-client guard
+all hold and all their obvious mutations die. But the fix commit **moved** one hole and **opened**
+a second, both on the acceptance criteria themselves:
+
+- **V1 (new survivor, blocking).** Deleting the *ordinary*-branch
+  `m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))`
+  (`internal/app/app.go:1131`) leaves `go test ./... -count=1` fully green, 27/27.
+  This is a **regression created by 77dd3fb**: `TestModel_NotificationsFetchedMsg_AppliesTheNewPollIntervalHintToThePoller`
+  dispatches precisely `{Items: nil, Err: nil}`, and decision 74's new early-return branch now
+  intercepts that message before the ordinary path is ever reached. The test still passes — it
+  now pins the *nil,nil* branch's `SetInterval` (deleting **that** one does kill it) — so task 15's
+  headline criterion, decision 8's `max(X-Poll-Interval, configured)` applied per fetch, is
+  unobserved on the **only path a real GitHub response takes**. Decision 72's exact failure shape,
+  reintroduced by the fix for a different finding. Needs a sibling test dispatching a **non-nil
+  Items** result with a raised hint and asserting `Interval()`, exactly as
+  `..._RealResult_ReDerivesOptsFromConfig` does for opts.
+
+- **V2 (new defect, blocking).** Decision 74's guard conflates "nothing changed" with "the inbox
+  is genuinely empty". `CompositeProvider.List` accumulates into `var all []Notification`
+  (`internal/provider/composite.go:679`) and `mergeNotifications` returns it untouched when there
+  are no errors, so **a capable backend with zero notifications produces exactly
+  `NotificationsFetchedMsg{Items: nil, Err: nil}`** — the very shape the new branch now discards.
+  Consequences, both user-visible: (a) once rows are on screen, clearing the inbox in the browser
+  never propagates — every subsequent poll is dropped and the stale rows stay indefinitely, which
+  is the inverse of decision 20's "a blank pane must not be indistinguishable from you're clear";
+  (b) measured with a throwaway probe (capable provider, `WindowSizeMsg`, then one `{nil,nil}`
+  result): the pane renders `⣾ Loading notifications...` and **never** `No notifications found.`,
+  because `HandleFetchResult` — the only thing that clears the construction-time `SetLoading(true)` —
+  is skipped. In practice (b) is transient (`initTabCmd` re-fetches through the pane's own path on
+  tab switch), but (a) is permanent. Note decision 74's stated trigger — "a FetchNotifications call
+  that was skipped or short-circuited before ever calling the client" — is **unreachable**:
+  `FetchNotifications` returns a nil `tea.Cmd` in both those cases, so no message is emitted at all.
+  The only real producer of `{nil, nil}` is the empty inbox. Overloading `nil` cannot carry both
+  meanings; the not-modified signal needs its own channel (a `NotModified bool` on the msg, or the
+  composite returning a non-nil empty slice) before the guard is correct.
+
+- **V3 (survivor, same root cause as V2).** `if msg.Items == nil && msg.Err == nil` →
+  `if len(msg.Items) == 0 && msg.Err == nil` survives the whole suite. No test anywhere
+  distinguishes a nil `Items` from an empty-but-non-nil `Items`, which is the single
+  discrimination decision 74's entire guard rests on.
+
+### Acceptance criteria
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| 1 | 🔴 gate (decision 73): the **timer** is gated on capability AND pane-enabled | **Holds** | `Init()` calls `m.notificationsStartPollingCmd()` (`app.go:730`), which returns nil unless `m.isTabEnabled(TabNotifications)` (`app.go:766-771`) — membership in `enabledTabs`, built solely by `buildEnabledTabs`'s `cfg.IsPaneEnabled("notifications") && notifCapable` (`app.go:407`), so the predicate is exactly capability-AND-pane-enabled and is not restated. Poller also handed a nil client when incapable: `notificationsPollerClient` (`app.go:334-339`) at the `NewModel` call site (`app.go:659`). Both directions pinned: `TestModel_NotificationsStartPollingCmd_EnabledAndCapable_ArmsTimer` (resolves to `polling.NotificationsTickMsg`) and `..._DisabledOrIncapable_ReturnsNil` (both the incapable and the pane-disabled subtest), plus `TestModel_Init_NotificationsTimerGate_WiredIn` for the wiring and `TestNotificationsPollerClient_ReturnsNilWhenIncapable` for the nil client |
+| 2 | Decision 74: `{nil, nil}` does not replace the feed but still re-derives cadence + opts; an error with nil Items still renders as an error | **Guard shape correct, semantics wrong — see V2/V3** | `app.go:1120-1124`: the conjunct really is `msg.Items == nil && msg.Err == nil`, and `TestModel_Update_NotificationsFetchedMsg_ErrorDoesNotClearFeed` dispatches `{Err: errors.New("poll boom")}` with nil Items and asserts the `"Notifications unavailable:"` error body, so the `Err == nil` conjunct is load-bearing. Both `SetInterval` and `SetOpts` are called inside the branch (deleting either dies). **But** the branch's trigger in production is the empty inbox, not a skipped fetch |
+| 3 | Decision 75: `SetOpts` per fetch in **both** branches; `Since` truncated to the day; `SinceDays == 0` stays zero | **Holds** | `app.go:1122` (nil-nil) and `app.go:1136` (ordinary); deleting either dies in its own test. Truncation at `internal/ui/notifications/filter.go:155-161`, inside the `if nc.SinceDays > 0` guard, so the zero case never reaches `time.Date` at all. Verified the zero case cannot be corrupted even if the guard were moved: `time.Date(1, January, 1, 0,0,0,0, time.UTC)` **is** the zero `time.Time`, so truncating a zero value is an identity. Pinned by `TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls` and the tightened `..._ProducesPastCutoff` |
+| 4 | Poller stopped on quit; status bar lists `u`/`d`; `StartPolling` nil-client guard | **Holds** | `app.go:887` (`m.notificationsPoller.Stop()`), `app.go:1420-1421` + corrected doc comment at `:1409-1412`, `notifications_poller.go:178-180`. Each pinned by its own new test; all three deletions die |
+| 5 | Original criteria: cadence `max()`, `PollIntervalHinter` not a 4th `NotificationSource` method, non-hinting fallback, 304 leaves the list intact, ticks cannot cross (decision 69) | **Holds, except criterion 1's per-fetch application — V1** | `notificationsPollInterval` (`app.go:388-395`) is a real `max`. Tick separation still pinned by `TestNotificationsPoller_StartPolling_EmitsNotificationsTickMsg`, `TestModel_Update_NotificationsTickMsg_DrivesNotificationsPollerNotPipelinePoller`, and now additionally by the new arm test's explicit `polling.TickMsg` negative assertion. Hinter/fallback unchanged from the 59047ab pass |
+
+### Mutation ledger (this pass — nine fresh mutations, none previously run)
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | delete the **ordinary**-branch `SetInterval` in the `NotificationsFetchedMsg` handler | **SURVIVED** (V1) — full suite green, 27/27 |
+| 2 | `msg.Items == nil` → `len(msg.Items) == 0` in the nil-nil guard | **SURVIVED** (V3) — full suite green |
+| 3 | drop `every: tea.Every` from `NewNotificationsPoller` (seam defaults to nil) | died — nil func call panics in `TestModel_Update_NotificationsTickMsg_DrivesNotificationsPollerNotPipelinePoller` |
+| 4 | gate predicate → `!hasNotificationCapability(m.client)` (drops the pane-enabled conjunct) | died — `..._DisabledOrIncapable_ReturnsNil/capable_provider,_pane_disabled` + `TestModel_Init_NotificationsTimerGate_WiredIn` |
+| 5 | `notificationsPollerClient` returns a **typed** nil (`(*provider.CompositeProvider)(nil)`) instead of an untyped one | died — `TestNotificationsPollerClient_ReturnsNilWhenIncapable` uses `got != nil`, which a typed nil fails |
+| 6 | `Since` truncation `since.Location()` → `time.UTC` | **equivalent under the sandbox's UTC clock**; dies under `TZ=Europe/Stockholm` (`..._ProducesPastCutoff`: `+0000 UTC` vs `+0200 CEST`). Baseline also passes under that TZ, so the test is not UTC-over-fitted |
+| 7 | delete the nil-nil branch's `SetInterval` | died — `..._AppliesTheNewPollIntervalHintToThePoller` (this is the coverage that **moved**, see V1) |
+| 8 | delete the nil-nil branch's `SetOpts` / delete the ordinary branch's `SetOpts` | both died — `..._NilNil_ReDerivesOptsFromConfig` / `..._RealResult_ReDerivesOptsFromConfig` respectively |
+| 9 | remove `m.notificationsPoller.Stop()` from the `q` handler | died — `TestModel_QuitKey_StopsNotificationsPollerToo` |
+
+### Test quality, safety, gates
+
+- **No new vacuous tests.** `TestModel_Init_NotificationsTimerGate_WiredIn`'s isolation assumption
+  was checked: both models force `activeTab = TabNotifications` so Init's preload append is false
+  on both, and `batchLen` resolves the outer batch exactly one level (bubbletea's `compactCmds`
+  never invokes a sub-cmd), so no real timer or network leaf is touched. It does die under the
+  gate mutations above, so the length comparison is genuinely discriminating.
+- **`SetEveryForTesting` is load-bearing but slightly over-exposed.** It is required as an
+  *exported* method only by `TestModel_NotificationsStartPollingCmd_EnabledAndCapable_ArmsTimer`
+  in `internal/app`, which resolves the cmd to assert `polling.NotificationsTickMsg`; with real
+  `tea.Every` that call blocks for the interval. Strictly, that app-level test could have asserted
+  `cmd != nil` (unlike Init's batch, `notificationsStartPollingCmd` returns a single cmd, so
+  non-nil *is* discriminating) and left the message-type assertion to the polling package, which
+  could then have used an unexported seam. Not a defect — the exported seam is documented,
+  production-inert and mirrors the pane's `now` clock seam — but it is a wider API than the tests
+  strictly needed. Not blocking.
+- **Convention 17 / decision 71 — no violation.** Every new `&config.Config{...}` literal drives
+  only `WindowSizeMsg`, `NotificationsFetchedMsg`, `KeyMsg{'q'}`, `Init()` or `View()`. The only
+  `Save()` route in `internal/app` is `case components.ThemeSelectedMsg:`; no test added by
+  `77dd3fb` dispatches it, and the `q` handler does `m.poller.Stop()`, `m.notificationsPoller.Stop()`,
+  `tea.Quit` and nothing else.
+- Gates: `go build ./...` clean; `go vet ./...` clean; `go test ./... -count=1` green, **27/27**;
+  `gofmt -l` clean on all seven files `77dd3fb` touched. Suite also green under `TZ=Europe/Stockholm`.
+- Working tree verified clean after every probe (`git status --porcelain` empty, no `*.probe` left).
+
+### To close task 15
+
+1. **V1** — add a real-result sibling to `..._AppliesTheNewPollIntervalHintToThePoller`: dispatch
+   `NotificationsFetchedMsg` with **non-nil** `Items` after raising the stub's hint and assert
+   `m.notificationsPoller.Interval()`. Deleting the ordinary-branch `SetInterval` must fail.
+2. **V2/V3** — decide, in a new decision, how "not modified" is signalled distinctly from
+   "the inbox is empty" (`CompositeProvider.List` returns `(nil, nil)` for both today), then
+   implement it and pin **both** cases end-to-end: an empty poll result must clear a populated
+   feed and render the empty-inbox body; a genuine not-modified result must not. Until then the
+   `Items == nil` guard silently freezes the feed of any user who empties their inbox elsewhere.
+
+## Review feedback closure: task 15 re-check survivors — 2026-07-30, commit `77dd3fb`
+
+The opus re-check confirmed every forwarded item genuinely closed (the 🔴 timer gate, decision 75's
+per-fetch opts, quit/status-bar/nil-client, and the original criteria), but found that the fix
+commit **moved one coverage hole and opened one live defect** — both on the acceptance criteria
+themselves, neither present before the fix. Fixed here.
+
+| # | Finding | Disposition |
+|---|---|---|
+| V2 | Decision 74's guard discards the genuine empty-inbox result, so a cleared inbox never propagates to the pane | **Decision 74 revised and reverted.** `events.go`'s doc comment — the source of the error — corrected in place, with the correction recorded inline so the next reader inherits evidence rather than the claim. Pinned by `TestModel_Update_NotificationsFetchedMsg_EmptyInboxClearsTheFeed`, which asserts the row is **gone** and the empty state renders; re-introducing the guard kills it |
+| V1 | Deleting the ordinary branch's `SetInterval` was green — the interval test had migrated into the guard's branch | **Decision 76.** The test now dispatches a real non-empty result and documents why it must not revert. Deleting either `SetInterval` now fails |
+| V3 | Nothing distinguished nil from empty-non-nil `Items` | Dissolved with the guard — there is no longer a branch resting on that distinction |
+| — | `SetEveryForTesting` slightly over-exposed (non-blocking) | Kept. It is genuinely used cross-package from `internal/app`, and a `tea.Every` duration is otherwise unobservable |
+
+Verified by the loop driver, not an independent agent: both mutations (delete either `SetInterval`;
+re-introduce the nil/nil guard) confirmed to fail, suite green 27/27, `gofmt` clean, no probe files.
+This is the same disclosure task 13 carries — a third independent pass on task 15 was judged not to
+earn its cost once the defect and its cause were both understood.
