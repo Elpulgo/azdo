@@ -1477,6 +1477,123 @@ func TestMarkDone_PollWithinDebounceWindow_RowStaysHidden(t *testing.T) {
 	}
 }
 
+// TestMarkDone_Success_SurvivesWindowExpiry_WithoutPoll is the regression test
+// for a confirmed mark-done coming back on its own. It is deliberately
+// poll-free: the only inputs after the successful result are the clock moving
+// past markDebounceWindow and one purely local re-render (`f`).
+//
+// The bug this pins: while success left the override as the sole holder of the
+// dismissal, visibleItems re-derived from an m.feed that still contained the
+// row, so the instant the window elapsed the row the server had already
+// accepted as done reappeared — no stale poll needed, just 30 seconds and any
+// keypress that re-derives. That is data resurrection, not a flicker, which is
+// why the fix commits the mark into the feed (commitOverride) rather than
+// widening the window.
+//
+// Every row shares one reason so the `f` cycle re-derives without also
+// filtering rows out: what the assertion sees is the override/feed interaction
+// alone.
+func TestMarkDone_Success_SurvivesWindowExpiry_WithoutPoll(t *testing.T) {
+	marker := &fakeMarker{}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonMentioned, false, fixedNow)
+	second := mkNotification("2", "owner/repo", "Keep me", provider.NotificationReasonMentioned, false, fixedNow)
+	third := mkNotification("3", "owner/repo", "Keep me too", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target, second, third})
+
+	m, cmd := m.Update(keyRune('d'))
+	m = runMarkCmd(t, m, cmd)
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("precondition: Items() = %+v, want the target row gone after a successful MarkDone", m.list.Items())
+	}
+
+	// No poll: the clock simply advances past the debounce window and the user
+	// presses f, which re-derives the visible rows from the held feed.
+	m.now = func() time.Time { return fixedNow.Add(markDebounceWindow + time.Second) }
+	m, _ = m.Update(keyRune('f'))
+
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("Items() = %+v, want 2 rows — the successfully-dismissed row must not return once the override expires", m.list.Items())
+	}
+	for _, n := range m.list.Items() {
+		if n.Identity.SameItem(target.Identity) {
+			t.Errorf("Items() = %+v, want %+v to stay gone: MarkDone succeeded, so the row must never be re-derived from the feed", m.list.Items(), target.Identity)
+		}
+	}
+}
+
+// TestMarkRead_Success_SurvivesWindowExpiry_WithoutPoll is the read-side mirror
+// of TestMarkDone_Success_SurvivesWindowExpiry_WithoutPoll: a confirmed `u`
+// must not silently revert to unread once the override expires, with no poll
+// having contradicted it. Separate from the mark-done case because the two
+// commit paths differ — overrideRead rewrites a field on a retained row, while
+// overrideHidden drops the row — so one can regress without the other.
+func TestMarkRead_Success_SurvivesWindowExpiry_WithoutPoll(t *testing.T) {
+	marker := &fakeMarker{}
+	target := mkNotification("1", "owner/repo", "Read me", provider.NotificationReasonMentioned, false, fixedNow)
+	second := mkNotification("2", "owner/repo", "Untouched", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target, second})
+
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+	if item, ok := m.selectedItem(); !ok || !item.Read {
+		t.Fatalf("precondition: item = %+v, ok=%v, want Read=true after a successful MarkRead", item, ok)
+	}
+
+	m.now = func() time.Time { return fixedNow.Add(markDebounceWindow + time.Second) }
+	m, _ = m.Update(keyRune('f'))
+
+	items := m.list.Items()
+	if len(items) != 2 {
+		t.Fatalf("Items() = %+v, want both rows still present", items)
+	}
+	for _, n := range items {
+		if n.Identity.SameItem(target.Identity) && !n.Read {
+			t.Errorf("Items() = %+v, want %+v to stay Read: MarkRead succeeded, so expiry must not revert it", items, target.Identity)
+		}
+		// The untouched row must not be swept up by the commit — a commit that
+		// matched on something looser than the full identity key would mark the
+		// whole feed read and still pass the assertion above.
+		if n.Identity.SameItem(second.Identity) && n.Read {
+			t.Errorf("Items() = %+v, want %+v to stay unread: only the marked row may be committed", items, second.Identity)
+		}
+	}
+}
+
+// TestMarkDone_Failure_ThenWindowExpiry_DoesNotResurrectTwice pins that the
+// commit-on-success path did not quietly become commit-on-every-result: a
+// *failed* MarkDone must leave m.feed untouched, so the restored row is still
+// there after the window elapses and a later local re-render happens. Without
+// this, committing unconditionally in handleMarkResult would pass every other
+// mark test in this file.
+func TestMarkDone_Failure_ThenWindowExpiry_DoesNotResurrectTwice(t *testing.T) {
+	marker := &fakeMarker{doneErr: errors.New("boom")}
+	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonMentioned, false, fixedNow)
+	second := mkNotification("2", "owner/repo", "Keep me", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{target, second})
+
+	m, cmd := m.Update(keyRune('d'))
+	m = runMarkCmd(t, m, cmd)
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("precondition: Items() = %+v, want the row restored after a failed MarkDone", m.list.Items())
+	}
+
+	m.now = func() time.Time { return fixedNow.Add(markDebounceWindow + time.Second) }
+	m, _ = m.Update(keyRune('f'))
+
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("Items() = %+v, want the rolled-back row to still be present past the window", m.list.Items())
+	}
+	foundTarget := false
+	for _, n := range m.list.Items() {
+		if n.Identity.SameItem(target.Identity) {
+			foundTarget = true
+		}
+	}
+	if !foundTarget {
+		t.Errorf("Items() = %+v, want %+v present: a failed mark must never be committed to the feed", m.list.Items(), target.Identity)
+	}
+}
+
 // TestCanTriage_Blocks_UAndD_WhenNoRows pins that u/d are no-ops with an
 // empty feed: canTriage must gate on more than "a marker is set".
 func TestCanTriage_Blocks_UAndD_WhenNoRows(t *testing.T) {

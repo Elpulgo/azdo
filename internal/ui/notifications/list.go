@@ -64,11 +64,15 @@ type Model struct {
 	marker provider.NotificationSource
 
 	// overrides holds the pane's local optimistic intent for in-flight or
-	// already-resolved `u`/`d` actions, applied on top of the feed by
-	// visibleItems until either the server agrees or the debounce window
-	// expires (the spec's Unknowns section: GitHub's read state can be
-	// eventually consistent, so a poll landing right after a PATCH can still
-	// report unread). Rollback on API failure is dropping the entry here —
+	// already-confirmed `u`/`d` actions, applied on top of the feed by
+	// visibleItems until the debounce window expires (the spec's Unknowns
+	// section: GitHub's read state can be eventually consistent, so a poll
+	// landing right after a PATCH can still report unread).
+	//
+	// An entry outliving its own API call is the point, not an oversight: once
+	// the call succeeds commitOverride writes the mark into feed and the entry
+	// stays only to outweigh a lagging poll, which replaces feed wholesale.
+	// Rollback on API failure is dropping the entry here —
 	// never deleting/re-inserting a row — so decision 45's merge-sort total
 	// order is never reproduced by hand and can never be gotten wrong.
 	//
@@ -346,9 +350,11 @@ func (m Model) withOverride(key identityKey, kind overrideKind) Model {
 // dropOverride returns a copy of m with key's override removed — the
 // rollback path for a failed MarkRead/MarkDone (task 14). This is
 // deliberately NOT a no-op: dropping the override is what un-hides a failed
-// `d` and un-marks-read a failed `u`, since neither ever touched m.feed
-// itself. A no-op rollback would make the optimistic update permanent even
-// when the API call failed.
+// `d` and un-marks-read a failed `u`. It is a complete rollback because only
+// commitOverride ever writes a mark into m.feed and it runs solely on the
+// success path, so on failure the override is still the only thing holding the
+// optimistic change. A no-op rollback would leave that change on screen even
+// though the API call failed.
 func (m Model) dropOverride(key identityKey) Model {
 	if _, ok := m.overrides[key]; !ok {
 		return m
@@ -382,15 +388,67 @@ func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
 	}
 }
 
-// handleMarkResult applies the outcome of a markCmd. Success is a no-op: the
-// optimistic override already applied and stays in place — until the feed
-// agrees or the debounce window elapses (see visibleItems). Failure rolls the
-// optimistic change back by dropping the override.
+// handleMarkResult applies the outcome of a markCmd: failure rolls the
+// optimistic change back by dropping the override, success commits it into the
+// held feed via commitOverride while deliberately leaving the override entry
+// in place.
+//
+// Success must not be a no-op. The override alone is a *finite* debounce
+// buffer, so leaving the confirmed mark resting on it means the row reappears
+// the moment the window elapses — visibleItems re-derives from m.feed, which
+// still carries the pre-mark row, and no poll needs to be involved: any purely
+// local re-render past the window (an `f` cycle, a resize) resurrects a row the
+// server already accepted as read or done. Committing to the feed is what makes
+// a confirmed mark durable for as long as the pane holds that feed.
 func (m Model) handleMarkResult(res notificationMarkResultMsg) Model {
-	if res.err == nil {
+	if res.err != nil {
+		return m.dropOverride(res.key)
+	}
+	return m.commitOverride(res.key, res.kind)
+}
+
+// commitOverride folds a server-confirmed `u`/`d` into m.feed itself:
+// overrideHidden drops the row, overrideRead sets its Read field. It keeps the
+// override entry, which is not redundant — the two layers answer two different
+// questions:
+//
+//   - the feed carries the mark for as long as this feed is held, so the
+//     override expiring can never resurrect the row (see handleMarkResult);
+//   - the override still outweighs a *poll* landing inside the debounce window
+//     with stale `unread`, because SetFeed replaces m.feed wholesale and would
+//     otherwise reintroduce the row GitHub has not caught up on yet.
+//
+// Once the window elapses a disagreeing poll is trusted again, exactly as
+// Decision 5 intends: phase 1 keeps no persisted local read/done state, so the
+// server is the only long-term source of truth.
+//
+// A key that matches no row in the feed leaves the model untouched (a poll may
+// already have dropped it); the override stays live so a later poll that still
+// reports the row does not flicker it back.
+func (m Model) commitOverride(key identityKey, kind overrideKind) Model {
+	next := make([]provider.Notification, 0, len(m.feed))
+	found := false
+	for _, n := range m.feed {
+		if keyOf(n.Identity) != key {
+			next = append(next, n)
+			continue
+		}
+		found = true
+		if kind == overrideHidden {
+			continue
+		}
+		n.Read = true
+		next = append(next, n)
+	}
+	if !found {
 		return m
 	}
-	return m.dropOverride(res.key)
+
+	m.feed = next
+	// Idempotent while the override is still live (visibleItems already applied
+	// the same change), but keeps the rendered list derived from the committed
+	// feed rather than relying on the override to keep reproducing it.
+	return m.setItemsPreservingSelection()
 }
 
 // View renders task 13's four render states, in priority order, per decision
@@ -674,6 +732,11 @@ func (m Model) selectedIdentity() (provider.Identity, bool) {
 // the polled feed's own data wins again (Decision 5: this is a short-lived
 // buffer, not persisted local state) — this is exactly what makes "the
 // debounce window" a real, finite window rather than a permanent override.
+//
+// Expiry is therefore only safe because a *confirmed* mark is no longer held
+// here at all: commitOverride has already folded it into m.feed, so what
+// expiry gives back is a genuinely newer poll's answer, never the pre-mark row
+// this pane was already told to drop.
 //
 // Always a freshly allocated slice when any override is active, for the same
 // reason reasonFiltered is: the pane's held feed must never be aliased or
