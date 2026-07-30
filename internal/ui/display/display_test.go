@@ -297,6 +297,48 @@ func TestMixedKinds(t *testing.T) {
 	}
 }
 
+// ─── MultiScope ──────────────────────────────────────────────────────────────
+
+// TestMultiScope mirrors TestMixedKinds for the notifications pane's dynamic
+// Repo column predicate. The empty-slice row is load-bearing rather than
+// decorative: listview.New calls ToColumns(nil) to derive the initial column
+// specs (listview.go:110 documents relying on MixedKinds([]) == false for
+// exactly this), so a MultiScope that reported true for an empty slice would
+// build the table with a Repo column that the first single-repo ToRows call
+// then has no cell for — a table.renderRow panic (convention 7).
+func TestMultiScope(t *testing.T) {
+	tests := []struct {
+		name     string
+		scopes   []string
+		expected bool
+	}{
+		// nil → false (the ToColumns(nil) path listview.New takes)
+		{"Nil", nil, false},
+		// empty (non-nil) → false
+		{"Empty", []string{}, false},
+		// single element → false
+		{"OneElement", []string{"owner/repo"}, false},
+		// several elements, all the same scope → false
+		{"AllSame", []string{"owner/repo", "owner/repo", "owner/repo"}, false},
+		// several elements, all the empty scope → false (an absent repository
+		// payload on every row is still a single scope, not a multi-repo feed)
+		{"AllEmptyString", []string{"", "", ""}, false},
+		// two distinct scopes → true
+		{"TwoDistinct", []string{"owner/repo1", "owner/repo2"}, true},
+		// an absent repository payload alongside a real scope is still two
+		// distinct scopes → true
+		{"EmptyPlusNonEmpty", []string{"", "owner/repo"}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.MultiScope(tc.scopes)
+			if got != tc.expected {
+				t.Errorf("MultiScope(%q) = %v, want %v", tc.scopes, got, tc.expected)
+			}
+		})
+	}
+}
+
 // ─── Style function tests ─────────────────────────────────────────────────────
 
 func TestStateStyle(t *testing.T) {

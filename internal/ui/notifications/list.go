@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/ui/display"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Model is the notifications pane: a listview.Model[provider.Notification]
@@ -26,8 +27,7 @@ import (
 // diverges (convention 8: a divergence surfaces as a table.renderRow panic,
 // not a failed assertion).
 type Model struct {
-	list   listview.Model[provider.Notification]
-	styles *styles.Styles
+	list listview.Model[provider.Notification]
 
 	// feed is the config-filtered inbox, set by SetFeed. It is never itself
 	// narrowed by the `f` cycle — reasonFiltered() derives a fresh slice from
@@ -86,8 +86,7 @@ func NewModelWithStyles(s *styles.Styles) Model {
 	}
 
 	return Model{
-		list:   listview.New(cfg, s),
-		styles: s,
+		list: listview.New(cfg, s),
 	}
 }
 
@@ -97,12 +96,24 @@ func (m Model) Init() tea.Cmd {
 }
 
 // Update handles messages. The `f` key cycles the reason filter (decision
-// 53) when the list is in its normal browsing state; every other message is
-// forwarded to the underlying listview.
+// 53) when the list is in its normal browsing state; `r` is swallowed while
+// the fetch hook is a stub (decision 58); every other message is forwarded to
+// the underlying listview.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
-		if key.String() == "f" && !m.list.IsSearching() && m.list.GetViewMode() == listview.ViewList {
+	if key, ok := msg.(tea.KeyMsg); ok && !m.list.IsSearching() && m.list.GetViewMode() == listview.ViewList {
+		switch key.String() {
+		case "f":
 			return m.cycleReasonFilter(), nil
+		case "r":
+			// STOPGAP — removed by task 15, which wires the real fetch.
+			// listview.updateList sets loading = true and shows the spinner
+			// before batching config.Fetch(), and this pane's Fetch is a stub
+			// returning nil, so nothing would ever call HandleFetchResult and
+			// the spinner would never clear: a permanent one-keypress dead
+			// end (decision 58). Swallowing `r` keeps the rows on screen. Task
+			// 15 deletes this case together with the Fetch stub in
+			// NewModelWithStyles.
+			return m, nil
 		}
 	}
 
@@ -111,9 +122,34 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// View renders the view.
+// View renders the view, appending the `Filter: <reason>` indicator whenever
+// the `f` cycle is off its "all reasons" position (decision 57). Without it,
+// a feed containing no rows of the selected reason renders as the plain
+// empty-inbox text while a user-set filter is what is hiding everything.
 func (m Model) View() string {
-	return m.list.View()
+	view := m.list.View()
+	if !m.reasonFilterActive {
+		return view
+	}
+	return view + "\n" + m.filterIndicator()
+}
+
+// filterIndicator renders the active reason filter, mirroring the
+// `Filter: …` shape internal/ui/metrics/list.go already uses for its own
+// flag filter. Deliberately unstyled: the pane holds no *styles.Styles of its
+// own, and task 13 owns the in-view chrome that will style this line while
+// distinguishing "you're clear" from "your filter hides everything".
+func (m Model) filterIndicator() string {
+	return "Filter: " + display.NotificationReasonLabel(m.reasonFilter)
+}
+
+// ReasonFilter reports the `f` cycle's current position: the selected
+// NotificationReason and whether a reason filter is active at all. A false
+// second return is the "all reasons" position (decision 57) — exported
+// because tasks 13 and 16 cannot tell an empty inbox from a filter that hides
+// every row without it.
+func (m Model) ReasonFilter() (provider.NotificationReason, bool) {
+	return m.reasonFilter, m.reasonFilterActive
 }
 
 // SetFeed sets the config-filtered feed (task 10's FilterNotifications
@@ -121,8 +157,7 @@ func (m Model) View() string {
 // top of it, routing the result through listview.SetItems per decision 54.
 func (m Model) SetFeed(feed []provider.Notification) Model {
 	m.feed = feed
-	m.list = m.list.SetItems(m.reasonFiltered())
-	return m
+	return m.setItemsPreservingSelection()
 }
 
 // cycleReasonFilter advances the `f` cycle by one step and re-applies it.
@@ -150,8 +185,48 @@ func (m Model) cycleReasonFilter() Model {
 		}
 	}
 
+	return m.setItemsPreservingSelection()
+}
+
+// setItemsPreservingSelection hands the current `f`-filtered view to
+// listview.SetItems (decision 54) and restores the cursor onto the *same
+// item* it was on before, by Identity.SameItem (decision 55).
+//
+// listview.setColumnsAndRows restores the cursor purely positionally — it
+// saves table.Cursor() and re-applies it clamped to the new row count — so
+// narrowing the feed silently moves the selection to a different row.
+// Decision 45 canonicalised the merge's sort order to protect exactly this
+// index-held cursor; an in-pane filter reintroduces the hazard from the other
+// direction, and task 14's `d` would then mark the wrong row done.
+//
+// When the previously selected item did not survive the filter there is
+// nothing to restore to, and listview's clamp is the correct behaviour — so
+// this deliberately leaves it alone in that case.
+func (m Model) setItemsPreservingSelection() Model {
+	prev, hadSelection := m.selectedIdentity()
+
 	m.list = m.list.SetItems(m.reasonFiltered())
+
+	if hadSelection {
+		if idx := m.list.FindIndex(func(n provider.Notification) bool {
+			return n.Identity.SameItem(prev)
+		}); idx >= 0 {
+			m.list.SetCursor(idx)
+		}
+	}
 	return m
+}
+
+// selectedIdentity returns the Identity of the row currently under the cursor
+// and whether there was one (an empty list, or a cursor listview has clamped
+// to -1, yields false).
+func (m Model) selectedIdentity() (provider.Identity, bool) {
+	items := m.list.Items()
+	idx := m.list.SelectedIndex()
+	if idx < 0 || idx >= len(items) {
+		return provider.Identity{}, false
+	}
+	return items[idx].Identity, true
 }
 
 // reasonFiltered returns the rows visible under the current `f` position: the
@@ -237,9 +312,11 @@ func toColumns(items []provider.Notification) []listview.ColumnSpec {
 //     ScopeDisplay: decision 35 defaults it to Scope at the adapter
 //     boundary, but a thread whose repository payload is absent leaves both
 //     empty, the one case the mapper cannot fix.
-//   - The Title cell is rendered with the styles.Styles.Title named style
-//     (bold) for unread rows, so unread emphasis is a named style rather
-//     than an inline lipgloss.NewStyle() (convention 6).
+//   - The Title cell is rendered through titleStyle's named style —
+//     styles.Styles.Title (bold) for unread rows, styles.Styles.Value for
+//     read ones — so unread emphasis is a named style rather than an inline
+//     lipgloss.NewStyle() (convention 6). An empty Title dashes to "—"
+//     before styling (decision 58).
 //   - The Updated cell renders "—" for a zero UpdatedAt (the mapper leaves it
 //     zero when the wire omits updated_at), never a year-0001 date.
 func toRows(items []provider.Notification, s *styles.Styles) []table.Row {
@@ -263,16 +340,35 @@ func toRows(items []provider.Notification, s *styles.Styles) []table.Row {
 	return rows
 }
 
-// titleCell returns the Title column's cell text for a notification. Unread
-// rows are rendered through styles.Styles.Title — a named style, never an
-// inline lipgloss.NewStyle() (convention 6) — so unread emphasis is
-// assertable against that exact named style rather than a substring of the
-// rendered output. Read rows are plain, unstyled text.
-func titleCell(n provider.Notification, s *styles.Styles) string {
+// titleStyle returns the named style the Title cell is rendered with: unread
+// rows get styles.Styles.Title (Primary + Bold — the unread emphasis), read
+// rows get styles.Styles.Value (plain foreground, not bold).
+//
+// This is split out from titleCell on purpose (decision 56). lipgloss resolves
+// the Ascii profile in a test binary, so Render is the identity function there
+// and a rendered-bytes comparison of styled vs. unstyled output is vacuous —
+// deleting the unread branch entirely left the suite green. Returning the
+// lipgloss.Style itself makes convention 6 assertable on the *style object*
+// (GetBold/GetForeground against styles.Styles' own fields, plus that the two
+// branches resolve to different styles), which no color profile can flatten.
+// Both branches are named styles from styles.Styles — never an inline
+// lipgloss.NewStyle().
+func titleStyle(n provider.Notification, s *styles.Styles) lipgloss.Style {
 	if !n.Read {
-		return s.Title.Render(n.Title)
+		return s.Title
 	}
-	return n.Title
+	return s.Value
+}
+
+// titleCell returns the Title column's cell text for a notification, rendered
+// through titleStyle's named style.
+//
+// An empty Title falls back to "—" (decision 58), dashed *before* the style is
+// applied so an untitled unread row still shows the dash: Title comes verbatim
+// from thread.Subject.Title with no wire-level fallback, and a blank cell in
+// the 60%-width column reads as a rendering bug rather than as missing data.
+func titleCell(n provider.Notification, s *styles.Styles) string {
+	return titleStyle(n, s).Render(dashIfEmpty(n.Title))
 }
 
 // dashIfEmpty returns "—" for an empty string, val otherwise.

@@ -146,7 +146,11 @@ accepted value.
 | 52 | Filter purity: which knobs, and may it reuse the input's backing array? | Only the five knobs in the precedence chain. It must allocate a new slice — **never** `rows[:0]` in place — must not mutate any element, and must preserve input order | `participating_only` and `since_days` are fetch-time (`NotifOpts`) and `max_items` is applied by the composite after the sort (decisions 31, 44); re-applying any of them here would double-filter. In-place filtering is the specific trap: the pane keeps the **unfiltered** feed so it can re-apply task 11's interactive `f` reason filter without refetching, and `rows[:0]` would corrupt that feed the first time the config filter dropped a row. Order must be preserved because decision 45's total order is established upstream in the merge and re-sorting here would fight it. Defence in depth: task 9 guarantees every surviving `exclude_reasons` entry parses, but the filter still checks `ParseNotificationReason`'s bool and skips an unrecognised entry rather than letting it degrade to `Other` and silently trim rows the user never asked to hide (decision 26) |
 | 52a | Is "allocates a new slice" uniform across every return path, including nil-cfg and no-knobs-set? | Yes — **every** path returns a freshly allocated slice, with no exception for `cfg == nil` or the zero-value config | Measured: two paths returned the caller's own slice or its backing array — `cfg == nil`, and the no-knobs `default:` branch if written `out = rows`. Both are safe only as long as no caller ever mutates or appends, which is an invariant living in a doc comment rather than in the code, and the `default:` branch is the **shipped default config** — the most-exercised path in the product, and the one with the weakest guarantee. A conditional contract ("aliased sometimes") is also the kind a reviewer or a later caller has to re-derive; making it unconditional costs one `append` on a path that already walks the slice. Uniform allocation is what lets task 11 hold the unfiltered feed and re-apply its interactive `f` filter without a defensive copy of its own |
 | 53 | Is `f` a picker or a cycle, and in what order does it cycle? | A **cycle**, mirroring `internal/ui/metrics/list.go`'s `f`, with an "all reasons" position so the filter is always escapable. The cycle visits reasons **present in the loaded feed**, in **enum order** — never feed order, never the full enum | The `f`-cycles idiom already exists in this codebase and a picker modal for at most eleven values is more machinery than the job needs. Enum order is the load-bearing part: deriving the order from the rows means the next poll can reorder the cycle under the user's fingers, so the same number of presses lands somewhere else — the feed is sorted `UpdatedAt` descending (decision 45) and therefore reshuffles constantly. Restricting to reasons present is task 11's stated criterion; it also keeps `Unknown` out, which no mapped row can carry (decision 18) and which would otherwise be a cycle stop that matches nothing. The "all" position must be reachable by cycling alone — a filter a user cannot clear without knowing a second key is a trap |
-| 54 | How does the `f` filter compose with `listview`'s own search filter without breaking convention 7? | The pane keeps the config-filtered feed in its **own** field and applies `f` by calling `SetItems(reasonFiltered(feed))`. It never feeds a second, narrower slice to `ToRows` alone | `listview.applyFilter` and `SetItems` both pass **one** slice to `effectiveColumnSpecs` *and* `ToRows`, which is exactly why convention 7 holds today. A second filter layer that narrowed only the rows would reintroduce the column/cell divergence convention 7 exists to prevent, and per convention 8 it would surface as a `table.renderRow` panic rather than a failed assertion. Routing `f` through `SetItems` keeps the invariant structural instead of a rule the pane has to remember, and it composes with `/` for free — `SetItems` re-applies the search query when one is active. Decision 52's uniform-allocation contract is what makes holding the unfiltered feed safe: the pane can re-filter from it repeatedly without a defensive copy |
+| 54 | How does the `f` filter compose with `listview`'s own search filter without breaking convention 7? | The pane keeps the config-filtered feed in its **own** field and applies `f` by calling `SetItems(reasonFiltered(feed))`. It never feeds a second, narrower slice to `ToRows` alone | `listview.applyFilter` and `SetItems` both pass **one** slice to `effectiveColumnSpecs` *and* `ToRows`, which is exactly why convention 7 holds today. A second filter layer that narrowed only the rows would reintroduce the column/cell divergence convention 7 exists to prevent, and per convention 8 it would surface as a `table.renderRow` panic rather than a failed assertion. Routing `f` through `SetItems` keeps the invariant structural instead of a rule the pane has to remember, and it composes with `/` for free — `SetItems` re-applies the search query when one is active. Decision 52's uniform-allocation contract is what makes holding the unfiltered feed safe: the pane can re-filter from it repeatedly without a defensive copy. **Superseded in part by decision 57**: the pane sets no `FilterFunc`, so the search half of this is unreachable in phase 1 and the `IsSearching()` guard is untestable future-proofing, not a live path |
+| 55 | Does the pane restore the cursor by index or by identity when `f` collapses the feed? | By **identity**: capture the selected row's `Identity` before re-filtering, then `FindIndex(SameItem)` + `SetCursor` after, falling back to `listview`'s clamp only when the item was filtered out. Fixtures must leave **≥2 rows** after the collapse with the survivor at a **non-zero, non-last** index | Measured: cursor restore in `listview.setColumnsAndRows` is purely positional — it saves `table.Cursor()` and re-applies it clamped — so the item under the cursor is not tracked at all. A 4-row probe (cursor on index 1, whose row *survives* the filter) lands on a different row after filtering. Both the validator and the reviewer independently found that task 11's collapse fixtures narrow to exactly **one** row, where index 0 is the only valid index and *any* clamp satisfies the assertion — including resetting to 0, which a mutation confirmed survives. This is the failure mode decision 45 exists to prevent: decision 45 canonicalised the *sort* to protect an index-held cursor, and an in-pane filter reintroduces the same hazard from the other direction, with task 14's `d` marking the wrong row done as the consequence. The in-range half of the criterion *is* genuinely pinned (deleting the clamp fails tests in both `notifications` and `listview`); only the same-item half needs the fix |
+| 56 | How is convention 6's "named style, not a substring" asserted when the test binary strips styling? | Assert the **style object**, not rendered text: extract a `titleStyle(n, s) lipgloss.Style` and assert its `GetBold()`/`GetForeground()` against `styles.Styles`' own fields, plus that the read and unread styles differ. Forcing a color profile is the acceptable fallback, not the primary form | Measured: lipgloss resolves the `Ascii` profile in a test binary, so `s.Title.Render(x) == x` and styled/unstyled output is byte-identical. Deleting `titleCell`'s entire unread branch left the suite green — both existing assertions collapse to `"Unread title" == "Unread title"`, one of them by comparing the function under test against itself. A `GetBold()` check on `styles.Title` pins the *theme's* definition, not that the cell applies it, so it cannot fail when the cell stops using the style. Asserting the style object is theme-independent and cannot go vacuous when a palette changes, which a rendered-bytes comparison can; `internal/ui/components/table/table_test.go:97` sets the `SetColorProfile(TrueColor)` precedent for cases where only bytes are reachable. This generalises past this task and is a reflection-step candidate for `## Proposed` |
+| 57 | Does the notifications pane get `listview`'s text search, given `f` is the repo-wide search key? | **No search in phase 1** — `FilterFunc` stays nil and `f` is unambiguously the reason cycle on this pane. In exchange the active cycle position must be **observable**: an exported accessor on the pane, rendered as a `Filter: <reason>` indicator, and task 17's help must state the per-pane meaning of `f` | `f` is the search key on every other `listview` pane (`listview.go:208`, gated on `FilterFunc != nil`; pipelines, pullrequests and workitems all set it) and `help.go:80` documents it globally as "Search / filter". Notifications repurposing it is a real inconsistency, but the `f`-cycle idiom is equally established (`internal/ui/metrics/list.go:432`) and decision 53 settled the key — re-keying the cycle to buy a search this pane does not have yet trades a documented exception for a worse one. What is *not* acceptable is the invisibility: measured, filtering to `Mentioned` and then polling a feed with no mentioned rows renders the **empty-inbox** text while a user-set filter hides every row. Metrics already renders `Filter: …` for exactly this reason. The accessor lands in task 11 because tasks 13 and 16 cannot tell "you're clear" from "your filter hides everything" without it, and adding it later means reopening this file |
+| 58 | Is `—` the fallback for an empty `Title` too, and may `r` leave the pane spinning? | Yes to the dash — `Title` routes through the same `dashIfEmpty`, dashing *before* the unread style so an untitled unread row still shows it. And no: pressing `r` must not strand the pane on a spinner while the `Fetch` hook is still a stub | `Title` comes verbatim from `thread.Subject.Title` with no fallback, and the criterion's own justification for the `ScopeDisplay` dash — "a blank cell reads as a rendering bug rather than as missing data" — applies with more force to the 60%-width column than to the repo cell it actually names. On `r`: `listview.updateList` sets `loading = true` before batching the fetch cmd, so a `nil` cmd means nothing ever calls `HandleFetchResult` and the spinner never clears — measured as a permanent one-keypress dead end. It self-heals when task 15's poller lands, but the loop ticks task 11 before then and no later task's criteria mention `r`, so it must be closed here (intercept `r`, or have the stub emit an immediate no-change result) and task 15 removes the stopgap when the real fetch arrives |
 
 ## Tasks
 
@@ -160,7 +164,7 @@ accepted value.
 - [x] 8. `provider`: composite fan-out, merge/sort, `HasNotifications()` (blocked by: 2). → done: fans out only to backends implementing the interface; `HasNotifications()` false with zero capable backends and true with ≥1; merged output sorted newest-first; per decision 20 a failing backend still returns the others' rows and never empties the feed — test that case explicitly; per decision 25 `MarkRead`/`MarkDone` route by `Identity.Kind` and **not** `backendFor(scope)` — test that a row from an unconfigured repo still routes to a backend
 - [x] 9. `config`: `notifications` block with decision-19 key names, defaults, validation, `validDisabledPanes` entry, guard accepts notifications-only (decision 22) (blocked by: 2). → done: block loads with documented defaults; keys resolve lowercased (convention 9); `disabled_panes: notifications` validates; a config with only notifications enabled passes `Validate()`; per decision 26 an unrecognised `exclude_reasons` entry produces a **warning naming the bad value and the eleven accepted ones** and is then ignored — it must never silently act as `other`, and must never be a hard config error that stops the app from starting
 - [x] 10. Config-driven filter as a pure function (blocked by: 8,9). → done: table tests cover each knob alone, the full precedence chain, the `participating_only` + `exclude_reasons` compose case (decision 10), and that an unrecognised reason is only filtered when `other` is listed explicitly. Task 9 drops unrecognised entries at load, so every entry this filter receives parses — assert that too. Repo globs are **not** validated at load beyond rejecting empty entries: `"   "` and `"[bad"` both load clean, and `path.Match("[bad", …)` returns `ErrBadPattern`, so this task must decide whether a malformed glob warns (consistent with decision 26's warn-don't-die) or matches nothing, and pin it either way
-- [x] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6); the filter-collapse path and cursor survival are asserted — when the `f` filter narrows the feed enough that the dynamic repo column disappears, assert that transition *and* that the cursor/selection survives the column-count change, because the expand direction passing does not prove the shrink direction (this requirement is stated inline on purpose: it matches `.spec/conventions.md`'s **proposed** convention 14, which is inert until a human promotes it, so it binds here as a spec criterion and must not be cited by convention number); a zero `UpdatedAt` renders as `—`, never as a year-0001 date (the mapper leaves it zero when the wire omits `updated_at`); an empty `ScopeDisplay` gets the same `—` treatment — decision 35 defaults it to `Scope`, but a thread whose `repository` payload is absent yields both empty, the one case the mapper cannot fix, and a blank cell reads as a rendering bug rather than as missing data; the `f` filter offers **only reasons actually present in the loaded feed**, never the full enum — otherwise it lists `Unknown`, which no mapped row can carry (decision 18), as a choice that matches nothing
+- [x] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6) — and per decision 56 that means asserting the **style object**, since lipgloss's `Ascii` profile in a test binary makes a rendered-bytes comparison vacuous; the filter-collapse path and cursor survival are asserted — when the `f` filter narrows the feed enough that the dynamic repo column disappears, assert that transition *and* that the cursor/selection survives the column-count change, because the expand direction passing does not prove the shrink direction, and per decision 55 the same-item half needs an identity-based restore in the pane plus a fixture leaving **≥2 rows** with the survivor at a **non-zero, non-last** index — a one-row survivor makes the assertion true whatever the cursor does (this requirement is stated inline on purpose: it matches `.spec/conventions.md`'s **proposed** convention 14, which is inert until a human promotes it, so it binds here as a spec criterion and must not be cited by convention number); a zero `UpdatedAt` renders as `—`, never as a year-0001 date (the mapper leaves it zero when the wire omits `updated_at`); an empty `ScopeDisplay` gets the same `—` treatment — decision 35 defaults it to `Scope`, but a thread whose `repository` payload is absent yields both empty, the one case the mapper cannot fix, and a blank cell reads as a rendering bug rather than as missing data; the `f` filter offers **only reasons actually present in the loaded feed**, never the full enum — otherwise it lists `Unknown`, which no mapped row can carry (decision 18), as a choice that matches nothing; an empty `Title` gets the same `—` as the other two, dashed before styling (decision 58); pressing `r` while `Fetch` is a stub must not strand the pane on a spinner (decision 58); the active cycle position is reachable through an exported accessor and rendered as a `Filter:` indicator (decision 57); and `display.MultiScope` carries its own table test beside `TestMixedKinds`, including the empty-slice case `listview.go:110` depends on
 - [ ] 12. `app`: register the tab first, remap number keys, `enabledTabs`, `state.TabID` (decisions 6, 9, 11) (blocked by: 11). → done: notifications is `enabledTabs[0]`; number keys map to the new order; `TabID "notifications"` round-trips through `state.yaml`; the tab is absent when no backend implements the capability, and present-but-empty when one does
 - [ ] 13. `app`: the three render states — empty inbox, capability-unsupported, token-scope error (decisions 11, 17) (blocked by: 12). → done: three distinct renders, each asserted by its own test; the empty state reads as "you're clear", never as an error; and per decision 46 any `Config.Warnings` entry renders in the pane — asserted with a populated warning, and asserted absent when the slice is empty so an empty warnings list never reserves a blank line
 - [ ] 14. `app`: `u` mark-read (one-way, decision 13) / `d` mark-done (blocked by: 13). → done: `u` issues one mark-read and updates the row optimistically, rolling back on API failure; `d` removes the row and restores it on failure; a poll that returns stale `unread` inside the debounce window does not flicker the row back
@@ -171,6 +175,122 @@ accepted value.
 - [ ] 19. Token-scope error state (decision 17) (blocked by: 13,18). → done: a 403 missing-scope response renders in-view naming the `notifications` scope and how to add it; 401-expired and generic failures render differently; the disable action writes `disabled_panes` via `Config.Save()` behind a confirm, on a key that is not `d` or `u`; its test uses a temp-path config (convention 17)
 - [ ] 20. Docs: README (required `notifications` scope, upgrade note for existing tokens, how to disable), Architecture.md, config.yaml.example, FAQ (blocked by: 17,19). → done: every config key from decision 19 is documented; the required token scope and the upgrade path for existing tokens are stated; `exclude_reasons` values are documented as lowercase snake_case and **case-sensitive** (`Subscribed` warns and is dropped — viper lowercases config *keys*, never list values), `unknown` is documented as reserved and not accepted, and `since_days` is named as the knob for very large inboxes per decision 48. **Do not reproduce the Config-shape arrow chain as if it were a pipeline** — measured, all five knobs are independent row predicates and every stage order is observationally identical, so "precedence" describes exactly one thing: the two *selection* knobs override each other (`only_configured_repos` wins, decision 50). `exclude_repos`/`exclude_reasons`/`unread_only` are an order-independent AND and must be documented as such
 - [ ] 21. Fold phase-1 answers into `20260729-notif-p2-azdo.md` "Inputs from Phase 1" (blocked by: 20). → done: no `TBD` remains in that section
+
+## Validation: `ui/notifications` listview pane (task 11) — 2026-07-30, commit `040911d`
+
+Gates all green: `go build ./...`, `go vet ./internal/...`, `go test -count=1 ./...` (exit 0),
+`gofmt -l` clean on the three touched Go files, no diff in `internal/github`,
+`internal/provider`, `internal/config`, no scope creep into tasks 12–16, `git status` clean.
+
+Verified as satisfied: render through `View()` after a `WindowSizeMsg` in both single- and
+multi-repo cases (and the render test is *real* — measured: making `toRows` prepend the repo
+cell while `toColumns` stays gated makes `TestView_RendersAfterWindowSizeMsg_SingleRepo` panic
+and fail); column/row-cell parity from one predicate (`multiRepo`) over the same slice in both
+`toRows` and `toColumns`; zero `UpdatedAt` → `—` with an explicit no-`0001` assertion; empty
+`ScopeDisplay` → `—`; `f` cycle restricted to reasons present in the feed, in enum order, never
+`Unknown`, with the "all" position reachable by cycling alone; decision 54 wiring — `f` only ever
+reaches `listview` through `SetItems(m.reasonFiltered())`, nothing hands a narrower slice to
+`toRows`.
+
+**Missing — one criterion:** *"unread rows assert a named style, not a substring (convention 6)"*
+is not actually pinned by any test. Measured with a mutation on a scratch copy: replacing
+`titleCell`'s unread branch `return s.Title.Render(n.Title)` with a bare `return n.Title` (i.e.
+deleting the named style entirely) leaves **both** `TestToRows_UnreadRow_UsesNamedTitleStyle` and
+`TestTitleCell_ReadVsUnread_StructurallyDifferentPaths` green. Two reasons:
+
+1. `TestToRows_UnreadRow_UsesNamedTitleStyle` compares `rows[0][1]` against `titleCell(items[0], s)`
+   — the production function under test — so it is a tautology whatever `titleCell` does.
+2. `TestTitleCell_...` compares against `s.Title.Render(...)`, but the test binary has no TTY, so
+   lipgloss resolves the `Ascii` profile and `Render` is the identity function — styled and
+   unstyled output are byte-identical. `s.Title.GetBold()` pins `styles.Title`'s own definition,
+   not that `titleCell` applies it.
+
+Fix (in-repo precedent exists — `internal/ui/components/table/table_test.go:97`, *"Force color
+output so ANSI escapes are actually emitted"*): call `lipgloss.SetColorProfile(termenv.TrueColor)`
+in the style test, then assert the unread cell **differs** from the plain title and equals
+`s.Title.Render(title)`, and that the read cell equals the plain title. Re-run the same mutation
+(drop the style, watch it fail, restore) before ticking.
+
+Non-blocking notes for the same pass:
+
+- Cursor survival is asserted only as "in range". The *same-item* clause in
+  `TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives` is trivially true: exactly
+  one row survives the filter, so index 0 is the only valid index and `Items()[0].ID == "2"`
+  regardless of cursor behaviour. `list.go` contains no `SetCursor`/`FindIndex`/`SelectedIndex`
+  call, so identity preservation is entirely `listview.setColumnsAndRows`'s clamp-to-last-row and
+  the pane would pass the same assertion if it reset the cursor to 0. If the same-item property is
+  wanted, keep ≥2 rows after the collapse and put the cursor on a surviving non-first row.
+- `TestUpdate_FKey_NoopOutsideListMode` never presses `f` outside list mode — it only asserts the
+  precondition `GetViewMode() == ViewList` and pins nothing. Either drive a detail-mode/search
+  state and assert `f` is forwarded rather than consumed, or drop the test.
+- `display.MultiScope` is a new exported function with no direct test in `display_test.go`, whereas
+  its sibling `MixedKinds` has `TestMixedKinds` (display_test.go:273). Add the mirror table test.
+
+## Review feedback: `ui/notifications` listview pane (task 11) — 2026-07-30, commit `040911d`
+
+Opus review: REQUEST_CHANGES. 17 mutations run — all 7 the implementer reported are genuinely
+KILLED, plus 10 new ones of which **6 SURVIVED**. Findings 1–3 and the `f`-key one are now
+decisions 55–58; the rest are listed here with their surviving mutation.
+
+Must fix:
+
+1. **🔴 Same-item cursor survival does not hold** — `list.go:124`, `:153`; assertion at
+   `list_test.go:388-394`. Per **decision 55**: restore by identity, and change the fixture so the
+   survivor sits at a non-zero, non-last index with ≥2 rows left. Surviving mutation: clamping the
+   saved cursor to `0` instead of `len(rows)-1` breaks nothing.
+2. **🔴 Convention 6 is materially vacuous** — `list.go:271-276`; assertions at `list_test.go:145`,
+   `:166`. Per **decision 56**: extract `titleStyle` and assert the style object. Surviving
+   mutation: `titleCell` → `return n.Title` (all unread emphasis deleted).
+3. **🟡 `display.MultiScope` has no test anywhere** — `display.go:161-171`. Surviving mutation:
+   `MultiScope([]) → true`, even though `listview.go:110` documents `MixedKinds([]) == false` as
+   load-bearing for the initial `ToColumns(nil)`. Add the mirror table beside `TestMixedKinds`:
+   `nil`, `[]`, one element, all-same, all-empty, two distinct, empty-plus-nonempty.
+4. **🟡 The active `f` position is invisible** — `list.go:37-40`. Per **decision 57**: add the
+   exported accessor and the `Filter: <reason>` indicator.
+5. **🟡 An empty `Title` renders a blank cell** — `list.go:255`, `:271-276`. Per **decision 58**,
+   route it through `dashIfEmpty` before styling. (The em-dash audit is otherwise clean: the pane
+   and its test contain exactly one non-ASCII punctuation codepoint, `U+2014`.)
+6. **🟡 `r` strands the pane on a permanent spinner** — `list.go:78`. Per **decision 58**.
+7. **🟡 The vanished-reason branch is untested** — `list.go:146`. Surviving mutation: dropping
+   `idx < 0 ||` so a selected reason absent from a refreshed feed jumps to `present[0]` instead of
+   "all". This is the branch finding 4's scenario runs through, and a live poller hits it routinely.
+8. **🟢 Column widths are unpinned** — `list.go:229`. Surviving mutation: dropping
+   `listview.NormalizeWidths(cols)`. Multi-repo specs sum to 120% unnormalised, so the table
+   over-widens past the terminal with nothing failing. Assert the specs sum to 100.
+9. **🟢 The gating field is unpinned** — `list.go:214`. `multiRepo` gates on `Identity.Scope` while
+   the cell renders `Identity.ScopeDisplay`; surviving mutation swaps the gate, because every
+   fixture sets them equal. Not a convention-7 risk (count parity holds either way), but two scopes
+   sharing a display name yield a disambiguating column that disambiguates nothing. One fixture
+   with `Scope != ScopeDisplay` closes it.
+10. **🟢 `TestUpdate_FKey_NoopOutsideListMode` pins nothing** — `list_test.go:428-438`: it never
+    presses `f` and never leaves list mode, so deleting the `!IsSearching() && ViewList` guard
+    survives. Per decision 57 the `IsSearching()` half is unreachable in phase 1 — drive
+    `ViewDetail` and assert `f` does not cycle, or delete the test rather than leave a name
+    promising coverage it does not have.
+11. **🟢 The convention-8 `defer recover()` guards the wrong statement** — `list_test.go:101-106`,
+    `:118-123`. `View()` returns pre-rendered viewport content; every `table.renderRow` call happens
+    inside `SetFeed → SetItems → setColumnsAndRows → SetRows → UpdateViewport`. Confirmed under
+    mutation: the panic stack bottoms out at `list_test.go:113`, five lines *above* the `defer`.
+    The test still fails (`tRunner` recovers), so the criterion is met — but move the `defer` above
+    `SetFeed` so the failure message points at the call that can actually panic.
+12. **🟢 Dead field** — `list.go:30`: `styles` is assigned at `:90` and never read (`toRows` takes
+    `s` from `listview`). Remove it, or note which later task needs it.
+
+Confirmed sound under mutation, do not re-litigate: convention 7's parity is **structural** — every
+row-narrowing path in `listview` (`applyFilter` :275/:285, `SetItems` :382, `HandleFetchResult`
+:400, `exitSearch` :239) passes one slice to both `effectiveColumnSpecs` and `ToRows`, and the
+`WindowSizeMsg` branch (:187) derives its basis from the same set the rows came from. Decision 54's
+`SetItems`-only routing is faithful. Decision 53's cycle is correct and well-pinned in all four
+directions (enum-not-feed order, present-not-full-enum, never `Unknown`, "all" reachable).
+
+Deferred, not to be fixed here: `FORWARD: task 12/15` — the `r` stopgap from decision 58 comes out
+when the real fetch lands. `FORWARD: task 13` — render the `Filter:` indicator using decision 57's
+accessor, and distinguish "you're clear" from "your filter hides everything". `FORWARD: task 17` —
+the help section must reconcile `help.go:80`'s global "Search / filter" line with a pane where `f`
+is a reason cycle and no search exists. `FORWARD: task 13` — `enter` currently costs the next
+keypress (`list.go:83-86`: the `EnterDetail` stub returns `(nil, nil)`, so `updateDetail`
+immediately resets to `ViewList` and swallows the message that triggered the reset); the real
+detail view removes it.
 
 ## Phase 2 notes — carry into `20260729-notif-p2-azdo.md`
 
