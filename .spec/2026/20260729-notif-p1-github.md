@@ -453,6 +453,49 @@ task 20` — `cmd/azdo-tui/main.go`'s `runHelp()` (~`:108`) still prints `1/2/3 
 Requests, Work Items, Pipelines)` and its GitHub token-scope list omits `notifications`; the in-TUI
 help modal *was* updated, the CLI help was not, and it will be wrong in a shipped binary.
 
+## Validation: app tab registration (task 12) — re-check, 2026-07-30, commit `4b5abbd`
+
+Gates (exit codes): `go build ./...` **0**, `go vet ./internal/... ./cmd/...` **0**,
+`go test -count=1 ./...` **0** (all 27 packages ok), `gofmt -l` over the nine Go files touched
+by task 12 (`040911d..HEAD`) → empty. `git status --porcelain` clean, no probe files left.
+
+Mutation ledger (each mutation applied to the real file, suite run, file restored via `.probe`):
+
+| # | Mutation | Result |
+|---|----------|--------|
+| 1 🔴 | `hasNotificationCapability` body → `_, ok := p.(provider.NotificationSource); return ok` (`app.go:293`) | **KILLED** — `TestHasNotificationCapability_AzureOnlyComposite_False`, `TestModel_NotificationsTab_Absent_WhenIncapable`, `TestModel_NotificationsPane_ConstructedEvenWhenTabAbsent/capability_absent`. The incapable fixture is now `provider.NewCompositeProvider(azdevops.NewAdapter(nil))` (`app_test.go` `newNotificationIncapableProvider`) and self-guards that it *is* capable-shaped, so decision 59 is met in letter |
+| 2 🔴 | delete `case TabNotifications:` from `View()`'s content switch (`app.go:1323`) | **KILLED** — `TestModel_NotificationsTab_PresentButEmpty_WhenCapable`, `TestModel_PerTabChrome/notifications`, `TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter`. Presence is asserted on the pane body (`notificationsPaneMarker = "No notifications found."`) plus a negative on `"No pipeline runs found."` — decision 60 satisfied |
+| 3 🔴 | drop `ghNC := github.NewNotificationsClient(token)` and pass `nil` (`main.go:322-323`) | **KILLED** — `TestRunTUI_UsesGitHubAdapterWithNotifications` fails on the nil-second-arg and missing-`NewNotificationsClient` assertions; decision 62's "argument, not just callee" is pinned |
+| 4 🟡 | help-modal name list restates the per-pane predicate with the `IsPaneEnabled` conjunct dropped | **KILLED** — `TestModel_NotificationsTab_Absent_WhenPaneDisabled_ButCapable` (help-modal half) |
+| 5 🟡 | revert to conditional pane construction (`var nv notifications.Model; if containsTab(...)`) | **KILLED** — `TestModel_NotificationsPane_ConstructedEvenWhenTabAbsent/capability_absent` fails via an un-recovered nil-`*LoadingIndicator` panic (convention 16 respected: no recover wrapper) |
+| 6a 🟡 | delete `initTabCmd`'s arm (`app.go:359`) | **KILLED** — `TestModel_InitTabCmd_Notifications` |
+| 6b 🟡 | delete the `WindowSizeMsg` sizing line (`app.go:916`) | **KILLED** — `TestModel_WindowSizeMsg_SizesNotificationsPane` |
+| 6c 🟡 | delete `resizeActiveViewIfNeeded`'s arm (`app.go:1085`) | **KILLED** — `TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter` |
+| 6d 🟡 | delete `syncStatusBarContext`'s arm (`app.go:1105`) | **KILLED** — same test (footer measured against pipelines' stale context bar → frame one row short) |
+| 6e 🟡 | delete the `notificationsKeybindings()` arm (`app.go:1356`) | **KILLED** — `TestModel_PerTabChrome/notifications` |
+| 8 🟡 | `state.TabNotifications` literal `"notifications"` → `"notifs"` (`state.go:43`) | **KILLED** — `TestModel_TabID_NotificationsRoundTripsThroughState`, which now `Flush()`es, `state.Load(path)`s, and greps the file for `active_tab: notifications` |
+| 7 🟡 | all four chrome forwarders → constant zero (`ui/notifications/list.go:161,166,171,176`) | **SURVIVED — genuine equivalent, accepted.** `listview.go:426-455` returns the zero value unless `viewMode == ViewDetail && m.detail != nil`, and the pane's `EnterDetail` hook returns `(nil, nil)` (`list.go:84-86`), so `detail` can never be non-nil; `HasContextBar` needs `config.HasContextBar != nil`, which the pane never sets. All four are structurally constant in phase 1. `TestChromeForwarders_MatchUnderlyingListview` pins the delegation (`!= m.list.X()`, not a hand-written zero), so it becomes non-vacuous the moment task 13 gives the pane a detail view. Verified: suite green under the mutation, as the hardening report states |
+
+Deviation judgment (finding 4 / decision 61): **accepted.** The plan asked for a `notifTabEnabled`
+local derived from `enabledTabs`; the implementation deleted the local instead and derives the
+help-modal line straight from `enabledTabs` via `helpTabName`, adding `containsTab` so
+`isTabEnabled` queries the same slice. That is stronger than the letter of decision 61, not weaker:
+with no second copy of the predicate anywhere, there is nothing left to drift.
+`buildEnabledTabs` (`app.go:308`) is the sole owner, and the only other
+`IsPaneEnabled("notifications")` in the tree is task 9's `Validate()` guard (`config.go:624`,
+decision 47), a different question. The help-name derivation is behaviour-preserving:
+`metricsEnabled` (`app.go:451`) is exactly `buildEnabledTabs`' metrics predicate, and the
+label divergence (`"PR"` vs the strip's label) is documented as deliberate on `helpTabName`.
+
+Also closed en route, beyond the eight findings: `cmd/azdo-tui/main.go:107-109`'s CLI help no
+longer prints the three-tab line, satisfying task 12's own "CLI help no longer advertises the old
+three-tab line" criterion literally (previously a `FORWARD: task 20` note). The CLI help's GitHub
+token-scope list still omits `notifications` — that half stays `FORWARD: task 20`.
+
+Still forwarded, unchanged: `FORWARD: task 13/15` (empty-inbox body says "Press r to refresh"
+while the pane swallows `r`), `FORWARD: task 16` (the vacuous-but-correct `isActiveViewSearching`
+arm), `FORWARD: task 20` (CLI token-scope list).
+
 ## Phase 2 notes — carry into `20260729-notif-p2-azdo.md`
 
 Implementation questions phase 1 answered in a deliberately phase-1-shaped way. Each is
