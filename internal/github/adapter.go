@@ -2,6 +2,7 @@ package github
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
 )
@@ -17,15 +18,50 @@ import (
 // for GitHub: the scope ("owner/repo") already fully identifies the repository.
 // It is accepted for interface compliance and ignored internally. This is
 // documented on each affected method.
+//
+// Adapter also satisfies provider.NotificationSource via nc, the user-scoped
+// NotificationsClient (Decision 39). Unlike mc, nc is not part of the
+// per-repo fan-out map: GET /notifications is user-level (see the spec's
+// Constraints section), so it is a separate field set once at construction —
+// see NewAdapterWithNotifications.
 type Adapter struct {
 	mc *MultiClient
+
+	// nc is the user-scoped notifications client (Decision 39). It is set
+	// once at construction by NewAdapterWithNotifications and never mutated
+	// afterwards: Adapter is read concurrently by Bubble Tea's
+	// goroutine-per-tea.Cmd model, and a setter would make this field a data
+	// race with no lock available to guard it — Decision 37 keeps locks off
+	// the mark-read/mark-done path deliberately, so introducing one here
+	// (even just to guard a field write) would undermine that. NewAdapter
+	// leaves this nil; a nil nc is a reachable, supported state (see
+	// NewAdapterWithNotifications's doc comment), not defensive padding.
+	nc *NotificationsClient
 }
 
 // NewAdapter creates an Adapter wrapping the given MultiClient.
 // A nil MultiClient is allowed (the Adapter still satisfies the interface; all
 // methods that require a live client return a descriptive error).
+//
+// nc (the notifications client) is left nil. Use NewAdapterWithNotifications
+// to construct an Adapter that also supports provider.NotificationSource.
 func NewAdapter(mc *MultiClient) *Adapter {
 	return &Adapter{mc: mc}
+}
+
+// NewAdapterWithNotifications creates an Adapter wrapping both the given
+// MultiClient and the given user-scoped NotificationsClient (Decision 39).
+//
+// mc may be nil (see NewAdapter). nc may also be nil: this is a reachable
+// state, not defensive padding — Adapter satisfies provider.NotificationSource
+// at compile time whether or not a notifications client was supplied, so a
+// GitHub config that never built one (e.g. a token missing the notifications
+// scope, discovered lazily) still shows the notifications tab under Decision
+// 11 and still calls List. List/MarkRead/MarkDone all return a descriptive
+// error rather than panicking when nc is nil, matching NewAdapter(nil)'s
+// documented contract for the rest of the interface.
+func NewAdapterWithNotifications(mc *MultiClient, nc *NotificationsClient) *Adapter {
+	return &Adapter{mc: mc, nc: nc}
 }
 
 // Kind returns provider.KindGitHub to identify the GitHub backend.
@@ -517,4 +553,118 @@ func (a *Adapter) PipelineURL(scope string, id int) string {
 		return ""
 	}
 	return c.PipelineURL(id)
+}
+
+// --------------------------------------------------------------------------
+// provider.NotificationSource — task 7
+// --------------------------------------------------------------------------
+
+// List returns the caller's notification inbox, shaped by opts and mapped to
+// the neutral provider.Notification type via MapNotification.
+//
+// opts.Max is honoured by truncating the mapped result on return, never by
+// stopping nc.List's page walk early (Decision 31): nc.List already performs
+// the full walk and caches it under a path that does not encode Max, so
+// stopping early here would let a later, larger-Max call with the same
+// request shape hit nc's 304 cache and be handed back the earlier, truncated
+// set presented as complete. opts.Max is therefore never forwarded into
+// NotificationListOpts.
+//
+// Per Decision 28, an unsolicited-304 error surfaced by nc.List (a 304 with no
+// matching cache) is returned unchanged, never translated into an empty
+// slice: an emptied attention feed reads as "you're clear", which is exactly
+// the failure Decision 20 forbids.
+//
+// scopeDisplay is resolved per-row from the thread's own repository
+// (Decision 35 — MapNotification is the adapter boundary for the
+// Scope/ScopeDisplay fallback): a.mc.DisplayNameFor(scope) is used when mc is
+// configured, and left empty (letting the mapper fall back to Scope itself)
+// when it is not — most inbox rows come from repos that are not configured at
+// all (Decisions 2, 3), so mc cannot resolve a display name for them anyway.
+func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error) {
+	if a.nc == nil {
+		return nil, fmt.Errorf("github: notifications: no notifications client configured")
+	}
+
+	wire, err := a.nc.List(NotificationListOpts{
+		Participating: opts.ParticipatingOnly,
+		Since:         opts.Since,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]provider.Notification, len(wire))
+	for i, thread := range wire {
+		scopeDisplay := ""
+		if a.mc != nil {
+			scopeDisplay = a.mc.DisplayNameFor(thread.Repository.FullName)
+		}
+		out[i] = MapNotification(thread, scopeDisplay)
+	}
+
+	// Decision 31: truncate on return, after the full walk and its caching
+	// already happened inside nc.List above — never stop the walk early.
+	if opts.Max > 0 && len(out) > opts.Max {
+		out = out[:opts.Max]
+	}
+	return out, nil
+}
+
+// MarkRead marks the given notification as read via
+// PATCH /notifications/threads/{id}, forwarding id.ID straight through to
+// nc.MarkRead.
+//
+// id.Kind must be provider.KindGitHub. A mismatched Kind (e.g. an Azure
+// identity reaching the GitHub adapter) is rejected as a caller bug: Decision
+// 14 exists so a bare native id from one backend can never be mistaken for
+// another's, and silently issuing id.ID against GitHub's API for an identity
+// that does not actually belong to GitHub would be exactly that mistake, just
+// deferred to runtime instead of caught here.
+//
+// This method takes no lock of its own, and in particular never the fetch
+// mutex nc.List holds for the duration of its (possibly multi-page) walk —
+// Decision 37's entire benefit is a lock-free marker, and wrapping this call
+// in any lock shared with List would reinstate a stall of up to
+// maxNotificationPages times the HTTP timeout on a call a tea.Cmd user
+// expects to feel instant.
+func (a *Adapter) MarkRead(id provider.Identity) error {
+	if a.nc == nil {
+		return fmt.Errorf("github: mark read: no notifications client configured")
+	}
+	if id.Kind != provider.KindGitHub {
+		return fmt.Errorf("github: mark read: identity kind %v is not %v", id.Kind, provider.KindGitHub)
+	}
+	return a.nc.MarkRead(id.ID)
+}
+
+// MarkDone marks the given notification as done via
+// DELETE /notifications/threads/{id}, forwarding id.ID straight through to
+// nc.MarkDone. See MarkRead's doc comment: the nil-nc guard, the Kind check,
+// and the no-lock contract are all shared and not repeated here.
+func (a *Adapter) MarkDone(id provider.Identity) error {
+	if a.nc == nil {
+		return fmt.Errorf("github: mark done: no notifications client configured")
+	}
+	if id.Kind != provider.KindGitHub {
+		return fmt.Errorf("github: mark done: identity kind %v is not %v", id.Kind, provider.KindGitHub)
+	}
+	return a.nc.MarkDone(id.ID)
+}
+
+// PollInterval forwards nc's cadence hint (parsed from GitHub's
+// X-Poll-Interval response header) so Adapter satisfies task 15's
+// PollIntervalHinter (Decision 30): the composite provider holds *Adapter,
+// never *NotificationsClient directly, so the hint needs a route from here.
+//
+// Returns 0 when nc is nil (no notifications client configured) — there is no
+// error return on this method to report that condition through, and 0 is a
+// safe "no hint" value for a caller applying decision 8's max(hint,
+// configured) rule; it never falls back to nc's internal default on its own,
+// since there is no nc to ask.
+func (a *Adapter) PollInterval() time.Duration {
+	if a.nc == nil {
+		return 0
+	}
+	return a.nc.PollInterval()
 }
