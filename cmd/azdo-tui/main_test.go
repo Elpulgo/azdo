@@ -38,6 +38,9 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 	var (
 		sawNewAdapterWithNotifications bool
 		sawBareNewAdapter              bool
+		sawNewNotificationsClient      bool
+		notifAdapterArgCount           int
+		notifAdapterSecondArgIsNil     bool
 	)
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -56,16 +59,45 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 		switch sel.Sel.Name {
 		case "NewAdapterWithNotifications":
 			sawNewAdapterWithNotifications = true
+			notifAdapterArgCount = len(call.Args)
+			if len(call.Args) == 2 {
+				if id, ok := call.Args[1].(*ast.Ident); ok && id.Name == "nil" {
+					notifAdapterSecondArgIsNil = true
+				}
+			}
 		case "NewAdapter":
 			sawBareNewAdapter = true
+		case "NewNotificationsClient":
+			sawNewNotificationsClient = true
 		}
 		return true
 	})
 
 	if !sawNewAdapterWithNotifications {
-		t.Error("expected runTUI to call github.NewAdapterWithNotifications to construct the GitHub backend, found no such call")
+		t.Fatal("expected runTUI to call github.NewAdapterWithNotifications to construct the GitHub backend, found no such call")
 	}
 	if sawBareNewAdapter {
 		t.Error("runTUI must not call github.NewAdapter (leaves the notifications client nil); use github.NewAdapterWithNotifications instead")
+	}
+
+	// Pinning the callee is only half the mutation space (Decision 62). The
+	// walk above keys on sel.Sel.Name, so deleting the
+	// `ghNC := github.NewNotificationsClient(token)` line and passing nil as
+	// the second argument satisfies every assertion so far while reproducing
+	// exactly the state this test's doc comment says it prevents: a.nc stays
+	// nil and every List call returns "no notifications client configured".
+	//
+	// Note this pins a property that is currently unreachable rather than
+	// fixing a live bug — NewNotificationsClient always returns non-nil with no
+	// error, GetGitHubToken() has already errored out upstream, and GitHubConfig
+	// carries no base-URL/GHE field. The value is that it stays unreachable.
+	if notifAdapterArgCount != 2 {
+		t.Errorf("github.NewAdapterWithNotifications called with %d args, want 2 (MultiClient, NotificationsClient)", notifAdapterArgCount)
+	}
+	if notifAdapterSecondArgIsNil {
+		t.Error("github.NewAdapterWithNotifications's second argument must not be nil — a nil NotificationsClient makes every notifications List call fail with \"no notifications client configured\" while the tab still shows up under Decision 11's capability check")
+	}
+	if !sawNewNotificationsClient {
+		t.Error("expected runTUI to construct the user-scoped client via github.NewNotificationsClient, found no such call")
 	}
 }

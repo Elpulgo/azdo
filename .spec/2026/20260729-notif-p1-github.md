@@ -151,6 +151,10 @@ accepted value.
 | 56 | How is convention 6's "named style, not a substring" asserted when the test binary strips styling? | Assert the **style object**, not rendered text: extract a `titleStyle(n, s) lipgloss.Style` and assert its `GetBold()`/`GetForeground()` against `styles.Styles`' own fields, plus that the read and unread styles differ. Forcing a color profile is the acceptable fallback, not the primary form | Measured: lipgloss resolves the `Ascii` profile in a test binary, so `s.Title.Render(x) == x` and styled/unstyled output is byte-identical. Deleting `titleCell`'s entire unread branch left the suite green — both existing assertions collapse to `"Unread title" == "Unread title"`, one of them by comparing the function under test against itself. A `GetBold()` check on `styles.Title` pins the *theme's* definition, not that the cell applies it, so it cannot fail when the cell stops using the style. Asserting the style object is theme-independent and cannot go vacuous when a palette changes, which a rendered-bytes comparison can; `internal/ui/components/table/table_test.go:97` sets the `SetColorProfile(TrueColor)` precedent for cases where only bytes are reachable. This generalises past this task and is a reflection-step candidate for `## Proposed`. **Amendment:** "read and unread must differ" must **not** be read as "give the read branch a named foreground style too". The read branch is the **empty** `lipgloss.NewStyle()`, whose `Render` emits nothing, so the cell inherits `table.renderRow`'s `Cell`/`Selected` styling — which is what every sibling pane does (`pullrequests/list.go:531` emits `pr.Title` bare). The first hardening attempt used `styles.Value` because an empty style has no foreground to compare, and that ships a real regression: `renderRow` wraps each cell in `Cell` inheriting `Selected` on the cursor row, so an inner foreground SGR overrides the selection's foreground for that one cell, and `styles.Value` is `Foreground(theme.Foreground)` — invisible on any theme where `Foreground` equals `SelectBackground`. The Matrix theme sets both to `#00ff41` (`themes.go:467`, `:474`), so a read title on the selected row would render green-on-green. Assert the read branch's *absence* of styling instead: `GetForeground() == lipgloss.NoColor{}`, `GetBold() == false`, and the rendered cell equal to the bare title even under a forced TrueColor profile. Unread rows accept the selection-override trade deliberately — persisting the emphasis is the point |
 | 57 | Does the notifications pane get `listview`'s text search, given `f` is the repo-wide search key? | **No search in phase 1** — `FilterFunc` stays nil and `f` is unambiguously the reason cycle on this pane. In exchange the active cycle position must be **observable**: an exported accessor on the pane, rendered as a `Filter: <reason>` indicator, and task 17's help must state the per-pane meaning of `f` | `f` is the search key on every other `listview` pane (`listview.go:208`, gated on `FilterFunc != nil`; pipelines, pullrequests and workitems all set it) and `help.go:80` documents it globally as "Search / filter". Notifications repurposing it is a real inconsistency, but the `f`-cycle idiom is equally established (`internal/ui/metrics/list.go:432`) and decision 53 settled the key — re-keying the cycle to buy a search this pane does not have yet trades a documented exception for a worse one. What is *not* acceptable is the invisibility: measured, filtering to `Mentioned` and then polling a feed with no mentioned rows renders the **empty-inbox** text while a user-set filter hides every row. Metrics already renders `Filter: …` for exactly this reason. The accessor lands in task 11 because tasks 13 and 16 cannot tell "you're clear" from "your filter hides everything" without it, and adding it later means reopening this file |
 | 58 | Is `—` the fallback for an empty `Title` too, and may `r` leave the pane spinning? | Yes to the dash — `Title` routes through the same `dashIfEmpty`, dashing *before* the unread style so an untitled unread row still shows it. And no: pressing `r` must not strand the pane on a spinner while the `Fetch` hook is still a stub | `Title` comes verbatim from `thread.Subject.Title` with no fallback, and the criterion's own justification for the `ScopeDisplay` dash — "a blank cell reads as a rendering bug rather than as missing data" — applies with more force to the 60%-width column than to the repo cell it actually names. On `r`: `listview.updateList` sets `loading = true` before batching the fetch cmd, so a `nil` cmd means nothing ever calls `HandleFetchResult` and the spinner never clears — measured as a permanent one-keypress dead end. It self-heals when task 15's poller lands, but the loop ticks task 11 before then and no later task's criteria mention `r`, so it must be closed here (intercept `r`, or have the stub emit an immediate no-change result) and task 15 removes the stopgap when the real fetch arrives |
+| 59 | What is a valid "incapable backend" fixture for the decision-11 capability gate? | A capable-**shaped** but incapable provider — `provider.NewCompositeProvider(azdevops.NewAdapter(nil))`. A `nil` provider is **not** an acceptable stand-in, and `hasNotificationCapability` must route through `CompositeProvider.HasNotifications()`, never a bare `p.(provider.NotificationSource)` assertion | Measured independently by the validator and the reviewer: every "incapable" fixture passed `nil`, which fails *any* type assertion, so replacing the whole gate with the naive `_, ok := p.(provider.NotificationSource); return ok` leaves the entire `internal/app` suite green. That naive form is not merely unpinned, it is **wrong**: `*CompositeProvider` implements `NotificationSource` unconditionally, so an Azure-only composite satisfies the assertion and the tab ships to Azure-only users — the precise outcome decisions 1 and 11 exist to forbid, and the one the function's own doc comment claims to prevent. `internal/azdevops` contains zero `Notification` occurrences, so that composite is genuinely incapable and makes the distinction observable. This is the optional-capability pattern's characteristic trap: the fan-out wrapper always satisfies the interface, so capability must be asked of it as a *question* rather than inferred from its type, and a nil fixture can never tell the two apart |
+| 60 | What must a tab-presence test assert — the tab-bar label or the pane body? | The **pane body**. Asserting the tab strip's `"1: Notifications"` substring is not sufficient | Measured: deleting `case TabNotifications:` from `View()`'s content switch makes the Notifications tab render the **pipelines** pane, and the suite stays green because the presence test pins only the label. Convention 8 is satisfied in letter — the test does render through `View()` after a `WindowSizeMsg` — and still misses it, because a fallthrough produces a perfectly valid render of the wrong pane. The sibling tests already do better (`TestModel_View_ShowsPullRequests_WhenActiveTab` and `..._ShowsWorkItems_...` both pin content), so this is a local regression from established practice rather than a new standard. The discriminating string for the empty pane is `"No notifications found."`, present with the case and absent without it. This generalises past task 12 and is a reflection-step candidate for `## Proposed` |
+| 61 | Where does "is the notifications tab enabled" live, and must the zero-value pane be safe? | **One** place: `buildEnabledTabs`. `NewModel`'s `notifTabEnabled` and the help modal's tab-name list both **derive** from the computed `enabledTabs` and never restate the `IsPaneEnabled && capable` predicate or the tab order. And the pane is constructed **unconditionally**, so no zero value is ever reachable | Measured: the predicate is written three times and the order a third time, and dropping the `IsPaneEnabled` conjunct from `NewModel`'s copy survives, because the three `buildEnabledTabs` unit tests cover capable-plus-pane-disabled but nothing that *renders* it — leaving the help modal and the tab strip free to disagree. On the zero value: the comment claiming it is never reached is false, because the `WindowSizeMsg` handler calls `m.notificationsView.Update(contentSize)` unconditionally and `ThemeSelectedMsg` reconstructs the pane unconditionally. It is also not inert — `Init()` and `SetFeed` panic on the zero value's nil `*LoadingIndicator` (`internal/ui/components/spinner.go:40`). Nothing routes those to a disabled pane *today*, so this is latent, but tasks 15 and 16 deliver messages to this pane from the top-level switch and a future implementer will trust that comment. Constructing unconditionally is measured behaviour-preserving and removes the hazard instead of documenting it |
+| 62 | What must the `main.go` wiring test pin — the callee or the argument? | Both. Asserting the callee is `NewAdapterWithNotifications` is half the mutation space; the test must also assert the second argument is not `nil` and that a `github.NewNotificationsClient` call appears at the call site | Measured: the AST walk matches only `sel.Sel.Name`, so deleting the `ghNC := github.NewNotificationsClient(token)` line and passing `nil` keeps the suite green — exactly the state the test's own doc comment says it prevents ("`a.nc` stays nil forever… every List call returns 'no notifications client configured'"). Reverting to `NewAdapter` is the easy half and *is* killed; the hard half was unguarded. Note this is a gap in the **test**, not a live bug: `NewNotificationsClient` always returns non-nil with no error, `GetGitHubToken()` has already errored out upstream, and `GitHubConfig` carries no base-URL/GHE field, so `nc == nil` is unreachable from any real config. The value of pinning the argument is that it stays unreachable |
 
 ## Tasks
 
@@ -165,7 +169,7 @@ accepted value.
 - [x] 9. `config`: `notifications` block with decision-19 key names, defaults, validation, `validDisabledPanes` entry, guard accepts notifications-only (decision 22) (blocked by: 2). → done: block loads with documented defaults; keys resolve lowercased (convention 9); `disabled_panes: notifications` validates; a config with only notifications enabled passes `Validate()`; per decision 26 an unrecognised `exclude_reasons` entry produces a **warning naming the bad value and the eleven accepted ones** and is then ignored — it must never silently act as `other`, and must never be a hard config error that stops the app from starting
 - [x] 10. Config-driven filter as a pure function (blocked by: 8,9). → done: table tests cover each knob alone, the full precedence chain, the `participating_only` + `exclude_reasons` compose case (decision 10), and that an unrecognised reason is only filtered when `other` is listed explicitly. Task 9 drops unrecognised entries at load, so every entry this filter receives parses — assert that too. Repo globs are **not** validated at load beyond rejecting empty entries: `"   "` and `"[bad"` both load clean, and `path.Match("[bad", …)` returns `ErrBadPattern`, so this task must decide whether a malformed glob warns (consistent with decision 26's warn-don't-die) or matches nothing, and pin it either way
 - [x] 11. `ui/notifications`: `listview` pane — dynamic repo column, unread emphasis, `f` reason filter (blocked by: 3,10). → done: renders through `View()` after a `WindowSizeMsg` without panic (convention 8); column count equals row-cell count in both single- and multi-repo cases (convention 7); unread rows assert a named style, not a substring (convention 6) — and per decision 56 that means asserting the **style object**, since lipgloss's `Ascii` profile in a test binary makes a rendered-bytes comparison vacuous; the filter-collapse path and cursor survival are asserted — when the `f` filter narrows the feed enough that the dynamic repo column disappears, assert that transition *and* that the cursor/selection survives the column-count change, because the expand direction passing does not prove the shrink direction, and per decision 55 the same-item half needs an identity-based restore in the pane plus a fixture leaving **≥2 rows** with the survivor at a **non-zero, non-last** index — a one-row survivor makes the assertion true whatever the cursor does (this requirement is stated inline on purpose: it matches `.spec/conventions.md`'s **proposed** convention 14, which is inert until a human promotes it, so it binds here as a spec criterion and must not be cited by convention number); a zero `UpdatedAt` renders as `—`, never as a year-0001 date (the mapper leaves it zero when the wire omits `updated_at`); an empty `ScopeDisplay` gets the same `—` treatment — decision 35 defaults it to `Scope`, but a thread whose `repository` payload is absent yields both empty, the one case the mapper cannot fix, and a blank cell reads as a rendering bug rather than as missing data; the `f` filter offers **only reasons actually present in the loaded feed**, never the full enum — otherwise it lists `Unknown`, which no mapped row can carry (decision 18), as a choice that matches nothing; an empty `Title` gets the same `—` as the other two, dashed before styling (decision 58); pressing `r` while `Fetch` is a stub must not strand the pane on a spinner (decision 58); the active cycle position is reachable through an exported accessor and rendered as a `Filter:` indicator (decision 57); and `display.MultiScope` carries its own table test beside `TestMixedKinds`, including the empty-slice case `listview.go:110` depends on
-- [x] 12. `app`: register the tab first, remap number keys, `enabledTabs`, `state.TabID` (decisions 6, 9, 11) (blocked by: 11). → done: notifications is `enabledTabs[0]`; number keys map to the new order; `TabID "notifications"` round-trips through `state.yaml`; the tab is absent when no backend implements the capability, and present-but-empty when one does
+- [x] 12. `app`: register the tab first, remap number keys, `enabledTabs`, `state.TabID` (decisions 6, 9, 11) (blocked by: 11). → done: notifications is `enabledTabs[0]`; number keys map to the new order, and `cmd/azdo-tui`'s CLI help no longer advertises the old three-tab line; `TabID "notifications"` round-trips through `state.yaml` — actually serialising, not just through the in-memory store snapshot; the tab is absent when no backend implements the capability, and present-but-empty when one does — with the incapable fixture being a capable-**shaped** provider per decision 59 (a `nil` provider cannot tell the correct gate from the naive type assertion), presence asserted on **pane content** per decision 60 (the tab-bar label alone passes when the content switch falls through to a sibling pane), the enablement predicate computed **once** and the pane constructed unconditionally per decision 61, and the `main.go` wiring test pinning the **argument** as well as the callee per decision 62
 - [ ] 13. `app`: the three render states — empty inbox, capability-unsupported, token-scope error (decisions 11, 17) (blocked by: 12). → done: three distinct renders, each asserted by its own test; the empty state reads as "you're clear", never as an error; and per decision 46 any `Config.Warnings` entry renders in the pane — asserted with a populated warning, and asserted absent when the slice is empty so an empty warnings list never reserves a blank line
 - [ ] 14. `app`: `u` mark-read (one-way, decision 13) / `d` mark-done (blocked by: 13). → done: `u` issues one mark-read and updates the row optimistically, rolling back on API failure; `d` removes the row and restores it on failure; a poll that returns stale `unread` inside the debounce window does not flicker the row back
 - [ ] 15. Polling integration honouring decisions 8 and 23 (blocked by: 12). → done: cadence is `max(X-Poll-Interval, configured)`; the hint reaches the poller via the separate `PollIntervalHinter` optional interface, **not** a new `NotificationSource` method (decision 23); a backend that does not implement the hinter falls back to the configured interval; a 304 response leaves the existing list intact rather than clearing it
@@ -225,6 +229,86 @@ Non-blocking notes for the same pass:
   state and assert `f` is forwarded rather than consumed, or drop the test.
 - `display.MultiScope` is a new exported function with no direct test in `display_test.go`, whereas
   its sibling `MixedKinds` has `TestMixedKinds` (display_test.go:273). Add the mirror table test.
+
+## Validation: app tab registration (task 12) — 2026-07-30, commit `9429c9e`
+
+Gates all green: `go build ./...`, `go vet ./internal/... ./cmd/...`, `go test -count=1 ./...`
+(exit 0), `gofmt -l` clean on all seven touched Go files, `git status --porcelain` empty.
+
+Verified as satisfied:
+
+- **`main.go` wiring is genuinely pinned.** Measured: reverting line 321-322 to
+  `backends = append(backends, github.NewAdapter(ghMC))` makes
+  `TestRunTUI_UsesGitHubAdapterWithNotifications` fail on **both** assertions
+  (missing `NewAdapterWithNotifications`, present bare `NewAdapter`). The AST walk keys on
+  `SelectorExpr{X: ident "github"}` so it cannot match a comment, and `azdevops.NewAdapter`
+  does not trip it. Restored, md5 verified.
+- **Notifications is `enabledTabs[0]`** (`buildEnabledTabs` prepends it) and `disabled_panes`
+  still applies on top.
+- **Number keys.** The digit set is now `"1".."5"` and the mapping is purely positional into
+  `m.enabledTabs`; `TestModel_DigitKeys_MapToNewOrder_AllFiveTabs` drives all five with every
+  tab enabled. No hardcoded tab index survives anywhere — every `switch m.activeTab` in
+  `app.go` gained a `TabNotifications` case (Update delegation, `isActiveViewSearching`,
+  `resizeActiveViewIfNeeded`, `syncStatusBarContext`, `View`, `initTabCmd`, keybindings), and
+  no other package references `app.Tab*`.
+- **No `CurrentVersion` bump** — `state.CurrentVersion` is still `2`; `TabNotifications` is
+  additive and `state.Load` does no ID validation.
+- **Degradation.** `TestApplyState_IgnoresIncapableNotificationsTab` restores a state naming
+  `notifications` against an incapable model, lands on `TabPullRequests`, and calls `View()`.
+- **Convention 8.** Both app-level presence tests render through `View()` after a
+  `WindowSizeMsg`; mapping `tabIDForTab(TabNotifications)` to `state.TabPipelines` fails the
+  round-trip test (mutation killed).
+- **Scope is clean.** No `u`/`d`, no poller/`PollIntervalHinter`, no footer badge, no render-state
+  branching beyond presence, no doc prose. The five new `internal/ui/notifications/list.go`
+  methods are pure one-line forwarders to `m.list`.
+
+**Missing — one criterion:** *"the tab is absent when no backend implements the capability"* is
+not pinned against a production provider shape, and the gate is measurably switched off.
+
+`TestModel_NotificationsTab_Absent_WhenIncapable` passes `NewModel(nil, …)`. A nil
+`provider.Provider` fails `hasNotificationCapability`'s type assertion outright, so
+`CompositeProvider.HasNotifications()` — the actual per-backend `provider.NotificationSource`
+assertion — is never reached. Production always builds a `*CompositeProvider` (`main.go:296+`),
+which satisfies `notificationCapableProvider` unconditionally.
+
+Measured mutation, **SURVIVED** (whole `./internal/app/...` suite green):
+
+```go
+func hasNotificationCapability(p provider.Provider) bool {
+	_, ok := p.(notificationCapableProvider)
+	return ok            // HasNotifications() result discarded
+}
+```
+
+Under that mutation an Azure-only config shows the notifications tab — exactly the hole
+decisions 11 and 47 exist to close — with nothing failing. (`internal/azdevops` contains zero
+occurrences of `Notification`, so an Azure-only composite really is incapable; the correct
+behaviour is in the code today, only untested.)
+
+Fix, measured to work: swap that one fixture to a capable-shaped-but-incapable composite —
+
+```go
+m := NewModel(provider.NewCompositeProvider(azdevops.NewAdapter(nil)), client, cfg, "dev", "")
+```
+
+Unmutated it passes; with the mutation above it fails on both assertions. `app_test.go` already
+imports `azdevops` and `provider`, so no new imports are needed. Re-run the mutation (drop the
+`HasNotifications()` call, watch it fail, restore) before ticking.
+
+Non-blocking notes for the same pass:
+
+- `tabFromID`'s `case state.TabNotifications` is **vacuously** covered: deleting the case leaves
+  the suite green, because `TabNotifications == 0` is `Tab`'s zero value *and* is always
+  `enabledTabs[0]` when capable, so the ignored-restore path lands on the same tab as a
+  successful one. Functionally harmless; if the mapping is wanted pinned, assert
+  `tabFromID(state.TabNotifications)` directly.
+- The round-trip test never touches `state.yaml`: it asserts `store.State().ActiveTab`
+  (in-memory) and feeds `store.State()` back into `ApplyState`, with no `store.Flush()` and no
+  `state.Load`. `TabID` is a plain string with no load-time validation so the disk half is
+  low-risk, but a `Flush()` + `state.Load(path)` would make the criterion literal.
+- `cmd/azdo-tui/main.go:108` still prints `1/2/3  Switch tabs (Pull Requests, Work Items,
+  Pipelines)` in the CLI `--help` text — stale once notifications takes slot 1. Probably task 20's
+  to fix; recorded here so it is not lost.
 
 ## Review feedback: `ui/notifications` listview pane (task 11) — 2026-07-30, commit `040911d`
 
@@ -291,6 +375,83 @@ is a reason cycle and no search exists. `FORWARD: task 13` — `enter` currently
 keypress (`list.go:83-86`: the `EnterDetail` stub returns `(nil, nil)`, so `updateDetail`
 immediately resets to `ViewList` and swallows the message that triggered the reset); the real
 detail view removes it.
+
+## Review feedback: app tab registration (task 12) — 2026-07-30, commit `9429c9e`
+
+Opus review: REQUEST_CHANGES. 24 mutations, **16 SURVIVED**. The production code survived every
+attack on behaviour — happy path, all disabled-pane permutations, all five state-restore
+degradations. What did not survive is the suite's ability to *notice* a regression: three of the
+survivors reintroduce failure modes this commit's own doc comments claim to prevent. Findings 1–3
+and the enablement/zero-value ones are now decisions 59–62.
+
+Must fix:
+
+1. **🔴 The capability gate can regress to the naive assertion undetected** — `app.go:288-294`. Per
+   **decision 59**: use `provider.NewCompositeProvider(azdevops.NewAdapter(nil))` as the incapable
+   fixture, not `nil`, and assert both `hasNotificationCapability(p) == false` and that `NewModel`
+   renders no Notifications tab. Surviving mutation: body → `_, ok := p.(provider.NotificationSource);
+   return ok`. Found independently by the validator and the reviewer.
+2. **🔴 The notifications tab can render the pipelines pane with a green suite** — `app.go:1282-1287`.
+   Per **decision 60**: assert pane content (`"No notifications found."`), not the tab-bar label.
+   Surviving mutation: delete `case TabNotifications:` from `View()`'s content switch.
+3. **🔴 The `main.go` AST test pins the callee but not the argument** — `cmd/azdo-tui/main_test.go:43-70`.
+   Per **decision 62**. Surviving mutation: drop the `ghNC := github.NewNotificationsClient(token)`
+   line and pass `nil` as the second argument.
+4. **🟡 The enablement predicate is written three times and the tab order a third time** —
+   `app.go:426` and `:448-463` versus `buildEnabledTabs` at `:273-286`. Per **decision 61**: derive
+   both from the computed `enabledTabs`. Surviving mutation: `notifTabEnabled := notifCapable`
+   (drop the `IsPaneEnabled` conjunct). Add one `NewModel`-level test for capable-but-pane-disabled
+   asserting the tab strip *and* the help modal, which is the combination nothing renders today.
+5. **🟡 The "zero value is never reached" comment is false and the zero value panics** —
+   `app.go:536-542`, contradicted by `:875` and `:828`. Per **decision 61**: construct
+   unconditionally (measured behaviour-preserving).
+6. **🟡 Five new `case TabNotifications:` arms are entirely unpinned** — `app.go:327` (`initTabCmd`),
+   `:1044` (`resizeActiveViewIfNeeded`), `:1065` (`syncStatusBarContext`), `:1315` (keybindings),
+   `:875` (`WindowSizeMsg` sizing). Each deletes clean. Consequences: pipelines detail context leaks
+   into the notifications footer; the pane's fetch is never dispatched (silent today, a visible bug
+   at task 15); `notificationsKeybindings()` at `:1161-1170` has zero coverage; the pane is never
+   sized. One table test over the five tabs asserting per-tab keybinding text and status-bar context,
+   rendered through `View()`, closes all of them — the keybindings assertion is the cheapest and
+   highest-value single line.
+7. **🟡 Four of the five new forwarders are unpinned in both packages** —
+   `internal/ui/notifications/list.go`: `GetContextItems`, `GetScrollPercent`, `GetStatusMessage`,
+   `HasContextBar` each replaced with a zero value and survive. Trivial delegations, so severity is
+   bounded, but they exist solely to feed the app chrome and nothing checks that they do. One table
+   test seeding a feed and comparing each against the underlying `listview` value.
+8. **🟡 The `state.yaml` round-trip never touches `state.yaml`** — `app_test.go`'s
+   `TestModel_TabID_NotificationsRoundTripsThroughState` calls `store.Apply` then reads
+   `store.State()`; `Apply` mutates memory and schedules a debounced `flushAsync`, so nothing
+   serialises and renaming the on-disk literal to `"notifs"` survives. Task 12's criterion says
+   *through `state.yaml`*. Either call `store.Flush()` then `state.Load(path)`, or add a
+   `notifications` row to the existing disk round-trip table in `internal/state/store_test.go`.
+   Mitigating: `store_test.go:75-114` covers the marshalling generically and `"pull_requests"` is
+   equally unpinned, so this is pre-existing practice rather than a new regression. The convention-17
+   constraint is not at issue — this is `state.Store` on a `t.TempDir()` path, not `Config.Save()`.
+
+Genuine equivalents, do not chase: deleting `case TabNotifications:` from `isActiveViewSearching`
+(`app.go:967`) cannot be killed, because decision 57 leaves `FilterFunc` nil so
+`notifications.Model.IsSearching()` can never be true and both branches return `false` — keep the
+vacuous-but-correct arm and write no test for it (`FORWARD: task 16`). And `CurrentVersion = 2 → 3`
+survives because `Version` is written by `Save` and never read by `Load`, making decision 9's
+no-bump rule unfalsifiable in-repo; the code does honour it, and `TabsState` genuinely has only
+`PullRequests` and `WorkItems`, so the `state.go` comment's "mirroring Pipelines" claim checks out.
+
+Confirmed sound under attack, do not re-litigate: notifications-first ordering and positional digit
+derivation share **one** source — digits (`app.go:724-740`), `renderTabBar`'s `i+1` labels and
+`enabledTabs` — so restating the order is killed by seven inherited tests, and notifications-only
+(decision 47), `workitems`-disabled and notifications-disabled all render with digits agreeing;
+`nextTab`/`prevTab` wrap correctly over 1..5-length slices. `main.go`'s nil semantics are unreachable
+from any real config. All five state-restore degradations land on an enabled tab with no panic and no
+blank screen. Decision 21 is not foreclosed: `FilterNotifications` is not referenced from
+`internal/app` or `cmd` at all, so no redundant defensive copy was added at the app boundary.
+
+Deferred: `FORWARD: task 15/16` — the zero-value pane hazard in finding 5 becomes live once those
+tasks route messages to this pane from the top-level switch. `FORWARD: task 13/15` — the empty-inbox
+body says "Press r to refresh" while the pane deliberately swallows `r` (decision 58's stopgap) and
+the footer omits it; cosmetic today, actively misleading once the tab is discoverable. `FORWARD:
+task 20` — `cmd/azdo-tui/main.go`'s `runHelp()` (~`:108`) still prints `1/2/3  Switch tabs (Pull
+Requests, Work Items, Pipelines)` and its GitHub token-scope list omits `notifications`; the in-TUI
+help modal *was* updated, the CLI help was not, and it will be wrong in a shipped binary.
 
 ## Phase 2 notes — carry into `20260729-notif-p2-azdo.md`
 

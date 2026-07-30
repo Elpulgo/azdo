@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,14 +224,18 @@ func detailRefOrEmpty(id provider.Identity, open bool) state.DetailRef {
 	return refFromIdentity(id)
 }
 
+// containsTab reports whether tab appears in tabs. Split out of isTabEnabled
+// so NewModel can ask the same question of the enabledTabs slice it has just
+// computed, before any Model exists to ask it of (Decision 61: buildEnabledTabs
+// is the only place the "is this tab on" predicate lives, and every other site
+// queries its output instead of recomputing it).
+func containsTab(tabs []Tab, tab Tab) bool {
+	return slices.Contains(tabs, tab)
+}
+
 // isTabEnabled returns true if the given tab is in the enabledTabs list.
 func (m Model) isTabEnabled(tab Tab) bool {
-	for _, t := range m.enabledTabs {
-		if t == tab {
-			return true
-		}
-	}
-	return false
+	return containsTab(m.enabledTabs, tab)
 }
 
 // nextTab returns the next enabled tab after the current one (wrapping).
@@ -318,6 +323,33 @@ func buildEnabledTabs(cfg *config.Config, azurePresent bool, notifCapable bool) 
 		tabs = append(tabs, TabMetrics)
 	}
 	return tabs
+}
+
+// helpTabName returns the label the help modal's Tabs binding uses for tab.
+// Config keys MUST be lowercase — viper lowercases every config key on load,
+// so Terms map keys arrive lowercase and a capitalised lookup silently never
+// matches the user's override (convention 9).
+//
+// Deliberately not renderTabBar's label map: the modal has rendered "PR" for
+// pull requests since before notifications existed (help.go's NewHelpModal
+// seeds "PR / Work Items / Pipelines") and the line is width-constrained, so
+// the two label sets differ on purpose. What must NOT differ is the *order* or
+// the *membership*, which is why the caller walks enabledTabs rather than
+// re-listing panes (Decision 61).
+func helpTabName(cfg *config.Config, tab Tab) string {
+	switch tab {
+	case TabNotifications:
+		return cfg.TermFor("notifications", "Notifications")
+	case TabPullRequests:
+		return "PR"
+	case TabWorkItems:
+		return cfg.TermFor("work_items", "Work Items")
+	case TabPipelines:
+		return cfg.TermFor("pipelines", "Pipelines")
+	case TabMetrics:
+		return cfg.TermFor("metrics", "Metrics")
+	}
+	return ""
 }
 
 // initTabCmd returns the Init command for the given tab, or nil for pipelines
@@ -422,8 +454,20 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// the tab is absent unless a configured backend implements
 	// provider.NotificationSource, and present (possibly empty) whenever one
 	// does. disabled_panes still applies on top, same as every other pane.
-	notifCapable := hasNotificationCapability(p)
-	notifTabEnabled := cfg.IsPaneEnabled("notifications") && notifCapable
+	//
+	// buildEnabledTabs is the single owner of that predicate (Decision 61):
+	// enabledTabs is computed here, up front, and everything downstream that
+	// needs to know whether a tab is on — the help modal's tab-name list, the
+	// Model's own enabledTabs field, containsTab/isTabEnabled queries —
+	// derives from it rather than restating `IsPaneEnabled && capable` or the
+	// tab order. Restating either is what let the copies drift: dropping the
+	// IsPaneEnabled conjunct from a second copy left the tab strip and the
+	// help modal free to disagree with nothing failing. There is deliberately
+	// no `notifTabEnabled` local left — with the pane now constructed
+	// unconditionally and the help line derived, a second copy of the
+	// predicate has no consumer at all, which is the strongest form of "one
+	// place". Ask containsTab(enabledTabs, TabNotifications) if you need it.
+	enabledTabs := buildEnabledTabs(cfg, mc != nil, hasNotificationCapability(p))
 
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
@@ -443,23 +487,15 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		helpModal.RemoveBindingsByDescription("pipelines")
 	}
 
-	// Update tab description in help modal based on enabled tabs. Notifications
-	// is listed first (Decision 6) to mirror enabledTabs' own order below.
-	enabledTabNames := []string{}
-	if notifTabEnabled {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("notifications", "Notifications"))
-	}
-	if cfg.IsPaneEnabled("pullrequests") {
-		enabledTabNames = append(enabledTabNames, "PR")
-	}
-	if cfg.IsPaneEnabled("workitems") {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("work_items", "Work Items"))
-	}
-	if cfg.IsPaneEnabled("pipelines") {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("pipelines", "Pipelines"))
-	}
-	if metricsEnabled {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("metrics", "Metrics"))
+	// Update tab description in help modal based on enabled tabs. Derived from
+	// enabledTabs (Decision 61) rather than re-listing the order and the
+	// per-pane predicates: the modal's line and the tab strip then cannot
+	// disagree, because both read the same slice. Notifications lands first
+	// (Decision 6) because buildEnabledTabs put it there, not because this
+	// loop says so.
+	enabledTabNames := make([]string, 0, len(enabledTabs))
+	for _, tab := range enabledTabs {
+		enabledTabNames = append(enabledTabNames, helpTabName(cfg, tab))
 	}
 	// Rebuild the tabs help line whenever the set differs from the default
 	// "1/2/3 — PR / Work Items / Pipelines" (e.g. a pane disabled, metrics
@@ -526,20 +562,25 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		errorHandler.SetError(themeNotFoundErr)
 	}
 
-	enabledTabs := buildEnabledTabs(cfg, mc != nil, notifCapable)
-
 	var mv metrics.Model
 	if metricsEnabled {
 		mv = metrics.NewModelWithStyles(mc, cfg, appStyles)
 	}
 
-	// The notifications pane is only constructed when the tab is actually
-	// enabled; its zero value is never reached (Init/Update/View), matching
-	// the metrics view's pattern above.
-	var nv notifications.Model
-	if notifTabEnabled {
-		nv = notifications.NewModelWithStyles(appStyles)
-	}
+	// The notifications pane is constructed unconditionally, even when the tab
+	// is disabled or capability-absent (Decision 61). It deliberately does not
+	// follow the metrics view's conditional pattern above: the zero value IS
+	// reachable — the tea.WindowSizeMsg handler calls
+	// m.notificationsView.Update(contentSize) on every resize and
+	// ThemeSelectedMsg reconstructs the pane, both unconditionally — and it is
+	// not inert, because listview.Init and SetFeed dereference the zero
+	// value's nil *components.LoadingIndicator and panic
+	// (internal/ui/components/spinner.go's Tick). Nothing routes a message to
+	// a disabled pane today, so the hazard is latent rather than live, but
+	// tasks 15 and 16 deliver messages to this pane from the top-level switch.
+	// Constructing here is measured behaviour-preserving and removes the
+	// hazard instead of documenting it.
+	nv := notifications.NewModelWithStyles(appStyles)
 
 	return Model{
 		client:        p,

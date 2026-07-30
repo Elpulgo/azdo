@@ -810,3 +810,75 @@ func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
 		t.Error("f cycled the reason filter while the pane was not in list mode")
 	}
 }
+
+// ─── app-chrome forwarders ───────────────────────────────────────────────────
+
+// TestChromeForwarders_MatchUnderlyingListview pins the four accessors that
+// exist solely to feed app.Model's chrome — GetContextItems, GetScrollPercent,
+// GetStatusMessage and HasContextBar — against the listview values they are
+// meant to forward, on a seeded feed and in both view modes the pane can reach.
+//
+// Honest limitation, stated so nobody reads more into this test than it gives:
+// in phase 1 all four *are* the zero value whatever the pane does. HasContextBar
+// resolves through listview.Model.config.HasContextBar, which this pane leaves
+// nil (always false), and the other three only return non-zero when
+// `viewMode == ViewDetail && detail != nil` — unreachable here because decision
+// 3 gives the pane no detail view, so its EnterDetail hook returns a nil
+// DetailView. Replacing any of the four with a hardcoded zero literal is
+// therefore a genuine equivalent today, not an unpinned regression.
+//
+// What this does pin is the delegation itself: any forwarder that starts
+// returning something *other* than its listview counterpart fails, including
+// after task 13 gives the pane a real detail view and turns these into live,
+// non-zero values. The `!= m.list.X()` form is deliberate — comparing against a
+// hand-written zero constant would keep passing when listview's own contract
+// changes underneath.
+func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
+	base := NewModelWithStyles(styles.DefaultStyles())
+	base.list, _ = base.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	base = base.SetFeed([]provider.Notification{
+		mkNotification("1", "owner/repo", "A", provider.NotificationReasonMentioned, false, fixedNow),
+		mkNotification("2", "other/repo", "B", provider.NotificationReasonSubscribed, true, fixedNow),
+	})
+
+	detail := base
+	detail, _ = detail.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	modes := []struct {
+		name string
+		m    Model
+	}{
+		{"list mode", base},
+		{"after enter", detail},
+	}
+
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			m := mode.m
+
+			if got, want := m.GetContextItems(), m.list.GetContextItems(); len(got) != len(want) {
+				t.Errorf("GetContextItems() returned %d items, underlying listview has %d", len(got), len(want))
+			} else {
+				for i := range got {
+					if got[i] != want[i] {
+						t.Errorf("GetContextItems()[%d] = %+v, listview has %+v", i, got[i], want[i])
+					}
+				}
+			}
+			if got, want := m.GetScrollPercent(), m.list.GetScrollPercent(); got != want {
+				t.Errorf("GetScrollPercent() = %v, listview has %v", got, want)
+			}
+			if got, want := m.GetStatusMessage(), m.list.GetStatusMessage(); got != want {
+				t.Errorf("GetStatusMessage() = %q, listview has %q", got, want)
+			}
+			if got, want := m.HasContextBar(), m.list.HasContextBar(); got != want {
+				t.Errorf("HasContextBar() = %v, listview has %v", got, want)
+			}
+			// IsSearching is deliberately not covered here: decision 57 leaves
+			// FilterFunc nil, so listview's search mode is unreachable and both
+			// branches return false permanently. It is a confirmed genuine
+			// equivalent, and a row asserting false == false would only look
+			// like coverage.
+		})
+	}
+}

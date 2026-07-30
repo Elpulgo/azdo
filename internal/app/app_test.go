@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -15,9 +16,12 @@ import (
 	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
+	"github.com/Elpulgo/azdo/internal/ui/notifications"
+	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/workitems"
 	"github.com/Elpulgo/azdo/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // newNotificationCapableProvider returns a provider whose sole backend is a
@@ -30,6 +34,30 @@ import (
 // for tests that only exercise wiring/layout, never real API calls.
 func newNotificationCapableProvider() provider.Provider {
 	return provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil))
+}
+
+// newNotificationIncapableProvider returns the phase-1 Azure-only shape: a
+// *provider.CompositeProvider whose sole backend is an *azdevops.Adapter, which
+// implements no notifications surface at all (internal/azdevops contains zero
+// occurrences of Notification).
+//
+// This fixture is capable-*shaped* on purpose (Decision 59). A nil
+// provider.Provider is NOT an acceptable stand-in for "incapable": nil fails
+// any type assertion, so a gate written as the naive
+//
+//	_, ok := p.(provider.NotificationSource); return ok
+//
+// reports false for nil and the tab is correctly hidden — the test passes while
+// the gate is wrong. It is wrong because *CompositeProvider satisfies
+// NotificationSource unconditionally, so the naive form reports *true* for the
+// composite production actually builds (main.go's runTUI always wraps backends
+// in one), shipping the notifications tab to Azure-only users. That is the
+// exact outcome Decisions 1 and 11 exist to forbid. Only a real composite over
+// a real incapable backend makes the correct gate
+// (CompositeProvider.HasNotifications, which does the per-backend assertion)
+// distinguishable from the naive one.
+func newNotificationIncapableProvider() provider.Provider {
+	return provider.NewCompositeProvider(azdevops.NewAdapter(nil))
 }
 
 func TestFormatVersionInfo(t *testing.T) {
@@ -1689,6 +1717,21 @@ func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {
 
 // --- Task 12: notifications tab registration (Decisions 6, 9, 11) ---------
 
+// notificationsPaneMarker is the string that discriminates "the notifications
+// pane rendered" from "some other pane rendered in the notifications tab's
+// slot" (Decision 60). listview.viewList formats its empty state as
+// "No <EntityName> found.", and notifications.NewModelWithStyles sets
+// EntityName to "notifications", so an empty notifications pane emits this and
+// no sibling pane can ("pipeline runs", "pull requests", "work items").
+//
+// The tab strip's "1: Notifications" label is NOT sufficient on its own:
+// deleting `case TabNotifications:` from View()'s content switch makes the tab
+// render the *pipelines* pane while the label stays put, so a label-only
+// assertion passes on a perfectly valid render of the wrong pane. Convention 8
+// is satisfied either way — the test does drive View() after a WindowSizeMsg —
+// which is exactly why the content has to be pinned too.
+const notificationsPaneMarker = "No notifications found."
+
 // TestBuildEnabledTabs_NotificationsFirst_WhenCapable pins Decision 6:
 // notifications lands at enabledTabs[0] whenever it is present at all.
 func TestBuildEnabledTabs_NotificationsFirst_WhenCapable(t *testing.T) {
@@ -1753,10 +1796,42 @@ func TestBuildEnabledTabs_NotificationsAbsent_WhenPaneDisabled(t *testing.T) {
 	}
 }
 
+// TestHasNotificationCapability_AzureOnlyComposite_False pins Decision 59
+// directly on the gate function: the production provider shape for an
+// Azure-only config is a *provider.CompositeProvider wrapping an
+// *azdevops.Adapter, and it must report false.
+//
+// This is the assertion the naive `_, ok := p.(provider.NotificationSource)`
+// form fails: *CompositeProvider satisfies NotificationSource unconditionally,
+// so the assertion succeeds and capability is reported for a config with no
+// GitHub backend at all. Only calling HasNotifications() — which performs the
+// real per-backend assertion — gets this right.
+func TestHasNotificationCapability_AzureOnlyComposite_False(t *testing.T) {
+	azureOnly := newNotificationIncapableProvider()
+
+	// Guard the fixture itself: it must be capable-*shaped*, i.e. it must
+	// satisfy provider.NotificationSource, or it cannot tell the correct gate
+	// from the naive one and the assertion below goes vacuous.
+	if _, ok := azureOnly.(provider.NotificationSource); !ok {
+		t.Fatal("fixture is not capable-shaped: *CompositeProvider must satisfy provider.NotificationSource, otherwise this test cannot distinguish the capability gate from a bare type assertion")
+	}
+
+	if hasNotificationCapability(azureOnly) {
+		t.Error("hasNotificationCapability(Azure-only composite) = true, want false — the gate must ask CompositeProvider.HasNotifications(), not assert provider.NotificationSource on the composite (Decisions 11, 59)")
+	}
+
+	// The capable shape must still report true, so the gate is not simply
+	// stuck at false.
+	if !hasNotificationCapability(newNotificationCapableProvider()) {
+		t.Error("hasNotificationCapability(GitHub composite) = false, want true")
+	}
+}
+
 // TestModel_NotificationsTab_Absent_WhenIncapable exercises the real NewModel
-// path with an Azure-only provider (p=nil, same shape every existing test in
-// this file already uses): the tab bar must not mention notifications at all,
-// and Pull Requests must keep its "1:" slot exactly as before this task.
+// path with the Azure-only composite of Decision 59 (never a nil provider —
+// see newNotificationIncapableProvider): the tab bar must not mention
+// notifications at all, no notifications pane body may render, and Pull
+// Requests must keep its "1:" slot exactly as before this task.
 func TestModel_NotificationsTab_Absent_WhenIncapable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1766,25 +1841,94 @@ func TestModel_NotificationsTab_Absent_WhenIncapable(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	m := NewModel(nil, client, cfg, "dev", "")
+	m := NewModel(newNotificationIncapableProvider(), client, cfg, "dev", "")
 	m.width = 100
 	m.height = 30
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(Model)
 
+	if m.isTabEnabled(TabNotifications) {
+		t.Error("TabNotifications must not be in enabledTabs for an Azure-only composite")
+	}
+	if m.activeTab != TabPullRequests {
+		t.Errorf("activeTab = %v, want TabPullRequests when notifications is capability-absent", m.activeTab)
+	}
+
 	view := m.View()
 	if strings.Contains(view, "Notifications") {
 		t.Error("tab bar should not mention Notifications when no backend implements provider.NotificationSource")
+	}
+	if strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("notifications pane body must not render when the tab is capability-absent, view:\n%s", view)
 	}
 	if !strings.Contains(view, "1: Pull Requests") {
 		t.Error("expected '1: Pull Requests' to remain the first tab when notifications is absent")
 	}
 }
 
+// TestModel_NotificationsTab_Absent_WhenPaneDisabled_ButCapable covers the one
+// combination Decision 61 found rendered nowhere: a capable provider with
+// `disabled_panes: [notifications]`. buildEnabledTabs' unit tests cover the
+// predicate, but nothing rendered it, which is why dropping the IsPaneEnabled
+// conjunct from NewModel's second copy of that predicate survived — the tab
+// strip and the help modal were free to disagree.
+//
+// Asserting both surfaces here is the point: they now derive from the same
+// computed enabledTabs slice, so a divergence is a test failure rather than a
+// silent inconsistency.
+func TestModel_NotificationsTab_Absent_WhenPaneDisabled_ButCapable(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		DisabledPanes:   []string{"notifications"},
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	m.width = 200
+	m.height = 60
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m = updated.(Model)
+
+	if m.isTabEnabled(TabNotifications) {
+		t.Error("TabNotifications must not be enabled when disabled_panes lists notifications, even with a capable provider")
+	}
+	if m.activeTab != TabPullRequests {
+		t.Errorf("activeTab = %v, want TabPullRequests", m.activeTab)
+	}
+
+	// Tab strip: no Notifications, and PR keeps slot 1.
+	view := m.View()
+	if strings.Contains(view, "Notifications") {
+		t.Errorf("tab strip must not list Notifications when the pane is disabled, view:\n%s", view)
+	}
+	if !strings.Contains(view, "1: Pull Requests") {
+		t.Errorf("expected '1: Pull Requests' when notifications is disabled, view:\n%s", view)
+	}
+	if strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("notifications pane body must not render when the pane is disabled, view:\n%s", view)
+	}
+
+	// Help modal: the Tabs line must agree with the strip.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+	helpView := m.View()
+	if strings.Contains(helpView, "Notifications") {
+		t.Errorf("help modal Tabs line must not list Notifications when the pane is disabled, view:\n%s", helpView)
+	}
+	if !strings.Contains(helpView, "PR / Work Items / Pipelines") {
+		t.Errorf("help modal Tabs line should read 'PR / Work Items / Pipelines' when notifications is disabled, view:\n%s", helpView)
+	}
+}
+
 // TestModel_NotificationsTab_PresentButEmpty_WhenCapable exercises NewModel
 // with a capable provider (Decision 11): the tab must appear first (Decision
-// 6) and rendering it after a WindowSizeMsg must not panic (convention 8),
-// even though the underlying feed is empty (no Init() populate happened).
+// 6), the *notifications pane* must be what renders in it (Decision 60 — see
+// notificationsPaneMarker for why the tab label alone is not enough), and
+// rendering after a WindowSizeMsg must not panic (convention 8) even though
+// the underlying feed is empty (no Init() populate happened).
 func TestModel_NotificationsTab_PresentButEmpty_WhenCapable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1806,6 +1950,397 @@ func TestModel_NotificationsTab_PresentButEmpty_WhenCapable(t *testing.T) {
 	view := m.View() // must not panic
 	if !strings.Contains(view, "1: Notifications") {
 		t.Errorf("expected tab bar to contain '1: Notifications', view:\n%s", view)
+	}
+	if !strings.Contains(view, notificationsPaneMarker) {
+		t.Errorf("expected the notifications pane body (%q) to render in the notifications tab, not a sibling pane; view:\n%s", notificationsPaneMarker, view)
+	}
+	// Negative half: the sibling the content switch falls through to must NOT
+	// be what rendered. Without this, a `default:`-branch render of the
+	// pipelines pane would only be caught by the assertion above going absent.
+	if strings.Contains(view, "No pipeline runs found.") {
+		t.Errorf("notifications tab rendered the pipelines pane — View()'s content switch fell through; view:\n%s", view)
+	}
+}
+
+// TestModel_PerTabChrome pins the five per-tab `case` arms that route the
+// active view's chrome, all of which deleted clean before this test existed
+// (Decision 61's neighbourhood: app.go's initTabCmd, resizeActiveViewIfNeeded,
+// syncStatusBarContext, the keybindings if/else chain, and the WindowSizeMsg
+// sizing loop).
+//
+// Everything is asserted through View() (convention 8), because the status bar
+// is populated as a side effect of rendering: View() calls
+// statusBar.SetKeybindings(m.<tab>Keybindings()) and reads the active view's
+// GetContextItems/GetScrollPercent/GetStatusMessage from the same switch. A
+// per-tab keybindings string is therefore the cheapest observable that
+// distinguishes "the arm for this tab ran" from "the default: arm ran", and
+// notificationsKeybindings() in particular had zero coverage.
+func TestModel_PerTabChrome(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+		Metrics:         config.MetricsConfig{Enabled: true},
+	}
+	client, err := azdevops.NewMultiClient("testorg", []string{"testproject"}, "dummy-pat", nil)
+	if err != nil {
+		t.Fatalf("NewMultiClient() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		tab  Tab
+		// wantKeys are substrings unique to that tab's keybindings string.
+		wantKeys []string
+		// notWantKeys are substrings owned by a *different* tab's keybindings
+		// string, so a fall-through to the wrong arm is caught positively
+		// rather than only as a missing expectation.
+		notWantKeys []string
+		// wantPane is the active pane's own body text, pinning the View()
+		// content switch and (via the empty-state render) that the pane was
+		// sized by the WindowSizeMsg handler rather than left at width 0.
+		wantPane string
+	}{
+		{
+			name:        "notifications",
+			tab:         TabNotifications,
+			wantKeys:    []string{"f filter reason"},
+			notWantKeys: []string{"S status", "m my items", "m my PRs", "v live/trends"},
+			wantPane:    notificationsPaneMarker,
+		},
+		{
+			name:        "pullrequests",
+			tab:         TabPullRequests,
+			wantKeys:    []string{"m my PRs", "A as reviewer"},
+			notWantKeys: []string{"f filter reason", "S status"},
+			wantPane:    "No pull requests found.",
+		},
+		{
+			name:        "workitems",
+			tab:         TabWorkItems,
+			wantKeys:    []string{"m my items", "s state"},
+			notWantKeys: []string{"f filter reason", "S status"},
+			wantPane:    "No work items found.",
+		},
+		{
+			name:        "pipelines",
+			tab:         TabPipelines,
+			wantKeys:    []string{"S status"},
+			notWantKeys: []string{"f filter reason", "m my PRs"},
+			wantPane:    "No pipeline runs found.",
+		},
+		{
+			name:        "metrics",
+			tab:         TabMetrics,
+			wantKeys:    []string{"v live/trends"},
+			notWantKeys: []string{"f filter reason", "S status"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+			m = updated.(Model)
+
+			if !m.isTabEnabled(tt.tab) {
+				t.Fatalf("precondition failed: tab %v not enabled; enabledTabs = %v", tt.tab, m.enabledTabs)
+			}
+			m.activeTab = tt.tab
+			// The real tab-switch path re-syncs the status bar's context items
+			// and resizes the newly active view; drive it so the
+			// syncStatusBarContext and resizeActiveViewIfNeeded arms run too.
+			m.resizeActiveViewIfNeeded()
+
+			view := m.View()
+
+			for _, want := range tt.wantKeys {
+				if !strings.Contains(view, want) {
+					t.Errorf("tab %v: keybindings missing %q — View()'s per-tab arm did not run; view:\n%s", tt.tab, want, view)
+				}
+			}
+			for _, notWant := range tt.notWantKeys {
+				if strings.Contains(view, notWant) {
+					t.Errorf("tab %v: view contains %q, which belongs to a different tab's keybindings — the wrong arm ran; view:\n%s", tt.tab, notWant, view)
+				}
+			}
+			if tt.wantPane != "" && !strings.Contains(view, tt.wantPane) {
+				t.Errorf("tab %v: expected pane body %q; view:\n%s", tt.tab, tt.wantPane, view)
+			}
+		})
+	}
+}
+
+// TestModel_WindowSizeMsg_SizesNotificationsPane pins the notifications line in
+// app.go's tea.WindowSizeMsg handler, which deleted clean: the pane kept
+// listview's construction-time defaults and rendered a narrow, short table
+// inside a full-width box, with nothing failing.
+//
+// Sizing is asserted by comparison against a reference pane sized directly with
+// the Model's own contentViewSize() and fed the same rows — exact, and immune to
+// the box-arithmetic constants. The anti-vacuity half compares against an
+// unsized reference so the test cannot pass by both panes happening to be
+// unsized.
+func TestModel_WindowSizeMsg_SizesNotificationsPane(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	feed := []provider.Notification{
+		{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"},
+			Title:     "A notification title",
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		},
+	}
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+	m.notificationsView = m.notificationsView.SetFeed(feed)
+
+	got := m.notificationsView.View()
+
+	sized := notifications.NewModelWithStyles(m.styles)
+	sized, _ = sized.Update(m.contentViewSize())
+	sized = sized.SetFeed(feed)
+	want := sized.View()
+
+	unsized := notifications.NewModelWithStyles(m.styles)
+	unsized = unsized.SetFeed(feed)
+	reference := unsized.View()
+
+	if lipgloss.Width(want) == lipgloss.Width(reference) && lipgloss.Height(want) == lipgloss.Height(reference) {
+		t.Fatalf("fixture is vacuous: a sized pane (%dx%d) renders identically to an unsized one",
+			lipgloss.Width(want), lipgloss.Height(want))
+	}
+	if lipgloss.Width(got) != lipgloss.Width(want) || lipgloss.Height(got) != lipgloss.Height(want) {
+		t.Errorf("notifications pane rendered %dx%d, want %dx%d (contentViewSize %dx%d); an unsized pane renders %dx%d — the WindowSizeMsg handler did not size it",
+			lipgloss.Width(got), lipgloss.Height(got),
+			lipgloss.Width(want), lipgloss.Height(want),
+			m.contentViewSize().Width, m.contentViewSize().Height,
+			lipgloss.Width(reference), lipgloss.Height(reference))
+	}
+}
+
+// TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter pins the two
+// remaining unpinned TabNotifications arms that both live on the tab-switch
+// path: resizeActiveViewIfNeeded's (app.go's switch on m.activeTab after the
+// footer height changed) and syncStatusBarContext's.
+//
+// Neither is observable from a plain tab switch, which is why both deleted
+// clean. resizeActiveViewIfNeeded only resizes when the footer height actually
+// changes, and syncStatusBarContext's notifications arm only differs from the
+// default arm when the pipelines pane happens to have a context bar — the
+// notifications pane's own HasContextBar() is structurally false in phase 1
+// (decision 57 leaves listview's HasContextBar hook nil), so it is the *stale
+// other pane* that has to supply the difference.
+//
+// The scenario builds exactly that state:
+//
+//	a. size the window on the notifications tab (footer 3 rows)
+//	b. open pipelines and press enter to enter detail mode, which turns its
+//	   context bar on and grows the footer to 4 rows
+//	c. re-send WindowSizeMsg while that detail view is open — its handler
+//	   sizes *every* pane, so the notifications pane is now one row short
+//	d. switch back to notifications
+//
+// At (d) the footer must shrink back to 3 rows, which requires
+// syncStatusBarContext to read the notifications pane (not fall through to
+// pipelines' still-open context bar), and the newly active pane must be
+// re-measured, which requires resizeActiveViewIfNeeded's notifications arm.
+//
+// Deleting the resize arm leaves the pane at (c)'s height while the layout
+// reserves (d)'s; deleting the sync arm leaves pipelines' context items on the
+// status bar, so measureFooterHeight reports 4 rows while View() — whose own
+// switch is a separate copy — renders 3, and the whole frame comes out a row
+// shorter than the terminal.
+func TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	// Enough rows that the pane fills whatever height it is given, so its
+	// rendered height reflects the last size it was told about.
+	feed := make([]provider.Notification, 0, 60)
+	for i := 0; i < 60; i++ {
+		feed = append(feed, provider.Notification{
+			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ScopeDisplay: "o/r", ID: fmt.Sprintf("%d", i)},
+			Title:     fmt.Sprintf("notification %d", i),
+			Reason:    provider.NotificationReasonMentioned,
+			UpdatedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		})
+	}
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+	m.notificationsView = m.notificationsView.SetFeed(feed)
+
+	// (b) pipelines detail mode.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")})
+	m = updated.(Model)
+	if m.activeTab != TabPipelines {
+		t.Fatalf("precondition failed: activeTab is %v after pressing 4, want TabPipelines", m.activeTab)
+	}
+	updated, _ = m.Update(pipelines.SetRunsMsg{Runs: []provider.PipelineRun{
+		{
+			Identity:       provider.Identity{Kind: provider.KindAzure, Scope: "testproject", ID: "1"},
+			DefinitionName: "build",
+			BuildNumber:    "42",
+			Status:         "completed",
+			Result:         "succeeded",
+			QueueTime:      time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		},
+	}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.pipelinesView.HasContextBar() {
+		t.Fatalf("precondition failed: pipelines pane has no context bar after enter, so the fallthrough arm cannot be distinguished")
+	}
+
+	// (c) resize while the detail context bar is open: the WindowSizeMsg handler
+	// sizes every pane, so the notifications pane picks up the shorter height.
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+	staleHeight := lipgloss.Height(m.notificationsView.View())
+
+	// (d) back to notifications.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	m = updated.(Model)
+	if m.activeTab != TabNotifications {
+		t.Fatalf("precondition failed: activeTab is %v after pressing 1, want TabNotifications", m.activeTab)
+	}
+
+	view := m.View()
+
+	// syncStatusBarContext: the footer must be measured for the notifications
+	// tab, not for pipelines' still-open detail context bar. A footer measured
+	// one row too tall costs the frame a row of terminal height.
+	if h := lipgloss.Height(view); h != m.height {
+		t.Errorf("View() rendered %d rows for a %d-row terminal (footerRows=%d) — the footer was measured against another pane's context bar; view:\n%s",
+			h, m.height, m.footerRows, view)
+	}
+
+	// resizeActiveViewIfNeeded: the pane must be re-measured for the shorter
+	// footer instead of keeping (c)'s height.
+	sized := notifications.NewModelWithStyles(m.styles)
+	sized, _ = sized.Update(m.contentViewSize())
+	sized = sized.SetFeed(feed)
+	wantHeight := lipgloss.Height(sized.View())
+
+	if wantHeight == staleHeight {
+		t.Fatalf("fixture is vacuous: the pane's height before (%d) and after (%d) the footer shrank are equal, so a missing resize is unobservable",
+			staleHeight, wantHeight)
+	}
+	if got := lipgloss.Height(m.notificationsView.View()); got != wantHeight {
+		t.Errorf("notifications pane rendered %d rows after the tab switch, want %d (contentViewSize height %d); it still has the %d rows it had while pipelines' detail view was open — the active view was not resized",
+			got, wantHeight, m.contentViewSize().Height, staleHeight)
+	}
+}
+
+// TestModel_NotificationsPane_ConstructedEvenWhenTabAbsent pins Decision 61's
+// second half: the pane is constructed unconditionally, so no zero-value
+// notifications.Model is ever reachable from a Model built by NewModel.
+//
+// The comment this replaces claimed the zero value is never reached. It is:
+// app.go's tea.WindowSizeMsg handler calls m.notificationsView.Update
+// unconditionally and ThemeSelectedMsg reconstructs the pane unconditionally.
+// And it is not inert — listview.Init does m.spinner.SetVisible(true) on a nil
+// *components.LoadingIndicator and panics. Nothing routes a message to a
+// disabled pane today, so this is latent rather than live, but tasks 15 and 16
+// deliver messages to this pane from the top-level switch and a future
+// implementer would have trusted that comment.
+//
+// Init() and SetFeed are asserted directly, without a recover wrapper
+// (convention 16): a helper that recovers would swallow the very panic this
+// test exists to guard and would pass against the unfixed code too.
+func TestModel_NotificationsPane_ConstructedEvenWhenTabAbsent(t *testing.T) {
+	cases := []struct {
+		name     string
+		cfg      *config.Config
+		provider provider.Provider
+	}{
+		{
+			name: "capability absent",
+			cfg: &config.Config{
+				Organization: "testorg", Projects: []string{"testproject"},
+				PollingInterval: 60, Theme: "dark",
+			},
+			provider: newNotificationIncapableProvider(),
+		},
+		{
+			name: "pane disabled",
+			cfg: &config.Config{
+				Organization: "testorg", Projects: []string{"testproject"},
+				PollingInterval: 60, Theme: "dark",
+				DisabledPanes: []string{"notifications"},
+			},
+			provider: newNotificationCapableProvider(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var client *azdevops.MultiClient
+			m := NewModel(tc.provider, client, tc.cfg, "dev", "")
+
+			if m.isTabEnabled(TabNotifications) {
+				t.Fatalf("precondition failed: TabNotifications should be absent for %q", tc.name)
+			}
+
+			// Both of these dereference the pane's *LoadingIndicator and panic
+			// on a zero-value notifications.Model.
+			if cmd := m.notificationsView.Init(); cmd == nil {
+				t.Error("notificationsView.Init() returned nil — the pane looks unconstructed")
+			}
+			m.notificationsView = m.notificationsView.SetFeed([]provider.Notification{
+				{
+					Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"},
+					Title:     "Something",
+					Reason:    provider.NotificationReasonMentioned,
+					UpdatedAt: time.Now(),
+				},
+			})
+		})
+	}
+}
+
+// TestModel_InitTabCmd_Notifications pins app.go's initTabCmd arm for the
+// notifications tab: without it the pane's Init is never dispatched, which is
+// silent today (the Fetch hook is task 11's stub) and a visible bug the moment
+// task 15 wires the real fetch. Asserted as a non-nil cmd, matching how the
+// sibling arms are observable.
+func TestModel_InitTabCmd_Notifications(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
+
+	if cmd := m.initTabCmd(TabNotifications); cmd == nil {
+		t.Error("initTabCmd(TabNotifications) = nil, want the pane's Init cmd — without the case arm the notifications pane is never initialised")
+	}
+	// Pipelines is the tab initTabCmd deliberately returns nil for (the poller
+	// populates it), so this confirms the assertion above is not just "every
+	// tab returns non-nil".
+	if cmd := m.initTabCmd(TabPipelines); cmd != nil {
+		t.Error("initTabCmd(TabPipelines) should stay nil (populated by the poller)")
 	}
 }
 
@@ -1932,9 +2467,20 @@ func TestModel_NotificationsTab_KeyDelegatesToNotificationsView(t *testing.T) {
 }
 
 // TestModel_TabID_NotificationsRoundTripsThroughState confirms
-// state.TabNotifications round-trips: switching to the notifications tab
-// persists it via the state store, and a fresh, equally-capable model
-// restores onto it via ApplyState (Decision 9).
+// state.TabNotifications round-trips through state.yaml *on disk*: switching to
+// the notifications tab persists it via the state store, the file that lands is
+// reloadable by state.Load, and a fresh, equally-capable model restores onto the
+// tab from that reloaded state (Decision 9).
+//
+// The disk hop is the point. store.Apply only mutates memory and schedules a
+// debounced flushAsync, so asserting store.State() — as this test originally
+// did — never serialises anything: renaming the on-disk TabID literal to
+// something else passed. Flush() forces the write and state.Load(path) reads it
+// back through the YAML marshal/unmarshal that the criterion ("round-trips
+// through state.yaml") actually names.
+//
+// This is state.Store on a t.TempDir() path, never config.Config.Save(), so
+// convention 17 is not at issue here.
 func TestModel_TabID_NotificationsRoundTripsThroughState(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -1944,7 +2490,8 @@ func TestModel_TabID_NotificationsRoundTripsThroughState(t *testing.T) {
 	}
 	var client *azdevops.MultiClient
 
-	store, err := state.NewStore(filepath.Join(t.TempDir(), "state.yaml"))
+	statePath := filepath.Join(t.TempDir(), "state.yaml")
+	store, err := state.NewStore(statePath)
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
@@ -1964,17 +2511,39 @@ func TestModel_TabID_NotificationsRoundTripsThroughState(t *testing.T) {
 	m = updated.(Model)
 
 	if got := store.State().ActiveTab; got != state.TabNotifications {
-		t.Fatalf("store ActiveTab = %v, want %v", got, state.TabNotifications)
+		t.Fatalf("in-memory store ActiveTab = %v, want %v", got, state.TabNotifications)
+	}
+
+	// Force the debounced write, then read the file back from scratch.
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	reloaded, err := state.Load(statePath)
+	if err != nil {
+		t.Fatalf("state.Load(%q) error = %v", statePath, err)
+	}
+	if reloaded.ActiveTab != state.TabNotifications {
+		t.Fatalf("reloaded-from-disk ActiveTab = %q, want %q", reloaded.ActiveTab, state.TabNotifications)
+	}
+	// Pin the serialised literal itself: state.TabID is a plain string with no
+	// load-time validation, so a renamed constant would round-trip happily
+	// while silently invalidating every existing user's state.yaml.
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", statePath, err)
+	}
+	if !strings.Contains(string(raw), "active_tab: notifications") {
+		t.Errorf("state.yaml should contain `active_tab: notifications`, got:\n%s", raw)
 	}
 
 	// A fresh model (simulating relaunch) with the same capability restores
-	// onto the persisted tab.
+	// onto the tab loaded from disk — not from the live in-memory store.
 	fresh := NewModel(newNotificationCapableProvider(), client, cfg, "dev", "")
 	fresh.width = 100
 	fresh.height = 30
-	fresh.ApplyState(store.State())
+	fresh.ApplyState(reloaded)
 
 	if fresh.activeTab != TabNotifications {
-		t.Errorf("after ApplyState, activeTab = %v, want TabNotifications", fresh.activeTab)
+		t.Errorf("after ApplyState(reloaded), activeTab = %v, want TabNotifications", fresh.activeTab)
 	}
 }

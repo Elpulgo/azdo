@@ -105,7 +105,8 @@ Keyboard shortcuts (in TUI):
     esc          Go back
 
   Tabs:
-    1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
+    1/2/3/4/5    Switch tabs (Notifications, Pull Requests, Work Items,
+                 Pipelines, Metrics) — only enabled tabs are numbered
     ←/→          Previous / next tab
 
   Actions:
