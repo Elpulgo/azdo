@@ -161,8 +161,14 @@ notifications:
 	if n.PollInterval != 120 {
 		t.Errorf("PollInterval = %d, want 120", n.PollInterval)
 	}
-	if len(cfg.Warnings) != 0 {
-		t.Errorf("Warnings = %v, want empty (both exclude_reasons entries valid)", cfg.Warnings)
+	// This fixture sets both only_configured_repos: true and a non-empty
+	// include_repos, which decision 50/51 (task 10) flags with exactly one
+	// warning -- include_repos is overridden, not intersected, and the user
+	// is told so rather than left to wonder why it had no effect. The
+	// exclude_reasons entries above are both valid, so this is the only
+	// warning expected.
+	if len(cfg.Warnings) != 1 {
+		t.Errorf("Warnings = %v, want exactly 1 entry (only_configured_repos + include_repos both set, decision 50)", cfg.Warnings)
 	}
 }
 
@@ -666,6 +672,157 @@ notifications:
 	}
 	if len(cfg.Notifications.ExcludeReasons) != 2 {
 		t.Errorf("ExcludeReasons = %v, want both entries kept", cfg.Notifications.ExcludeReasons)
+	}
+}
+
+// --- Task 10 / Decision 51: malformed exclude_repos / include_repos globs
+// are dropped at load with a warning naming the pattern and the key; a
+// whitespace-only entry is a hard Validate() error, extending the existing
+// empty-entry check rather than becoming a new warning class. ---
+
+func TestLoad_ExcludeRepos_BadPattern_DroppedWithWarning_ValidEntriesSurvive(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  exclude_repos:
+    - "owner/good"
+    - "[bad"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() should not fail on a malformed exclude_repos pattern: %v", err)
+	}
+
+	if len(cfg.Notifications.ExcludeRepos) != 1 || cfg.Notifications.ExcludeRepos[0] != "owner/good" {
+		t.Fatalf("ExcludeRepos = %v, want [owner/good] ([bad dropped, owner/good kept)", cfg.Notifications.ExcludeRepos)
+	}
+
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	msg := cfg.Warnings[0]
+	if !strings.Contains(msg, "[bad") {
+		t.Errorf("warning should name the offending pattern %q, got: %s", "[bad", msg)
+	}
+	if !strings.Contains(msg, "notifications.exclude_repos") {
+		t.Errorf("warning should name the key notifications.exclude_repos, got: %s", msg)
+	}
+}
+
+func TestLoad_IncludeRepos_BadPattern_DroppedWithWarning_ValidEntriesSurvive(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  include_repos:
+    - "[bad"
+    - "owner/good"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() should not fail on a malformed include_repos pattern: %v", err)
+	}
+
+	if len(cfg.Notifications.IncludeRepos) != 1 || cfg.Notifications.IncludeRepos[0] != "owner/good" {
+		t.Fatalf("IncludeRepos = %v, want [owner/good] ([bad dropped, owner/good kept)", cfg.Notifications.IncludeRepos)
+	}
+
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	msg := cfg.Warnings[0]
+	if !strings.Contains(msg, "[bad") {
+		t.Errorf("warning should name the offending pattern %q, got: %s", "[bad", msg)
+	}
+	if !strings.Contains(msg, "notifications.include_repos") {
+		t.Errorf("warning should name the key notifications.include_repos, got: %s", msg)
+	}
+}
+
+func TestLoad_OnlyConfiguredRepos_WithIncludeRepos_Warns(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  only_configured_repos: true
+  include_repos:
+    - "owner/repo"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	msg := cfg.Warnings[0]
+	if !strings.Contains(msg, "only_configured_repos") || !strings.Contains(msg, "include_repos") {
+		t.Errorf("warning should name both only_configured_repos and include_repos, got: %s", msg)
+	}
+	// include_repos itself is not mutated by the warning -- only ignored at
+	// filter time (decision 50), so it should still be present in the config.
+	if len(cfg.Notifications.IncludeRepos) != 1 || cfg.Notifications.IncludeRepos[0] != "owner/repo" {
+		t.Errorf("IncludeRepos = %v, want [owner/repo] (warned about, not dropped)", cfg.Notifications.IncludeRepos)
+	}
+}
+
+func TestLoad_WhitespaceOnlyGlobEntry_IsLoadError(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{"exclude_repos", "exclude_repos"},
+		{"include_repos", "include_repos"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			content := "organization: test-org\n" +
+				"projects:\n  - alpha\n" +
+				"polling_interval: 60\n" +
+				"theme: dark\n" +
+				"notifications:\n" +
+				"  " + tt.key + ":\n" +
+				"    - \"   \"\n"
+			if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := LoadFrom(configPath)
+			if err == nil {
+				t.Fatalf("LoadFrom() = nil error, want error for whitespace-only notifications.%s entry", tt.key)
+			}
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Errorf("error should mention %q, got: %s", tt.key, err.Error())
+			}
+		})
 	}
 }
 

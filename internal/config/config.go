@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -162,6 +163,33 @@ func acceptedNotificationReasons() []string {
 		names = append(names, r.String())
 	}
 	return names
+}
+
+// sanitizeRepoGlobs drops any pattern in patterns that path.Match rejects as
+// ErrBadPattern, appending a warning to *warnings naming the offending
+// pattern and the config key it came from (decision 51). This mirrors the
+// exclude_reasons sanitizer above: task 10's filter contract is "every
+// pattern it receives compiles", so a malformed glob is warned about and
+// removed here rather than left for match time, where a naive treatment of
+// the error could make the pattern match everything instead of nothing.
+//
+// The probe scope "owner/repo" is representative but arbitrary --
+// ErrBadPattern is a property of the pattern syntax alone (e.g. an
+// unterminated "["), not of what it is matched against.
+func sanitizeRepoGlobs(warnings *[]string, key string, patterns []string) []string {
+	if len(patterns) == 0 {
+		return patterns
+	}
+	sanitized := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if _, err := path.Match(p, "owner/repo"); errors.Is(err, path.ErrBadPattern) {
+			*warnings = append(*warnings, fmt.Sprintf(
+				"%s: dropping malformed pattern %q: %v", key, p, err))
+			continue
+		}
+		sanitized = append(sanitized, p)
+	}
+	return sanitized
 }
 
 // validDisabledPanes lists the pane names that can be disabled.
@@ -421,6 +449,23 @@ func LoadFrom(configPath string) (*Config, error) {
 		cfg.Notifications.ExcludeReasons = sanitized
 	}
 
+	// Decision 51: drop notifications.exclude_repos / include_repos entries
+	// that path.Match rejects as ErrBadPattern, same warn-don't-die channel
+	// as the exclude_reasons sanitizer above. An entry that is merely empty
+	// after trimming (e.g. "   ") is a valid-but-useless pattern, not a bad
+	// one -- Validate below rejects that case as a hard error instead.
+	cfg.Notifications.ExcludeRepos = sanitizeRepoGlobs(&cfg.Warnings, "notifications.exclude_repos", cfg.Notifications.ExcludeRepos)
+	cfg.Notifications.IncludeRepos = sanitizeRepoGlobs(&cfg.Warnings, "notifications.include_repos", cfg.Notifications.IncludeRepos)
+
+	// Decision 50: only_configured_repos overrides include_repos rather than
+	// intersecting with it, so a config setting both is not a conflict --
+	// but silently ignoring include_repos would be its own trap, hence the
+	// warning rather than staying quiet about it.
+	if cfg.Notifications.OnlyConfiguredRepos && len(cfg.Notifications.IncludeRepos) > 0 {
+		cfg.Warnings = append(cfg.Warnings,
+			"notifications.only_configured_repos is true — notifications.include_repos is ignored")
+	}
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -565,12 +610,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("notifications.poll_interval must be >= 0, got %d", c.Notifications.PollInterval)
 	}
 	for _, r := range c.Notifications.ExcludeRepos {
-		if r == "" {
+		if strings.TrimSpace(r) == "" {
 			return fmt.Errorf("notifications.exclude_repos entries must not be empty")
 		}
 	}
 	for _, r := range c.Notifications.IncludeRepos {
-		if r == "" {
+		if strings.TrimSpace(r) == "" {
 			return fmt.Errorf("notifications.include_repos entries must not be empty")
 		}
 	}
