@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/spf13/viper"
 )
 
@@ -26,17 +27,25 @@ type GitHubConfig struct {
 
 // Config holds the application configuration
 type Config struct {
-	Organization    string            `mapstructure:"organization"`
-	Project         string            `mapstructure:"project"` // deprecated: use Projects
-	Projects        []string          `mapstructure:"projects"`
-	DisplayNames    map[string]string `mapstructure:"-"`     // API name → display name
-	Terms           map[string]string `mapstructure:"terms"` // tab/term key → user-facing label
-	PollingInterval int               `mapstructure:"polling_interval"`
-	Theme           string            `mapstructure:"theme"`
-	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
-	Metrics         MetricsConfig     `mapstructure:"metrics"`
-	GitHub          GitHubConfig      `mapstructure:"github"`
-	configPath      string            // internal field to store config path for saving
+	Organization    string              `mapstructure:"organization"`
+	Project         string              `mapstructure:"project"` // deprecated: use Projects
+	Projects        []string            `mapstructure:"projects"`
+	DisplayNames    map[string]string   `mapstructure:"-"`     // API name → display name
+	Terms           map[string]string   `mapstructure:"terms"` // tab/term key → user-facing label
+	PollingInterval int                 `mapstructure:"polling_interval"`
+	Theme           string              `mapstructure:"theme"`
+	DisabledPanes   []string            `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
+	Metrics         MetricsConfig       `mapstructure:"metrics"`
+	GitHub          GitHubConfig        `mapstructure:"github"`
+	Notifications   NotificationsConfig `mapstructure:"notifications"`
+	// Warnings collects non-fatal load-time diagnostics — currently just
+	// decision 26's unrecognised-exclude_reasons entries. Populated by
+	// LoadFrom, never persisted (mapstructure:"-"), and never printed by this
+	// package (decision 46): a TUI has no safe place to write a line before
+	// or after Bubble Tea's alt-screen switch, so task 13 renders these in
+	// the notifications pane instead.
+	Warnings   []string `mapstructure:"-"`
+	configPath string   // internal field to store config path for saving
 }
 
 // HasAzure reports whether Azure DevOps is fully configured (org AND projects
@@ -74,11 +83,83 @@ type MetricsStates struct {
 	Closed       string `mapstructure:"closed"`
 }
 
+// NotificationsConfig holds the filters and cadence override for the
+// Notifications tab's merged inbox (spec 20260729-notif-p1-github.md, task
+// 9). Every field's zero value is the widest possible behaviour — whole
+// inbox, nothing filtered, pane on — per the spec's Config shape section.
+// There is deliberately no `enabled` key here: the pane disables the same
+// way every other default-on pane does, via `disabled_panes: notifications`
+// (decision 16).
+type NotificationsConfig struct {
+	// OnlyConfiguredRepos restricts the merged feed to repos listed under
+	// github.repos. False (default) shows the whole inbox, including rows
+	// from repos this config never built a client for (decisions 2, 3).
+	OnlyConfiguredRepos bool `mapstructure:"only_configured_repos"`
+	// ExcludeRepos is a glob list ("owner/repo" pattern, path.Match syntax —
+	// validated where it is used, task 10) of repos to hide from the feed.
+	// Empty (default) excludes nothing.
+	ExcludeRepos []string `mapstructure:"exclude_repos"`
+	// IncludeRepos is a glob list narrowing the feed to matching repos.
+	// Empty (default) narrows nothing.
+	IncludeRepos []string `mapstructure:"include_repos"`
+	// ExcludeReasons lists the neutral NotificationReason string names
+	// (decision 19, e.g. "subscribed", "ci_activity") to trim from the
+	// merged feed client-side (task 10). Empty (default) filters no reason.
+	//
+	// This slice is sanitized during LoadFrom per decision 26: any entry
+	// provider.ParseNotificationReason does not recognise (a typo, or the
+	// reserved "unknown") is removed here and reported via Config.Warnings
+	// instead of being kept around for task 10 to reinterpret. That keeps
+	// task 10's contract simple — every string surviving in this slice is
+	// guaranteed parseable — while still leaving "an unrecognised reason is
+	// only filtered when `other` is listed explicitly" satisfiable, since a
+	// literal "other" entry is recognised and is never removed.
+	ExcludeReasons []string `mapstructure:"exclude_reasons"`
+	// UnreadOnly filters the merged feed to unread rows only, client-side.
+	// The fetch itself always requests the full inbox regardless of this
+	// setting (decision 12); false (default) shows both read and unread.
+	UnreadOnly bool `mapstructure:"unread_only"`
+	// ParticipatingOnly narrows the server-side fetch to GitHub's
+	// "participating" bundle — roughly everything except `subscribed` — and
+	// composes with, rather than replaces, ExcludeReasons (decision 10).
+	// False (default) fetches the whole inbox.
+	ParticipatingOnly bool `mapstructure:"participating_only"`
+	// SinceDays bounds the feed to notifications updated within the last N
+	// days. Zero (default) means no bound.
+	SinceDays int `mapstructure:"since_days"`
+	// MaxItems caps the number of notifications returned across all fetched
+	// pages, applied after the newest-first sort (decision 44). Zero
+	// (default) means no cap.
+	MaxItems int `mapstructure:"max_items"`
+	// PollInterval overrides the global polling_interval for the
+	// notifications poller only. Zero (default) falls back to the backend's
+	// X-Poll-Interval hint when present, else the global polling_interval
+	// (decision 8).
+	PollInterval int `mapstructure:"poll_interval"`
+}
+
+// acceptedNotificationReasons returns the eleven configurable
+// NotificationReason string names, in enum declaration order, for use in
+// decision 26's unrecognised-exclude_reasons warning message. Generated from
+// provider.NotificationReason.String() rather than a second hardcoded table
+// — provider is the single source of truth for the enum (decision 19), and
+// a duplicated string list here would silently drift from it.
+// NotificationReasonUnknown is deliberately excluded: it is not a
+// configurable value (see spec's Config shape section).
+func acceptedNotificationReasons() []string {
+	names := make([]string, 0, 11)
+	for r := provider.NotificationReasonReviewRequested; r <= provider.NotificationReasonOther; r++ {
+		names = append(names, r.String())
+	}
+	return names
+}
+
 // validDisabledPanes lists the pane names that can be disabled.
 var validDisabledPanes = map[string]bool{
-	"pullrequests": true,
-	"pipelines":    true,
-	"workitems":    true,
+	"pullrequests":  true,
+	"pipelines":     true,
+	"workitems":     true,
+	"notifications": true,
 }
 
 // IsPaneEnabled returns true if the given pane is not in the disabled list.
@@ -230,6 +311,15 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
 	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
 	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
+	v.SetDefault("notifications.only_configured_repos", false)
+	v.SetDefault("notifications.exclude_repos", []string{})
+	v.SetDefault("notifications.include_repos", []string{})
+	v.SetDefault("notifications.exclude_reasons", []string{})
+	v.SetDefault("notifications.unread_only", false)
+	v.SetDefault("notifications.participating_only", false)
+	v.SetDefault("notifications.since_days", 0)
+	v.SetDefault("notifications.max_items", 0)
+	v.SetDefault("notifications.poll_interval", 0)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -294,6 +384,26 @@ func LoadFrom(configPath string) (*Config, error) {
 				cfg.DisabledPanes = append(cfg.DisabledPanes, p)
 			}
 		}
+	}
+
+	// Decision 26: sanitize notifications.exclude_reasons. An entry
+	// provider.ParseNotificationReason does not recognise (a typo, or the
+	// reserved "unknown") must never silently act as "other" — it is
+	// reported via cfg.Warnings and dropped from the slice here, so task 10
+	// never has to reinterpret a bad value. This must never be a hard
+	// config error: a typo cannot be allowed to stop the app from starting.
+	if len(cfg.Notifications.ExcludeReasons) > 0 {
+		sanitized := make([]string, 0, len(cfg.Notifications.ExcludeReasons))
+		for _, raw := range cfg.Notifications.ExcludeReasons {
+			if _, ok := provider.ParseNotificationReason(raw); ok {
+				sanitized = append(sanitized, raw)
+				continue
+			}
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
+				"notifications.exclude_reasons: unrecognised value %q — accepted values: %s",
+				raw, strings.Join(acceptedNotificationReasons(), ", ")))
+		}
+		cfg.Notifications.ExcludeReasons = sanitized
 	}
 
 	// Validate configuration
@@ -398,14 +508,56 @@ func (c *Config) Validate() error {
 
 	for _, p := range c.DisabledPanes {
 		if !validDisabledPanes[p] {
-			return fmt.Errorf("invalid disabled pane %q: only 'pullrequests', 'pipelines' and 'workitems' can be disabled", p)
+			return fmt.Errorf("invalid disabled pane %q: only 'pullrequests', 'pipelines', 'workitems' and 'notifications' can be disabled", p)
 		}
 	}
 
 	// At least one pane must remain enabled — otherwise the app would start
 	// with no navigable tabs.
-	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") {
-		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled")
+	//
+	// Notifications counts as a remaining pane only when a
+	// notification-capable backend will exist — in phase 1 that means
+	// HasGitHub() (decision 47). Decision 11 hides the notifications tab on
+	// *capability*, not on config, so a naive four-way guard would let an
+	// Azure-only config with the other three panes disabled pass here and
+	// then start with zero navigable tabs, since no backend implements
+	// NotificationSource to show the notifications tab either. Metrics
+	// cannot rescue this: it is separately gated on metrics.enabled.
+	//
+	// PHASE-1-ONLY: this HasGitHub() coupling is specific to phase 1, where
+	// GitHub is the only backend capable of notifications. Once phase 2
+	// makes Azure capable too, this condition must widen to "any configured
+	// backend" and the special case disappears.
+	notificationsCounts := c.IsPaneEnabled("notifications") && c.HasGitHub()
+	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") && !notificationsCounts {
+		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled " +
+			"(or leave 'notifications' enabled with a GitHub backend configured — github.repos — since notifications requires GitHub in phase 1)")
+	}
+
+	// Notifications validation. There is no `notifications.enabled` guard
+	// (decision 16) — the block is always present, if only at its all-zero
+	// default, so these checks must hold even when the user never wrote a
+	// `notifications:` section at all. That default (0 for each of the
+	// three numeric fields, no entries in the two glob lists) already
+	// satisfies every check below, so an absent block is always valid.
+	if c.Notifications.SinceDays < 0 {
+		return fmt.Errorf("notifications.since_days must be >= 0, got %d", c.Notifications.SinceDays)
+	}
+	if c.Notifications.MaxItems < 0 {
+		return fmt.Errorf("notifications.max_items must be >= 0, got %d", c.Notifications.MaxItems)
+	}
+	if c.Notifications.PollInterval < 0 {
+		return fmt.Errorf("notifications.poll_interval must be >= 0, got %d", c.Notifications.PollInterval)
+	}
+	for _, r := range c.Notifications.ExcludeRepos {
+		if r == "" {
+			return fmt.Errorf("notifications.exclude_repos entries must not be empty")
+		}
+	}
+	for _, r := range c.Notifications.IncludeRepos {
+		if r == "" {
+			return fmt.Errorf("notifications.include_repos entries must not be empty")
+		}
 	}
 
 	if c.Metrics.Enabled {
