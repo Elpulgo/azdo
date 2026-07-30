@@ -736,25 +736,6 @@ func (m Model) cycleReasonFilter() Model {
 	return m.setItemsPreservingSelection()
 }
 
-// setItemsPreservingSelection hands the current override-applied,
-// `f`-filtered view to listview.SetItems (decision 54) and restores the
-// cursor onto the *same item* it was on before, by Identity.SameItem
-// (decision 55).
-//
-// listview.setColumnsAndRows restores the cursor purely positionally — it
-// saves table.Cursor() and re-applies it clamped to the new row count — so
-// narrowing the feed silently moves the selection to a different row.
-// Decision 45 canonicalised the merge's sort order to protect exactly this
-// index-held cursor; an in-pane filter reintroduces the hazard from the other
-// direction, and task 14's `d` would then mark the wrong row done. This same
-// call is what applies a fresh `u`/`d` override immediately (the "optimistic"
-// half of task 14) and what re-applies one after a poll (SetFeed) or a
-// rollback (dropOverride) — a single call site for every path that changes
-// the visible row set, per convention 7.
-//
-// When the previously selected item did not survive the filter there is
-// nothing to restore to, and listview's clamp is the correct behaviour — so
-// this deliberately leaves it alone in that case.
 // refreshItems re-derives the visible rows from feed+overrides, unless the pane
 // is currently showing listview's error state.
 //
@@ -784,6 +765,27 @@ func (m Model) refreshItems() Model {
 	return m.setItemsPreservingSelection()
 }
 
+// setItemsPreservingSelection hands the current override-applied,
+// `f`-filtered view to listview.SetItems (decision 54) and restores the
+// cursor onto the *same item* it was on before, by Identity.SameItem
+// (decision 55).
+//
+// listview.setColumnsAndRows restores the cursor purely positionally — it
+// saves table.Cursor() and re-applies it clamped to the new row count — so
+// narrowing the feed silently moves the selection to a different row.
+// Decision 45 canonicalised the merge's sort order to protect exactly this
+// index-held cursor; an in-pane filter reintroduces the hazard from the other
+// direction, and task 14's `d` would then mark the wrong row done. This same
+// call is what applies a fresh `u`/`d` override immediately (the "optimistic"
+// half of task 14) and what re-applies one after a poll (SetFeed) or a
+// rollback (dropOverride) — a single call site for every path that changes
+// the visible row set, per convention 7.
+//
+// When the previously selected item did not survive the filter there is
+// nothing to restore to, and listview's clamp is the correct behaviour — so
+// this deliberately leaves it alone in that case. TestMarkDone_CursorLandsOnA
+// ConcreteRow pins the resulting positions; the restore itself is pinned by
+// TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives.
 func (m Model) setItemsPreservingSelection() Model {
 	prev, hadSelection := m.selectedIdentity()
 

@@ -1841,3 +1841,47 @@ func TestMarkResult_DoesNotClearAFailedFetchsErrorState(t *testing.T) {
 		t.Errorf("after a mark result landed on a failed fetch, the pane claims the inbox is clear — the fetch actually failed; view:\n%s", view)
 	}
 }
+
+// TestSetFeed_PrunesExpiredOverrides_ButKeepsLiveOnes pins prunedOverrides
+// against being deleted outright, which the two poll-debounce tests do not
+// catch: they kill the *inverted* form (dropping live entries) because that
+// resurrects a flicker, but a no-op prunedOverrides is behaviourally invisible
+// to them — visibleItems and markDone both skip an expired entry anyway, so
+// nothing on screen depends on the map having been swept. The only observable
+// is the map itself, hence the direct read of m.overrides (same package).
+//
+// Absent this, the map grows once per u/d for the life of the session, since
+// decision 65 keeps a *successful* override's entry and only a failure removes
+// one. Both halves are asserted: the expired entry goes, the live one stays —
+// a prune that clears the map wholesale would pass the first check alone and is
+// exactly the mutation that reintroduces the flicker the debounce window exists
+// to prevent.
+func TestSetFeed_PrunesExpiredOverrides_ButKeepsLiveOnes(t *testing.T) {
+	marker := &fakeMarker{}
+	old := mkNotification("1", "owner/repo", "stale mark", provider.NotificationReasonReviewRequested, false, fixedNow)
+	fresh := mkNotification("2", "owner/repo", "recent mark", provider.NotificationReasonMentioned, false, fixedNow)
+	m := newTriagePane(t, marker, []provider.Notification{old, fresh})
+
+	// Mark row 1 read at fixedNow, then row 2 read a full window later, so the
+	// first entry is expired and the second is live at the moment SetFeed runs.
+	m, cmd := m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+
+	m.now = func() time.Time { return fixedNow.Add(markDebounceWindow + time.Second) }
+	m.list.SetCursor(1)
+	m, cmd = m.Update(keyRune('u'))
+	m = runMarkCmd(t, m, cmd)
+
+	if len(m.overrides) != 2 {
+		t.Fatalf("precondition: overrides = %d, want 2 (one expired, one live) before SetFeed", len(m.overrides))
+	}
+
+	m = m.SetFeed([]provider.Notification{old, fresh})
+
+	if _, ok := m.overrides[keyOf(old.Identity)]; ok {
+		t.Errorf("the expired override for %q survived SetFeed — prunedOverrides is not sweeping, so the map grows for the life of the session", old.Identity.ID)
+	}
+	if _, ok := m.overrides[keyOf(fresh.Identity)]; !ok {
+		t.Errorf("the LIVE override for %q was pruned — a poll reporting stale unread will now flicker the row back", fresh.Identity.ID)
+	}
+}

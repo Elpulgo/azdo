@@ -2861,26 +2861,79 @@ func TestModel_NotificationMarker_IsWiredToThePane(t *testing.T) {
 		t.Fatal("notificationMarker returned nil for a capable provider — the pane would silently no-op on u/d")
 	}
 
-	// And the pane must actually have been handed one: drive d and require the
-	// marker to be called. A pane built with a nil marker returns no cmd.
-	m.notificationsView = notifications.NewModelWithStyles(styles.DefaultStyles(), marker).
-		SetFeed([]provider.Notification{{
-			Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
-			Title:     "wired",
-			Reason:    provider.NotificationReasonMentioned,
-			UpdatedAt: time.Now(),
-		}})
+	assertPaneHasAMarker(t, m, "NewModel")
+
+	// The marker stub is unused on the NewModel path on purpose: substituting a
+	// pane built around it is exactly what made the earlier version of this
+	// test vacuous. It stays only so the two nil-argument sites can be checked
+	// by the same helper without it.
+	_ = marker
+}
+
+// assertPaneHasAMarker drives `d` against the pane the Model already holds and
+// requires the row to disappear. It never replaces m.notificationsView — the
+// whole point is to exercise the pane that app *built*, so passing nil for
+// notificationMarker(...) at a construction site is caught. Feeding the
+// existing pane via SetFeed supplies data without discarding its marker.
+//
+// The discriminator is the row vanishing rather than the marker stub being
+// called, because on this path the marker is whatever app resolved from the
+// real provider and the test has no handle on it. markDone's nil-marker guard
+// (internal/ui/notifications/list.go) returns `m, nil` before recording any
+// override, so a markerless pane leaves the row on screen; a wired one hides
+// it optimistically. Rendered through View() after a WindowSizeMsg per
+// convention 8.
+func assertPaneHasAMarker(t *testing.T, m Model, site string) {
+	t.Helper()
+
+	const title = "MARKER-WIRED"
+	m.notificationsView = m.notificationsView.SetFeed([]provider.Notification{{
+		Identity:  provider.Identity{Kind: provider.KindGitHub, Scope: "owner/repo", ScopeDisplay: "owner/repo", ID: "1"},
+		Title:     title,
+		Reason:    provider.NotificationReasonMentioned,
+		UpdatedAt: time.Now(),
+	}})
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(Model)
+	if !strings.Contains(m.View(), title) {
+		t.Fatalf("%s: row %q not rendered before d — fixture is wrong, not the wiring", site, title)
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = next.(Model)
+
+	if strings.Contains(m.View(), title) {
+		t.Errorf("%s: row %q still visible after d — the pane was built with a nil marker, so u/d silently no-op", site, title)
+	}
+	if cmd == nil {
+		t.Errorf("%s: d produced no cmd — the pane has no marker", site)
+	}
+}
+
+// TestModel_ThemeChange_KeepsTheMarkerWiredToTheRebuiltPane covers the second
+// construction site. ThemeSelectedMsg rebuilds notificationsView from scratch,
+// so dropping the marker there kills u/d permanently after the user picks a
+// theme — a state no test reached while only NewModel's site was covered.
+func TestModel_ThemeChange_KeepsTheMarkerWiredToTheRebuiltPane(t *testing.T) {
+	// NewWithPath + t.TempDir per convention 17, and here it is load-bearing
+	// twice over. The handler's first statement is m.config.UpdateTheme, which
+	// calls Save(); with a bare &config.Config{} literal configPath is "" and
+	// Save() resolves GetPath() — the developer's real ~/.config/azdo-tui/
+	// config.yaml. It also makes the test vacuous: Save() fails, the handler
+	// takes its early `return m, nil`, and the pane rebuild below is never
+	// reached, so the nil-marker mutation at that site survives. The sibling
+	// TestModel_ThemeSwitch_* tests already do it this way.
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
+	var client *azdevops.MultiClient
+
+	m := NewModel(provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil)), client, cfg, "dev", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	if cmd == nil {
-		t.Fatal("d produced no cmd — the pane has no marker")
-	}
-	if msg := cmd(); msg == nil {
-		t.Fatal("the mark cmd produced no message")
-	}
-	if len(marker.doneCalls) != 1 {
-		t.Errorf("MarkDone calls = %d, want 1 — the marker the pane was built with was never called", len(marker.doneCalls))
-	}
+	updated, _ = m.Update(components.ThemeSelectedMsg{ThemeName: "catppuccin"})
+	m = updated.(Model)
+
+	assertPaneHasAMarker(t, m, "ThemeSelectedMsg")
 }
