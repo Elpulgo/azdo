@@ -201,7 +201,7 @@ accepted value.
 - [x] 17. Help-modal section + `RemoveSection` wiring when the pane is disabled (blocked by: 12). → done: section lists `u`/`d`/`o`/`f`; disabling the pane removes it; the tabs binding line reflects the new order
 - [x] 18. `config`: regression test pinning `Save()` preservation — seed a file containing `metrics:` and `notifications:`, change only the theme, assert both blocks survive with every value intact (blocked by: 9). → done: the new test fails if `ReadInConfig()` is removed from `Save()` (verify by deleting it locally, watching the test fail, restoring it); fixtures go through `LoadFrom(<t.TempDir() path>)`, never a bare `Config` literal (convention 17). Also pinned: a key the `Config` struct does not model at all survives — the general form of the requirement, and the only assertion here that can see such a key, since every other check reads the reloaded typed `Config` and is blind to sections outside it
 - [x] 19. Token-scope error state (decision 17) (blocked by: 13,18). → done: a 403 missing-scope response renders in-view naming the `notifications` scope and how to add it; 401-expired and generic failures render differently; the disable action writes `disabled_panes` via `Config.Save()` behind a confirm, on a key that is not `d` or `u`; its test uses a temp-path config (convention 17)
-- [ ] 20. Docs: README (required `notifications` scope, upgrade note for existing tokens, how to disable), Architecture.md, config.yaml.example, FAQ (blocked by: 17,19). → done: every config key from decision 19 is documented; the required token scope and the upgrade path for existing tokens are stated; `exclude_reasons` values are documented as lowercase snake_case and **case-sensitive** (`Subscribed` warns and is dropped — viper lowercases config *keys*, never list values), `unknown` is documented as reserved and not accepted, and `since_days` is named as the knob for very large inboxes per decision 48. **Do not reproduce the Config-shape arrow chain as if it were a pipeline** — measured, all five knobs are independent row predicates and every stage order is observationally identical, so "precedence" describes exactly one thing: the two *selection* knobs override each other (`only_configured_repos` wins, decision 50). `exclude_repos`/`exclude_reasons`/`unread_only` are an order-independent AND and must be documented as such
+- [x] 20. Docs: README (required `notifications` scope, upgrade note for existing tokens, how to disable), Architecture.md, config.yaml.example, FAQ (blocked by: 17,19). → done: every config key from decision 19 is documented; the required token scope and the upgrade path for existing tokens are stated; `exclude_reasons` values are documented as lowercase snake_case and **case-sensitive** (`Subscribed` warns and is dropped — viper lowercases config *keys*, never list values), `unknown` is documented as reserved and not accepted, and `since_days` is named as the knob for very large inboxes per decision 48. **Do not reproduce the Config-shape arrow chain as if it were a pipeline** — measured, all five knobs are independent row predicates and every stage order is observationally identical, so "precedence" describes exactly one thing: the two *selection* knobs override each other (`only_configured_repos` wins, decision 50). `exclude_repos`/`exclude_reasons`/`unread_only` are an order-independent AND and must be documented as such
 - [ ] 21. Fold phase-1 answers into `20260729-notif-p2-azdo.md` "Inputs from Phase 1" (blocked by: 20). → done: no `TBD` remains in that section
 
 ## Validation: `ui/notifications` listview pane (task 11) — 2026-07-30, commit `040911d`
@@ -1433,3 +1433,25 @@ Behaviours driven end-to-end rather than taken on report:
   top-level switch (`q`/`ctrl+c`/`?`/`t`/`1`-`5`/`left`/`right`).
 - **All six error renders are pairwise distinct**, and the scope banner appears on exactly the two
   non-rate-limited 403 variants (classic-with-headers and fine-grained-without).
+
+| 86 | `runHelp()` was not the only place the GitHub token scopes are listed | **`runAuthGitHub()` carries a second, near-identical block — both must name `notifications`.** Found by the task-20 implementer and fixed by the driver | `runAuthGitHub()` is the interactive setup wizard: it is what a user reads *while creating the token*. Leaving it stale is worse than the `runHelp()` omission task 20 was scoped to fix — a user would follow the wizard, mint a token without the scope, and land directly on the 403 that the whole of task 19 exists to explain. Documenting a requirement in the reference text while the setup flow still teaches the old list is not "documented" |
+
+## Review feedback: docs (task 20) — 2026-07-30
+
+Verification by the loop driver. Documentation-only task; the sole production change is the token-scope
+list in `cmd/azdo-tui/main.go`.
+
+| # | Finding | Severity | Outcome |
+|---|---|---|---|
+| 1 | `runAuthGitHub()`'s second scope block also omitted `notifications` — correctly flagged by the implementer as out of its stated scope, rather than silently papered over | 🟡 | Fixed by the driver; decision 86 |
+
+Claims checked against source rather than against the spec's own prose:
+
+| Claim | Verified against |
+|---|---|
+| Nine `notifications.*` keys, no more and no fewer | `NotificationsConfig`'s `mapstructure` tags — documented set matches exactly. The spec's own prose named only six; `include_repos`, `participating_only` and `max_items` were missing from it, and the implementer went to the struct |
+| The eleven `exclude_reasons` values | `acceptedNotificationReasons()` executed directly: `review_requested mentioned assigned authored commented state_changed ci_activity security_alert approval_requested subscribed other` |
+| The global `f` help row is quoted verbatim | Byte-identical to `internal/ui/components/help.go:94` |
+| Notifications is tab 1 | `buildEnabledTabs` registers it first (decision 6) |
+| A 403 is not always a scope problem | README states the rate-limit case explicitly (decision 83) — the failure mode this task was most at risk of introducing |
+| `x`,`x` disable and its next-restart timing | Documented in both README and FAQ, without implying the tab vanishes immediately (decision 61) |

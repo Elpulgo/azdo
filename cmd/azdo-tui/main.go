@@ -88,11 +88,13 @@ Required Azure DevOps PAT scopes:
 
 Required GitHub token scopes:
   Classic PAT:   repo          (private repos) or public_repo (public only)
+                 notifications (Notifications tab: list, mark read, mark done)
   Fine-grained:  Metadata      (read)
                  Contents      (read)
                  Issues        (read & write)
                  Pull requests (read & write)
                  Actions       (read)
+                 Notifications (account permission, Notifications tab)
   Note: resolving PR comment threads requires a classic 'repo' PAT;
         fine-grained tokens are commonly rejected for that operation.
 
@@ -223,11 +225,13 @@ func runAuthGitHub(store *config.KeyringStore) error {
 	fmt.Println()
 	fmt.Println(`Required token scopes:
   Classic PAT:  repo            (private repos) or public_repo (public only)
+                notifications   (Notifications tab: list, mark read, mark done)
   Fine-grained: Metadata        (read)
                 Contents        (read)
                 Issues          (read & write)
                 Pull requests   (read & write)
-                Actions         (read)`)
+                Actions         (read)
+                Notifications   (account permission, Notifications tab)`)
 	fmt.Println()
 
 	var model patinput.Model

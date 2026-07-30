@@ -17,6 +17,13 @@ organization: your-org-name
 projects:
   - your-project-name
 
+# GitHub (optional; required only if you use GitHub, including the
+# Notifications tab below). One or more "owner/repo" slugs enables the
+# GitHub backend.
+# github:
+#   repos:
+#     - your-org/your-repo
+
 # Polling interval in seconds (optional, default: 60)
 polling_interval: 60
 
@@ -25,6 +32,11 @@ polling_interval: 60
 # Custom themes: Place JSON theme files in ~/.config/azdo-tui/themes/
 # Example: If you have ~/.config/azdo-tui/themes/mytheme.json, use: theme: mytheme
 theme: dark
+
+# Disable specific panes (optional, comma-separated).
+# Valid values: pullrequests, pipelines, workitems, notifications.
+# At least one pane must remain enabled.
+# disabled_panes: pipelines,workitems
 
 # Tab labels (optional). Override the name shown for any tab — in both the tab
 # bar and the help dialog. Keys are lowercase snake_case and must match exactly
@@ -35,6 +47,45 @@ theme: dark
 #   work_items: Tasks
 #   pipelines: Builds
 #   metrics: Dashboard
+
+# Notifications tab (GitHub only). On by default whenever github.repos is
+# set — there is deliberately no notifications.enabled key; use
+# disabled_panes above (disabled_panes: notifications) to turn it off
+# instead. Every key is optional and defaults to the widest possible
+# behaviour (whole inbox, nothing filtered). Takes effect on next restart.
+#
+# notifications:
+#   only_configured_repos: false # narrow the feed to github.repos; wins over
+#                                # include_repos when both are set (include_repos
+#                                # is then ignored, with a startup warning)
+#   include_repos: []           # glob list (path.Match syntax, e.g. "your-org/*")
+#                                # narrowing the feed to matching repos; "*" does
+#                                # not cross "/" -- write "*/*" to mean "everything"
+#   exclude_repos: []           # glob list of repos to hide from the feed
+#   exclude_reasons: []         # drop rows by *why* they're in your inbox; accepts:
+#                                #   review_requested, mentioned, assigned, authored,
+#                                #   commented, state_changed, ci_activity,
+#                                #   security_alert, approval_requested, subscribed,
+#                                #   other
+#                                # lowercase snake_case, case-sensitive ("Subscribed"
+#                                # warns and is dropped). "unknown" is reserved and
+#                                # not accepted. exclude_repos, exclude_reasons and
+#                                # unread_only are an order-independent AND -- each
+#                                # only ever removes rows.
+#   unread_only: false          # show only unread rows (client-side; the fetch
+#                                # itself always requests the whole inbox)
+#   participating_only: false   # narrow the server-side fetch to GitHub's
+#                                # "participating" bundle (roughly everything
+#                                # except subscribed); composes with exclude_reasons
+#   since_days: 0                # only show notifications updated in the last N
+#                                # days; 0 = no bound. The knob to reach for on a
+#                                # very large inbox -- it's the one filter that
+#                                # actually reduces what's fetched from GitHub.
+#   max_items: 0                 # cap the number of notifications returned,
+#                                # applied after the newest-first sort; 0 = no cap
+#   poll_interval: 0             # override polling_interval for notifications only,
+#                                # in seconds; 0 = fall back to GitHub's
+#                                # X-Poll-Interval hint, else polling_interval
 
 # Metrics tab (opt-in, management dashboard). Disabled unless enabled: true.
 # When enabled a fourth tab surfaces per-user WIP, stuck-item flags, and
