@@ -720,3 +720,92 @@ Verified sound, not to be re-litigated:
 unreachable through the UI and is untested. It is a genuine double-fire guard for a future
 direct caller, so it stays, but it is dead code by the same standard decision 64 applied to
 the `Loading()` conjunct — worth a pin if task 16 or 19 ever drives `markDone` directly.
+
+## Validation: `u`/`d` mark-read/mark-done (task 14) — re-check, 2026-07-30, commit `5f7a198`
+
+**Verdict: COMPLETE.** Decision 65's fix is in place and, unlike `3e0461c`, it is pinned by
+tests that can fail. All six prescribed mutations die.
+
+Gates (all green): `go build ./...`, `go vet ./...`, `go test -count=1 ./...` (no failures),
+`gofmt -l` clean on the four files this task touched (`internal/app/app.go`,
+`internal/app/app_test.go`, `internal/ui/notifications/list.go`,
+`internal/ui/notifications/list_test.go`). The ~23 pre-existing gofmt-dirty files inherited
+from `main` are out of scope and were not counted against this task.
+
+Mutation ledger — 6 prescribed, 6 killed, 0 survivors:
+
+| # | Mutation | Result | Killed by |
+|---|----------|--------|-----------|
+| 1 | `handleMarkResult` success reverted to `if res.err == nil { return m }` (the original 🔴) | **dies** | `TestMarkDone_Success_SurvivesWindowExpiry_WithoutPoll`, `TestMarkRead_Success_SurvivesWindowExpiry_WithoutPoll` |
+| 2 | `handleMarkResult` commits unconditionally, ignoring `res.err` | **dies** | `TestMarkRead_Failure_RollsBackOptimisticUpdate`, `TestMarkDone_Failure_RestoresRow`, `TestMarkDone_Failure_ThenWindowExpiry_DoesNotResurrectTwice` |
+| 3 | `commitOverride` matches every feed row (`keyOf(n.Identity) == key` guard deleted) | **dies** | `TestMarkDone_Success_RemovesRowAndStaysRemoved`, both `..._SurvivesWindowExpiry_WithoutPoll` tests |
+| 4 | `commitOverride` also drops the override after committing | **dies** | `TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack`, `TestMarkDone_PollWithinDebounceWindow_RowStaysHidden` — i.e. exactly the poll-debounce pair decision 65 says must break |
+| 5a | `markDebounceWindow = 0` | **dies** | 7 tests, incl. both optimistic-update paths and both poll-within-window tests |
+| 5b | `markDebounceWindow = 24 * time.Hour` | **dies** | `TestMarkRead_PollAfterDebounceWindowExpires_TrustsPoll` |
+| 6 | `dropOverride` made a no-op | **dies** | the three failure/rollback tests |
+
+Note on 5b: it is killed by a single test, because the mark-done-side expiry fixtures derive
+their clock advance from `markDebounceWindow + time.Second` and so move with the constant.
+`TestMarkRead_PollAfterDebounceWindowExpires_TrustsPoll` hardcodes `+10 * time.Minute`, which
+is what makes it a real bound. That test is also no longer the ambiguous one the review
+flagged: now that success commits into `m.feed`, "the poll won" and "the feed was never
+updated" have different observable outcomes, so it discriminates.
+
+Criterion-by-criterion against the task line as amended by decision 65:
+
+- `u` issues **exactly one** mark-read for the cursor row's own `Identity`, applied
+  optimistically inside `Update` before the `tea.Cmd` runs — pinned, incl. the wrong-row
+  case (`TestMarkRead_ExactIdentity_SelectsRowUnderCursor_NotFirstRow`) and one-way-ness
+  from both the override and the feed (`..._AlreadyRead_IsOneWay_NoSecondCall`,
+  `..._AlreadyReadInFeed_NeverCallsMarkRead`).
+- Rollback on API failure for both `u` and `d`, by dropping the override rather than
+  re-inserting a row — pinned; mutation 6 confirms.
+- Stale-`unread` poll inside the window does not flicker the row back, for both kinds —
+  pinned; mutations 4 and 5a confirm.
+- Decision 65's commit-into-the-feed **and** keep-the-override: both halves pinned
+  independently (mutation 1 kills the missing commit, mutation 4 kills the missing keep),
+  asserted for `u` and `d` separately as the task requires, plus
+  `TestMarkDone_Failure_ThenWindowExpiry_DoesNotResurrectTwice` pinning that the commit is
+  success-only.
+- `TestMarkRead_Success_SurvivesWindowExpiry_WithoutPoll` also asserts the *untouched*
+  neighbour row stays unread, which is the in-test guard against a loose commit match —
+  independent of mutation 3.
+- `commitOverride` allocates a fresh `next` slice, so the caller's `SetFeed` slice and its
+  backing array are never mutated (decision 52's non-aliasing rule holds through the new
+  path too).
+- `canTriage` gates `u`/`d` on the empty, error and capability-unsupported states, and a nil
+  marker is a no-op — all four pinned.
+
+Conventions (`## Active` only, 1–12 and 17):
+
+- **7** satisfied structurally: every path that changes the visible row set — including the
+  new `commitOverride` — routes through the single `setItemsPreservingSelection` →
+  `listview.SetItems` call site, so `ToColumns` and `ToRows` always receive the same slice.
+- **10** satisfied: `gofmt -l` clean on all four touched files.
+- **17** trivially satisfied and confirmed, not assumed: the task-14 diff contains no
+  reference to `internal/config`, no `Config.Save()`, no `GetPath()`, no `os.WriteFile`, no
+  `HOME`/`TempDir` manipulation. Nothing can reach a real user config path.
+- 1–6, 8, 9, 11, 12 are not engaged by this diff (no new neutral type, no `Provider` scope
+  method, no mapper enumeration, no glyph/style change, no config keys, no id guard, no
+  ignore patterns).
+
+🟡 **Observations, not blockers** (neither is a task-14 acceptance criterion):
+
+1. `app.notificationMarker` is unpinned. Mutating it to `return nil` — the exact
+   nil-marker-forever state decision 62 caught for `main.go`'s wiring — leaves the whole
+   suite green, because every `internal/app` notifications test constructs the pane with a
+   `nil` marker and no test asserts the pane received the provider. It is a *test* gap, not
+   a live bug (the wiring in `NewModel` and the `ThemeSelectedMsg` branch is correct), but
+   it is the same class decision 62 documents. Worth a pin when task 15 or 16 next touches
+   `app.go`.
+2. Convention 8: no task-14 test drives `View()`. The mark paths share
+   `setItemsPreservingSelection` with the `f` cycle, whose collapse test *does* render
+   through `View()` after a `WindowSizeMsg`, so the column/cell invariant is covered by
+   proxy — but a `d` that collapses a multi-repo feed to a single repo is not itself rendered.
+
+Process note: another agent was concurrently editing `internal/config` in this worktree
+during validation (`internal/config/config_save_test.go` modified, plus a transient
+`config.go` + `.probe` pair). Those are task 17's in-progress work, untouched here, and one
+transient `internal/config` build failure observed mid-run came from that edit, not from
+task 14 — the clean full-suite run above predates it and the four packages this task can
+affect (`ui/notifications`, `app`, `provider`, `github`) were re-run green afterwards.
