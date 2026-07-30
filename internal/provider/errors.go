@@ -18,3 +18,11 @@ type PartialError struct {
 func (e *PartialError) Error() string {
 	return fmt.Sprintf("%d of %d sources failed to load", e.Failed, e.Total)
 }
+
+// Unwrap exposes the individual source errors for Go 1.20+ multi-error
+// unwrapping, so errors.As can recover a specific error type (e.g.
+// *github.APIError) buried in a partial-failure result. Purely additive:
+// no existing caller inspects PartialError.Errors via Unwrap today.
+func (e *PartialError) Unwrap() []error {
+	return e.Errors
+}
