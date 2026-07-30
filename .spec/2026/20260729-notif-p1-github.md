@@ -497,6 +497,82 @@ Still forwarded, unchanged: `FORWARD: task 13/15` (empty-inbox body says "Press 
 while the pane swallows `r`), `FORWARD: task 16` (the vacuous-but-correct `isActiveViewSearching`
 arm), `FORWARD: task 20` (CLI token-scope list).
 
+## Validation: notifications render states (task 13) — 2026-07-30, commit `26c2870`
+
+Gates all green: `go build ./...` (exit 0), `go vet ./internal/... ./cmd/...` (exit 0),
+`go test -count=1 ./...` (exit 0, all packages `ok`), `git status --porcelain` empty after every
+probe was reverted. `gofmt -l` on the six touched Go files (`internal/app/app.go`,
+`internal/app/app_test.go`, `internal/ui/components/listview/listview.go`,
+`internal/ui/components/listview/listview_test.go`, `internal/ui/notifications/list.go`,
+`internal/ui/notifications/list_test.go`) flags only `listview.go`, confirmed **pre-existing**
+by diffing `gofmt -l` against the same file checked out from `main` — unrelated to this commit,
+per convention 10's per-touched-file scope.
+
+### Mutation ledger
+
+| Mutation | Result |
+|---|---|
+| `filterEmptyBody` → `emptyInboxBody()` | KILLED — `TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox`, `TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter` (pane), `TestModel_NotificationsTab_FilterEmpty_DistinctFromEmptyInbox` (app) |
+| `errorBody` → `emptyInboxBody()` | KILLED — `TestView_Error_CarriesTokenScopeSkeleton_AndTakesPriorityOverRows`, `TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty` (pane), `TestModel_NotificationsTab_Error_RendersThroughFullView` (app) |
+| `capabilityUnsupportedBody` → `emptyInboxBody()` | KILLED — `TestView_CapabilityUnsupported_DistinctFromOtherThreeStates` (pane-only, as decision 63 specifies; app suite stays green, correctly, since this state is unreachable through the tab) |
+| Reorder `View()`: error check before capability check (swap adjacent pair 1↔2) | **SURVIVED** — both suites green. No test ever sets `capabilityUnsupported` and a `list.Err()` simultaneously, so the documented priority between these two specific states is unpinned. Judged non-blocking: decision 63 states the capability arm is reachable only via the pane-only `SetCapabilityUnsupported()` test seam and never co-occurs with a real error in any real configuration (an incapable backend never reaches `List`), so the two states are mutually exclusive in practice and a combined-state test would itself be the kind of vacuous fixture decision 59/63 warn against. Recorded for the record, not treated as a task-13 defect. |
+| Reorder `View()`: error check after the filter-empty/empty block (swap adjacent pair 2↔3) | KILLED — `TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty` (pane), `TestModel_NotificationsTab_Error_RendersThroughFullView` (app). This is exactly the test the implementer added to close the gap they reported finding during implementation. |
+| Swap filter-empty/empty branches (pair 3↔4) | N/A as a "reorder" — these are the two arms of one `if/else` on `m.reasonFilterActive`, not a priority stack (they can never both be true), so there is nothing to reorder; swapping the `if`/`else` bodies is a no-op and both suites stayed green as expected. |
+| `notificationsTabContent` → unconditionally `banner + "\n\n" + paneView` | KILLED — `TestNotificationsTabContent_EmptyWarnings_NoStrayBlankLine`, `TestModel_SwitchToNotificationsTab_ResizesPaneAndAccountsFooter` |
+| `notificationsWarningsBanner` → unconditionally `""` | KILLED — `TestNotificationsTabContent_PopulatedWarnings_RendersBanner`, `TestModel_NotificationsTab_Warnings_RenderInFullView` |
+
+### Convention checks
+
+- **Convention 8**: every task-13 test drives `m.list.Update(tea.WindowSizeMsg{...})` before
+  `SetFeed`/`HandleFetchResult`/`View()`, so `table.renderRow` runs (inside `SetItems`) on the
+  correct column widths ahead of the render assertion — matching the "recover above the row
+  population, not merely around `View()`" shape convention 8 requires. No dedicated
+  `defer recover()` guard was needed in these specific tests because an unrecovered panic already
+  fails the test; the existing panic-guard tests (`TestView_RendersAfterWindowSizeMsg_*`) remain
+  from task 11 and were not touched.
+- **Convention 6**: none of the four states, nor the warnings banner, introduce new styled text —
+  `emptyInboxBody`, `filterEmptyBody`, `errorBody`, `capabilityUnsupportedBody` and
+  `notificationsWarningsBanner` all return plain, unstyled strings (`filterIndicator` was already
+  deliberately unstyled per its existing doc comment). Convention 6 is therefore not implicated by
+  this commit — nothing here needs a style-object assertion.
+- **Decision 58's `r` stopgap**: `emptyInboxBody()` = `"No notifications found.\n\nYou're all
+  caught up."` and `filterEmptyBody()` = `"No notifications match Filter: %s.\n\nPress f to cycle
+  back to all reasons."` — neither mentions `r`. `TestView_EmptyInbox_ReadsAsClear_NotError`
+  explicitly asserts the absence of "Press r".
+- **Additive listview accessors** (`Err()`, `Loading()`, `internal/ui/components/listview/listview.go:425-450`):
+  read-only, no existing field's write path changed, no existing call site touched. Confirmed by
+  running the full suite (all pre-existing `listview` and sibling-pane tests pass unmutated) and
+  by inspection — both are pure getters added after existing methods, and the new
+  `TestErr_ReflectsHandleFetchResult`/`TestLoading_ReflectsRefreshState` tests are additive-only.
+  No other pane's behaviour changed.
+
+### Judgment calls (per validator brief point 6)
+
+1. **`len(m.list.Items()) == 0 && m.reasonFilterActive` vs. `len(m.feed) > 0`.** Measured directly
+   (probe test, reverted): seeding a 2-row feed, activating the `f` filter to `Mentioned`, then
+   calling `SetFeed(nil)` (the *whole* feed goes empty, not just the filtered view) renders
+   `"No notifications match Filter: Mentioned.\n\nPress f to cycle back to all reasons."` — the
+   filter-empty text — even though clearing the filter reveals nothing, because the feed itself is
+   empty. No test in this commit pins this combination (confirmed by grep: none of the new
+   fixtures call `SetFeed` with an empty/nil slice while a reason filter is already active). This
+   is a real, unpinned edge case, but I judge it **non-blocking for task 13**: the message itself
+   remains literally true (no row matches `Mentioned`) and pressing `f` — the action the message
+   names — does correctly resolve to `emptyInboxBody()` on the very next cycle, because
+   `cycleReasonFilter` defensively resets to "all reasons" the moment `presentReasons(m.feed)` is
+   empty (list.go:328-329, 334-335). It is an imprecise-in-the-moment message, not a dead end or a
+   lie the user cannot escape. Decision 63's own reachable-state definition ("a user-set `f` filter
+   matching zero rows" of a *non-empty* feed) does not extend to this deeper case either. Worth a
+   follow-up note for whichever task next touches this file (task 15's poller is the next writer of
+   `SetFeed`), but not a task-13 criterion failure.
+2. **`errorBody` appending the token-scope line to every error, including the nil-client message.**
+   Acceptable as specified. Task 13's own criterion text says the error state "carries the
+   token-scope skeleton (decision 17) and the nil-client message, with task 19 owning the 403/401
+   differentiation" — i.e. the spec explicitly defers narrowing this message to task 19, and
+   `errorBody`'s doc comment (`list.go:263-268`) states this in a `FORWARD: task 19` note naming
+   exactly the `errors.As`/`*github.APIError` differentiation to add. Shipping the flat skeleton
+   now, with the deferral documented, matches the letter of the task-13 criterion rather than
+   overrunning into task 19's scope.
+
 ## Phase 2 notes — carry into `20260729-notif-p2-azdo.md`
 
 Implementation questions phase 1 answered in a deliberately phase-1-shaped way. Each is
