@@ -1033,11 +1033,14 @@ func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
 // distinguishability, not merely four positive assertions.
 
 const (
-	emptyInboxMarker    = "You're all caught up."
-	filterEmptyMarker   = "No notifications match Filter:"
-	errorMarker         = "Notifications unavailable:"
-	capabilityMarker    = "not supported by this configuration"
-	tokenScopeSkeleton  = "GitHub token scope required: notifications"
+	emptyInboxMarker   = "You're all caught up."
+	filterEmptyMarker  = "No notifications match Filter:"
+	errorMarker        = "Notifications unavailable:"
+	capabilityMarker   = "not supported by this configuration"
+	tokenScopeSkeleton = "GitHub token scope required: notifications"
+	// expiredBodyMarker is unique to expiredTokenErrorBody: scopeErrorBody
+	// never says "Generate a new", and genericErrorBody carries no remedy at all.
+	expiredBodyMarker   = "Generate a new classic token"
 	nilClientMsgMarker  = "no notifications client configured"
 	pressRToRefreshText = "Press r"
 )
@@ -1229,14 +1232,19 @@ func TestView_Error_ScopeError_WithHeaders_NamesGrantedAndRequiredScopes(t *test
 	assertOtherStatesAbsent(t, view, errorMarker)
 }
 
-// TestView_Error_ScopeError_Headerless_NamesFineGrainedTokenCaveat pins the
-// other, genuinely reachable 403 shape: a fine-grained PAT never sends
-// X-Accepted-OAuth-Scopes/X-OAuth-Scopes at all, so RequiredScopes and
-// GrantedScopes are both empty even though the token may or may not actually
-// lack the scope. This render must not pretend the (absent) headers confirm
-// anything, and must point at the fine-grained token settings page rather
-// than only the classic one.
-func TestView_Error_ScopeError_Headerless_NamesFineGrainedTokenCaveat(t *testing.T) {
+// TestView_Error_ScopeError_Headerless_TellsUserToSwitchToAClassicToken pins
+// the other, genuinely reachable 403 shape: a fine-grained PAT never sends
+// X-Accepted-OAuth-Scopes/X-OAuth-Scopes at all, so both scope fields are
+// empty. Their absence is the diagnosis, not an ambiguity to hedge around —
+// GitHub's notifications endpoints accept classic tokens only, so a
+// fine-grained token cannot be fixed, it has to be replaced.
+//
+// The render must NOT send the user to the fine-grained settings page. An
+// earlier version did, telling them to "check the token's notifications
+// permission" there; no such permission exists, so it sent them hunting
+// through a list that could not contain the answer. That was a real shipped
+// bug, caught by a user reading the docs and not finding the permission.
+func TestView_Error_ScopeError_Headerless_TellsUserToSwitchToAClassicToken(t *testing.T) {
 	apiErr := &github.APIError{StatusCode: http.StatusForbidden}
 
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
@@ -1252,10 +1260,16 @@ func TestView_Error_ScopeError_Headerless_NamesFineGrainedTokenCaveat(t *testing
 		t.Errorf("headerless-scope-error view = %q, want decision 17's scope skeleton naming notifications", view)
 	}
 	if !strings.Contains(view, "fine-grained") {
-		t.Errorf("headerless-scope-error view = %q, want an honest caveat that fine-grained tokens never send scope headers", view)
+		t.Errorf("headerless-scope-error view = %q, want it to name the likely cause (a fine-grained token)", view)
 	}
-	if !strings.Contains(view, fineGrainedTokenSettingsURL) {
-		t.Errorf("headerless-scope-error view = %q, want the fine-grained token settings URL", view)
+	if !strings.Contains(view, "classic tokens only") {
+		t.Errorf("headerless-scope-error view = %q, want it to state that the notifications API accepts classic tokens only", view)
+	}
+	if !strings.Contains(view, classicTokenSettingsURL) {
+		t.Errorf("headerless-scope-error view = %q, want the classic token settings URL — the only actionable remedy", view)
+	}
+	if strings.Contains(view, "settings/personal-access-tokens") {
+		t.Errorf("headerless-scope-error view = %q, must NOT send the user to the fine-grained settings page: no fine-grained permission enables the notifications API", view)
 	}
 	assertOtherStatesAbsent(t, view, errorMarker)
 }
@@ -1292,8 +1306,11 @@ func TestView_Error_ExpiredToken_DistinctFromScopeError_AndGeneric(t *testing.T)
 	if !strings.Contains(view, classicTokenSettingsURL) {
 		t.Errorf("expired-token view = %q, want the classic token settings URL — unique to expiredTokenErrorBody, unlike genericErrorBody", view)
 	}
-	if !strings.Contains(view, fineGrainedTokenSettingsURL) {
-		t.Errorf("expired-token view = %q, want the fine-grained token settings URL — unique to expiredTokenErrorBody, unlike genericErrorBody", view)
+	if !strings.Contains(view, expiredBodyMarker) {
+		t.Errorf("expired-token view = %q, want %q — unique to expiredTokenErrorBody, unlike genericErrorBody and scopeErrorBody", view, expiredBodyMarker)
+	}
+	if strings.Contains(view, "settings/personal-access-tokens") {
+		t.Errorf("expired-token view = %q, must NOT offer a fine-grained token: it would leave this pane broken however valid it is elsewhere", view)
 	}
 	if strings.Contains(view, tokenScopeSkeleton) {
 		t.Errorf("expired-token view = %q, must NOT carry the scope skeleton — a rejected token is not a scope gap", view)
@@ -1324,11 +1341,12 @@ func TestView_Error_ThreeVariants_ArePairwiseDistinguishable(t *testing.T) {
 	// still appear even if expiredTokenErrorBody's own branch were deleted and
 	// the 401 fell through to genericErrorBody's plain %v fold-in (a real
 	// mutation verified directly to survive against that weaker marker).
-	// classicTokenSettingsURL is scopeView's own marker (the headers-present
-	// branch only ever names the classic URL), so fineGrainedTokenSettingsURL
-	// is the one string genuinely unique to expiredTokenErrorBody here.
+	// Nor is it a settings URL: every actionable body now names the classic
+	// page and only the classic page, since the notifications API accepts no
+	// other token flavor. expiredBodyMarker is the one phrase this body alone
+	// carries.
 	scopeOnly := tokenScopeSkeleton
-	expiredOnly := fineGrainedTokenSettingsURL
+	expiredOnly := expiredBodyMarker
 	genericMarkerText := "boom"
 
 	views := map[string]string{"scope": scopeView, "expired": expiredView, "generic": genericView}
@@ -1374,8 +1392,8 @@ func TestView_Error_RateLimited403_DoesNotClaimMissingScope(t *testing.T) {
 	if strings.Contains(view, tokenScopeSkeleton) {
 		t.Errorf("rate-limited 403 view = %q, must not claim a missing scope", view)
 	}
-	if strings.Contains(view, classicTokenSettingsURL) || strings.Contains(view, fineGrainedTokenSettingsURL) {
-		t.Errorf("rate-limited 403 view = %q, must not send the user to the token settings pages", view)
+	if strings.Contains(view, classicTokenSettingsURL) {
+		t.Errorf("rate-limited 403 view = %q, must not send the user to the token settings page", view)
 	}
 }
 

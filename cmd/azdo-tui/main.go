@@ -94,9 +94,11 @@ Required GitHub token scopes:
                  Issues        (read & write)
                  Pull requests (read & write)
                  Actions       (read)
-                 Notifications (account permission, Notifications tab)
   Note: resolving PR comment threads requires a classic 'repo' PAT;
         fine-grained tokens are commonly rejected for that operation.
+  Note: the Notifications tab requires a CLASSIC token. GitHub's
+        notifications API supports no fine-grained permission, so
+        there is nothing to grant a fine-grained token here.
 
 Keyboard shortcuts (in TUI):
   Navigation:
@@ -231,7 +233,8 @@ func runAuthGitHub(store *config.KeyringStore) error {
                 Issues          (read & write)
                 Pull requests   (read & write)
                 Actions         (read)
-                Notifications   (account permission, Notifications tab)`)
+  Note: the Notifications tab requires a CLASSIC token — GitHub's
+  notifications API supports no fine-grained permission.`)
 	fmt.Println()
 
 	var model patinput.Model

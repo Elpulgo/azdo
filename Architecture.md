@@ -514,9 +514,12 @@ posture the rest of `internal/config` already has for optional features. See
 **Auth** is per-backend, each with a keyring-first priority chain:
 - Azure PAT: system keyring → `AZDO_PAT` env fallback.
 - GitHub token: system keyring → `GITHUB_TOKEN` env fallback. The Notifications
-  tab additionally requires the `notifications` scope (classic PAT) or the
-  account-level Notifications permission (fine-grained token) on top of
-  whatever the rest of the GitHub backend already needs.
+  tab additionally requires the `notifications` scope on top of whatever the
+  rest of the GitHub backend already needs — and specifically a **classic**
+  PAT, since GitHub's notifications endpoints support no other token flavor.
+  That asymmetry is why the pane's 403 handling treats *absent*
+  `X-Accepted-OAuth-Scopes` headers as a positive signal ("this is a
+  fine-grained token") rather than as missing information.
 
 System keyring is Windows Credential Manager / macOS Keychain / Linux
 SecretService. If a required credential is missing, `azdo auth` (which uses the

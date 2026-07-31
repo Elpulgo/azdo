@@ -82,13 +82,18 @@ scope (see the next question).
 
 ## The Notifications tab says my token is missing a scope
 
-The GitHub token needs an extra scope beyond what the rest of the app uses: `notifications`
-on a classic PAT, or the account-level **Notifications** permission on a fine-grained
-token. This is a common situation if you set up your token before the Notifications tab
-existed — the fix is to add the scope to your existing token (or generate a new
-fine-grained one with the permission) and run `azdo auth` to update the stored token. See
-[GitHub — Personal Access Token](README.md#github--personal-access-token) in the README for
-exactly where to add it.
+The GitHub token needs an extra scope beyond what the rest of the app uses:
+`notifications` on a **classic** PAT. There is no fine-grained equivalent — GitHub's
+notifications API [only supports classic
+tokens](https://docs.github.com/en/rest/activity/notifications), so if you go looking for a
+Notifications permission in the fine-grained token form you won't find one. Everything else
+in the GitHub backend works fine on a fine-grained token; only this tab doesn't.
+
+This is a common situation if you set up your token before the Notifications tab existed —
+the fix is to tick `notifications` on your existing classic token (or create a classic one
+if yours is fine-grained) and run `azdo auth` to update the stored token. See [GitHub —
+Personal Access Token](README.md#github--personal-access-token) in the README for exactly
+where to add it.
 
 If you'd rather not touch your token, add `notifications` to `disabled_panes` in your
 config instead — or, from the pane's own error screen, press `x` twice, which writes that

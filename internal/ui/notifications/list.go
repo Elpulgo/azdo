@@ -817,15 +817,13 @@ func filterEmptyBody(reason provider.NotificationReason) string {
 	)
 }
 
-// classicTokenSettingsURL and fineGrainedTokenSettingsURL are named per
-// GitHub's two PAT flavors: classic tokens send scope-check headers
-// (X-Accepted-OAuth-Scopes / X-OAuth-Scopes) on a 403, fine-grained tokens
-// never do. scopeErrorBody points the user at whichever page matches what
-// the response actually told us.
-const (
-	classicTokenSettingsURL     = "https://github.com/settings/tokens"
-	fineGrainedTokenSettingsURL = "https://github.com/settings/personal-access-tokens"
-)
+// classicTokenSettingsURL is the only token page these error bodies ever
+// name. GitHub's notifications endpoints "only support authentication using
+// a personal access token (classic)" and require the `notifications` or
+// `repo` scope — a fine-grained token cannot reach this API at all, and no
+// account permission exists to grant it. So there is no fine-grained remedy
+// to offer: every fixable failure here is fixed with a classic token.
+const classicTokenSettingsURL = "https://github.com/settings/tokens"
 
 // errorBody renders decision 63's fourth state: a failed List call. Task 19
 // recovers *github.APIError via errors.As to tell three cases apart, each
@@ -860,21 +858,29 @@ func errorBody(err error) string {
 }
 
 // scopeErrorBody renders a 403 that is not rate-limiting. GitHub sends
-// X-Accepted-OAuth-Scopes/X-OAuth-Scopes only for classic PATs; fine-grained
-// tokens return a bare 403 with neither header. Rather than pretend the
-// headers confirm anything in that case, this names the ambiguity honestly:
-// the required scope either way, but a different, hedged sentence about
-// where to check it depending on whether GitHub told us anything.
+// X-Accepted-OAuth-Scopes/X-OAuth-Scopes only for classic PATs, so their
+// absence is itself the diagnosis: the token is almost certainly
+// fine-grained, and a fine-grained token can never reach this API — the
+// notifications endpoints accept classic tokens only, and there is no
+// account permission that enables them.
+//
+// The two branches therefore give genuinely different remedies rather than
+// two shades of the same one: with headers, add a scope to the token you
+// have; without them, the token flavor itself is wrong and must be replaced.
+// An earlier version told the headers-absent user to "check the token's
+// notifications permission" on the fine-grained settings page. No such
+// permission exists, so that sent them hunting through a list that could
+// not contain the answer.
 func scopeErrorBody(apiErr *github.APIError) string {
 	if apiErr.RequiredScopes == "" && apiErr.GrantedScopes == "" {
 		return fmt.Sprintf(
 			"Notifications unavailable: %v\n\n"+
 				"GitHub token scope required: notifications\n\n"+
-				"GitHub did not report token scopes with this response — this is "+
-				"expected for fine-grained personal access tokens, which never send "+
-				"scope headers. Check the token's notifications permission at %s, or "+
-				"switch to a classic token with the notifications scope at %s.\n\n%s",
-			apiErr, fineGrainedTokenSettingsURL, classicTokenSettingsURL, disableHint(),
+				"GitHub reported no token scopes with this response, which is what a "+
+				"fine-grained personal access token looks like. GitHub's notifications "+
+				"API accepts classic tokens only — no fine-grained permission enables "+
+				"it. Create a classic token with the notifications scope at %s.\n\n%s",
+			apiErr, classicTokenSettingsURL, disableHint(),
 		)
 	}
 	return fmt.Sprintf(
@@ -891,12 +897,17 @@ func scopeErrorBody(apiErr *github.APIError) string {
 // (expired, revoked, or malformed), not a scope gap. Deliberately does not
 // mention scopes at all — telling the user to add a scope to a token GitHub
 // no longer accepts at all would be wrong.
+//
+// Names only the classic settings page. This body is rendered inside the
+// notifications pane, and a fine-grained replacement token would leave this
+// pane broken however valid it is for the app's other tabs.
 func expiredTokenErrorBody(err error) string {
 	return fmt.Sprintf(
 		"Notifications unavailable: %v\n\n"+
 			"Your GitHub token appears to be expired or invalid. Generate a new "+
-			"one at %s (classic) or %s (fine-grained) and update your config.\n\n%s",
-		err, classicTokenSettingsURL, fineGrainedTokenSettingsURL, disableHint(),
+			"classic token with the notifications scope at %s and update your "+
+			"config.\n\n%s",
+		err, classicTokenSettingsURL, disableHint(),
 	)
 }
 

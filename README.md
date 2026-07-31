@@ -546,7 +546,7 @@ A classic or fine-grained token works for most operations.
 |-------|----------|
 | `repo` | Private repos: issues, pull requests, reviews, and Actions |
 | `public_repo` | Public repos only (use instead of `repo`) |
-| `notifications` | The Notifications tab: list, mark read, mark done |
+| `notifications` | The Notifications tab: list, mark read, mark done (**classic only** — see note below) |
 
 **Fine-grained token** — https://github.com/settings/personal-access-tokens — grant these
 repository permissions:
@@ -558,36 +558,35 @@ repository permissions:
 | Pull requests | Read & write |
 | Actions | Read |
 
-...plus this **account** permission (found in a separate section of the token creation
-form from the repository permissions above — it applies to your account, not to any
-specific repo):
-| Permission | Access |
-|------------|--------|
-| Notifications | Required for the Notifications tab |
-
 > **Note:** resolving PR comment threads requires a classic `repo` PAT — fine-grained tokens are commonly rejected for that operation.
 
-**Upgrading an existing token.** If you already have a GitHub token configured from before
-the Notifications tab existed, it won't have the scope above and the tab will show a
-"token scope required: notifications" error instead of your inbox. Add the scope to your
-existing token (classic: edit it at https://github.com/settings/tokens and tick
-`notifications`; fine-grained: the account permission generally can't be edited in place —
-generate a new token with it included) and run `azdo auth` to update the stored token. If
-you don't want the tab at all, see [Disabling the Notifications
-tab](#notifications-configuration) — add `notifications` to `disabled_panes` instead of
-touching your token.
+> **The Notifications tab requires a classic PAT.** GitHub's notifications REST API
+> [only supports classic tokens](https://docs.github.com/en/rest/activity/notifications) —
+> there is no fine-grained permission that enables it, so don't go looking for one in the
+> fine-grained token form. A fine-grained token is fine for everything else in the GitHub
+> backend; it just can't reach the inbox. If you'd rather not switch, see [Disabling the
+> Notifications tab](#notifications-configuration) — add `notifications` to
+> `disabled_panes` and the tab goes away.
 
-**Diagnosing a 403 on a fine-grained token.** Classic tokens make GitHub send back which
-scopes are required and which the token has, so a missing-scope 403 names both. Fine-grained
-tokens never send those headers, so the exact same 403 shows up bare — if you're on a
-fine-grained token, check the token's **Notifications** account permission directly rather
-than looking for a scope name in the error. Note a 403 isn't always a scope problem either:
-a rate-limited 403 is reported as a plain failure with no scope banner at all, since adding
-a scope to an already-correct token wouldn't fix a rate limit.
+**Upgrading an existing token.** If you already have a GitHub token configured from before
+the Notifications tab existed, it won't have the `notifications` scope and the tab will
+show a "token scope required: notifications" error instead of your inbox. Edit the token at
+https://github.com/settings/tokens, tick `notifications`, and run `azdo auth` to update the
+stored token. If your existing token is fine-grained, you need a new classic one — see the
+note above.
+
+**Diagnosing a 403.** Classic tokens make GitHub send back which scopes are required and
+which the token has, so a missing-scope 403 names both. Fine-grained tokens never send
+those headers, so the exact same 403 shows up bare — and that absence is itself the
+diagnosis: a bare 403 here almost always means the token is fine-grained and needs
+replacing with a classic one. Note a 403 isn't always a scope problem either: a
+rate-limited 403 is reported as a plain failure with no scope banner at all, since adding a
+scope to an already-correct token wouldn't fix a rate limit.
 
 To create a token:
 1. Go to GitHub → Settings → Developer settings → Personal access tokens
-2. Generate a classic or fine-grained token with the scopes above
+2. Generate a classic or fine-grained token with the scopes above (classic if you want the
+   Notifications tab)
 3. Copy the generated token
 
 ## Keyboard Shortcuts
