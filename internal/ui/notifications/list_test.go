@@ -68,56 +68,68 @@ func forceTrueColor(t *testing.T) {
 
 // ─── toColumns / toRows: convention 7 (column/cell parity) ──────────────────
 
-func TestToColumnsToRows_SingleRepo_NoRepoColumn(t *testing.T) {
-	s := styles.DefaultStyles()
-	items := []provider.Notification{
-		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
-		mkNotification("2", "owner/repo", "PR two", provider.NotificationReasonMentioned, true, fixedNow),
-	}
+// TestColumnOrder_MatchesCellIndices pins notificationColumns and the
+// cell<N> index constants in step. toRows assigns by index, so a column
+// inserted into notificationColumns without a matching constant shift would
+// silently move every cell after it into the wrong column — a bug that
+// renders as plausible-looking garbage rather than as a panic.
+func TestColumnOrder_MatchesCellIndices(t *testing.T) {
+	cols := toColumns(nil)
 
-	cols := toColumns(items)
-	rows := toRows(items, s)
-
-	if len(cols) != 3 {
-		t.Fatalf("single-repo columns = %d, want 3 (no Repo column)", len(cols))
+	if len(cols) != cellCount {
+		t.Fatalf("toColumns returned %d columns, want cellCount = %d", len(cols), cellCount)
 	}
-	for i, row := range rows {
-		if len(row) != len(cols) {
-			t.Fatalf("row %d has %d cells, want %d (== column count)", i, len(row), len(cols))
+	for _, tc := range []struct {
+		idx   int
+		title string
+	}{
+		{cellRead, ""},
+		{cellRepo, "Repo"},
+		{cellReason, "Reason"},
+		{cellTitle, "Title"},
+		{cellUpdated, "Updated"},
+	} {
+		if cols[tc.idx].Title != tc.title {
+			t.Errorf("column at index %d = %q, want %q", tc.idx, cols[tc.idx].Title, tc.title)
 		}
 	}
 }
 
-func TestToColumnsToRows_MultiRepo_RepoColumnFirst(t *testing.T) {
+// TestToColumnsToRows_CellParity_BothShapes is convention 7's invariant over
+// both feed shapes that used to select different layouts. The layout is now
+// static, so these two cases are expected to be identical — which is exactly
+// what makes the test worth keeping: it is what fails if the multi-scope gate
+// is ever reintroduced.
+func TestToColumnsToRows_CellParity_BothShapes(t *testing.T) {
 	s := styles.DefaultStyles()
-	items := []provider.Notification{
-		mkNotification("1", "owner/repo1", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
-		mkNotification("2", "owner/repo2", "PR two", provider.NotificationReasonMentioned, true, fixedNow),
+	for _, tc := range []struct {
+		name  string
+		items []provider.Notification
+	}{
+		{"single repo", []provider.Notification{
+			mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+			mkNotification("2", "owner/repo", "PR two", provider.NotificationReasonMentioned, true, fixedNow),
+		}},
+		{"multiple repos", []provider.Notification{
+			mkNotification("1", "owner/repo1", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
+			mkNotification("2", "owner/repo2", "PR two", provider.NotificationReasonMentioned, true, fixedNow),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := toColumns(tc.items)
+			if len(cols) != cellCount {
+				t.Fatalf("%s columns = %d, want %d", tc.name, len(cols), cellCount)
+			}
+			if cols[cellRepo].Title != "Repo" {
+				t.Errorf("column at cellRepo = %q, want %q", cols[cellRepo].Title, "Repo")
+			}
+			for i, row := range toRows(tc.items, s) {
+				if len(row) != len(cols) {
+					t.Fatalf("row %d has %d cells, want %d (== column count)", i, len(row), len(cols))
+				}
+			}
+		})
 	}
-
-	cols := toColumns(items)
-	rows := toRows(items, s)
-
-	const wantCols = 4 // Repo + Reason + Title + Updated
-	if len(cols) != wantCols {
-		t.Fatalf("multi-repo columns = %d, want %d", len(cols), wantCols)
-	}
-	if cols[0].Title != "Repo" {
-		t.Errorf("first column = %q, want %q", cols[0].Title, "Repo")
-	}
-	for i, row := range rows {
-		if len(row) != len(cols) {
-			t.Fatalf("row %d has %d cells, want %d (== column count)", i, len(row), len(cols))
-		}
-	}
-	if !strings.Contains(rows[0][0], "owner/repo1") {
-		t.Errorf("row 0 repo cell = %q, want to contain %q", rows[0][0], "owner/repo1")
-	}
-
-	// The specs must be normalised: unnormalised they sum to 120
-	// (Repo 20 + Reason 20 + Title 60 + Updated 20), which over-widens the
-	// table past the terminal with nothing else failing.
-	assertWidthsSumTo100(t, cols)
 }
 
 // assertWidthsSumTo100 pins listview.NormalizeWidths having been applied to a
@@ -141,32 +153,120 @@ func TestToColumns_SingleRepo_WidthsNormalized(t *testing.T) {
 	assertWidthsSumTo100(t, toColumns(items))
 }
 
-// TestMultiRepo_GatesOnScope_NotScopeDisplay pins which Identity field the
-// dynamic Repo column keys off. Every other fixture sets Scope == ScopeDisplay,
-// so swapping the gate to ScopeDisplay is invisible to them — yet two distinct
-// repos sharing a display name would then render a disambiguating column that
-// disambiguates nothing, and a single repo whose display name varies per row
-// would grow a column it does not need.
-func TestMultiRepo_GatesOnScope_NotScopeDisplay(t *testing.T) {
-	// Distinct Scope, identical ScopeDisplay → multi-repo (gate is Scope).
-	a := mkNotification("1", "owner/repo1", "A", provider.NotificationReasonOther, false, fixedNow)
-	a.Identity.ScopeDisplay = "shared-display"
-	b := mkNotification("2", "owner/repo2", "B", provider.NotificationReasonOther, false, fixedNow)
-	b.Identity.ScopeDisplay = "shared-display"
-
-	if !multiRepo([]provider.Notification{a, b}) {
-		t.Error("multiRepo(distinct Scope, identical ScopeDisplay) = false, want true (gate must be Identity.Scope)")
+// TestToColumns_RepoColumnIsUnconditional pins the notifications pane's
+// deliberate departure from convention 7's multi-scope gating example: the
+// Repo column is present whether the feed spans one repo or several.
+//
+// The gate this replaces made the column vanish precisely when a filter
+// narrowed the feed to a single repo — so switching on only_configured_repos
+// removed the very answer ("which of my repos is this?") the filter was set
+// to sharpen. Reported from real use.
+//
+// Asserting on both slices matters: a re-added `if multiRepo(items)` gate
+// still passes the multi-repo case, so only the single-repo case can catch
+// a regression here.
+func TestToColumns_RepoColumnIsUnconditional(t *testing.T) {
+	single := []provider.Notification{
+		mkNotification("1", "owner/repo", "A", provider.NotificationReasonOther, false, fixedNow),
+	}
+	multi := []provider.Notification{
+		mkNotification("1", "owner/repo1", "A", provider.NotificationReasonOther, false, fixedNow),
+		mkNotification("2", "owner/repo2", "B", provider.NotificationReasonOther, false, fixedNow),
 	}
 
-	// Identical Scope, distinct ScopeDisplay → single repo.
-	c := mkNotification("3", "owner/repo", "C", provider.NotificationReasonOther, false, fixedNow)
-	c.Identity.ScopeDisplay = "display-one"
-	d := mkNotification("4", "owner/repo", "D", provider.NotificationReasonOther, false, fixedNow)
-	d.Identity.ScopeDisplay = "display-two"
-
-	if multiRepo([]provider.Notification{c, d}) {
-		t.Error("multiRepo(identical Scope, distinct ScopeDisplay) = true, want false (gate must be Identity.Scope)")
+	for _, tc := range []struct {
+		name  string
+		items []provider.Notification
+	}{
+		{"single repo", single},
+		{"multiple repos", multi},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := toColumns(tc.items)
+			if !hasColumn(cols, "Repo") {
+				t.Errorf("toColumns(%s) = %+v, want a Repo column — it is unconditional in this pane", tc.name, cols)
+			}
+			assertWidthsSumTo100(t, cols)
+		})
 	}
+}
+
+// TestToRows_CellCountMatchesColumnCount is convention 7's invariant stated
+// directly. table.renderRow indexes m.cols[i], so a row with more cells than
+// there are columns panics; this pins the two in step for both slice shapes,
+// which is what the removed multiRepo gate used to make fragile.
+func TestToRows_CellCountMatchesColumnCount(t *testing.T) {
+	items := []provider.Notification{
+		mkNotification("1", "owner/repo1", "A", provider.NotificationReasonOther, false, fixedNow),
+		mkNotification("2", "owner/repo2", "B", provider.NotificationReasonOther, true, fixedNow),
+	}
+
+	cols := toColumns(items)
+	for i, row := range toRows(items, styles.DefaultStyles()) {
+		if len(row) != len(cols) {
+			t.Errorf("row %d has %d cells, want %d (one per column) — table.renderRow would panic", i, len(row), len(cols))
+		}
+	}
+}
+
+// TestToRows_UnreadGlyph_PresentOnlyForUnread pins the marker that makes read
+// state legible at a glance.
+//
+// Before this cell existed, unread state was conveyed *only* by the Title
+// cell's boldness. That is close to invisible in themes with little contrast
+// between weights, which made `u` (mark read) look like a no-op: the row
+// correctly stays in place when unread_only is false, so with no perceptible
+// style change there was nothing at all to see. Reported from real use.
+//
+// The assertion is on the glyph rune rather than on rendered escape
+// sequences, per decision 56: lipgloss resolves the Ascii profile in a test
+// binary, so a styled-vs-unstyled byte comparison is vacuous. Emphasis is
+// asserted separately, on the style object, in
+// TestReadStyle_UnreadEmphasised_ReadPlain.
+func TestToRows_UnreadGlyph_PresentOnlyForUnread(t *testing.T) {
+	unread := mkNotification("1", "owner/repo", "A", provider.NotificationReasonOther, false, fixedNow)
+	read := mkNotification("2", "owner/repo", "B", provider.NotificationReasonOther, true, fixedNow)
+
+	rows := toRows([]provider.Notification{unread, read}, styles.DefaultStyles())
+
+	if !strings.Contains(rows[0][0], unreadGlyph) {
+		t.Errorf("unread row's marker cell = %q, want it to contain %q", rows[0][0], unreadGlyph)
+	}
+	if strings.Contains(rows[1][0], unreadGlyph) {
+		t.Errorf("read row's marker cell = %q, want no unread glyph", rows[1][0])
+	}
+}
+
+// TestReadStyle_UnreadEmphasised_ReadPlain asserts the marker's emphasis on
+// the lipgloss.Style object, which no color profile can flatten — the same
+// technique, and the same reason, as titleStyle's own test (decision 56).
+//
+// It also pins the marker and the title to the *same* named style, so a theme
+// change can never emphasise one and not the other.
+func TestReadStyle_UnreadEmphasised_ReadPlain(t *testing.T) {
+	s := styles.DefaultStyles()
+	unread := mkNotification("1", "owner/repo", "A", provider.NotificationReasonOther, false, fixedNow)
+	read := mkNotification("2", "owner/repo", "B", provider.NotificationReasonOther, true, fixedNow)
+
+	if !readStyle(unread, s).GetBold() {
+		t.Error("readStyle(unread).GetBold() = false, want true — the unread marker carries the unread emphasis")
+	}
+	if readStyle(read, s).GetBold() {
+		t.Error("readStyle(read).GetBold() = true, want false — a read row must not be emphasised")
+	}
+	if readStyle(unread, s).GetForeground() != titleStyle(unread, s).GetForeground() {
+		t.Error("unread marker and unread title resolve to different foregrounds, want the same named style so themes move both together")
+	}
+}
+
+// hasColumn reports whether cols contains a column with the given title.
+func hasColumn(cols []listview.ColumnSpec, title string) bool {
+	for _, c := range cols {
+		if c.Title == title {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── Rendering: convention 8 (render through View() after WindowSizeMsg) ────
@@ -308,7 +408,7 @@ func TestToRows_TitleCell_UsesTitleStyleForBothStates(t *testing.T) {
 
 	rows := toRows(items, s)
 
-	const titleCol = 1 // single-repo layout: [Reason][Title][Updated]
+	const titleCol = cellTitle
 	if got, want := rows[0][titleCol], s.Title.Render("Same title"); got != want {
 		t.Errorf("unread title cell = %q, want %q (styles.Styles.Title)", got, want)
 	}
@@ -357,7 +457,7 @@ func TestToRows_EmptyTitle_RendersDash(t *testing.T) {
 
 	rows := toRows(items, s)
 
-	const titleCol = 1 // single-repo layout: [Reason][Title][Updated]
+	const titleCol = cellTitle
 	if !strings.Contains(rows[0][titleCol], "—") {
 		t.Errorf("empty Title cell = %q, want to contain %q", rows[0][titleCol], "—")
 	}
@@ -376,7 +476,7 @@ func TestToRows_ZeroUpdatedAt_RendersDash(t *testing.T) {
 
 	rows := toRows(items, s)
 
-	const updatedCol = 2 // single-repo layout: [Reason][Title][Updated]
+	const updatedCol = cellUpdated
 	if rows[0][updatedCol] != "—" {
 		t.Errorf("zero UpdatedAt cell = %q, want %q", rows[0][updatedCol], "—")
 	}
@@ -388,8 +488,10 @@ func TestToRows_ZeroUpdatedAt_RendersDash(t *testing.T) {
 func TestToRows_EmptyScopeDisplay_RendersDash(t *testing.T) {
 	s := styles.DefaultStyles()
 	// A thread whose repository payload is absent: both Scope and
-	// ScopeDisplay are empty on that one row, but a second row with a
-	// populated Scope keeps the feed multi-repo so the Repo column renders.
+	// ScopeDisplay are empty on that one row. The Repo column is
+	// unconditional now, so no second row is needed to keep it rendered; the
+	// second row is retained anyway so the fixture still covers the mixed
+	// case.
 	absent := mkNotification("1", "", "Absent repo payload", provider.NotificationReasonOther, false, fixedNow)
 	absent.Identity.ScopeDisplay = ""
 	items := []provider.Notification{
@@ -399,8 +501,8 @@ func TestToRows_EmptyScopeDisplay_RendersDash(t *testing.T) {
 
 	rows := toRows(items, s)
 
-	if rows[0][0] != "—" {
-		t.Errorf("empty ScopeDisplay cell = %q, want %q", rows[0][0], "—")
+	if rows[0][cellRepo] != "—" {
+		t.Errorf("empty ScopeDisplay cell = %q, want %q", rows[0][cellRepo], "—")
 	}
 }
 
@@ -508,15 +610,22 @@ func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
 // This is the direction that matters most (the task's own words): the expand
 // direction passing does not prove the shrink direction. Start multi-repo
 // with the cursor on a non-first row, cycle until the feed narrows to a
-// single repo, and assert the column collapses, View() does not panic, and
-// the cursor/selection survives — still on the *same item*, per decision 55.
+// single repo, and assert View() does not panic and the cursor/selection
+// survives — still on the *same item*, per decision 55.
+//
+// This test previously also asserted that the Repo column *disappeared* on
+// the collapse. That was the documented intent at the time and it is now
+// inverted: the column is unconditional, and the assertion below pins it
+// surviving. See notificationColumns for why — in short, a column vanishing
+// as a side effect of filtering hid the answer the filter was asked for, and
+// was reported as a bug from real use.
 //
 // The fixture is shaped so that no accidental cursor behaviour can satisfy the
 // same-item assertion: ≥2 rows survive the collapse, the pre-filter cursor
 // index (2 of 5) is neither zero nor last, and the surviving row's post-filter
 // index (1 of 3) is neither zero nor last either. Reset-to-0, clamp-to-last and
 // keep-the-saved-index all land on a different row than the identity restore.
-func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testing.T) {
+func TestCycleReasonFilter_Collapse_RepoColumnSurvives_CursorSurvives(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
@@ -527,8 +636,8 @@ func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testi
 	// Row 4: id 5, a/repo1, Mentioned
 	//
 	// Mentioned precedes Subscribed in enum order, so the first `f` filters to
-	// Mentioned: ids 2, 3 and 5 survive, all in a/repo1 — so the Repo column
-	// collapses — and the cursor's own item (id 3) lands at index 1.
+	// Mentioned: ids 2, 3 and 5 survive, all in a/repo1 — collapsing the feed
+	// to a single scope — and the cursor's own item (id 3) lands at index 1.
 	feed := []provider.Notification{
 		mkNotification("1", "a/repo1", "Subscribed in repo1", provider.NotificationReasonSubscribed, false, fixedNow),
 		mkNotification("2", "a/repo1", "Mentioned in repo1 (first)", provider.NotificationReasonMentioned, false, fixedNow),
@@ -538,9 +647,9 @@ func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testi
 	}
 	m = m.SetFeed(feed)
 
-	// Sanity: starts multi-repo (Repo column present).
-	if cols := toColumns(m.list.Items()); len(cols) != 4 {
-		t.Fatalf("pre-filter columns = %d, want 4 (multi-repo)", len(cols))
+	// Sanity: starts multi-repo, Repo column present.
+	if cols := toColumns(m.list.Items()); !hasColumn(cols, "Repo") {
+		t.Fatalf("pre-filter columns = %+v, want a Repo column", cols)
 	}
 
 	m.list.SetCursor(2) // id "3": neither the first nor the last row
@@ -558,15 +667,13 @@ func TestCycleReasonFilter_Collapse_RepoColumnDisappears_CursorSurvives(t *testi
 		t.Fatalf("post-filter items = %d, want 3 (ids 2, 3, 5 survive)", len(visible))
 	}
 
-	// (a) the repo column is gone
+	// (a) the repo column survives the collapse to a single scope
 	cols := toColumns(visible)
-	if len(cols) != 3 {
-		t.Fatalf("post-filter columns = %d, want 3 (Repo column gone)", len(cols))
+	if len(cols) != cellCount {
+		t.Fatalf("post-filter columns = %d, want %d (layout is static)", len(cols), cellCount)
 	}
-	for _, c := range cols {
-		if c.Title == "Repo" {
-			t.Fatal("Repo column must not survive the collapse")
-		}
+	if !hasColumn(cols, "Repo") {
+		t.Fatalf("post-filter columns = %+v, want the Repo column to survive the collapse to one scope", cols)
 	}
 
 	// (b) View() does not panic across the column-count change

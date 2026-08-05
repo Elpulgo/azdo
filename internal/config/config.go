@@ -624,7 +624,7 @@ func (c *Config) Validate() error {
 	notificationsCounts := c.IsPaneEnabled("notifications") && c.HasGitHub()
 	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") && !notificationsCounts {
 		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled " +
-			"(or leave 'notifications' enabled with a GitHub backend configured — github.repos — since notifications requires GitHub in phase 1)")
+			"(or leave 'notifications' enabled with at least one repo under github.repos — the Notifications tab needs a GitHub backend)")
 	}
 
 	// Notifications validation. There is no `notifications.enabled` guard

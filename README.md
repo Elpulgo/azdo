@@ -106,12 +106,17 @@ never shows the tab (Azure support is a later phase). The tab reappears on its o
 future release adds Azure support — no config change needed.
 
 - One merged feed across every backend that supports it, sorted newest-first
+- Columns are `● | Repo | Reason | Title | Updated`. Unread rows carry a `●` marker and a
+  bold title; read rows are unmarked. The Repo column is always shown, even when every
+  visible row is from the same repo — this pane is a cross-repo inbox, so which repo a
+  row belongs to is primary context and shouldn't disappear when a filter narrows the feed
 - Rows from repos you haven't configured are shown too — `o` opens them in the browser
 - `f` cycles the reason filter (review requested, mentioned, assigned, authored, commented,
   state changed, CI activity, security alert, approval requested, subscribed, other) —
   only reasons present in the current feed are offered, and there's always an "all reasons"
   position
-- `u` marks the selected row read (one-way — GitHub has no mark-unread endpoint)
+- `u` marks the selected row read — the `●` marker clears (one-way; GitHub has no
+  mark-unread endpoint). With `unread_only: false` the row stays in place, unmarked
 - `d` marks the selected row done (removes it from the feed)
 - `o` opens the selected row in your browser
 - An unread-count badge appears in the footer from every tab, after your config filters

@@ -236,18 +236,68 @@ type openURLResultMsg struct {
 	err error
 }
 
-// baseColumns are the notifications list's per-row column specs, excluding
-// the optional dynamic Repo column. Defined once and copied inside toColumns
-// to avoid mutating the package-level slice (mirrors prBaseColumns).
-var baseColumns = []listview.ColumnSpec{
-	{Title: "Reason", WidthPct: 20, MinWidth: 10},
-	{Title: "Title", WidthPct: 60, MinWidth: 20},
-	{Title: "Updated", WidthPct: 20, MinWidth: 10},
+// notificationColumns are the notifications list's per-row column specs:
+// [•] [Repo] [Reason] [Title] [Updated]. Defined once and copied inside
+// toColumns to avoid mutating the package-level slice (mirrors
+// prBaseColumns).
+//
+// Unlike every sibling pane, the Repo column here is NOT gated on the item
+// slice spanning multiple scopes (display.MultiScope, as convention 7's
+// example describes). Two reasons, both specific to this pane:
+//
+//   - The whole point of this tab is a merged cross-repo inbox, so "which
+//     repo is this about" is primary context, not redundant detail.
+//   - The gate made the column vanish exactly when a filter narrowed the
+//     feed to one repo — so turning on only_configured_repos, or cycling the
+//     `f` reason filter down to a single repo's rows, silently removed the
+//     answer to the question the filter was asked in service of. A column
+//     that disappears as a side effect of filtering reads as a bug.
+//
+// Keeping it unconditional also makes convention 7 trivially satisfied: with
+// no predicate, toColumns and toRows cannot disagree about the column count.
+//
+// readColumn carries the unread marker. It has a blank header because the
+// glyph is self-describing and a label would cost more width than the column
+// itself uses.
+// The Reason column is wider than the 20% it had before the marker column
+// existed: its widest label, "◉ Approval requested", is 20 cells, and the
+// marker's share came out of Reason's under the old split — truncating the
+// most common label ("◐ Review requested") to "◐ Review reques…". The extra
+// width is taken from Title, which has the most slack.
+var notificationColumns = []listview.ColumnSpec{
+	{Title: "", WidthPct: 4, MinWidth: 2},
+	{Title: "Repo", WidthPct: 20, MinWidth: 10},
+	{Title: "Reason", WidthPct: 24, MinWidth: 12},
+	{Title: "Title", WidthPct: 52, MinWidth: 20},
+	{Title: "Updated", WidthPct: 18, MinWidth: 10},
 }
 
-// repoColumn is the dynamic column prepended when the item slice spans more
-// than one distinct Identity.Scope (convention 7).
-var repoColumn = listview.ColumnSpec{Title: "Repo", WidthPct: 20, MinWidth: 10}
+// unreadGlyph marks a row whose effective Read state is false. Read rows
+// render a blank cell rather than a second glyph: an inbox is mostly-read in
+// steady state, so marking the exception keeps the column quiet, and a
+// "read" glyph would compete with the Reason column's own glyph for
+// attention.
+//
+// Decision 56's caveat applies here exactly as it does to titleStyle: a
+// rendered-bytes comparison cannot distinguish styled from unstyled output
+// in a test binary, so the emphasis is asserted on the style object while
+// the glyph itself — a plain rune, not an escape sequence — is asserted on
+// the cell text.
+const unreadGlyph = "●"
+
+// Cell indices into the row layout built by toRows, matching
+// notificationColumns position for position. Named so that a column added or
+// reordered is a single edit here plus notificationColumns, rather than a
+// hunt for magic numbers across the render path and its tests.
+// TestColumnOrder_MatchesCellIndices pins the two in step.
+const (
+	cellRead = iota
+	cellRepo
+	cellReason
+	cellTitle
+	cellUpdated
+	cellCount
+)
 
 // NewModel creates a new notifications pane model with default styles, no
 // marker (u/d are no-ops until a real one is injected), and no config (the
@@ -1377,66 +1427,84 @@ func indexOfReason(reasons []provider.NotificationReason, target provider.Notifi
 	return -1
 }
 
-// multiRepo reports whether items span more than one distinct
-// Identity.Scope, via display.MultiScope. Both toRows and toColumns compute
-// it from the exact same slice they're each called with, so the dynamic
-// Repo column's presence and the per-row Repo cell can never diverge
-// (convention 7).
-func multiRepo(items []provider.Notification) bool {
-	scopes := make([]string, len(items))
-	for i, n := range items {
-		scopes[i] = n.Identity.Scope
-	}
-	return display.MultiScope(scopes)
-}
-
-// toColumns derives the notifications list's column specs from the current
-// items: [Repo?] [Reason] [Title] [Updated].
-func toColumns(items []provider.Notification) []listview.ColumnSpec {
-	cols := make([]listview.ColumnSpec, len(baseColumns))
-	copy(cols, baseColumns)
-
-	if multiRepo(items) {
-		cols = append([]listview.ColumnSpec{repoColumn}, cols...)
-	}
+// toColumns returns the notifications list's column specs:
+// [•] [Repo] [Reason] [Title] [Updated].
+//
+// The items parameter is unused — the layout is static (see
+// notificationColumns) — but is kept because listview's ToColumns hook is
+// defined in terms of the item slice, and every sibling pane's
+// implementation reads it.
+func toColumns(_ []provider.Notification) []listview.ColumnSpec {
+	cols := make([]listview.ColumnSpec, len(notificationColumns))
+	copy(cols, notificationColumns)
 
 	listview.NormalizeWidths(cols)
 	return cols
 }
 
 // toRows converts notifications to table rows, mirroring toColumns's layout
-// and gating predicate exactly: [Repo?] [Reason] [Title] [Updated].
+// exactly: [•] [Repo] [Reason] [Title] [Updated]. Neither has a gating
+// predicate, so the two cannot diverge (convention 7).
 //
-//   - The Repo cell (when present) falls back to "—" for an empty
-//     ScopeDisplay: decision 35 defaults it to Scope at the adapter
-//     boundary, but a thread whose repository payload is absent leaves both
-//     empty, the one case the mapper cannot fix.
+//   - The read cell carries unreadGlyph for an unread row and a blank cell
+//     for a read one, styled through readStyle.
+//   - The Repo cell falls back to "—" for an empty ScopeDisplay: decision 35
+//     defaults it to Scope at the adapter boundary, but a thread whose
+//     repository payload is absent leaves both empty, the one case the
+//     mapper cannot fix.
 //   - The Title cell is rendered through titleStyle's named style —
-//     styles.Styles.Title (bold) for unread rows, styles.Styles.Value for
-//     read ones — so unread emphasis is a named style rather than an inline
+//     styles.Styles.Title (bold) for unread rows, an empty style for read
+//     ones — so unread emphasis is a named style rather than an inline
 //     lipgloss.NewStyle() (convention 6). An empty Title dashes to "—"
 //     before styling (decision 58).
 //   - The Updated cell renders "—" for a zero UpdatedAt (the mapper leaves it
 //     zero when the wire omits updated_at), never a year-0001 date.
 func toRows(items []provider.Notification, s *styles.Styles) []table.Row {
-	multi := multiRepo(items)
-
 	rows := make([]table.Row, len(items))
 	for i, n := range items {
 		reasonCell := display.NotificationReasonStyle(n.Reason, s).
 			Render(display.NotificationReasonGlyph(n.Reason) + " " + display.NotificationReasonLabel(n.Reason))
 
-		cells := table.Row{
-			reasonCell,
-			titleCell(n, s),
-			formatUpdatedAt(n.UpdatedAt),
-		}
-		if multi {
-			cells = append(table.Row{dashIfEmpty(n.Identity.ScopeDisplay)}, cells...)
-		}
-		rows[i] = cells
+		row := make(table.Row, cellCount)
+		row[cellRead] = readCell(n, s)
+		row[cellRepo] = dashIfEmpty(n.Identity.ScopeDisplay)
+		row[cellReason] = reasonCell
+		row[cellTitle] = titleCell(n, s)
+		row[cellUpdated] = formatUpdatedAt(n.UpdatedAt)
+		rows[i] = row
 	}
 	return rows
+}
+
+// readStyle returns the style the read-marker cell is rendered with. It
+// mirrors titleStyle deliberately: the unread glyph and the unread title are
+// one emphasis expressed in two cells, so they resolve to the same named
+// style (styles.Styles.Title) and a theme change moves both together.
+//
+// The read branch returns an empty style for the same reason titleStyle's
+// does — see its comment for why a named foreground style would be wrong on
+// the selected row.
+func readStyle(n provider.Notification, s *styles.Styles) lipgloss.Style {
+	if !n.Read {
+		return s.Title
+	}
+	return lipgloss.NewStyle()
+}
+
+// readCell returns the unread-marker cell text: unreadGlyph for an unread
+// row, empty for a read one.
+//
+// This exists because unread state was previously conveyed *only* by the
+// Title cell's boldness, which is close to invisible in themes with a low
+// contrast between bold and regular weight — making `u` (mark read) look
+// like it had done nothing at all, since the row correctly stays put when
+// unread_only is false. A glyph appearing and disappearing is legible in
+// every theme and at every terminal font weight.
+func readCell(n provider.Notification, s *styles.Styles) string {
+	if n.Read {
+		return ""
+	}
+	return readStyle(n, s).Render(unreadGlyph)
 }
 
 // titleStyle returns the style the Title cell is rendered with: unread rows get
