@@ -292,6 +292,13 @@ ORDER BY [System.ChangedDate] DESC`
 // that claim did not hold for @Me either and does not hold here. Decision
 // 3's System.History CONTAINS WORDS fallback is therefore not implemented.
 //
+// Ordered by ChangedDate descending, matching ListMyWorkItems above — stage 2
+// (SourceMentioned's confirmAndMapMentions) relies on this to fetch comments
+// for the most-recently-changed candidates first, and boundMentionCandidates
+// truncates from the tail of this order when a project's candidate count
+// exceeds the fan-out bound, so an unordered result would silently drop the
+// wrong candidates under load.
+//
 // top: maximum number of candidate work items to return (max 50 enforced,
 // matching every other WIQL caller in this file).
 func (c *Client) ListRecentlyMentionedWorkItems(top int) ([]WorkItem, error) {
@@ -300,7 +307,8 @@ func (c *Client) ListRecentlyMentionedWorkItems(top int) ([]WorkItem, error) {
 	}
 
 	query := `SELECT [System.Id] FROM WorkItems
-WHERE [System.TeamProject] = @project AND [System.Id] IN (@RecentMentions)`
+WHERE [System.TeamProject] = @project AND [System.Id] IN (@RecentMentions)
+ORDER BY [System.ChangedDate] DESC`
 
 	ids, err := c.QueryWorkItemIDs(query, top)
 	if err != nil {

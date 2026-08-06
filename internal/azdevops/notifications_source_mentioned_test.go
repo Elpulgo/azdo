@@ -1,10 +1,8 @@
 package azdevops
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -25,9 +23,9 @@ import (
 //   - stage 2's per-candidate comments response, keyed by id (comments)
 //
 // commentHits records every id a comments request actually arrived for, in
-// request order — TestSourceMentioned_CandidateFanOutBoundedAndLogged uses
-// this to prove the bound is enforced by actual HTTP call count, not merely
-// by the returned row count.
+// request order — TestSourceMentioned_CandidateFanOutBounded_InterleavesAcrossProjects
+// uses this to prove the bound is enforced by actual HTTP call count, not
+// merely by the returned row count.
 type mentionServerFixture struct {
 	ids                []int
 	items              map[int]WorkItem
@@ -119,17 +117,6 @@ func (f *mentionServerFixture) hitCount() int {
 	return len(f.commentHits)
 }
 
-// captureLogs redirects the slog default logger to a buffer for the
-// duration of the test and restores it on cleanup.
-func captureLogs(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
-}
-
 // --- SourceMentioned: matching and stamping ---
 
 func TestSourceMentioned_MatchesAndStampsFromComment(t *testing.T) {
@@ -152,10 +139,11 @@ func TestSourceMentioned_MatchesAndStampsFromComment(t *testing.T) {
 	setUserIDs(mc, "user-1")
 
 	now := changedDate.Add(time.Hour)
-	rows, err := SourceMentioned(mc, now)
+	result, err := SourceMentioned(mc, now)
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
+	rows := result.Rows
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
@@ -208,10 +196,11 @@ func TestSourceMentioned_UnrelatedEditAfterMention_DoesNotResurrectDismissedRow(
 	setUserIDs(mc, "user-1")
 
 	now := initialChanged.Add(time.Hour)
-	rows, err := SourceMentioned(mc, now)
+	firstResult, err := SourceMentioned(mc, now)
 	if err != nil {
 		t.Fatalf("SourceMentioned (first poll) failed: %v", err)
 	}
+	rows := firstResult.Rows
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row from the first poll, got %d", len(rows))
 	}
@@ -238,10 +227,11 @@ func TestSourceMentioned_UnrelatedEditAfterMention_DoesNotResurrectDismissedRow(
 	setUserIDs(mc2, "user-1")
 
 	now2 := laterChanged.Add(time.Minute)
-	rows2, err := SourceMentioned(mc2, now2)
+	secondResult, err := SourceMentioned(mc2, now2)
 	if err != nil {
 		t.Fatalf("SourceMentioned (second poll) failed: %v", err)
 	}
+	rows2 := secondResult.Rows
 	if len(rows2) != 1 {
 		t.Fatalf("expected 1 row from the second poll, got %d", len(rows2))
 	}
@@ -269,12 +259,12 @@ func TestSourceMentioned_NonMatchingTargetID_Excluded(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("expected stage 1's over-match to be filtered out by stage 2, got %d rows", len(rows))
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected stage 1's over-match to be filtered out by stage 2, got %d rows", len(result.Rows))
 	}
 }
 
@@ -291,10 +281,11 @@ func TestSourceMentioned_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
+	rows := result.Rows
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
@@ -318,7 +309,7 @@ func TestSourceMentioned_AllProjectsFailStage1_ReturnsPlainError(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": errServer})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, time.Now())
 	if err == nil {
 		t.Fatal("expected error when every project fails stage 1")
 	}
@@ -326,8 +317,8 @@ func TestSourceMentioned_AllProjectsFailStage1_ReturnsPlainError(t *testing.T) {
 	if errors.As(err, &partialErr) {
 		t.Fatalf("expected a plain error (nothing survived to report partially), got a *PartialError: %v", err)
 	}
-	if rows != nil {
-		t.Fatalf("expected nil rows when every project fails, got %d", len(rows))
+	if result.Rows != nil {
+		t.Fatalf("expected nil rows when every project fails, got %d", len(result.Rows))
 	}
 }
 
@@ -351,7 +342,7 @@ func TestSourceMentioned_PartialStage1Failure_ReturnsSurvivingRows(t *testing.T)
 	})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, time.Now())
 	if err == nil {
 		t.Fatal("expected a *PartialError when one project fails stage 1")
 	}
@@ -359,6 +350,7 @@ func TestSourceMentioned_PartialStage1Failure_ReturnsSurvivingRows(t *testing.T)
 	if !errors.As(err, &partialErr) {
 		t.Fatalf("expected a *PartialError, got: %v", err)
 	}
+	rows := result.Rows
 	if len(rows) != 1 {
 		t.Fatalf("expected the surviving project's confirmed mention, got %d rows", len(rows))
 	}
@@ -384,7 +376,7 @@ func TestSourceMentioned_PartialStage2Failure_ReturnsSurvivingRows(t *testing.T)
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, time.Now())
 	if err == nil {
 		t.Fatal("expected a *PartialError when one candidate's comments fetch fails")
 	}
@@ -392,6 +384,7 @@ func TestSourceMentioned_PartialStage2Failure_ReturnsSurvivingRows(t *testing.T)
 	if !errors.As(err, &partialErr) {
 		t.Fatalf("expected a *PartialError, got: %v", err)
 	}
+	rows := result.Rows
 	if len(rows) != 1 {
 		t.Fatalf("expected the surviving candidate's row, got %d rows", len(rows))
 	}
@@ -402,17 +395,20 @@ func TestSourceMentioned_PartialStage2Failure_ReturnsSurvivingRows(t *testing.T)
 
 // --- Bounded fan-out ---
 
-// TestSourceMentioned_CandidateFanOutBoundedAndLogged pins the spec's bound
-// requirement: stage 2 caps at mentionCandidateLimit candidates merged
-// across every project, and the truncation is logged (never silent).
-// alpha's 30 lower-numbered ids and beta's 30 higher-numbered ids merge to
-// 60, over the 50 limit; boundMentionCandidates sorts by id, so the 20
-// dropped must be beta's ids 51-60 specifically — asserted via each
-// project's own comments-request hit count, which proves the bound by
-// actual HTTP call volume rather than only by the returned row count.
-func TestSourceMentioned_CandidateFanOutBoundedAndLogged(t *testing.T) {
+// TestSourceMentioned_CandidateFanOutBounded_InterleavesAcrossProjects pins
+// the spec's bound requirement: stage 2 caps at mentionCandidateLimit
+// candidates merged across every project, and the truncation is surfaced as
+// structured data on the returned SourceMentionedResult (never silent, never
+// logged — this repo has no logging facility). alpha's and beta's 30
+// candidates each merge to 60, over the 50 limit; the merge round-robins
+// alphabetically by project ("alpha" before "beta"), so with equal-sized
+// per-project lists the cap lands exactly halfway through each — asserted
+// via each project's own comments-request hit count, which proves the bound
+// by actual HTTP call volume rather than only by the returned row count.
+func TestSourceMentioned_CandidateFanOutBounded_InterleavesAcrossProjects(t *testing.T) {
 	const alphaCount = 30
 	const betaCount = 30 // 60 total > mentionCandidateLimit (50)
+	const wantPerProject = mentionCandidateLimit / 2
 
 	alphaFixture := newSequentialMentionFixture(1, alphaCount) // ids 1..30
 	betaFixture := newSequentialMentionFixture(31, betaCount)  // ids 31..60
@@ -428,14 +424,18 @@ func TestSourceMentioned_CandidateFanOutBoundedAndLogged(t *testing.T) {
 	})
 	setUserIDs(mc, "user-1")
 
-	logBuf := captureLogs(t)
-
-	rows, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("expected 0 rows (no fixture comment mentions the user), got %d", len(rows))
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected 0 rows (no fixture comment mentions the user), got %d", len(result.Rows))
+	}
+	if result.CandidateLimit != mentionCandidateLimit {
+		t.Errorf("CandidateLimit = %d, want %d", result.CandidateLimit, mentionCandidateLimit)
+	}
+	if result.CandidatesDropped != alphaCount+betaCount-mentionCandidateLimit {
+		t.Errorf("CandidatesDropped = %d, want %d", result.CandidatesDropped, alphaCount+betaCount-mentionCandidateLimit)
 	}
 
 	alphaHits := alphaFixture.hitCount()
@@ -445,40 +445,147 @@ func TestSourceMentioned_CandidateFanOutBoundedAndLogged(t *testing.T) {
 		t.Fatalf("expected exactly %d total comments fetches across projects (the bound), got %d (alpha=%d, beta=%d)",
 			mentionCandidateLimit, alphaHits+betaHits, alphaHits, betaHits)
 	}
-	if alphaHits != alphaCount {
-		t.Errorf("expected all %d of alpha's lower-numbered ids to survive the id-ascending cap, got %d", alphaCount, alphaHits)
+	if alphaHits != wantPerProject {
+		t.Errorf("expected round-robin to give alpha %d of its candidates, got %d", wantPerProject, alphaHits)
 	}
-	if betaHits != mentionCandidateLimit-alphaCount {
-		t.Errorf("expected only the lowest %d of beta's ids to survive the cap, got %d", mentionCandidateLimit-alphaCount, betaHits)
-	}
-
-	logged := logBuf.String()
-	if !strings.Contains(logged, "truncated") {
-		t.Fatalf("expected a log line when candidate fan-out is truncated, got: %q", logged)
-	}
-	if !strings.Contains(logged, "candidates_before_truncation=60") {
-		t.Errorf("expected the log line to record the pre-truncation candidate count (60), got: %q", logged)
-	}
-	if !strings.Contains(logged, "candidates_processed=50") {
-		t.Errorf("expected the log line to record the post-truncation count (50), got: %q", logged)
+	if betaHits != wantPerProject {
+		t.Errorf("expected round-robin to give beta %d of its candidates (fair split, not crowded out), got %d", wantPerProject, betaHits)
 	}
 }
 
-func TestSourceMentioned_BelowCandidateLimit_NoTruncationLog(t *testing.T) {
+func TestSourceMentioned_BelowCandidateLimit_NoCandidatesDropped(t *testing.T) {
 	fixture := newSequentialMentionFixture(1, 5)
 	server := newMentionServer(t, fixture)
 	defer server.Close()
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	logBuf := captureLogs(t)
-
-	if _, err := SourceMentioned(mc, time.Now()); err != nil {
+	result, err := SourceMentioned(mc, time.Now())
+	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
 
-	if logBuf.Len() != 0 {
-		t.Errorf("expected no log output below the candidate limit, got: %q", logBuf.String())
+	if result.CandidatesDropped != 0 {
+		t.Errorf("CandidatesDropped = %d, want 0 below the candidate limit", result.CandidatesDropped)
+	}
+	if result.CandidateLimit != mentionCandidateLimit {
+		t.Errorf("CandidateLimit = %d, want %d (always populated, even without truncation)", result.CandidateLimit, mentionCandidateLimit)
+	}
+}
+
+// TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation proves
+// the fix for defect (a): the candidate bound is a function of stage 1's
+// query order (ChangedDate DESC), never of the work-item id itself. Azure
+// DevOps ids are assigned at creation and never reused, so a low id can
+// belong to a work item created long ago that just received a brand-new
+// mention (query order: near the front) while a high id can belong to a
+// work item created yesterday whose only mention is already stale (query
+// order: near the back). Sorting the merged candidates by id — ascending
+// (the original defect) or descending (the naive "fix") — gets this
+// backwards either way; only preserving query order and truncating the tail
+// gets it right.
+func TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation(t *testing.T) {
+	const total = mentionCandidateLimit + 1 // exactly one candidate must be dropped
+	const recentLowID = 5
+	const staleHighID = 9999
+
+	fixture := &mentionServerFixture{
+		ids:      make([]int, total),
+		items:    make(map[int]WorkItem, total),
+		comments: make(map[int][]WorkItemComment, total),
+	}
+
+	// Position 0: the low, recently-mentioned id — first in stage 1's
+	// ChangedDate-DESC order.
+	fixture.ids[0] = recentLowID
+	fixture.items[recentLowID] = WorkItem{ID: recentLowID, Fields: WorkItemFields{Title: "Old item, new mention"}}
+	fixture.comments[recentLowID] = []WorkItemComment{
+		{ID: 1, CreatedDate: time.Now(), Mentions: []CommentMention{{TargetID: "user-1"}}},
+	}
+
+	// Middle filler, positions 1..total-2: ids chosen between the two so an
+	// id-based sort in either direction would reorder everything relative to
+	// array position. None of these ever match, they exist purely to pad the
+	// fan-out past the cap.
+	for i := 1; i < total-1; i++ {
+		id := 100 + i
+		fixture.ids[i] = id
+		fixture.items[id] = WorkItem{ID: id, Fields: WorkItemFields{Title: "Untitled"}}
+	}
+
+	// Last position: the high, stale id — last in stage 1's order, past the
+	// cap once the filler pushes the total over mentionCandidateLimit.
+	fixture.ids[total-1] = staleHighID
+	fixture.items[staleHighID] = WorkItem{ID: staleHighID, Fields: WorkItemFields{Title: "New item, stale mention"}}
+	fixture.comments[staleHighID] = []WorkItemComment{
+		{ID: 1, CreatedDate: time.Now(), Mentions: []CommentMention{{TargetID: "user-1"}}},
+	}
+
+	server := newMentionServer(t, fixture)
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, "user-1")
+
+	result, err := SourceMentioned(mc, time.Now())
+	if err != nil {
+		t.Fatalf("SourceMentioned failed: %v", err)
+	}
+
+	if result.CandidatesDropped != 1 {
+		t.Fatalf("CandidatesDropped = %d, want 1", result.CandidatesDropped)
+	}
+
+	var sawLow, sawHigh bool
+	for _, row := range result.Rows {
+		switch row.Identity.ID {
+		case NotifKey("mention", "wi", recentLowID):
+			sawLow = true
+		case NotifKey("mention", "wi", staleHighID):
+			sawHigh = true
+		}
+	}
+	if !sawLow {
+		t.Error("expected the low-id, recently-mentioned work item to survive truncation")
+	}
+	if sawHigh {
+		t.Error("expected the high-id, stale-mention work item to be dropped by truncation")
+	}
+}
+
+// --- interleaveMentionCandidates ---
+
+func TestInterleaveMentionCandidates_RoundRobinsAcrossProjects(t *testing.T) {
+	byProject := map[string][]WorkItem{
+		"alpha": {{ID: 1}, {ID: 2}, {ID: 3}},
+		"beta":  {{ID: 10}, {ID: 20}},
+	}
+
+	got := interleaveMentionCandidates(byProject)
+
+	want := []int{1, 10, 2, 20, 3}
+	if len(got) != len(want) {
+		t.Fatalf("len(got) = %d, want %d", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Errorf("got[%d].ID = %d, want %d", i, got[i].ID, id)
+		}
+	}
+}
+
+func TestInterleaveMentionCandidates_DeterministicProjectOrder(t *testing.T) {
+	byProject := map[string][]WorkItem{
+		"zeta":  {{ID: 100}},
+		"alpha": {{ID: 1}},
+	}
+
+	// Map iteration order is randomized per run, so repeat enough times to
+	// catch a non-deterministic implementation.
+	for i := 0; i < 20; i++ {
+		got := interleaveMentionCandidates(byProject)
+		if len(got) != 2 || got[0].ID != 1 || got[1].ID != 100 {
+			t.Fatalf("run %d: got %v, want [alpha's 1, zeta's 100] in that order every time", i, got)
+		}
 	}
 }
 
@@ -497,18 +604,20 @@ func TestBoundMentionCandidates_WithinLimit_NoTruncation(t *testing.T) {
 	if len(bounded) != 3 {
 		t.Fatalf("expected all 3 candidates, got %d", len(bounded))
 	}
-	for i, want := range []int{1, 2, 3} {
+	for i, want := range []int{3, 1, 2} {
 		if bounded[i].ID != want {
-			t.Errorf("bounded[%d].ID = %d, want %d (must be sorted ascending)", i, bounded[i].ID, want)
+			t.Errorf("bounded[%d].ID = %d, want %d (order must be preserved, not re-sorted)", i, bounded[i].ID, want)
 		}
 	}
 }
 
-func TestBoundMentionCandidates_OverLimit_TruncatesToLowestIDs(t *testing.T) {
+func TestBoundMentionCandidates_OverLimit_KeepsLeadingCandidatesInOrder(t *testing.T) {
 	candidates := make([]WorkItem, mentionCandidateLimit+10)
 	for i := range candidates {
-		// Deliberately reversed insertion order so a correct implementation
-		// must sort, not merely slice, to keep the lowest ids.
+		// Ids deliberately run opposite to position (high id first, low id
+		// last) so this only passes if boundMentionCandidates keeps the
+		// leading elements positionally rather than re-sorting by id in
+		// either direction.
 		candidates[i] = WorkItem{ID: len(candidates) - i}
 	}
 
@@ -522,8 +631,11 @@ func TestBoundMentionCandidates_OverLimit_TruncatesToLowestIDs(t *testing.T) {
 	if len(bounded) != mentionCandidateLimit {
 		t.Fatalf("len(bounded) = %d, want %d", len(bounded), mentionCandidateLimit)
 	}
-	if bounded[0].ID != 1 || bounded[len(bounded)-1].ID != mentionCandidateLimit {
-		t.Errorf("bounded ids = [%d..%d], want [1..%d]", bounded[0].ID, bounded[len(bounded)-1].ID, mentionCandidateLimit)
+	for i := range bounded {
+		if bounded[i].ID != candidates[i].ID {
+			t.Fatalf("bounded[%d].ID = %d, want %d (leading elements must survive in original order, not re-sorted)",
+				i, bounded[i].ID, candidates[i].ID)
+		}
 	}
 }
 

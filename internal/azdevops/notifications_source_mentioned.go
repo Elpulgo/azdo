@@ -2,7 +2,6 @@ package azdevops
 
 import (
 	"fmt"
-	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -24,9 +23,29 @@ const mentionCandidateQueryTop = 50
 // otherwise fan out unboundedly. The spec's own "Unknowns" section records
 // this constant as an explicit guess pending real-world measurement against
 // a busy org; it exists to cap cost, not because 50 is a meaningful number.
-// When candidates are truncated to this limit, it is logged (see
-// SourceMentioned) rather than silently dropped.
+// When candidates are truncated to this limit, the drop count is surfaced to
+// the caller as structured data on SourceMentionedResult rather than logged
+// — this repo has no logging facility, and a call that writes to stderr
+// mid-poll would land on top of Bubble Tea's alt-screen render.
 const mentionCandidateLimit = 50
+
+// SourceMentionedResult is SourceMentioned's return value: the confirmed
+// mention rows plus how much stage 1's candidate fan-out was truncated, if
+// at all. Truncation is never silently swallowed and never written to
+// stderr/stdout — it is data the caller (task 8's composition layer) decides
+// how to surface.
+type SourceMentionedResult struct {
+	// Rows is the set of confirmed-mentioned notifications, shaped for
+	// Reconcile the same way every other source's rows are.
+	Rows []provider.Notification
+	// CandidatesDropped is how many stage-1 candidates were discarded by
+	// the mentionCandidateLimit cap. Zero means no truncation occurred.
+	CandidatesDropped int
+	// CandidateLimit is the cap that applied (mentionCandidateLimit),
+	// always populated regardless of whether truncation happened, so a
+	// caller can render "N of Limit" without importing the constant.
+	CandidateLimit int
+}
 
 // SourceMentioned implements the "@mentions in work-item discussions"
 // notification source (task 5 of the phase-2 notifications spec) →
@@ -60,45 +79,56 @@ const mentionCandidateLimit = 50
 // source has no backend fraction to report. A project or candidate that
 // fails is simply missing from the result; it is not retried within this
 // call. Only when every stage-1 project fails does this function return
-// (nil, err) with no *PartialError, since stage 2 has nothing to run against
-// in that case.
-func SourceMentioned(mc *MultiClient, now time.Time) ([]provider.Notification, error) {
+// (SourceMentionedResult{}, err) with no *PartialError, since stage 2 has
+// nothing to run against in that case.
+//
+// Candidate fan-out across projects is bounded by mentionCandidateLimit
+// (see boundMentionCandidates). Truncation, when it happens, is reported on
+// the returned SourceMentionedResult rather than logged — this repo has no
+// logging facility.
+func SourceMentioned(mc *MultiClient, now time.Time) (SourceMentionedResult, error) {
 	if mc == nil {
-		return nil, fmt.Errorf("no client configured")
+		return SourceMentionedResult{}, fmt.Errorf("no client configured")
 	}
 
 	userID, err := resolveMentionUserID(mc)
 	if err != nil {
-		return nil, err
+		return SourceMentionedResult{}, err
 	}
 
-	candidates, stage1Errs := queryMentionCandidates(mc)
+	byProject, stage1Errs := queryMentionCandidates(mc)
 
 	projectCount := len(mc.Projects())
 	if projectCount > 0 && len(stage1Errs) == projectCount {
-		return nil, fmt.Errorf("all projects failed to query mention candidates: %v", stage1Errs)
+		return SourceMentionedResult{}, fmt.Errorf("all projects failed to query mention candidates: %v", stage1Errs)
 	}
 
-	candidates, truncated, beforeTruncation := boundMentionCandidates(candidates)
+	merged := interleaveMentionCandidates(byProject)
+	candidates, truncated, beforeTruncation := boundMentionCandidates(merged)
+
+	dropped := 0
 	if truncated {
-		slog.Warn("azdevops: mention source candidate fan-out truncated",
-			"limit", mentionCandidateLimit,
-			"candidates_before_truncation", beforeTruncation,
-			"candidates_processed", len(candidates))
+		dropped = beforeTruncation - len(candidates)
 	}
 
 	rows, stage2Errs := confirmAndMapMentions(mc, candidates, userID, now)
 
+	result := SourceMentionedResult{
+		Rows:              rows,
+		CandidatesDropped: dropped,
+		CandidateLimit:    mentionCandidateLimit,
+	}
+
 	failed := len(stage1Errs) + len(stage2Errs)
 	total := projectCount + len(candidates)
 	if failed == 0 {
-		return rows, nil
+		return result, nil
 	}
 
 	errs := make([]error, 0, failed)
 	errs = append(errs, stage1Errs...)
 	errs = append(errs, stage2Errs...)
-	return rows, &PartialError{Failed: failed, Total: total, Errors: errs}
+	return result, &PartialError{Failed: failed, Total: total, Errors: errs}
 }
 
 // resolveMentionUserID fetches the authenticated user's id from any one
@@ -126,7 +156,14 @@ func resolveMentionUserID(mc *MultiClient) (string, error) {
 // same way MultiClient's own fan-out methods do, and returns every
 // individual project error rather than collapsing them — SourceMentioned
 // counts these toward its combined PartialError.
-func queryMentionCandidates(mc *MultiClient) ([]WorkItem, []error) {
+//
+// Results are kept keyed by project rather than flattened into one slice:
+// each project's list preserves ListRecentlyMentionedWorkItems' own
+// ChangedDate-DESC order, but WIQL returns only ids, so there is no
+// cross-project timestamp to sort a flattened list by. interleaveMentionCandidates
+// merges these per-project lists round-robin, which preserves each project's
+// recency order without ever comparing timestamps (or ids) across projects.
+func queryMentionCandidates(mc *MultiClient) (map[string][]WorkItem, []error) {
 	type result struct {
 		project string
 		items   []WorkItem
@@ -156,7 +193,7 @@ func queryMentionCandidates(mc *MultiClient) ([]WorkItem, []error) {
 		close(ch)
 	}()
 
-	var all []WorkItem
+	byProject := make(map[string][]WorkItem, len(projects))
 	var errs []error
 	for r := range ch {
 		if r.err != nil {
@@ -167,20 +204,61 @@ func queryMentionCandidates(mc *MultiClient) ([]WorkItem, []error) {
 			r.items[i].ProjectName = r.project
 			r.items[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
 		}
-		all = append(all, r.items...)
+		byProject[r.project] = r.items
 	}
 
-	return all, errs
+	return byProject, errs
 }
 
-// boundMentionCandidates sorts candidates by id (so the cap is deterministic
-// regardless of the goroutine-fan-out and map-iteration order that produced
-// the input) and truncates to mentionCandidateLimit. Returns the bounded
-// slice, whether truncation occurred, and the pre-truncation count for the
-// caller's log line.
-func boundMentionCandidates(candidates []WorkItem) ([]WorkItem, bool, int) {
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
+// interleaveMentionCandidates merges every project's stage-1 candidates into
+// one slice by round-robin, preserving each project's own ChangedDate-DESC
+// order (see queryMentionCandidates). Round-robin — rather than a single
+// cross-project sort — is what keeps every project's most-recently-changed
+// candidates represented once boundMentionCandidates truncates, instead of
+// letting one project with many candidates crowd out another's newest items.
+// It also avoids the trap a bare id-descending sort falls into: work-item id
+// order is *creation* order, not activity order, and an old (low-id) work
+// item can receive a brand-new mention — exactly the case this source exists
+// to catch.
+//
+// Projects are visited in a fixed alphabetical order, so the merge is
+// deterministic regardless of the goroutine fan-out and map iteration order
+// that produced byProject.
+func interleaveMentionCandidates(byProject map[string][]WorkItem) []WorkItem {
+	projects := make([]string, 0, len(byProject))
+	total := 0
+	for p, items := range byProject {
+		projects = append(projects, p)
+		total += len(items)
+	}
+	sort.Strings(projects)
 
+	merged := make([]WorkItem, 0, total)
+	for i := 0; ; i++ {
+		added := false
+		for _, p := range projects {
+			items := byProject[p]
+			if i < len(items) {
+				merged = append(merged, items[i])
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return merged
+}
+
+// boundMentionCandidates truncates an already round-robin-interleaved
+// candidate slice (see interleaveMentionCandidates) to mentionCandidateLimit.
+// It does not sort: the input's order already carries the meaning that
+// matters — each project's most-recently-changed candidates first — so
+// truncating from the tail drops the least-recently-changed candidates
+// spread fairly across projects, rather than collapsing to whichever id
+// happens to be numerically highest or lowest. Returns the bounded slice,
+// whether truncation occurred, and the pre-truncation count for the caller.
+func boundMentionCandidates(candidates []WorkItem) ([]WorkItem, bool, int) {
 	total := len(candidates)
 	if total <= mentionCandidateLimit {
 		return candidates, false, total
