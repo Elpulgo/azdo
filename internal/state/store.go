@@ -118,6 +118,14 @@ func (s *Store) LastWriteError() error {
 	return s.writeErr
 }
 
+// WriteAtomic writes data to path via a temp file + rename, so a crash
+// mid-write cannot leave a half-written file behind. Exported so sibling
+// stores outside this package (e.g. azdevops's local notification triage
+// store) get the same atomicity guarantee without duplicating it.
+func WriteAtomic(path string, data []byte) error {
+	return writeAtomic(path, data)
+}
+
 // writeAtomic writes data to path via a temp file + rename, so a crash
 // mid-write cannot leave a half-written state.yaml behind.
 func writeAtomic(path string, data []byte) error {
