@@ -330,7 +330,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 
 - [x] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
 - [x] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
-- [x] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → state left untouched, *not* cleared — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
+- [ ] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → **triage** state (`Read`/`Done`/`LastActivity`) left untouched, *not* cleared, but `LastSeen` **is** advanced like every other branch — `LastSeen` is presence bookkeeping, not triage, and freezing it lets a row present in every poll be TTL-pruned and resurrect (amended 2026-08-06 after review; decision 2's prose only ever discusses clearing `read`/`done`) — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
 - [ ] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
 - [ ] 5. **`azdevops`: source — @mentions in work-item discussions** → `mentioned` (blocked by: 1,3). → done: stage 1 narrows via the form task 1 confirmed; stage 2 fetches comments for candidates and keeps only those with a `mentions[].targetId` equal to `GetCurrentUserID()`; key is `mention/wi/<id>`; activity stamp is the **newest matching comment's `createdDate`**, not the work item's `ChangedDate` — a test must pin that an unrelated edit after the mention does not advance the stamp, which is the entire reason stage 2 exists; candidate fan-out is bounded by a constant and the bound is logged when it truncates, never silently
 - [ ] 6. **`azdevops`: source — recently assigned work items** → `assigned` (blocked by: 3). → done: WIQL over `[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-N` (decision 6 — no snapshot, no delta state); key is `assigned/wi/<id>`; a test proves the same poll run twice yields identical rows and identical state (idempotence is the property that replaces the snapshot); a fresh install with an empty state file surfaces at most the window's worth of items, asserted with a fixture spanning items inside and outside the window
@@ -359,3 +359,56 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   scales with how much a user is mentioned. Decision 10's slower interval bounds the damage and
   task 5 bounds the fan-out, but the constant is a guess until someone runs it against a busy
   org. Revisit after the first real-world use.
+
+## Review feedback: azdevops identity key + reconcile function
+
+Task 3 un-ticked after review. The state machine is correct — the reviewer walked
+appears → mark read → same-stamp poll → new comment → mark done → same-stamp poll →
+new activity and confirmed triage survives and resurrects at the right moments, `After`
+(strict `>`) is the right operator, purity holds by reading not just by test, and the
+TTL boundary is right. One branch is wrong.
+
+- 🔴 `notifications_reconcile.go` (~93-95, the `Before` branch, interacting with the prune
+  loop ~111-115): the older-stamp branch writes nothing back, so `LastSeen` stays frozen
+  while the row is returned by the source on **every** poll. The prune loop iterates all of
+  `newState` including keys seen this poll, so the entry is deleted on stale `LastSeen` and
+  the dismissed item resurrects. Demonstrated against the real function: a `done` entry with
+  a regressed stamp, row present in all 40 polls → `day 31: ENTRY PRUNED while row still in
+  feed / RESURRECTED: rows=1 unread=[false]`. Maximally silent — while `done` the row is
+  dropped from the feed, so the user sees nothing for 30 days and then a dismissed item
+  reappears as unread with no triggering event. Not hypothetical for the sources this gates:
+  task 5's stamp is the newest matching comment's `createdDate`, so deleting that comment
+  regresses the stamp permanently. **Fix:** advance `LastSeen` only in the `Before` branch
+  and write the entry back, leaving `Read`/`Done`/`LastActivity` at their stored values.
+  The task line has been amended to match — `LastSeen` is presence bookkeeping, not triage.
+  Add a row proving a regressed-stamp row still in the feed survives past `orphanTTL`.
+- 🟡 Zero `UpdatedAt` is untested and takes the skew branch, pinning the entry completely
+  (`LastSeen advanced? false`). A source that intermittently fails to populate the stamp is
+  the most likely production trigger for the 🔴 above, and it is invisible rather than an
+  error. The opposite direction is benign (zero then real → `After` → correctly resurfaces).
+  Decide the contract explicitly and pin it with a test: either treat zero as "no activity
+  information" (skip the stamp comparison, apply stored `Read`/`Done`, still refresh
+  `LastSeen`), or require sources never to emit one.
+- 🟡 An empty `Identity.ID` is accepted as a map key, collapsing unrelated subjects into one
+  entry. `NotifKey` correctly returns `""` for `id <= 0` but nothing acts on it. Probed with
+  two unrelated malformed rows (different sources, projects, stamps): `rows in=2 out=1;
+  state keys=1` — one row dropped because the *other* subject's stored `Done` applied, and
+  the second's newer stamp cleared triage belonging to the first. Also persists a `""` key
+  into `notifications.yaml` forever. `provider.Identity.IsZero()` already treats `ID == ""`
+  as unset, so `Reconcile` is the one place that doesn't. Guard `key == ""` at the top of the
+  loop and document the rule on `NotifKey`, since tasks 4-7 each call it independently.
+- 🟡 Task 9 hazard: an entry created by `MarkRead`/`MarkDone` for an unseen id has a zero
+  `LastActivity`, so the next `Reconcile` sees any real `row.UpdatedAt` as strictly newer,
+  takes `After`, and clears the mark the user just made — it survives less than one poll.
+  Document the invariant on `Reconcile` (an entry written outside it must carry a
+  `LastActivity` at least as new as the row it was marked from) or expose a constructor
+  taking the row's `UpdatedAt`. Cheap now, expensive to diagnose later.
+- 🟢 `Reconcile` speaks `map[string]TriageEntry` while `State`/`Apply`/`Replace` all speak
+  the named `TriageState`. Take and return `TriageState`; rename the `state` parameter to
+  `stored` (the package has a sibling file importing `internal/state`).
+
+Checked and explicitly **not** flagged: key collisions across projects (`config.Organization`
+is singular and ids are collection-unique within an org, so `source/entity/id` is safe today);
+and `done` rows dropped while still present in the source (the switch runs *before* the
+`if entry.Done { continue }`, so their `LastSeen` is refreshed correctly — that ordering is
+right, and the 🔴 is the only path that defeats it).
