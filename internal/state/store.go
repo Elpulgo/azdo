@@ -127,14 +127,18 @@ func WriteAtomic(path string, data []byte) error {
 }
 
 // writeAtomic writes data to path via a temp file + rename, so a crash
-// mid-write cannot leave a half-written state.yaml behind.
+// mid-write cannot leave a half-written file behind. The temp-file prefix
+// and error text are derived from the target file's own name (rather than
+// hardcoded to "state") so a sibling store (e.g. azdevops's notifications.yaml)
+// sharing this helper gets accurate diagnostics too.
 func writeAtomic(path string, data []byte) error {
+	base := filepath.Base(path)
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
+		return fmt.Errorf("create dir for %s: %w", base, err)
 	}
 
-	f, err := os.CreateTemp(dir, ".state-*.tmp")
+	f, err := os.CreateTemp(dir, fmt.Sprintf(".%s-*.tmp", base))
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}

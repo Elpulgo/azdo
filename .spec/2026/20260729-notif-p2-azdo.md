@@ -329,7 +329,7 @@ Sources: [Query fields, operators, macros, and variables](https://learn.microsof
 Task 1 is a spike and gates task 5 only; everything else can start immediately.
 
 - [x] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
-- [ ] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
+- [x] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
 - [ ] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → state left untouched, *not* cleared — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
 - [ ] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
 - [ ] 5. **`azdevops`: source — @mentions in work-item discussions** → `mentioned` (blocked by: 1,3). → done: stage 1 narrows via the form task 1 confirmed; stage 2 fetches comments for candidates and keeps only those with a `mentions[].targetId` equal to `GetCurrentUserID()`; key is `mention/wi/<id>`; activity stamp is the **newest matching comment's `createdDate`**, not the work item's `ChangedDate` — a test must pin that an unrelated edit after the mention does not advance the stamp, which is the entire reason stage 2 exists; candidate fan-out is bounded by a constant and the bound is logged when it truncates, never silently
@@ -359,57 +359,3 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   scales with how much a user is mentioned. Decision 10's slower interval bounds the damage and
   task 5 bounds the fan-out, but the constant is a guess until someone runs it against a busy
   org. Revisit after the first real-world use.
-
-## Review feedback: azdevops local triage store
-
-Task 2 was un-ticked after review. `TriageStore` was copied from `state.Store` with `State`
-(a **struct**, copied by value) swapped for `TriageState` (a **map**, a reference). Every
-safety property in the original depended on that type being a value, so the copy inherits the
-shape without the guarantee. Fix all 🔴 items before re-ticking.
-
-- 🔴 `notifications_store.go` `Flush` (~168-171): `snapshot := s.state` copies a map *header*,
-  then the mutex is released and `snapshot.Marshal()` iterates the live map while a concurrent
-  `Apply` writes to it. Reproduced against the committed code as
-  `fatal error: concurrent map iteration and map write` — a runtime `throw`, not a race-detector
-  warning, so it needs no `-race` build and it kills the whole TUI. Fires on the ordinary path:
-  the debounce timer's `flushAsync` runs on its own goroutine while the UI goroutine calls
-  `Apply`. Deep-copy under the lock before unlocking — `TriageEntry` is all value types, so a
-  shallow per-key copy is a true snapshot.
-- 🔴 `notifications_store.go` `State` (~122-127): documented as returning "a snapshot", actually
-  returns the live map. A caller can mutate store internals with no lock and without setting
-  `dirty`. This is the same defect class the spec already legislates against in task 14
-  ("returned **by copy** under a mutex … phase 1 lost a defect to exactly this"); tasks 3 and 8
-  are `State()` callers by construction. Return a copy.
-- 🔴 `notifications_store.go` `Flush` (~158-184): silent lost update. `Flush` snapshots, drops
-  the lock, writes, then clears `dirty` **unconditionally**. An `Apply` landing in that window
-  arms a new timer, gets its `dirty` cleared, and the timer then no-ops — the write is lost, and
-  the shutdown `Flush()` returns `nil` having written nothing. Inherited from `state.Store`,
-  where losing a navigation breadcrumb is harmless; decision 1's premise is that triage state is
-  not disposable. Add a generation counter: clear `dirty` after the write only if the generation
-  is unchanged, else leave it set and re-arm.
-- 🟡 `Flush` (~159-163) stops and nils the timer *before* writing, so a failed write leaves
-  `dirty` true with no timer armed and nothing ever retries. Re-arm on write failure.
-- 🟡 `writeErr` (~147-152, 186-193) is never cleared on a later success, so one transient
-  failure pins a persistence error in the UI forever, contradicting its own doc comment.
-- 🟡 `SetDebounce` (~114-120) has no `d <= 0` guard; `time.AfterFunc` fires immediately on zero
-  or negative, silently disabling the coalescing `Apply` promises. Convention 11 shape,
-  convention 13 boundary rows at `-1`, `0`, `1ns`.
-- 🟡 The test file is a strict subset of `internal/state/store_test.go`, and the five omitted
-  tests are exactly the ones that would have caught the above: `ConcurrentApplyIsSafe`,
-  `DebouncedWriteEventuallyHappens`, `RapidAppliesCoalesce`, `FlushAtomicallyReplacesExistingFile`,
-  `CreatesParentDirectory`. `flushAsync`, the timer path and `LastWriteError` have zero coverage —
-  the one round-trip test calls `SetDebounce(10ms)` then immediately `Flush()`, which stops the
-  timer, so the debounce is never observed. Add empty-file and malformed-YAML load rows too.
-- 🟡 Forward pressure from task 3: `Apply(mutate func(TriageState))` permits only in-place
-  mutation, but task 3 specifies `Reconcile` as a **pure function returning a fresh map** whose
-  TTL pruning *deletes* keys. Writing that back through `Apply` forces a hand-rolled
-  clear-then-copy over the live map — the mutation-in-place shape the pure design exists to
-  avoid, and an easy place to drop the delete half and leak pruned entries. Add
-  `Replace(TriageState)`, or change `Apply` to `func(TriageState) TriageState`.
-- 🟢 Corrupt-file policy is undecided rather than deliberate: one malformed entry rejects the
-  whole file, and `NewTriageStore` propagates the error, so following `main.go:348`'s wiring
-  pattern would make a corrupt `notifications.yaml` a fatal startup failure for the TUI. Decide
-  it before task 9 wires it up and pin the choice with a test.
-- 🟢 `internal/state/store.go` (~133, 137): now that `WriteAtomic` is shared, its `.state-*.tmp`
-  prefix and `"create state dir"` error text are state.yaml-specific. A failed triage write
-  reports "create state dir". Derive the prefix from `filepath.Base(path)`.
