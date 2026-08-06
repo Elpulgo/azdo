@@ -600,3 +600,36 @@ func TestTriageStore_Replace_SwapsMapAndPersists(t *testing.T) {
 		t.Errorf("reloaded = %+v, want exactly one entry", reloaded)
 	}
 }
+
+// TestTriageStore_Replace_DoesNotAliasCallerMap mirrors
+// TestTriageStore_State_ReturnsCopyNotLiveMap for the write side: Replace
+// used to store the caller's map by reference, so a caller mutating the map
+// it just handed to Replace corrupted the store's live state without going
+// through any lock — the exact hole that previously caused a "concurrent
+// map iteration and map write" fatal error when Reconcile's returned map
+// was mutated by its caller after being passed to Replace.
+func TestTriageStore_Replace_DoesNotAliasCallerMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notifications.yaml")
+	store, err := NewTriageStore(path)
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+
+	callerMap := TriageState{
+		"review/pr/1": {Read: true},
+	}
+	store.Replace(callerMap)
+
+	// Mutate the caller's map after handing it to Replace.
+	callerMap["review/pr/1"] = TriageEntry{Read: false, Done: true}
+	callerMap["review/pr/2"] = TriageEntry{Read: true}
+
+	got := store.State()
+	entry, ok := got["review/pr/1"]
+	if !ok || !entry.Read || entry.Done {
+		t.Errorf("store state mutated via caller's map after Replace(): got[review/pr/1] = %+v, ok = %v", entry, ok)
+	}
+	if _, ok := got["review/pr/2"]; ok {
+		t.Errorf("store state gained a key injected into the caller's map after Replace(): %+v", got)
+	}
+}

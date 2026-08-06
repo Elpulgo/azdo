@@ -196,7 +196,12 @@ func (s *TriageStore) Replace(newState TriageState) {
 		newState = TriageState{}
 	}
 	s.mu.Lock()
-	s.state = newState
+	// Store a deep copy, not the caller's live map. Reconcile hands back a
+	// freshly built map, but aliasing it here would let the caller's later
+	// mutation of that map race the store's own reads/writes of s.state —
+	// exactly the "concurrent map iteration and map write" fatal error a
+	// previous pass of this store already fixed for Flush's snapshot.
+	s.state = newState.clone()
 	s.markDirtyLocked()
 	s.mu.Unlock()
 }
