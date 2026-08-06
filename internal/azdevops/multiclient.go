@@ -363,6 +363,66 @@ func (mc *MultiClient) ListWorkItems(top int) ([]WorkItem, error) {
 	return allItems, nil
 }
 
+// ListRecentlyAssignedWorkItems fetches work items assigned to the
+// authenticated user (@Me) that changed within the last lookbackDays days
+// from all projects concurrently, tags each with ProjectName, merges and
+// sorts by ChangedDate descending. Backs the "recently assigned work items"
+// notification source (task 6 of the phase-2 notifications spec, see
+// SourceAssigned in notifications_source_assigned.go and
+// Client.ListRecentlyAssignedWorkItems for the query itself).
+func (mc *MultiClient) ListRecentlyAssignedWorkItems(lookbackDays, top int) ([]WorkItem, error) {
+	type result struct {
+		project string
+		items   []WorkItem
+		err     error
+	}
+
+	var wg sync.WaitGroup
+	ch := make(chan result, len(mc.clients))
+
+	for project, client := range mc.clients {
+		wg.Add(1)
+		go func(p string, c *Client) {
+			defer wg.Done()
+			items, err := c.ListRecentlyAssignedWorkItems(lookbackDays, top)
+			ch <- result{p, items, err}
+		}(project, client)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	var allItems []WorkItem
+	var errs []error
+	for r := range ch {
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		for i := range r.items {
+			r.items[i].ProjectName = r.project
+			r.items[i].ProjectDisplayName = mc.DisplayNameFor(r.project)
+		}
+		allItems = append(allItems, r.items...)
+	}
+
+	if len(errs) == len(mc.clients) {
+		return nil, fmt.Errorf("all projects failed: %v", errs)
+	}
+
+	sort.Slice(allItems, func(i, j int) bool {
+		return allItems[i].Fields.ChangedDate.After(allItems[j].Fields.ChangedDate)
+	})
+
+	if len(errs) > 0 {
+		return allItems, &PartialError{Failed: len(errs), Total: len(mc.clients), Errors: errs}
+	}
+
+	return allItems, nil
+}
+
 // MetricsWorkItems fetches the org-wide metrics dataset (configured workflow
 // states plus items closed on or after `since`) from all projects
 // concurrently, tags each with ProjectName, merges and sorts by ChangedDate

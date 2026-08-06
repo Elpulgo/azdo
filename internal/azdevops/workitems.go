@@ -338,6 +338,65 @@ ORDER BY [System.ChangedDate] DESC`
 	return items, nil
 }
 
+// ListRecentlyAssignedWorkItems retrieves work items assigned to the
+// authenticated user (@Me) whose System.ChangedDate falls within the last
+// lookbackDays days, scoped to this client's project. This is the entire
+// query behind the "recently assigned work items" notification source (task
+// 6 of the phase-2 notifications spec, SourceAssigned in
+// notifications_source_assigned.go): decision 6 chose this bounded lookback
+// window over a snapshot/delta design specifically because it is stateless
+// and idempotent — the same query run twice against unchanged data returns
+// the same ids in the same order, so a fresh install with an empty local
+// state file surfaces at most this window's worth of items rather than
+// flooding the feed with everything ever assigned.
+//
+// The query's ORDER BY only sorts the ids QueryWorkItemIDs returns — the
+// GET /wit/workitems batch endpoint GetWorkItems calls next returns
+// response.Value in its own order, unrelated to the order the ids were
+// requested in (see ListRecentlyMentionedWorkItems' doc comment for the full
+// explanation, and MultiClient.ListWorkItems/.MetricsWorkItems/
+// .ListMyWorkItems for the same fix applied elsewhere in this package). The
+// result below is explicitly re-sorted by Fields.ChangedDate descending
+// after the batch fetch to correct for that.
+//
+// lookbackDays is N in `[System.ChangedDate] >= @Today-N` — task 11 wires it
+// to notifications.azure.lookback_days; this method takes it as a plain
+// parameter and does no config lookups of its own.
+//
+// top: maximum number of work items to return (max 50 enforced, matching
+// every other WIQL caller in this file).
+func (c *Client) ListRecentlyAssignedWorkItems(lookbackDays, top int) ([]WorkItem, error) {
+	if top > 50 {
+		top = 50
+	}
+
+	query := fmt.Sprintf(`SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project
+  AND [System.AssignedTo] = @Me
+  AND [System.ChangedDate] >= @Today-%d
+ORDER BY [System.ChangedDate] DESC`, lookbackDays)
+
+	ids, err := c.QueryWorkItemIDs(query, top)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ids) == 0 {
+		return []WorkItem{}, nil
+	}
+
+	items, err := c.GetWorkItems(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Fields.ChangedDate.After(items[j].Fields.ChangedDate)
+	})
+
+	return items, nil
+}
+
 // GetWorkItemTypeStates retrieves the available states for a work item type.
 // States in the "Removed" category are excluded since they are not typical user transitions.
 func (c *Client) GetWorkItemTypeStates(workItemType string) ([]WorkItemTypeState, error) {

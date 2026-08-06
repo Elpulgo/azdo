@@ -982,3 +982,102 @@ func TestClient_ListRecentlyMentionedWorkItems_SortsByChangedDateDescending(t *t
 		}
 	}
 }
+
+// TestClient_ListRecentlyAssignedWorkItems_SortsByChangedDateDescending
+// mirrors TestClient_ListRecentlyMentionedWorkItems_SortsByChangedDateDescending's
+// fix for the same trap (see that test's doc comment): the WIQL query's
+// ORDER BY only sorts the ids QueryWorkItemIDs returns, not the work items
+// GetWorkItems fetches next. The WIQL response here lists ids ascending
+// (1, 2, 3) but the batch GetWorkItems response deliberately returns them in
+// an unrelated order (3, 1, 2) that matches neither the WIQL order nor
+// ChangedDate order — only an explicit post-fetch sort by Fields.ChangedDate
+// descending recovers the correct [3, 2, 1] order asserted below.
+func TestClient_ListRecentlyAssignedWorkItems_SortsByChangedDateDescending(t *testing.T) {
+	oldest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			response := WIQLResponse{
+				WorkItems: []WorkItemReference{{ID: 1}, {ID: 2}, {ID: 3}},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		response := WorkItemsResponse{
+			Value: []WorkItem{
+				{ID: 3, Fields: WorkItemFields{Title: "Newest", ChangedDate: newest}},
+				{ID: 1, Fields: WorkItemFields{Title: "Oldest", ChangedDate: oldest}},
+				{ID: 2, Fields: WorkItemFields{Title: "Middle", ChangedDate: middle}},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	items, err := client.ListRecentlyAssignedWorkItems(14, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 work items, got %d", len(items))
+	}
+
+	wantOrder := []int{3, 2, 1} // newest ChangedDate first
+	for i, wantID := range wantOrder {
+		if items[i].ID != wantID {
+			t.Errorf("items[%d].ID = %d, want %d (ChangedDate descending)", i, items[i].ID, wantID)
+		}
+	}
+}
+
+// TestClient_ListRecentlyAssignedWorkItems_QueryContainsLookbackWindow pins
+// that lookbackDays is threaded into the WIQL query as the literal N in
+// `@Today-N`, and that the query still scopes to @Me and @project — decision
+// 6's bounded lookback window (no snapshot, no delta state) only bounds the
+// feed if N actually reaches the query Azure evaluates server-side.
+func TestClient_ListRecentlyAssignedWorkItems_QueryContainsLookbackWindow(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListRecentlyAssignedWorkItems(21, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedBody, "@Today-21") {
+		t.Errorf("WIQL query must bound the lookback window via @Today-21, got query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@Me") {
+		t.Errorf("WIQL query must scope to @Me, got query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@project") {
+		t.Errorf("WIQL query must scope to @project to prevent duplicates in multi-project mode, got query body: %s", capturedBody)
+	}
+}
