@@ -331,7 +331,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
 - [x] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
 - [x] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → **triage** state (`Read`/`Done`/`LastActivity`) left untouched, *not* cleared, but `LastSeen` **is** advanced like every other branch — `LastSeen` is presence bookkeeping, not triage, and freezing it lets a row present in every poll be TTL-pruned and resurrect (amended 2026-08-06 after review; decision 2's prose only ever discusses clearing `read`/`done`) — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
-- [x] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
+- [ ] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
 - [ ] 5. **`azdevops`: source — @mentions in work-item discussions** → `mentioned` (blocked by: 1,3). → done: stage 1 narrows via the form task 1 confirmed; stage 2 fetches comments for candidates and keeps only those with a `mentions[].targetId` equal to `GetCurrentUserID()`; key is `mention/wi/<id>`; activity stamp is the **newest matching comment's `createdDate`**, not the work item's `ChangedDate` — a test must pin that an unrelated edit after the mention does not advance the stamp, which is the entire reason stage 2 exists; candidate fan-out is bounded by a constant and the bound is logged when it truncates, never silently
 - [ ] 6. **`azdevops`: source — recently assigned work items** → `assigned` (blocked by: 3). → done: WIQL over `[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-N` (decision 6 — no snapshot, no delta state); key is `assigned/wi/<id>`; a test proves the same poll run twice yields identical rows and identical state (idempotence is the property that replaces the snapshot); a fresh install with an empty state file surfaces at most the window's worth of items, asserted with a fixture spanning items inside and outside the window
 - [ ] 7. **`azdevops`: source — my failed pipeline runs** → `ci_activity` (blocked by: 3). → done: filters `MultiClient.ListPipelineRuns` (`multiclient.go:69`) to runs triggered by me with a failed result; key is `cifail/run/<id>` — each failed run is its own item, so no stamp advance is needed and the reconcile treats it as a permanently-stable subject; reason is `NotificationReasonCIActivity` per decision 8, asserted by name so a future `ci_failed` member cannot be silently swapped in
@@ -359,3 +359,72 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   scales with how much a user is mentioned. Decision 10's slower interval bounds the damage and
   task 5 bounds the fan-out, but the constant is a guess until someone runs it against a busy
   org. Revisit after the first real-world use.
+- **Should resurrection key off a changed activity *token* rather than a newer timestamp?**
+  Raised by task 4's review, 2026-08-06, and it applies to every source, not just PRs. Every
+  stamp this design uses is attacker- or accident-settable and can move backwards: a PR's
+  committer date (`GIT_COMMITTER_DATE`, `rebase --committer-date-is-author-date`, force-push to
+  an older commit) and task 5's newest-matching-comment `createdDate` (deleting that comment
+  regresses it permanently). `Reconcile`'s `After` test then reads real new activity as "older"
+  and leaves a dismissed row stranded. Clamping future stamps to `now` — done in task 4 — closes
+  the permanent-strand variant but not the regression one. The alternative is a `LastCommitID`
+  or generic opaque-token field on `TriageEntry`, where *any* change means new activity
+  regardless of clock direction; `CommitID` is already decoded and unused. **Deferred to Oscar
+  deliberately:** it changes `TriageEntry`'s persisted shape and `Reconcile`'s contract across
+  all four sources, which is a design decision, not a fix an implementer should make mid-loop.
+  Decide before task 9 hardens the store's schema.
+
+## Review feedback: azdevops source PRs awaiting my review
+
+Task 4 un-ticked after review. No 🔴 — the reviewer explicitly cleared nil-safety (`Committer`
+is a value struct, one guarded dereference; a `"committer":null` payload lands zero, no panic),
+zero-time handling, the degradation ladder (`org`/`project` come from the *resolved* client and
+never from the PR, so a wrong-repo link is structurally impossible), the `git.go` struct
+widening, and convention 11. The prior validator confirmed against Microsoft's REST docs that
+`GitPullRequest` genuinely has no last-updated property and that `lastMergeSourceCommit` is
+recomputed whenever the source branch changes — settled, do not re-litigate. Three 🟡s remain,
+one of which is a data-loss path.
+
+- 🟡 `notifications_source_review.go` ~28-31: a partial multi-project failure is collapsed into
+  a total one. `MultiClient.ListPullRequestsAsReviewer` returns rows **and** a `*PartialError`
+  when some projects fail; this discards the rows on any non-nil error. Two projects, `beta`
+  500s on an expired PAT, `alpha`'s 6 review-requested PRs vanish. The rest of the codebase
+  honours the rows-plus-`PartialError` contract explicitly — `internal/ui/pullrequests/list.go`
+  at 154 and 193 both keep `msg.prs`. Secondary and worse: once task 8 forwards rows into
+  `Reconcile`, a `nil` slice advances no entry's `LastSeen`, so sustained partial failure
+  TTL-prunes live triage state and resurrects dismissed rows — the exact defect task 3 was
+  reopened for, re-entered through a different door. Task 8's done-criteria already require one
+  failing source to degrade rather than empty the feed; this is the same rule one layer down.
+  **Fix:** map the rows you got and return them alongside the `*PartialError`.
+- 🟡 `notifications_source_review.go` ~78-83: `prActivityStamp` is non-monotonic. A committer
+  date is user-settable (`GIT_COMMITTER_DATE`) and wrong under build-agent clock skew, and
+  `Reconcile` stores it as `LastActivity` unconditionally on the `After` branch. A commit dated
+  2031 raises the bar past anything a real push can clear, and the amended `Before` branch then
+  leaves triage frozen — the row is silently dead for five years. **Fix now:** clamp with
+  `if stamp.After(now) { stamp = now }`, which closes the non-self-healing variant entirely.
+  The regression variant (force-push to an older commit, or `rebase --committer-date-is-author-date`,
+  strands a dismissed row until a commit dated after the stored stamp arrives) is **deferred to
+  Oscar** — see Unknowns. Do not redesign `Reconcile` or `TriageEntry` for it in this task.
+- 🟡 `notifications_source_review_test.go` (root cause `multiclient_test.go:96`): nothing pins
+  the wire field names. `newPRServer` marshals the *same* struct the client unmarshals, so the
+  tags round-trip symmetrically and every test passes even with `json:"commiter"`. A typo or an
+  Azure casing change leaves the pointer permanently `nil`, every PR falls back to
+  `CreationDate`, and **no push ever resurrects a dismissed row** — the one behaviour this task
+  exists to deliver — against a fully green suite. **Fix:** unmarshal a raw JSON string literal
+  shaped like Azure's real `GetPullRequests` response and assert `prActivityStamp` picks the
+  committer date. Use a fixture where the committer date (09:00) is *older* than `CreationDate`
+  (10:00) — the realistic case, since you push the branch before opening the PR, and proof that
+  the `CreationDate` fallback is not a lower bound.
+- 🟢 `TestSourceReviewRequested_PropagatesListError` configures one project, so
+  `len(errs) == len(mc.clients)` always holds and the `errors.As(&partialErr)` assertion is
+  unreachable-by-construction. Adding a second, succeeding server makes it fail today — it is
+  the test that surfaces the first 🟡.
+- 🟢 `TestSourceReviewRequested_NewPushResurrectsDismissedRow` is a genuine end-to-end assertion
+  through `Reconcile`, but synthesises the push via `mapReviewRequested` instead of a second
+  server round-trip, so the one poll that must carry `lastMergeSourceCommit` over the wire never
+  does. Its `pr` literal also sets no `ProjectName`, so it compares rows differing in a field it
+  never asserts. Serving the second poll from a second `newPRServer` folds the third 🟡 into it.
+- 🟢 `Vote` and `IsDraft` are not consulted, so drafts and PRs you already approved appear, and
+  an unrelated push re-clears `Read` on one you signed off days ago. Not against this task's
+  stated criteria and consistent with the existing as-reviewer list view, which filters neither
+  — but the fixture sets `Vote: 0`, which reads like an intent never implemented. Decide it
+  deliberately in task 8 rather than by omission.
