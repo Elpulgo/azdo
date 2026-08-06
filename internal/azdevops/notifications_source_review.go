@@ -1,6 +1,7 @@
 package azdevops
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,19 +21,41 @@ import (
 // only computes the freshly-queried subject, the same shape Reconcile (see
 // notifications_reconcile.go) expects as input. Folding local triage state in
 // is composition-layer work (task 8), not this source's job.
-func SourceReviewRequested(mc *MultiClient, top int) ([]provider.Notification, error) {
+//
+// now is threaded through to prActivityStamp so a stamp can never land in the
+// future (see prActivityStamp's doc comment) while staying testable — it is
+// never read from time.Now() internally, matching Reconcile's own style.
+//
+// A partial multi-project failure (MultiClient.ListPullRequestsAsReviewer
+// returning rows alongside a *PartialError) must not discard the rows it did
+// get: the rest of the codebase honours that rows-plus-PartialError contract
+// explicitly (internal/ui/pullrequests/list.go:154 and :193), and dropping
+// the rows here would also starve Reconcile of LastSeen updates for every
+// subject a healthy project still returned, TTL-pruning and resurrecting
+// dismissed rows on sustained partial failure.
+func SourceReviewRequested(mc *MultiClient, top int, now time.Time) ([]provider.Notification, error) {
 	if mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
 
 	prs, err := mc.ListPullRequestsAsReviewer(top)
 	if err != nil {
-		return nil, err
+		var partialErr *PartialError
+		if !errors.As(err, &partialErr) {
+			return nil, err
+		}
+		// Partial failure: still map and return the rows the surviving
+		// projects gave us, alongside the error.
+		rows := make([]provider.Notification, 0, len(prs))
+		for _, pr := range prs {
+			rows = append(rows, mapReviewRequested(mc, pr, now))
+		}
+		return rows, err
 	}
 
 	rows := make([]provider.Notification, 0, len(prs))
 	for _, pr := range prs {
-		rows = append(rows, mapReviewRequested(mc, pr))
+		rows = append(rows, mapReviewRequested(mc, pr, now))
 	}
 	return rows, nil
 }
@@ -40,7 +63,7 @@ func SourceReviewRequested(mc *MultiClient, top int) ([]provider.Notification, e
 // mapReviewRequested maps a single wire PullRequest (already tagged with
 // ProjectName/ProjectDisplayName by MultiClient's fan-out) to a
 // provider.Notification for the review_requested reason.
-func mapReviewRequested(mc *MultiClient, pr PullRequest) provider.Notification {
+func mapReviewRequested(mc *MultiClient, pr PullRequest, now time.Time) provider.Notification {
 	scope := pr.ProjectName
 	scopeDisplay := pr.ProjectDisplayName
 	if scopeDisplay == "" {
@@ -56,7 +79,7 @@ func mapReviewRequested(mc *MultiClient, pr PullRequest) provider.Notification {
 		},
 		Title:     pr.Title,
 		Reason:    provider.NotificationReasonReviewRequested,
-		UpdatedAt: prActivityStamp(pr),
+		UpdatedAt: prActivityStamp(pr, now),
 		WebURL:    reviewRequestedWebURL(mc, pr),
 	}
 }
@@ -75,11 +98,25 @@ func mapReviewRequested(mc *MultiClient, pr PullRequest) provider.Notification {
 // CreationDate is the fallback so the row still gets a usable stamp instead of
 // the zero time, which Reconcile treats as "no activity information" rather
 // than as the epoch.
-func prActivityStamp(pr PullRequest) time.Time {
+//
+// now is clamped against: a committer date is user-settable
+// (GIT_COMMITTER_DATE, rebase --committer-date-is-author-date) or wrong under
+// build-agent clock skew, and Reconcile stores whatever this returns as
+// LastActivity unconditionally on its "newer" branch. An unclamped future
+// stamp would raise the bar past anything a real push could ever clear,
+// permanently freezing the row (see this task's review feedback and the
+// spec's "Unknowns" entry on resurrection-by-token, which covers the
+// regression variant this clamp does not address). now is a parameter, never
+// time.Now() read internally, so this stays as testable as Reconcile itself.
+func prActivityStamp(pr PullRequest, now time.Time) time.Time {
+	stamp := pr.CreationDate
 	if pr.LastMergeSourceCommit != nil && !pr.LastMergeSourceCommit.Committer.Date.IsZero() {
-		return pr.LastMergeSourceCommit.Committer.Date
+		stamp = pr.LastMergeSourceCommit.Committer.Date
 	}
-	return pr.CreationDate
+	if stamp.After(now) {
+		return now
+	}
+	return stamp
 }
 
 // reviewRequestedWebURL resolves a review-requested PR's browser URL,
