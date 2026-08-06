@@ -186,6 +186,48 @@ type Step struct {
 	CompletedAt *time.Time `json:"completed_at"`
 }
 
+// NotificationSubject is the "subject" sub-object of a notification thread,
+// identifying the thing the notification is about (an issue, pull request,
+// release, commit, discussion, or check suite). URL is an API URL (not a
+// browser URL); it is resolved to a web URL per subject Type.
+type NotificationSubject struct {
+	Title            string `json:"title"`
+	URL              string `json:"url"`
+	LatestCommentURL string `json:"latest_comment_url"`
+	Type             string `json:"type"`
+}
+
+// NotificationRepository is the "repository" sub-object of a notification
+// thread — a partial repository representation (GitHub's full repository
+// wire shape has far more fields; only what the mapping and web-URL fallback
+// need is decoded here).
+type NotificationRepository struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	HTMLURL  string `json:"html_url"`
+	Owner    User   `json:"owner"`
+}
+
+// NotificationThread represents a single entry from GET /notifications
+// (GitHub's user-level notification inbox). Reason is GitHub's wire string
+// (e.g. "review_requested", "mention", "subscribed") — it is mapped onto the
+// neutral provider.NotificationReason enum; this type keeps the raw string so
+// no reason is silently dropped before that mapping runs. LastReadAt is null
+// for a thread that has never been read. Unread is the server's read/unread
+// flag — GitHub, not this client, owns that state.
+type NotificationThread struct {
+	ID              string                 `json:"id"`
+	Unread          bool                   `json:"unread"`
+	Reason          string                 `json:"reason"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	LastReadAt      *time.Time             `json:"last_read_at"`
+	Subject         NotificationSubject    `json:"subject"`
+	Repository      NotificationRepository `json:"repository"`
+	URL             string                 `json:"url"`
+	SubscriptionURL string                 `json:"subscription_url"`
+}
+
 // PRFile represents a changed file in a pull request
 // (GET /repos/{owner}/{repo}/pulls/{pull_number}/files).
 // PreviousFilename is non-empty only on renames.

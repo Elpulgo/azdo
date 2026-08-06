@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/Elpulgo/azdo/internal/provider"
 	"github.com/spf13/viper"
 )
 
@@ -14,8 +16,8 @@ import (
 var ErrConfigNotFound = errors.New("config file not found")
 
 // GitHubConfig holds the GitHub-specific configuration.
-// TypePrefix and PriorityPrefix are left empty by default so that task 4 can
-// fall back to github.DefaultLabelConvention() — a zero-value LabelConvention
+// TypePrefix and PriorityPrefix are left empty by default so the label mapping
+// falls back to github.DefaultLabelConvention() — a zero-value LabelConvention
 // routes all labels to tags, which is the safe default before a user configures
 // custom prefixes. Do NOT set viper defaults for these fields here.
 type GitHubConfig struct {
@@ -26,17 +28,24 @@ type GitHubConfig struct {
 
 // Config holds the application configuration
 type Config struct {
-	Organization    string            `mapstructure:"organization"`
-	Project         string            `mapstructure:"project"` // deprecated: use Projects
-	Projects        []string          `mapstructure:"projects"`
-	DisplayNames    map[string]string `mapstructure:"-"`     // API name → display name
-	Terms           map[string]string `mapstructure:"terms"` // tab/term key → user-facing label
-	PollingInterval int               `mapstructure:"polling_interval"`
-	Theme           string            `mapstructure:"theme"`
-	DisabledPanes   []string          `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
-	Metrics         MetricsConfig     `mapstructure:"metrics"`
-	GitHub          GitHubConfig      `mapstructure:"github"`
-	configPath      string            // internal field to store config path for saving
+	Organization    string              `mapstructure:"organization"`
+	Project         string              `mapstructure:"project"` // deprecated: use Projects
+	Projects        []string            `mapstructure:"projects"`
+	DisplayNames    map[string]string   `mapstructure:"-"`     // API name → display name
+	Terms           map[string]string   `mapstructure:"terms"` // tab/term key → user-facing label
+	PollingInterval int                 `mapstructure:"polling_interval"`
+	Theme           string              `mapstructure:"theme"`
+	DisabledPanes   []string            `mapstructure:"-"` // parsed from comma-separated "disabled_panes"
+	Metrics         MetricsConfig       `mapstructure:"metrics"`
+	GitHub          GitHubConfig        `mapstructure:"github"`
+	Notifications   NotificationsConfig `mapstructure:"notifications"`
+	// Warnings collects non-fatal load-time diagnostics — currently
+	// unrecognised exclude_reasons and malformed repo globs. Populated by
+	// LoadFrom, never persisted (mapstructure:"-"), and never printed by this
+	// package: a TUI has no safe place to write a line before or after Bubble
+	// Tea's alt-screen switch, so the notifications pane renders these instead.
+	Warnings   []string `mapstructure:"-"`
+	configPath string   // internal field to store config path for saving
 }
 
 // HasAzure reports whether Azure DevOps is fully configured (org AND projects
@@ -74,11 +83,145 @@ type MetricsStates struct {
 	Closed       string `mapstructure:"closed"`
 }
 
+// NotificationsConfig holds the filters and cadence override for the
+// Notifications tab's merged inbox. Every field's zero value is the widest
+// possible behaviour — whole inbox, nothing filtered, pane on. There is
+// deliberately no `enabled` key here: the pane disables the same way every
+// other default-on pane does, via `disabled_panes: notifications`.
+type NotificationsConfig struct {
+	// OnlyConfiguredRepos restricts the merged feed to repos listed under
+	// github.repos. False (default) shows the whole inbox, including rows
+	// from repos this config never built a client for.
+	OnlyConfiguredRepos bool `mapstructure:"only_configured_repos"`
+	// ExcludeRepos is a glob list ("owner/repo" pattern, path.Match syntax) of
+	// repos to hide from the feed. Empty (default) excludes nothing.
+	ExcludeRepos []string `mapstructure:"exclude_repos"`
+	// IncludeRepos is a glob list narrowing the feed to matching repos.
+	// Empty (default) narrows nothing.
+	IncludeRepos []string `mapstructure:"include_repos"`
+	// ExcludeReasons lists the neutral NotificationReason string names (e.g.
+	// "subscribed", "ci_activity") to trim from the merged feed client-side.
+	// Empty (default) filters no reason.
+	//
+	// This slice is sanitized during LoadFrom: any entry
+	// provider.ParseNotificationReason does not recognise (a typo, or the
+	// reserved "unknown") is removed here and reported via Config.Warnings
+	// rather than kept around to reinterpret at filter time. Every string
+	// surviving here is guaranteed parseable, while a literal "other" entry is
+	// recognised and never removed.
+	ExcludeReasons []string `mapstructure:"exclude_reasons"`
+	// UnreadOnly filters the merged feed to unread rows only, client-side.
+	// The fetch itself always requests the full inbox regardless of this
+	// setting; false (default) shows both read and unread.
+	UnreadOnly bool `mapstructure:"unread_only"`
+	// ParticipatingOnly narrows the server-side fetch to GitHub's
+	// "participating" bundle — roughly everything except `subscribed` — and
+	// composes with, rather than replaces, ExcludeReasons.
+	// False (default) fetches the whole inbox.
+	ParticipatingOnly bool `mapstructure:"participating_only"`
+	// SinceDays bounds the feed to notifications updated within the last N
+	// days. Zero (default) means no bound.
+	SinceDays int `mapstructure:"since_days"`
+	// MaxItems caps the number of notifications returned across all fetched
+	// pages, applied after the newest-first sort. Zero (default) means no cap.
+	MaxItems int `mapstructure:"max_items"`
+	// PollInterval overrides the global polling_interval for the
+	// notifications poller only. Zero (default) falls back to the backend's
+	// X-Poll-Interval hint when present, else the global polling_interval.
+	PollInterval int `mapstructure:"poll_interval"`
+}
+
+// acceptedNotificationReasons returns the eleven configurable
+// NotificationReason string names, in enum declaration order, for the
+// unrecognised-exclude_reasons warning message. Generated from
+// provider.NotificationReason.String() rather than a second hardcoded table —
+// provider is the single source of truth for the enum, and a duplicated string
+// list here would silently drift from it.
+//
+// The range starts at NotificationReasonReviewRequested to skip the
+// NotificationReasonUnknown zero value: "unknown" is reserved and
+// ParseNotificationReason rejects it, so including it here would make the
+// warning self-contradicting — it would advertise as accepted a string the
+// parser refuses.
+//
+// The upper bound comes from provider.NotificationReasonCount(), the sentinel
+// that exists for exactly this purpose, rather than from a hardcoded last
+// member: a value inserted after NotificationReasonOther is then listed
+// automatically instead of being silently omitted from the warning. The
+// capacity is derived from the same sentinel, less the excluded Unknown.
+func acceptedNotificationReasons() []string {
+	names := make([]string, 0, provider.NotificationReasonCount()-1)
+	for r := provider.NotificationReasonReviewRequested; r < provider.NotificationReason(provider.NotificationReasonCount()); r++ {
+		names = append(names, r.String())
+	}
+	return names
+}
+
+// sanitizeRepoGlobs drops any pattern in patterns that path.Match rejects as
+// ErrBadPattern, appending a warning to *warnings naming the offending
+// pattern, the config key it came from, and the effect the user will actually
+// see. This mirrors the exclude_reasons sanitizer above: the filter contract
+// is "every pattern it receives compiles", so a malformed glob is warned about
+// and removed here rather than left for match time, where a naive treatment of
+// the error could make the pattern match everything instead of nothing.
+//
+// The warnings are emitted after the loop rather than inside it because the
+// consequence clause for include_repos depends on whether any compilable
+// pattern survived the whole list, which is only known once it has been
+// walked.
+//
+// The probe scope "owner/repo" is representative but arbitrary --
+// ErrBadPattern is a property of the pattern syntax alone (e.g. an
+// unterminated "["), not of what it is matched against.
+func sanitizeRepoGlobs(warnings *[]string, key string, patterns []string) []string {
+	if len(patterns) == 0 {
+		return patterns
+	}
+	sanitized := make([]string, 0, len(patterns))
+	var dropped []string
+	var droppedErrs []error
+	for _, p := range patterns {
+		if _, err := path.Match(p, "owner/repo"); errors.Is(err, path.ErrBadPattern) {
+			dropped = append(dropped, p)
+			droppedErrs = append(droppedErrs, err)
+			continue
+		}
+		sanitized = append(sanitized, p)
+	}
+	effect := repoGlobDropEffect(key, len(sanitized) == 0)
+	for i, p := range dropped {
+		*warnings = append(*warnings, fmt.Sprintf(
+			"%s: dropping malformed pattern %q: %v — %s", key, p, droppedErrs[i], effect))
+	}
+	return sanitized
+}
+
+// repoGlobDropEffect returns the one-clause description of what the user will
+// observe after a malformed glob was dropped from key. The pattern and the
+// error name the cause; without this the warning never says what changed, and
+// the notifications pane renders these lines verbatim, so it stays a clause
+// rather than a second sentence.
+//
+// The two keys differ because the lists are not symmetric: an exclude list
+// with a pattern removed simply stops excluding by it, while an include list
+// that loses its last pattern stops selecting at all and the filter falls back
+// to showing the whole inbox.
+func repoGlobDropEffect(key string, noneLeft bool) string {
+	if strings.HasSuffix(key, "include_repos") {
+		if noneLeft {
+			return "no include pattern is left, so the whole inbox is shown"
+		}
+		return "the remaining include patterns still apply"
+	}
+	return "nothing is excluded by it"
+}
+
 // validDisabledPanes lists the pane names that can be disabled.
 var validDisabledPanes = map[string]bool{
-	"pullrequests": true,
-	"pipelines":    true,
-	"workitems":    true,
+	"pullrequests":  true,
+	"pipelines":     true,
+	"workitems":     true,
+	"notifications": true,
 }
 
 // IsPaneEnabled returns true if the given pane is not in the disabled list.
@@ -230,6 +373,20 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
 	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
 	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
+	// These nine registrations are currently no-ops — every notifications
+	// default is a Go zero value, which mapstructure leaves in place anyway —
+	// and are kept deliberately so the first genuinely non-zero default has a
+	// correct landing site instead of being bolted on ad hoc. max_items and
+	// since_days stay unbounded on purpose.
+	v.SetDefault("notifications.only_configured_repos", false)
+	v.SetDefault("notifications.exclude_repos", []string{})
+	v.SetDefault("notifications.include_repos", []string{})
+	v.SetDefault("notifications.exclude_reasons", []string{})
+	v.SetDefault("notifications.unread_only", false)
+	v.SetDefault("notifications.participating_only", false)
+	v.SetDefault("notifications.since_days", 0)
+	v.SetDefault("notifications.max_items", 0)
+	v.SetDefault("notifications.poll_interval", 0)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -296,6 +453,43 @@ func LoadFrom(configPath string) (*Config, error) {
 		}
 	}
 
+	// Sanitize notifications.exclude_reasons. An entry
+	// provider.ParseNotificationReason does not recognise (a typo, or the
+	// reserved "unknown") must never silently act as "other" — it is reported
+	// via cfg.Warnings and dropped from the slice here, so the filter never has
+	// to reinterpret a bad value. This must never be a hard config error: a
+	// typo cannot be allowed to stop the app from starting.
+	if len(cfg.Notifications.ExcludeReasons) > 0 {
+		sanitized := make([]string, 0, len(cfg.Notifications.ExcludeReasons))
+		for _, raw := range cfg.Notifications.ExcludeReasons {
+			if _, ok := provider.ParseNotificationReason(raw); ok {
+				sanitized = append(sanitized, raw)
+				continue
+			}
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
+				"notifications.exclude_reasons: unrecognised value %q — accepted values: %s",
+				raw, strings.Join(acceptedNotificationReasons(), ", ")))
+		}
+		cfg.Notifications.ExcludeReasons = sanitized
+	}
+
+	// Drop notifications.exclude_repos / include_repos entries that
+	// path.Match rejects as ErrBadPattern, same warn-don't-die channel as the
+	// exclude_reasons sanitizer above. An entry that is merely empty after
+	// trimming (e.g. "   ") is a valid-but-useless pattern, not a bad one --
+	// Validate below rejects that case as a hard error instead.
+	cfg.Notifications.ExcludeRepos = sanitizeRepoGlobs(&cfg.Warnings, "notifications.exclude_repos", cfg.Notifications.ExcludeRepos)
+	cfg.Notifications.IncludeRepos = sanitizeRepoGlobs(&cfg.Warnings, "notifications.include_repos", cfg.Notifications.IncludeRepos)
+
+	// only_configured_repos overrides include_repos rather than intersecting
+	// with it, so a config setting both is not a conflict -- but silently
+	// ignoring include_repos would be its own trap, hence the warning rather
+	// than staying quiet about it.
+	if cfg.Notifications.OnlyConfiguredRepos && len(cfg.Notifications.IncludeRepos) > 0 {
+		cfg.Warnings = append(cfg.Warnings,
+			"notifications.only_configured_repos is true — notifications.include_repos is ignored")
+	}
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -321,7 +515,7 @@ const configurationGuideURL = "https://github.com/Elpulgo/azdo#configuration"
 
 // Validate checks if the configuration values are valid.
 //
-// Backend requirement (D5): at least one of Azure or GitHub must be configured.
+// Backend requirement: at least one of Azure or GitHub must be configured.
 // Azure is present when Organization AND Projects are both non-empty. GitHub is
 // present when at least one repo slug is listed. Both may coexist.
 //
@@ -334,8 +528,8 @@ func (c *Config) Validate() error {
 	azurePartial := azureHasOrg != azureHasProjects // XOR: one set, other not
 
 	// Half-configured Azure: only one of org/projects is present.
-	// This is only a fatal error when GitHub is NOT configured — per Decision D5,
-	// a partial Azure stanza is silently skipped when GitHub carries the config
+	// This is only a fatal error when GitHub is NOT configured — a partial
+	// Azure stanza is silently skipped when GitHub carries the config
 	// (HasAzure() returns false so the Azure backend won't be built).
 	if azurePartial && !c.HasGitHub() {
 		if !azureHasOrg {
@@ -398,14 +592,55 @@ func (c *Config) Validate() error {
 
 	for _, p := range c.DisabledPanes {
 		if !validDisabledPanes[p] {
-			return fmt.Errorf("invalid disabled pane %q: only 'pullrequests', 'pipelines' and 'workitems' can be disabled", p)
+			return fmt.Errorf("invalid disabled pane %q: only 'pullrequests', 'pipelines', 'workitems' and 'notifications' can be disabled", p)
 		}
 	}
 
 	// At least one pane must remain enabled — otherwise the app would start
 	// with no navigable tabs.
-	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") {
-		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled")
+	//
+	// Notifications counts as a remaining pane only when a
+	// notification-capable backend will exist — today that means HasGitHub().
+	// The notifications tab hides on *capability*, not on config, so a naive
+	// four-way guard would let an Azure-only config with the other three panes
+	// disabled pass here and then start with zero navigable tabs, since no
+	// backend implements NotificationSource to show the notifications tab
+	// either. Metrics cannot rescue this: it is separately gated on
+	// metrics.enabled.
+	//
+	// This HasGitHub() coupling will need revisiting when a second
+	// notification-capable backend arrives: the condition must then widen to
+	// "any configured backend" and the special case disappears.
+	notificationsCounts := c.IsPaneEnabled("notifications") && c.HasGitHub()
+	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") && !notificationsCounts {
+		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled " +
+			"(or leave 'notifications' enabled with at least one repo under github.repos — the Notifications tab needs a GitHub backend)")
+	}
+
+	// Notifications validation. There is no `notifications.enabled` guard —
+	// the block is always present, if only at its all-zero default, so these
+	// checks must hold even when the user never wrote a
+	// `notifications:` section at all. That default (0 for each of the
+	// three numeric fields, no entries in the two glob lists) already
+	// satisfies every check below, so an absent block is always valid.
+	if c.Notifications.SinceDays < 0 {
+		return fmt.Errorf("notifications.since_days must be >= 0, got %d", c.Notifications.SinceDays)
+	}
+	if c.Notifications.MaxItems < 0 {
+		return fmt.Errorf("notifications.max_items must be >= 0, got %d", c.Notifications.MaxItems)
+	}
+	if c.Notifications.PollInterval < 0 {
+		return fmt.Errorf("notifications.poll_interval must be >= 0, got %d", c.Notifications.PollInterval)
+	}
+	for _, r := range c.Notifications.ExcludeRepos {
+		if strings.TrimSpace(r) == "" {
+			return fmt.Errorf("notifications.exclude_repos entries must not be empty")
+		}
+	}
+	for _, r := range c.Notifications.IncludeRepos {
+		if strings.TrimSpace(r) == "" {
+			return fmt.Errorf("notifications.include_repos entries must not be empty")
+		}
 	}
 
 	if c.Metrics.Enabled {

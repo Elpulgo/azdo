@@ -36,6 +36,11 @@ const (
 	TabPullRequests TabID = "pull_requests"
 	TabWorkItems    TabID = "work_items"
 	TabPipelines    TabID = "pipelines"
+
+	// TabNotifications is an additive TabID — no CurrentVersion
+	// bump. Only the active-tab selection is restored for it; TabsState below
+	// deliberately gains no per-tab memory entry, mirroring Pipelines.
+	TabNotifications TabID = "notifications"
 )
 
 // State is the persistent application state written to disk between runs.

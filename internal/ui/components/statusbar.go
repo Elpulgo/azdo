@@ -28,6 +28,7 @@ type StatusBar struct {
 	warningMessage string
 	contextItems   []ContextItem
 	contextStatus  string
+	unreadCount    int
 }
 
 // NewStatusBar creates a new StatusBar with default values.
@@ -60,7 +61,14 @@ func (s *StatusBar) SetState(state polling.ConnectionState) {
 	s.state = state
 }
 
-// GetWarningMessage returns the current warning message.
+// GetWarningMessage returns the current warning message. A read-back rather
+// than a general getter: today it has two callers, both needing to know
+// warningMessage's live value because something else may have written it
+// since they last touched it — ThemeSelectedMsg's handler carries it across
+// a statusBar rebuild, and app.syncNotificationsActionMessage compares it
+// against what it itself last wrote before clearing, so it retracts only its
+// own message and never one a concurrent writer (polling.PipelineRunsUpdated's
+// partial-load warning) put there in the meantime.
 func (s *StatusBar) GetWarningMessage() string {
 	return s.warningMessage
 }
@@ -133,6 +141,16 @@ func (s *StatusBar) SetWarningMessage(message string) {
 	s.warningMessage = message
 }
 
+// SetUnreadCount sets the notifications unread-count footer badge.
+// It renders from every tab, not just the notifications one, because
+// the caller sets it unconditionally in View() rather than inside a
+// per-tab branch. A count of 0 (or less) renders nothing at all —
+// renderUnreadBadge returns "" — so hitting zero removes the badge and its
+// separator entirely rather than leaving an empty pill behind.
+func (s *StatusBar) SetUnreadCount(count int) {
+	s.unreadCount = count
+}
+
 // ClearWarningMessage clears the persistent warning message.
 func (s *StatusBar) ClearWarningMessage() {
 	s.warningMessage = ""
@@ -186,6 +204,10 @@ func (s *StatusBar) View() string {
 			Foreground(lipgloss.Color(s.styles.Theme.Warning)).
 			Bold(true)
 		parts = append(parts, warningStyle.Render("⚠ "+s.warningMessage))
+	}
+
+	if badge := s.renderUnreadBadge(); badge != "" {
+		parts = append(parts, badge)
 	}
 
 	if s.filterLabel != "" {
@@ -328,6 +350,38 @@ func (s *StatusBar) formatScopes() string {
 	visible := strings.Join(s.scopes[:scopesDisplayCap], ", ")
 	extra := len(s.scopes) - scopesDisplayCap
 	return fmt.Sprintf("%s +%d more", visible, extra)
+}
+
+// unreadBadgeStyle returns the notifications unread-count badge's style,
+// factored out of renderUnreadBadge so a test can assert on the style
+// *object* rather than rendered bytes: lipgloss resolves the Ascii profile
+// in test binaries, which makes Render the identity function there, so a
+// style change dies to nothing against any assertion made on View()'s output.
+//
+// Deliberately uses Theme.Warning as a *background*, not a foreground — the
+// opposite of warningMessage's style a few parts earlier in View(), which
+// uses Theme.Warning as a foreground against no background at all. Both
+// exist side by side today; that asymmetry is left as-is rather than
+// silently "fixed" here.
+func (s *StatusBar) unreadBadgeStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(s.styles.Theme.Background)).
+		Background(lipgloss.Color(s.styles.Theme.Warning)).
+		Bold(true).
+		Padding(0, 1)
+}
+
+// renderUnreadBadge renders the notifications unread-count footer badge.
+// Hidden entirely at zero (or less) — an empty string here
+// means the caller's parts slice never gains an entry, so there is no empty
+// pill and no stray separator, matching filterLabel's own hide-when-empty
+// idiom just below.
+func (s *StatusBar) renderUnreadBadge() string {
+	if s.unreadCount <= 0 {
+		return ""
+	}
+
+	return s.unreadBadgeStyle().Render(fmt.Sprintf("%d unread", s.unreadCount))
 }
 
 // renderScrollPercent renders the scroll percentage indicator.

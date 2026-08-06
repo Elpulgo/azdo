@@ -150,6 +150,42 @@ func TestHandleFetchResult_Error(t *testing.T) {
 	}
 }
 
+// TestSetLoading_True pins the SetLoading(true) half: it sets the loading
+// field and shows the spinner, mirroring what Init() does today except that,
+// unlike Init(), SetLoading returns a mutated copy the caller can keep —
+// Init() cannot, because tea.Model.Init has a value receiver.
+func TestSetLoading_True(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+
+	m = m.SetLoading(true)
+
+	if !m.Loading() {
+		t.Error("Loading() = false after SetLoading(true)")
+	}
+	if !m.spinner.IsVisible() {
+		t.Error("spinner.Visible() = false after SetLoading(true)")
+	}
+}
+
+// TestSetLoading_False pins the reverse: hides the spinner and clears
+// loading, so a caller can use SetLoading(false) to cancel a construction-time
+// loading state without going through SetItems/HandleFetchResult.
+func TestSetLoading_False(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+	m = m.SetLoading(true)
+
+	m = m.SetLoading(false)
+
+	if m.Loading() {
+		t.Error("Loading() = true after SetLoading(false)")
+	}
+	if m.spinner.IsVisible() {
+		t.Error("spinner.Visible() = true after SetLoading(false)")
+	}
+}
+
 func TestView_Loading(t *testing.T) {
 	s := styles.DefaultStyles()
 	m := New(testConfig(), s)
@@ -403,6 +439,54 @@ func TestSelectedIndex(t *testing.T) {
 	idx := m.SelectedIndex()
 	if idx != 0 {
 		t.Errorf("Expected selected index 0, got %d", idx)
+	}
+}
+
+// TestErr_ReflectsHandleFetchResult pins the Err() accessor a caller needs to
+// build its own render states on top of listview (internal/ui/notifications'
+// error state): it must report the last HandleFetchResult error, and
+// a subsequent successful SetItems/HandleFetchResult call must clear it back
+// to nil rather than leaving the accessor permanently sticky.
+func TestErr_ReflectsHandleFetchResult(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+
+	if m.Err() != nil {
+		t.Fatalf("Err() = %v, want nil before any fetch", m.Err())
+	}
+
+	mockErr := fmt.Errorf("fetch failed")
+	m = m.HandleFetchResult(nil, mockErr)
+	if m.Err() == nil {
+		t.Fatal("Err() = nil after a failing HandleFetchResult, want the error")
+	}
+
+	m = m.SetItems([]testItem{{ID: 1, Name: "Alpha"}})
+	if m.Err() != nil {
+		t.Errorf("Err() = %v after a successful SetItems, want nil", m.Err())
+	}
+}
+
+// TestLoading_ReflectsRefreshState pins the Loading() accessor added for the
+// same reason as Err(): "r" (listview's built-in refresh key) sets loading
+// true before the spinner clears it, and a caller overriding View() needs to
+// tell that apart from a genuinely empty feed.
+func TestLoading_ReflectsRefreshState(t *testing.T) {
+	s := styles.DefaultStyles()
+	m := New(testConfig(), s)
+
+	if m.Loading() {
+		t.Fatal("Loading() = true before any refresh, want false")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if !m.Loading() {
+		t.Fatal("Loading() = false after pressing r, want true")
+	}
+
+	m = m.HandleFetchResult([]testItem{{ID: 1, Name: "Alpha"}}, nil)
+	if m.Loading() {
+		t.Error("Loading() = true after HandleFetchResult, want false")
 	}
 }
 
@@ -829,7 +913,7 @@ func TestToColumns_UpdatesWhenSetItemsChanges(t *testing.T) {
 // TestView_WithToColumns_MixedItems_NoPanic constructs a listview model whose
 // ToColumns callback adds an extra column for certain items, sets those items,
 // sends a resize, then calls View(). It must not panic and columns must equal
-// cells (the exact defect described in the Validation: Task 3 section).
+// cells.
 func TestView_WithToColumns_MixedItems_NoPanic(t *testing.T) {
 	s := styles.DefaultStyles()
 	cfg := testConfigWithToColumns()

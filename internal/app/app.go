@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/state"
 	"github.com/Elpulgo/azdo/internal/ui/components"
 	"github.com/Elpulgo/azdo/internal/ui/metrics"
+	"github.com/Elpulgo/azdo/internal/ui/notifications"
 	"github.com/Elpulgo/azdo/internal/ui/pipelines"
 	"github.com/Elpulgo/azdo/internal/ui/pullrequests"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
@@ -37,10 +39,16 @@ func (e *ThemeNotFoundError) Error() string {
 type Tab int
 
 const (
-	TabPullRequests Tab = iota // Pull Requests tab (key '1')
-	TabWorkItems               // Work Items tab (key '2')
-	TabPipelines               // Pipelines tab (key '3')
-	TabMetrics                 // Metrics dashboard tab (opt-in via metrics.enabled)
+	// TabNotifications is the "what needs me now" pane. It is always registered
+	// first in enabledTabs when a configured backend implements
+	// provider.NotificationSource — capability gated, never config gated. Its
+	// number key therefore shifts with whatever else is enabled, same as every
+	// other tab; see enabledTabs.
+	TabNotifications Tab = iota
+	TabPullRequests
+	TabWorkItems
+	TabPipelines
+	TabMetrics // Metrics dashboard tab (opt-in via metrics.enabled)
 )
 
 // Layout constants for the bordered content area.
@@ -65,38 +73,46 @@ type updateCheckMsg struct {
 // Model is the root application model for the TUI
 type Model struct {
 	// client is the backend-neutral provider used by the three main views
-	// (pull requests, work items, pipelines). Stored now; views migrate to
-	// consume it in tasks 7-9.
+	// (pull requests, work items, pipelines).
 	client provider.Provider
 
 	// metricsClient is the concrete Azure DevOps client kept for the metrics
-	// view, which calls Azure-only methods not covered by provider.Provider
-	// (Decision 5). Nullable: nil when metrics is disabled or the concrete
-	// client was not supplied.
+	// view, which calls Azure-only methods not covered by provider.Provider.
+	// Nullable: nil when metrics is disabled or the concrete client was not
+	// supplied.
 	metricsClient *azdevops.MultiClient
 
-	config           *config.Config
-	styles           *styles.Styles
-	activeTab        Tab
-	enabledTabs      []Tab // ordered list of enabled tabs
-	pipelinesView    pipelines.Model
-	pullRequestsView pullrequests.Model
-	workItemsView    workitems.Model
-	metricsView      metrics.Model
-	logo             *components.Logo
-	statusBar        *components.StatusBar
-	helpModal        *components.HelpModal
-	errorModal       *components.ErrorModal
-	themePicker      components.ThemePicker
-	poller           *polling.Poller
-	errorHandler     *polling.ErrorHandler
-	currentVersion   string
-	commitHash       string
-	width            int
-	height           int
-	footerRows       int
-	err              error
-	stateStore       *state.Store // optional; nil when persistence is disabled
+	config              *config.Config
+	styles              *styles.Styles
+	activeTab           Tab
+	enabledTabs         []Tab // ordered list of enabled tabs
+	pipelinesView       pipelines.Model
+	pullRequestsView    pullrequests.Model
+	workItemsView       workitems.Model
+	metricsView         metrics.Model
+	notificationsView   notifications.Model
+	logo                *components.Logo
+	statusBar           *components.StatusBar
+	helpModal           *components.HelpModal
+	errorModal          *components.ErrorModal
+	themePicker         components.ThemePicker
+	poller              *polling.Poller
+	notificationsPoller *polling.NotificationsPoller
+	errorHandler        *polling.ErrorHandler
+	currentVersion      string
+	commitHash          string
+	width               int
+	height              int
+	footerRows          int
+	err                 error
+	stateStore          *state.Store // optional; nil when persistence is disabled
+
+	// notificationsActionMessage mirrors the last value
+	// notificationsView.GetStatusMessage() had when
+	// syncNotificationsActionMessage last observed it (see that method's doc
+	// comment). Its zero value ("") is correct at startup: the pane reports no
+	// message until an `o` outcome sets one.
+	notificationsActionMessage string
 }
 
 // SetStateStore attaches a state store to the model so navigation changes
@@ -109,6 +125,8 @@ func (m *Model) SetStateStore(s *state.Store) {
 // tabIDForTab maps the internal Tab iota to the on-disk TabID.
 func tabIDForTab(t Tab) state.TabID {
 	switch t {
+	case TabNotifications:
+		return state.TabNotifications
 	case TabPullRequests:
 		return state.TabPullRequests
 	case TabWorkItems:
@@ -120,9 +138,15 @@ func tabIDForTab(t Tab) state.TabID {
 }
 
 // tabFromID resolves a persisted TabID back to the internal Tab iota.
-// Unknown IDs return (0, false) so the caller can fall back gracefully.
+// Unknown IDs return (0, false) so the caller can fall back gracefully. This
+// also covers a TabID that is currently disabled or capability-absent (e.g.
+// "notifications" persisted from a prior GitHub-capable run, restored
+// against an Azure-only config): ApplyState's isTabEnabled check still
+// rejects it and NewModel's default (enabledTabs[0]) stands.
 func tabFromID(id state.TabID) (Tab, bool) {
 	switch id {
+	case state.TabNotifications:
+		return TabNotifications, true
 	case state.TabPullRequests:
 		return TabPullRequests, true
 	case state.TabWorkItems:
@@ -207,14 +231,18 @@ func detailRefOrEmpty(id provider.Identity, open bool) state.DetailRef {
 	return refFromIdentity(id)
 }
 
+// containsTab reports whether tab appears in tabs. Split out of isTabEnabled
+// so NewModel can ask the same question of the enabledTabs slice it has just
+// computed, before any Model exists to ask it of. buildEnabledTabs is the only
+// place the "is this tab on" predicate lives, and every other site queries its
+// output instead of recomputing it.
+func containsTab(tabs []Tab, tab Tab) bool {
+	return slices.Contains(tabs, tab)
+}
+
 // isTabEnabled returns true if the given tab is in the enabledTabs list.
 func (m Model) isTabEnabled(tab Tab) bool {
-	for _, t := range m.enabledTabs {
-		if t == tab {
-			return true
-		}
-	}
-	return false
+	return containsTab(m.enabledTabs, tab)
 }
 
 // nextTab returns the next enabled tab after the current one (wrapping).
@@ -254,11 +282,134 @@ func equalSlices(a, b []string) bool {
 	return true
 }
 
+// notificationCapableProvider is the minimal shape *provider.CompositeProvider
+// exposes for the notifications capability check. Asserting p directly against
+// provider.NotificationSource does not work here: the composite satisfies
+// that interface unconditionally (see its HasNotifications doc comment), so
+// such an assertion would report capability even for an Azure-only config
+// with no GitHub backend at all. HasNotifications performs the real
+// per-backend type assertion and is what must be called instead.
+type notificationCapableProvider interface {
+	HasNotifications() bool
+}
+
+// hasNotificationCapability reports whether p — or nil, in which case it is
+// false — has at least one backend implementing provider.NotificationSource.
+// This is the sole gate for the notifications tab's presence; it is never
+// derived from config and never from whether the feed is empty.
+func hasNotificationCapability(p provider.Provider) bool {
+	nc, ok := p.(notificationCapableProvider)
+	if !ok {
+		return false
+	}
+	return nc.HasNotifications()
+}
+
+// notificationMarker returns p as a provider.NotificationSource for the
+// notifications pane's u/d mark actions, or nil when p does not implement it —
+// including when p is an *untyped* nil interface, which fails the assertion. A
+// *typed* nil does not: `var cp *provider.CompositeProvider; NewModel(cp, ...)`
+// satisfies the assertion and yields a non-nil interface wrapping a nil
+// pointer, so the pane's `m.marker == nil` guard is false and markCmd derefs it
+// (convention 15's shape). Unreachable today — cmd/azdo-tui/main.go always
+// constructs a real *CompositeProvider and internal/demo/demo.go a concrete
+// adapter — and hasNotificationCapability above has the identical exposure.
+// Unlike hasNotificationCapability, this does not additionally require
+// HasNotifications(): *provider.CompositeProvider.MarkRead/MarkDone already
+// route by Identity.Kind and report a descriptive per-kind error when no
+// backend matches, so the plain type assertion is the correct level here — the
+// pane never needs to know which kinds are routable, only whether it has
+// something to call at all.
+func notificationMarker(p provider.Provider) provider.NotificationSource {
+	marker, _ := p.(provider.NotificationSource)
+	return marker
+}
+
+// notificationsPollerClient returns notificationMarker(p) as a
+// polling.NotificationsClient, but only when p has real notifications
+// capability (hasNotificationCapability); otherwise it returns nil. This is
+// belt-and-braces alongside gating the poller's timer in Init(): notifiedMarker
+// alone would hand *provider.CompositeProvider to the poller unconditionally,
+// since notificationMarker deliberately does not call HasNotifications() —
+// documented in notificationMarker's own comment as correct for the pane's
+// mark routing, but wrong for the poller's construction, which must self-defend
+// even if some future caller ever starts the timer without checking
+// hasNotificationCapability first.
+func notificationsPollerClient(p provider.Provider) polling.NotificationsClient {
+	if !hasNotificationCapability(p) {
+		return nil
+	}
+	return notificationMarker(p)
+}
+
+// notificationsIntervalHinter is satisfied by a provider.Provider whose
+// underlying backend(s) can report a server-suggested notifications polling
+// cadence -- currently only *provider.CompositeProvider, via its
+// NotificationsPollInterval method. This mirrors hasNotificationCapability's
+// and notificationMarker's narrow, per-capability type assertion rather than
+// adding a method to provider.Provider itself.
+type notificationsIntervalHinter interface {
+	NotificationsPollInterval() time.Duration
+}
+
+// notificationsPollIntervalHint returns p's server-suggested notifications
+// polling cadence, or 0 when p does not implement notificationsIntervalHinter.
+// Callers must treat 0 as "no hint available" -- either because no capable
+// backend implements provider.PollIntervalHinter, or because none has
+// completed a fetch yet -- exactly as provider.PollIntervalHinter's own doc
+// comment requires.
+func notificationsPollIntervalHint(p provider.Provider) time.Duration {
+	hinter, ok := p.(notificationsIntervalHinter)
+	if !ok {
+		return 0
+	}
+	return hinter.NotificationsPollInterval()
+}
+
+// notificationsConfiguredInterval returns the configured notifications
+// polling interval: cfg.Notifications.PollInterval if positive, falling back
+// to cfg.PollingInterval, and finally to polling.DefaultInterval. A nil cfg
+// returns polling.DefaultInterval. NewNotificationsPoller and SetInterval
+// both additionally floor the result at polling.MinInterval, which is what
+// keeps a configured notifications.poll_interval: 1 (accepted by config
+// validation -- it only requires >= 0) from producing sub-MinInterval
+// polling against GitHub.
+func notificationsConfiguredInterval(cfg *config.Config) time.Duration {
+	if cfg == nil {
+		return polling.DefaultInterval
+	}
+	if cfg.Notifications.PollInterval > 0 {
+		return time.Duration(cfg.Notifications.PollInterval) * time.Second
+	}
+	if cfg.PollingInterval > 0 {
+		return time.Duration(cfg.PollingInterval) * time.Second
+	}
+	return polling.DefaultInterval
+}
+
+// notificationsPollInterval computes the notifications poller's cadence:
+// max(configured interval, server hint). A hint of 0 (no capable backend, or
+// none has completed a fetch yet) leaves the configured interval untouched.
+func notificationsPollInterval(p provider.Provider, cfg *config.Config) time.Duration {
+	configured := notificationsConfiguredInterval(cfg)
+	hint := notificationsPollIntervalHint(p)
+	if hint > configured {
+		return hint
+	}
+	return configured
+}
+
 // buildEnabledTabs returns the list of enabled tabs based on config.
 // azurePresent must be true when a live Azure MultiClient is available;
 // the metrics tab requires both cfg.Metrics.Enabled AND azurePresent.
-func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
+// notifCapable must be true when at least one configured backend implements
+// provider.NotificationSource — see hasNotificationCapability. Notifications is
+// registered first so it lands at enabledTabs[0] whenever it is present at all.
+func buildEnabledTabs(cfg *config.Config, azurePresent bool, notifCapable bool) []Tab {
 	var tabs []Tab
+	if cfg.IsPaneEnabled("notifications") && notifCapable {
+		tabs = append(tabs, TabNotifications)
+	}
 	if cfg.IsPaneEnabled("pullrequests") {
 		tabs = append(tabs, TabPullRequests)
 	}
@@ -274,10 +425,39 @@ func buildEnabledTabs(cfg *config.Config, azurePresent bool) []Tab {
 	return tabs
 }
 
+// helpTabName returns the label the help modal's Tabs binding uses for tab.
+// Config keys MUST be lowercase — viper lowercases every config key on load,
+// so Terms map keys arrive lowercase and a capitalised lookup silently never
+// matches the user's override (convention 9).
+//
+// Deliberately not renderTabBar's label map: the modal has rendered "PR" for
+// pull requests since before notifications existed (help.go's NewHelpModal
+// seeds "PR / Work Items / Pipelines") and the line is width-constrained, so
+// the two label sets differ on purpose. What must NOT differ is the *order* or
+// the *membership*, which is why the caller walks enabledTabs rather than
+// re-listing panes.
+func helpTabName(cfg *config.Config, tab Tab) string {
+	switch tab {
+	case TabNotifications:
+		return cfg.TermFor("notifications", "Notifications")
+	case TabPullRequests:
+		return "PR"
+	case TabWorkItems:
+		return cfg.TermFor("work_items", "Work Items")
+	case TabPipelines:
+		return cfg.TermFor("pipelines", "Pipelines")
+	case TabMetrics:
+		return cfg.TermFor("metrics", "Metrics")
+	}
+	return ""
+}
+
 // initTabCmd returns the Init command for the given tab, or nil for pipelines
 // (which is populated by the poller).
 func (m Model) initTabCmd(tab Tab) tea.Cmd {
 	switch tab {
+	case TabNotifications:
+		return m.notificationsView.Init()
 	case TabPullRequests:
 		return m.pullRequestsView.Init()
 	case TabWorkItems:
@@ -322,14 +502,13 @@ func displayScopes(p provider.Provider, cfg *config.Config) []string {
 
 // NewModel creates a new application model.
 //
-// p is the backend-neutral provider used by the three main views. It is stored
-// on Model.client for future use by tasks 7-9. Pass nil to disable provider-
-// backed features (e.g. in tests that don't exercise view fetching).
+// p is the backend-neutral provider used by the three main views. Pass nil to
+// disable provider-backed features (e.g. in tests that don't exercise view
+// fetching).
 //
-// mc is the concrete Azure DevOps multi-client. It is passed directly to the
-// view initializers (which still accept *azdevops.MultiClient until tasks 7-9
-// migrate them) and stored on Model.metricsClient for the metrics view, which
-// requires Azure-specific methods not covered by provider.Provider (Decision 5).
+// mc is the concrete Azure DevOps multi-client, stored on Model.metricsClient
+// for the metrics view, which requires Azure-specific methods not covered by
+// provider.Provider.
 func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config, currentVersion string, commitHash string) Model {
 	// Create error handler early to capture initialization errors
 	errorHandler := polling.NewErrorHandler()
@@ -370,6 +549,22 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	// so it must only be enabled when a concrete MultiClient is present.
 	metricsEnabled := cfg.Metrics.Enabled && mc != nil
 
+	// Gate notifications on capability alone, never on config: the tab is
+	// absent unless a configured backend implements provider.NotificationSource,
+	// and present (possibly empty) whenever one does. disabled_panes still
+	// applies on top, same as every other pane.
+	//
+	// buildEnabledTabs is the single owner of that predicate: enabledTabs is
+	// computed here, up front, and everything downstream that needs to know
+	// whether a tab is on — the help modal's tab-name list, the Model's own
+	// enabledTabs field, containsTab/isTabEnabled queries — derives from it
+	// rather than restating `IsPaneEnabled && capable` or the tab order.
+	// Restating either is what let copies drift: dropping the IsPaneEnabled
+	// conjunct from a second copy left the tab strip and the help modal free to
+	// disagree with nothing failing. Ask containsTab(enabledTabs,
+	// TabNotifications) if you need the predicate.
+	enabledTabs := buildEnabledTabs(cfg, mc != nil, hasNotificationCapability(p))
+
 	// Create help modal
 	helpModal := components.NewHelpModal(appStyles)
 
@@ -388,19 +583,14 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		helpModal.RemoveBindingsByDescription("pipelines")
 	}
 
-	// Update tab description in help modal based on enabled tabs
-	enabledTabNames := []string{}
-	if cfg.IsPaneEnabled("pullrequests") {
-		enabledTabNames = append(enabledTabNames, "PR")
-	}
-	if cfg.IsPaneEnabled("workitems") {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("work_items", "Work Items"))
-	}
-	if cfg.IsPaneEnabled("pipelines") {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("pipelines", "Pipelines"))
-	}
-	if metricsEnabled {
-		enabledTabNames = append(enabledTabNames, cfg.TermFor("metrics", "Metrics"))
+	// Update tab description in help modal based on enabled tabs. Derived from
+	// enabledTabs rather than re-listing the order and the per-pane predicates:
+	// the modal's line and the tab strip then cannot disagree, because both read
+	// the same slice. Notifications lands first because buildEnabledTabs put it
+	// there, not because this loop says so.
+	enabledTabNames := make([]string, 0, len(enabledTabs))
+	for _, tab := range enabledTabs {
+		enabledTabNames = append(enabledTabNames, helpTabName(cfg, tab))
 	}
 	// Rebuild the tabs help line whenever the set differs from the default
 	// "1/2/3 — PR / Work Items / Pipelines" (e.g. a pane disabled, metrics
@@ -427,6 +617,28 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 			{Key: "esc", Description: "Clear tag filter (Live)"},
 			{Key: "o", Description: "Open focused item in browser (Live)"},
 			{Key: "r", Description: "Refresh metrics + reload snapshot file"},
+		})
+	}
+
+	// Notifications tab section. Gated on containsTab(enabledTabs,
+	// TabNotifications) — the single predicate buildEnabledTabs already computed
+	// above — never a second copy of cfg.IsPaneEnabled("notifications") &&
+	// hasNotificationCapability(p); see the comment above the buildEnabledTabs
+	// call for why that predicate must not be restated here.
+	//
+	// Lists exactly the keys internal/ui/notifications/list.go's Update switch
+	// handles: `f` (reason cycle), `u` (mark read, one-way), `d` (mark done),
+	// and `o` (open the selected row's WebURL). `enter`/`esc` are left out:
+	// EnterDetail's stub makes `enter` a harmless one-keypress round trip
+	// through listview's detail mode with nothing to show (not a real
+	// "expand/view details" action), and both keys are already covered
+	// generically by the Navigation section.
+	if containsTab(enabledTabs, TabNotifications) {
+		helpModal.AddSection("Notifications tab", []components.HelpBinding{
+			{Key: "f", Description: "Cycle reason filter"},
+			{Key: "u", Description: "Mark read (one-way)"},
+			{Key: "d", Description: "Mark done"},
+			{Key: "o", Description: "Open in browser"},
 		})
 	}
 
@@ -457,6 +669,18 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 	}
 	poller := polling.NewPoller(p, interval)
 
+	// The notifications poller mirrors the pipeline poller above but is a
+	// distinct type with its own cadence: max(configured, hint) is computed once
+	// here, up front, and recomputed after every fetch (see the
+	// polling.NotificationsFetchedMsg case in Update) since a GitHub hint only
+	// becomes known once the adapter has actually observed an X-Poll-Interval
+	// response header.
+	notificationsPoller := polling.NewNotificationsPoller(
+		notificationsPollerClient(p),
+		notificationsPollInterval(p, cfg),
+		notifications.NotifOptsFromConfig(cfg),
+	)
+
 	// If theme was not found, set a friendly error message
 	if themeErr != nil {
 		themesDir, _ := styles.GetThemesDirectoryPath()
@@ -467,34 +691,45 @@ func NewModel(p provider.Provider, mc *azdevops.MultiClient, cfg *config.Config,
 		errorHandler.SetError(themeNotFoundErr)
 	}
 
-	enabledTabs := buildEnabledTabs(cfg, mc != nil)
-
 	var mv metrics.Model
 	if metricsEnabled {
 		mv = metrics.NewModelWithStyles(mc, cfg, appStyles)
 	}
 
+	// The notifications pane is constructed unconditionally, even when the tab
+	// is disabled or capability-absent. It deliberately does not follow the
+	// metrics view's conditional pattern above: the zero value IS reachable —
+	// the tea.WindowSizeMsg handler calls
+	// m.notificationsView.Update(contentSize) on every resize and
+	// ThemeSelectedMsg reconstructs the pane, both unconditionally — and it is
+	// not inert, because listview.Init and SetFeed dereference the zero value's
+	// nil *components.LoadingIndicator and panic
+	// (internal/ui/components/spinner.go's Tick). Constructing here removes the
+	// hazard instead of documenting it.
+	nv := notifications.NewModelWithStyles(appStyles, notificationMarker(p), cfg)
+
 	return Model{
-		client:        p,
-		metricsClient: mc,
-		config:        cfg,
-		styles:        appStyles,
-		activeTab:     enabledTabs[0],
-		enabledTabs:   enabledTabs,
-		logo:          logo,
-		// pullRequestsView, workItemsView, and pipelinesView all consume provider.Provider (tasks 7-9).
-		pipelinesView:    pipelines.NewModelWithStyles(p, appStyles),
-		pullRequestsView: pullrequests.NewModelWithStyles(p, appStyles),
-		workItemsView:    workitems.NewModelWithStyles(p, appStyles),
-		metricsView:      mv,
-		statusBar:        statusBar,
-		helpModal:        helpModal,
-		errorModal:       errorModal,
-		themePicker:      themePicker,
-		poller:           poller,
-		errorHandler:     errorHandler,
-		currentVersion:   currentVersion,
-		commitHash:       commitHash,
+		client:              p,
+		metricsClient:       mc,
+		config:              cfg,
+		styles:              appStyles,
+		activeTab:           enabledTabs[0],
+		enabledTabs:         enabledTabs,
+		logo:                logo,
+		pipelinesView:       pipelines.NewModelWithStyles(p, appStyles),
+		pullRequestsView:    pullrequests.NewModelWithStyles(p, appStyles),
+		workItemsView:       workitems.NewModelWithStyles(p, appStyles),
+		metricsView:         mv,
+		notificationsView:   nv,
+		statusBar:           statusBar,
+		helpModal:           helpModal,
+		errorModal:          errorModal,
+		themePicker:         themePicker,
+		poller:              poller,
+		notificationsPoller: notificationsPoller,
+		errorHandler:        errorHandler,
+		currentVersion:      currentVersion,
+		commitHash:          commitHash,
 	}
 }
 
@@ -509,6 +744,7 @@ func (m Model) Init() tea.Cmd {
 	initCmds := []tea.Cmd{
 		m.poller.FetchPipelineRuns(), // Initial fetch - updates connection state
 		m.poller.StartPolling(),      // Start polling timer
+		m.notificationsStartPollingCmd(),
 		checkForUpdate(m.currentVersion),
 	}
 
@@ -523,8 +759,33 @@ func (m Model) Init() tea.Cmd {
 	if m.isTabEnabled(TabPullRequests) && m.activeTab != TabPullRequests {
 		initCmds = append(initCmds, m.pullRequestsView.Init())
 	}
+	// Notifications' own initTabCmd already issues the first fetch when it IS
+	// the active tab; this preload guard covers every other case (a
+	// different active tab, or notifications not the default) so switching
+	// to it later is instant -- mirroring the PR preload immediately above.
+	// Skipped when the tab is absent entirely (capability gate, or
+	// disabled_panes).
+	if m.isTabEnabled(TabNotifications) && m.activeTab != TabNotifications {
+		initCmds = append(initCmds, m.notificationsPoller.FetchNotifications())
+	}
 
 	return tea.Batch(initCmds...)
+}
+
+// notificationsStartPollingCmd arms the notifications poller's own timer, but
+// only when the notifications tab is actually present: m.isTabEnabled checks
+// membership in m.enabledTabs, which buildEnabledTabs only includes the
+// notifications tab into when both the capability gate (notifCapable) and
+// cfg.IsPaneEnabled("notifications") hold — exactly the "capability AND
+// pane-enabled" predicate the timer must be gated on. Without this gate,
+// m.notificationsPoller.StartPolling() ran unconditionally in Init(),
+// permanently re-arming a GitHub poll loop even when the tab is disabled or the
+// provider has no notifications-capable backend at all.
+func (m Model) notificationsStartPollingCmd() tea.Cmd {
+	if !m.isTabEnabled(TabNotifications) {
+		return nil
+	}
+	return m.notificationsPoller.StartPolling()
 }
 
 // checkForUpdate returns a tea.Cmd that checks GitHub for a newer version.
@@ -639,6 +900,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.poller.Stop()
+			m.notificationsPoller.Stop()
 			return m, tea.Quit
 		case "?":
 			m.helpModal.SetSize(m.width, m.height)
@@ -653,8 +915,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themePicker.SetSize(m.width, m.height)
 			m.themePicker.Show()
 			return m, nil
-		case "1", "2", "3", "4":
-			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2, "4"→3
+		case "1", "2", "3", "4", "5":
+			// Up to five tabs can now be enabled at once (notifications, PR,
+			// work items, pipelines, metrics), so "5" joins the digit set.
+			// The mapping stays purely positional into m.enabledTabs, which
+			// is why notifications landing first automatically shifts every
+			// other tab's number without a dedicated case here.
+			idx := int(msg.String()[0]-'0') - 1 // "1"→0, "2"→1, "3"→2, "4"→3, "5"→4
 			if idx >= 0 && idx < len(m.enabledTabs) {
 				target := m.enabledTabs[idx]
 				if target != m.activeTab {
@@ -740,7 +1007,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.themePicker = components.NewThemePicker(m.styles, availableThemes, msg.ThemeName)
 
 		// Recreate views with new styles.
-		// pullRequestsView, workItemsView, and pipelinesView all use provider.Provider (tasks 7-9).
 		m.pipelinesView = pipelines.NewModelWithStyles(m.client, m.styles)
 		m.pullRequestsView = pullrequests.NewModelWithStyles(m.client, m.styles)
 		m.workItemsView = workitems.NewModelWithStyles(m.client, m.styles)
@@ -748,6 +1014,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// recreating would erase its loaded snapshots, sprint selection and
 		// fetched rows, blanking the section on theme change.
 		m.metricsView.SetStyles(m.styles)
+		// notificationsView is recreated like pipelines/PR/WI rather than
+		// restyled in place like metrics. Its marker is re-supplied from
+		// m.client on every reconstruction, same as the other panes; any
+		// in-flight optimistic overrides are discarded here exactly as the
+		// feed itself is, which is consistent with the rest of this block —
+		// the poller simply repopulates both on its next fetch. m.config is
+		// re-supplied too so the reconstructed pane's own Fetch closure keeps
+		// deriving NotifOpts/filtering from the same config the rest of the app
+		// uses, rather than reverting to the nil-cfg fallback.
+		m.notificationsView = notifications.NewModelWithStyles(m.styles, notificationMarker(m.client), m.config)
 
 		// CRITICAL: Set window size for all views before they try to render
 		// Subtract border space (2 width for sides, 2 height for top/bottom borders)
@@ -758,6 +1034,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 			m.workItemsView, _ = m.workItemsView.Update(contentSize)
 			m.metricsView, _ = m.metricsView.Update(contentSize)
+			m.notificationsView, _ = m.notificationsView.Update(contentSize)
 		}
 
 		// Re-initialize views to fetch data again
@@ -767,6 +1044,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.activeTab == TabWorkItems {
 			cmds = append(cmds, m.workItemsView.Init())
+		}
+		if m.activeTab == TabNotifications {
+			cmds = append(cmds, m.notificationsView.Init())
 		}
 		// The metrics view is re-styled in place (SetStyles above), not
 		// recreated, so it must NOT be re-initialized here — re-running its
@@ -790,6 +1070,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 		m.workItemsView, _ = m.workItemsView.Update(contentSize)
 		m.metricsView, _ = m.metricsView.Update(contentSize)
+		m.notificationsView, _ = m.notificationsView.Update(contentSize)
 		return m, nil
 
 	case updateCheckMsg:
@@ -800,9 +1081,104 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case notifications.MarkResultMsg:
+		// Routed unconditionally, NOT through the delegate-to-active-tab switch
+		// below. A `u`/`d` is issued from the notifications tab but its result
+		// lands one HTTP round trip later, and tab switching is handled earlier
+		// in this function and returns early — so pressing 2 while a mark is in
+		// flight is trivially reachable. Delegating by active tab would hand the
+		// result to the pull-requests pane, which discards it, leaving the
+		// optimistic override as the sole holder of the mark and re-opening
+		// the resurrection defect by a second route: 30s later any re-derivation
+		// brings back a row the server already accepted as done.
+		//
+		// polling.PipelineRunsUpdated below is the same shape — a pane-bound
+		// message whose arrival is uncorrelated with which tab is showing.
+		var markCmd tea.Cmd
+		m.notificationsView, markCmd = m.notificationsView.Update(msg)
+		if markCmd != nil {
+			cmds = append(cmds, markCmd)
+		}
+		// A failed `u`/`d` sets the pane's statusMessage (closing a silent
+		// rollback); a success clears it. syncNotificationsActionMessage is the
+		// one place that surfacing is implemented — mirror it here exactly as
+		// NotificationsFetchedMsg below does, rather than reading
+		// m.notificationsView.GetStatusMessage() directly.
+		m.syncNotificationsActionMessage()
+		// The mark can flip the unread badge (a success clears it; a
+		// failure rolls the optimistic override back, re-raising it), and
+		// the badge is rendered from every tab regardless of which one is
+		// active. Re-measure here — same as NotificationsFetchedMsg below —
+		// so m.footerRows does not go stale relative to the badge's new
+		// digit width. Must come after syncNotificationsActionMessage, not
+		// before: the status message can itself add a wrapped footer row,
+		// and resizeActiveViewIfNeeded needs the status bar's fields settled
+		// first.
+		m.resizeActiveViewIfNeeded()
+		return m, tea.Batch(cmds...)
+
 	case polling.TickMsg:
 		// Time to poll for updates
 		cmds = append(cmds, m.poller.OnTick())
+
+	case polling.NotificationsTickMsg:
+		// A distinct top-level case from polling.TickMsg above:
+		// NotificationsTickMsg is a genuinely different concrete type, not
+		// TickMsg discriminated by a field, because the case above would
+		// still match a shared type and silently drive the pipeline poller
+		// instead of this one.
+		cmds = append(cmds, m.notificationsPoller.OnTick())
+
+	case polling.NotificationsFetchedMsg:
+		// Routed unconditionally, NOT through the delegate-to-active-tab
+		// switch below, for the same reason as notifications.MarkResultMsg
+		// and polling.PipelineRunsUpdated above: a background poll's result
+		// is uncorrelated with which tab is currently showing, and the
+		// notifications pane must still receive it (and re-derive its own
+		// polling cadence) even while some other tab is active.
+		//
+		// A nil Items with a nil Err means the inbox is genuinely EMPTY, and
+		// must clear the feed. It does not mean "nothing changed":
+		// CompositeProvider.List accumulates into a nil `var all []Notification`
+		// and mergeNotifications returns it untouched when no backend errored,
+		// so zero notifications is exactly this shape. "Not modified" never
+		// reaches this layer as nil — the GitHub client answers a 304 by
+		// replaying cloneThreads(c.cached) (notifications.go's "a 304 must never
+		// be read as 'the inbox is now empty'"), and an unsolicited 304 with no
+		// matching cache is an error. A skipped fetch emits no message at all,
+		// since FetchNotifications returns a nil tea.Cmd. So there is no shape
+		// left for a guard to catch, and guarding here strands a cleared inbox
+		// on screen forever.
+		filtered := notifications.FilterNotifications(msg.Items, m.config)
+		m.notificationsView = m.notificationsView.HandleFetchResult(filtered, msg.Err)
+		// HandleFetchResult clears the pane's own statusMessage on every
+		// fetch, success or failure alike (a stale `o` outcome must not
+		// survive "a poll refreshed the feed" — the reviewer-cited scenario
+		// this clearing rule specifically closes). Mirror that onto the
+		// status bar here, before this handler's own resizeActiveViewIfNeeded
+		// call below, so a footer that had widened for a long `o` failure
+		// message shrinks back and gets re-measured in the same render this
+		// fetch produces, not one render late.
+		m.syncNotificationsActionMessage()
+		// Re-derive the cadence after every fetch, success or failure alike: a
+		// GitHub hint only becomes known once the adapter has actually observed
+		// a response's X-Poll-Interval header, so the very first fetch is what
+		// turns a 0 hint into a real one.
+		m.notificationsPoller.SetInterval(notificationsPollInterval(m.client, m.config))
+		// NotifOpts must be re-derived once per fetch, not frozen at poller
+		// construction: since_days is computed from time.Now() at derivation
+		// time, so a poller that only ever got its opts once at startup would
+		// silently fetch an ever-staler window as real time passes.
+		m.notificationsPoller.SetOpts(notifications.NotifOptsFromConfig(m.config))
+		// A background poll can change the unread count, which changes the
+		// footer's badge digit width — and unlike every other status-bar
+		// field, the badge is driven by this poller, not by a following
+		// keypress, so there is no other point in the control flow that
+		// will ever repair m.footerRows if it goes stale here. Re-measure
+		// and resize before returning, the same as the delegate-to-active-
+		// tab path below does for every other message.
+		m.resizeActiveViewIfNeeded()
+		return m, tea.Batch(cmds...)
 
 	case components.CriticalErrorMsg:
 		m.errorModal.SetSize(m.width, m.height)
@@ -850,6 +1226,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Delegate to active view
 	var cmd tea.Cmd
 	switch m.activeTab {
+	case TabNotifications:
+		m.notificationsView, cmd = m.notificationsView.Update(msg)
+		// Covers both of `o`'s message-producing paths: the synchronous
+		// empty-WebURL case (set inline by this very Update call, no tea.Cmd
+		// involved) and the async openURLResultMsg success/failure case
+		// (delivered here on a later call, since that message is
+		// deliberately routed like any other — see its own doc comment).
+		// The re-measure this needs is covered by this switch's shared
+		// resizeActiveViewIfNeeded call just below, which runs for every
+		// message that reaches this path regardless of tab.
+		m.syncNotificationsActionMessage()
 	case TabPullRequests:
 		m.pullRequestsView, cmd = m.pullRequestsView.Update(msg)
 	case TabWorkItems:
@@ -879,6 +1266,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // isActiveViewSearching returns true if the currently active tab's view is in search mode.
 func (m Model) isActiveViewSearching() bool {
 	switch m.activeTab {
+	case TabNotifications:
+		return m.notificationsView.IsSearching()
 	case TabPipelines:
 		return m.pipelinesView.IsSearching()
 	case TabPullRequests:
@@ -954,6 +1343,8 @@ func (m *Model) resizeActiveViewIfNeeded() {
 	m.footerRows = newFooterRows
 	contentSize := m.contentViewSize()
 	switch m.activeTab {
+	case TabNotifications:
+		m.notificationsView, _ = m.notificationsView.Update(contentSize)
 	case TabPullRequests:
 		m.pullRequestsView, _ = m.pullRequestsView.Update(contentSize)
 	case TabWorkItems:
@@ -965,14 +1356,132 @@ func (m *Model) resizeActiveViewIfNeeded() {
 	}
 }
 
+// keybindingsForTab returns the status bar keybindings string for the active
+// tab, or "" when hasContextBar is true (a context bar replaces the default
+// per-tab keybindings in detail views). Factored out of View()'s old inline
+// switch purely to give View() and any other caller a single place to get
+// this text, rather than for use during premeasurement: syncStatusBarContext
+// deliberately does NOT call this (see its own comment) because the status
+// bar's connection state, error/warning messages, and other message-driven
+// fields are themselves only ever updated by handlers that skip the resize
+// path (e.g. polling.PipelineRunsUpdated), so syncing keybindings alone
+// during premeasure would make the mismatch between "what's stale" and
+// "what's fresh" worse, not better, for tabs that carry no unread badge.
+func (m Model) keybindingsForTab(hasContextBar bool) string {
+	if hasContextBar {
+		return ""
+	}
+	switch m.activeTab {
+	case TabNotifications:
+		return m.notificationsKeybindings()
+	case TabPullRequests:
+		return m.pullRequestsKeybindings()
+	case TabWorkItems:
+		return m.workItemsKeybindings()
+	case TabPipelines:
+		return m.pipelinesKeybindings()
+	case TabMetrics:
+		return m.metricsKeybindings()
+	default:
+		return ""
+	}
+}
+
+// filterLabelForTab returns the status bar filter-label text for the active
+// tab and whether it is active at all. Factored out of View()'s old inline
+// switch for the same reason as keybindingsForTab, and for the same reason
+// NOT called from syncStatusBarContext: see that function's comment. There
+// is exactly one caller today (View()); this stays a separate function
+// rather than being inlined there because it pairs with keybindingsForTab,
+// and both exist to give a future caller (e.g. a premeasurement path that
+// gains a real need for the filter label) a single place to get this text.
+func (m Model) filterLabelForTab() (label string, active bool) {
+	switch m.activeTab {
+	case TabWorkItems:
+		var labels []string
+		if m.workItemsView.IsMyItemsActive() {
+			labels = append(labels, "My Items")
+		}
+		if m.workItemsView.IsTagFilterActive() {
+			labels = append(labels, "Tag: "+m.workItemsView.ActiveTag())
+		}
+		if m.workItemsView.IsStateFilterActive() {
+			labels = append(labels, "State: "+m.workItemsView.ActiveState())
+		}
+		if len(labels) > 0 {
+			return strings.Join(labels, " + "), true
+		}
+		return "", false
+	case TabPipelines:
+		if m.pipelinesView.IsStatusFilterActive() {
+			return "Status: " + m.pipelinesView.ActiveStatus(), true
+		}
+		return "", false
+	case TabPullRequests:
+		switch {
+		case m.pullRequestsView.IsMyPRsActive():
+			return "My PRs", true
+		case m.pullRequestsView.IsAsReviewerActive():
+			return "Reviewer", true
+		default:
+			return "", false
+		}
+	case TabMetrics:
+		if m.metricsView.IsTagFilterActive() {
+			return "Tag: " + m.metricsView.ActiveTag(), true
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}
+
 // syncStatusBarContext reads context items from the active view and updates
 // the status bar. This ensures measureFooterHeight uses the correct state
 // during Update, not stale state from the previous View call.
+//
+// Deliberately narrow in scope: it syncs only the unread badge and context
+// items, not keybindings or the filter label. Those
+// two are left for View() to set on the next real render. Syncing them here
+// too was tried and reverted: connection state, error and warning messages
+// are set directly by message handlers that skip this premeasurement path
+// entirely (e.g. polling.PipelineRunsUpdated returns before reaching
+// resizeActiveViewIfNeeded), so they can already be stale at premeasure time
+// independent of anything below. Making keybindings exactly right here while
+// leaving state/error/warning wrong does not fix that pre-existing gap — it
+// just trades the direction of the mismatch, and did so in a way that broke
+// TestModel_View_OutputHeightMatchesTerminal, a test with no notifications
+// pane in play at all.
+//
+// The unread badge is NOT exempt from this class of bug — it is in fact the
+// worst case: View() does resync the badge's displayed number fresh on every
+// render (below), but m.footerRows, which the badge's digit width feeds
+// into via measureFooterHeight, is only ever written by
+// resizeActiveViewIfNeeded. Every other status-bar field that can change
+// outside a render (connection state, error/warning messages) is at least
+// followed by a keypress that reaches the delegate-to-active-tab path and
+// repairs the accounting. The badge's producer, polling.NotificationsFetchedMsg,
+// is the one status-bar input driven purely by a background poll with no
+// following keypress to fix things up — so its handler (and
+// notifications.MarkResultMsg's, which can also flip the count) must call
+// resizeActiveViewIfNeeded directly rather than relying on this method alone.
 func (m *Model) syncStatusBarContext() {
+	// Keep the unread badge in sync too: it renders unconditionally from every
+	// tab, so measureFooterHeight must see its real value here, not whatever was
+	// left over from the previous tab's View() call.
+	if m.isTabEnabled(TabNotifications) {
+		m.statusBar.SetUnreadCount(m.notificationsView.UnreadCount())
+	} else {
+		m.statusBar.SetUnreadCount(0)
+	}
+
 	var hasContextBar bool
 	var contextItems []components.ContextItem
 
 	switch m.activeTab {
+	case TabNotifications:
+		hasContextBar = m.notificationsView.HasContextBar()
+		contextItems = m.notificationsView.GetContextItems()
 	case TabPullRequests:
 		hasContextBar = m.pullRequestsView.HasContextBar()
 		contextItems = m.pullRequestsView.GetContextItems()
@@ -991,6 +1500,70 @@ func (m *Model) syncStatusBarContext() {
 		m.statusBar.SetContextItems(contextItems)
 	} else {
 		m.statusBar.ClearContextItems()
+	}
+}
+
+// syncNotificationsActionMessage surfaces the notifications pane's own
+// status message (today set only by `o`) onto the shared status bar. This
+// closes a defect: View()'s ordinary path only calls SetContextStatus when
+// hasContextBar is true, and this pane's HasContextBar() is currently always
+// false (there is no detail view yet to attach a context bar to) — so
+// GetStatusMessage()'s text, including both of `o`'s failure outcomes, was
+// rendered nowhere at all.
+//
+// SetWarningMessage/ClearWarningMessage were chosen over
+// SetErrorMessage/ClearErrorMessage even though both are named in
+// StatusBar's own doc comments as the two surfaces that render
+// unconditionally: SetErrorMessage's condition in StatusBar.View() is
+// `s.errorMessage != "" && s.state == polling.StateError`, gated on the
+// pipeline poller's connection state, a condition an `o` outcome has no
+// bearing on — reusing it would trade one dead path for another that is
+// dead just as often in practice.
+//
+// Edge-triggered against notificationsActionMessage rather than writing
+// unconditionally: this method is called on every message reaching the
+// delegate-to-active-tab switch below while notifications is the active
+// tab, and also from polling.NotificationsFetchedMsg's handler — not only
+// right after an `o` press. warningMessage is a single, tab-agnostic field
+// also driven independently by polling.PipelineRunsUpdated's own
+// partial-project-load warning (Init() can also seed it at startup).
+// Writing to it on every call, regardless of whether the pane's own message
+// actually changed, would blow away that unrelated warning on the very next
+// arrow-key press on the notifications tab, long after the `o` outcome it
+// belongs to stopped being relevant — reproducing the same "shared field,
+// last write wins, wrong write clobbers the right one" hazard this method
+// exists to avoid, just one level up.
+//
+// That edge-triggering only guards the *set* direction, though: it stops
+// this method from re-asserting its own stale message over someone else's,
+// but does nothing to stop the clear branch from retracting someone else's
+// message outright. warningMessage has exactly one other writer today
+// (polling.PipelineRunsUpdated's partial-load warning), and an unconditional
+// ClearWarningMessage() here — reached the instant the pane's own message
+// goes back to "" on a fetch — deletes whatever that writer put there in
+// the meantime, even though this method never wrote it and has no way to
+// know it belongs to someone else without checking first. So the clear
+// branch reads the status bar back (GetWarningMessage(), the same read-back
+// ThemeSelectedMsg's handler already uses to carry warningMessage across a
+// statusBar rebuild) and only clears if what's showing still matches what
+// this method itself last wrote — retracting only its own message, leaving
+// any other writer's message alone to self-heal on its own next update.
+func (m *Model) syncNotificationsActionMessage() {
+	msg := m.notificationsView.GetStatusMessage()
+	if msg == m.notificationsActionMessage {
+		return
+	}
+	prev := m.notificationsActionMessage
+	m.notificationsActionMessage = msg
+	if msg != "" {
+		m.statusBar.SetWarningMessage(msg)
+		return
+	}
+	// Retract only our own message (see doc comment above) — clearing
+	// unconditionally would delete whatever polling.PipelineRunsUpdated's
+	// partial-load warning wrote in the meantime.
+	if m.statusBar.GetWarningMessage() == prev {
+		m.statusBar.ClearWarningMessage()
 	}
 }
 
@@ -1063,6 +1636,56 @@ func (m Model) pipelinesKeybindings() string {
 		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
 }
 
+// notificationsKeybindings returns the keybindings string for the
+// notifications list view: navigation, `f` filter, `r` refresh, the `u`/`d`
+// mark-read/mark-done triage keys, and `o` (open the selected row's WebURL in
+// the browser).
+func (m Model) notificationsKeybindings() string {
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Border))
+	sep := sepStyle.Render(" • ")
+
+	return m.styles.Key.Render("↑↓") + m.styles.Description.Render(" navigate") + sep +
+		m.styles.Key.Render("f") + m.styles.Description.Render(" filter reason") + sep +
+		m.styles.Key.Render("u") + m.styles.Description.Render(" mark read") + sep +
+		m.styles.Key.Render("d") + m.styles.Description.Render(" mark done") + sep +
+		m.styles.Key.Render("o") + m.styles.Description.Render(" open") + sep +
+		m.styles.Key.Render("r") + m.styles.Description.Render(" refresh") + sep +
+		m.styles.Key.Render("?") + m.styles.Description.Render(" help") + sep +
+		m.styles.Key.Render("q") + m.styles.Description.Render(" quit")
+}
+
+// notificationsWarningsBanner renders Config.Warnings ahead of the
+// notifications pane's own render state. internal/config populates this slice
+// at load time (currently the unrecognised-exclude_reasons and bad-repo-glob
+// diagnostics) and never prints it itself — a TUI has no safe place to write a
+// line before or after Bubble Tea's alt-screen switch — so this is the one
+// delivery route. Returns "" for an empty (or nil) slice so an unpopulated
+// Warnings field never reserves a blank line ahead of the pane's content; see
+// notificationsTabContent, which is what actually enforces that.
+func notificationsWarningsBanner(warnings []string) string {
+	if len(warnings) == 0 {
+		return ""
+	}
+	return strings.Join(warnings, "\n")
+}
+
+// notificationsTabContent composes the notifications tab's full content:
+// notificationsWarningsBanner's banner (when non-empty) ahead of the pane's
+// own render. Factored out of View() as a pure function so the "an empty
+// Warnings slice must not reserve a blank line" requirement is assertable
+// directly against a plain string, without m.styles.ContentBox's Render()
+// reformatting it first — a version that unconditionally prepends
+// banner+"\n\n" would leave a stray leading blank line in front of paneView
+// whenever warnings is empty, which this shape cannot produce.
+func notificationsTabContent(paneView string, warnings []string) string {
+	banner := notificationsWarningsBanner(warnings)
+	if banner == "" {
+		return paneView
+	}
+	return banner + "\n\n" + paneView
+}
+
 // measureFooterHeight measures the actual footer height. The footer is always
 // just the status bar (context items are now rendered inline in the status bar).
 func (m Model) measureFooterHeight() int {
@@ -1077,10 +1700,11 @@ func (m Model) renderTabBar(innerWidth int) string {
 	// Terms map keys arrive lowercase. A capitalised lookup key would never match.
 	type tabLabel struct{ key, def string }
 	tabLabels := map[Tab]tabLabel{
-		TabPullRequests: {"pull_requests", "Pull Requests"},
-		TabWorkItems:    {"work_items", "Work Items"},
-		TabPipelines:    {"pipelines", "Pipelines"},
-		TabMetrics:      {"metrics", "Metrics"},
+		TabNotifications: {"notifications", "Notifications"},
+		TabPullRequests:  {"pull_requests", "Pull Requests"},
+		TabWorkItems:     {"work_items", "Work Items"},
+		TabPipelines:     {"pipelines", "Pipelines"},
+		TabMetrics:       {"metrics", "Metrics"},
 	}
 
 	var renderedTabs []string
@@ -1167,104 +1791,60 @@ func (m Model) View() string {
 	// Render content based on active tab
 	var content string
 	var hasContextBar bool
-	var contextItems []components.ContextItem
 	var scrollPercent float64
 	var statusMessage string
 
 	switch m.activeTab {
+	case TabNotifications:
+		content = notificationsTabContent(m.notificationsView.View(), m.config.Warnings)
+		hasContextBar = m.notificationsView.HasContextBar()
+		scrollPercent = m.notificationsView.GetScrollPercent()
+		statusMessage = m.notificationsView.GetStatusMessage()
 	case TabPullRequests:
 		content = m.pullRequestsView.View()
 		hasContextBar = m.pullRequestsView.HasContextBar()
-		contextItems = m.pullRequestsView.GetContextItems()
 		scrollPercent = m.pullRequestsView.GetScrollPercent()
 		statusMessage = m.pullRequestsView.GetStatusMessage()
 	case TabWorkItems:
 		content = m.workItemsView.View()
 		hasContextBar = m.workItemsView.HasContextBar()
-		contextItems = m.workItemsView.GetContextItems()
 		scrollPercent = m.workItemsView.GetScrollPercent()
 		statusMessage = m.workItemsView.GetStatusMessage()
 	case TabMetrics:
 		content = m.metricsView.View()
 		hasContextBar = m.metricsView.HasContextBar()
-		contextItems = m.metricsView.GetContextItems()
 		scrollPercent = m.metricsView.GetScrollPercent()
 		statusMessage = m.metricsView.GetStatusMessage()
 	default:
 		content = m.pipelinesView.View()
 		hasContextBar = m.pipelinesView.HasContextBar()
-		contextItems = m.pipelinesView.GetContextItems()
 		scrollPercent = m.pipelinesView.GetScrollPercent()
 		statusMessage = m.pipelinesView.GetStatusMessage()
 	}
 
-	// Set tab-specific keybindings on status bar
-	if m.activeTab == TabPullRequests && !hasContextBar {
-		m.statusBar.SetKeybindings(m.pullRequestsKeybindings())
-	} else if m.activeTab == TabWorkItems && !hasContextBar {
-		m.statusBar.SetKeybindings(m.workItemsKeybindings())
-	} else if m.activeTab == TabPipelines && !hasContextBar {
-		m.statusBar.SetKeybindings(m.pipelinesKeybindings())
-	} else if m.activeTab == TabMetrics && !hasContextBar {
-		m.statusBar.SetKeybindings(m.metricsKeybindings())
-	} else {
-		m.statusBar.SetKeybindings("")
+	// Sync the unread badge and context items on the status bar through the
+	// same syncStatusBarContext that resizeActiveViewIfNeeded uses to
+	// premeasure the footer height, so those two never disagree about the
+	// badge or context items. Keybindings and the filter label are set
+	// separately just below, through the same keybindingsForTab/
+	// filterLabelForTab helpers, but NOT via syncStatusBarContext — see that
+	// method's comment for why.
+	m.syncStatusBarContext()
+
+	// Context status (detail-view status message) is set here rather than in
+	// syncStatusBarContext because it depends on statusMessage, which is only
+	// available once the active view's content has actually been rendered
+	// above.
+	if hasContextBar && statusMessage != "" {
+		m.statusBar.SetContextStatus(statusMessage)
 	}
 
-	// Update filter label badge on status bar
-	if m.activeTab == TabWorkItems {
-		var labels []string
-		if m.workItemsView.IsMyItemsActive() {
-			labels = append(labels, "My Items")
-		}
-		if m.workItemsView.IsTagFilterActive() {
-			labels = append(labels, "Tag: "+m.workItemsView.ActiveTag())
-		}
-		if m.workItemsView.IsStateFilterActive() {
-			labels = append(labels, "State: "+m.workItemsView.ActiveState())
-		}
-		if len(labels) > 0 {
-			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
-		} else {
-			m.statusBar.ClearFilterLabel()
-		}
-	} else if m.activeTab == TabPipelines {
-		var labels []string
-		if m.pipelinesView.IsStatusFilterActive() {
-			labels = append(labels, "Status: "+m.pipelinesView.ActiveStatus())
-		}
-		if len(labels) > 0 {
-			m.statusBar.SetFilterLabel(strings.Join(labels, " + "))
-		} else {
-			m.statusBar.ClearFilterLabel()
-		}
-	} else if m.activeTab == TabPullRequests {
-		switch {
-		case m.pullRequestsView.IsMyPRsActive():
-			m.statusBar.SetFilterLabel("My PRs")
-		case m.pullRequestsView.IsAsReviewerActive():
-			m.statusBar.SetFilterLabel("Reviewer")
-		default:
-			m.statusBar.ClearFilterLabel()
-		}
-	} else if m.activeTab == TabMetrics {
-		if m.metricsView.IsTagFilterActive() {
-			m.statusBar.SetFilterLabel("Tag: " + m.metricsView.ActiveTag())
-		} else {
-			m.statusBar.ClearFilterLabel()
-		}
+	m.statusBar.SetKeybindings(m.keybindingsForTab(hasContextBar))
+
+	if label, active := m.filterLabelForTab(); active {
+		m.statusBar.SetFilterLabel(label)
 	} else {
 		m.statusBar.ClearFilterLabel()
-	}
-
-	// Pass context items to status bar (replaces default keybindings in detail views)
-	if hasContextBar {
-		m.statusBar.SetContextItems(contextItems)
-		if statusMessage != "" {
-			m.statusBar.SetContextStatus(statusMessage)
-		}
-	} else {
-		m.statusBar.ClearContextItems()
 	}
 
 	// Pass scroll percent to status bar

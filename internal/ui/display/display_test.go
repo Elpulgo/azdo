@@ -297,6 +297,48 @@ func TestMixedKinds(t *testing.T) {
 	}
 }
 
+// ─── MultiScope ──────────────────────────────────────────────────────────────
+
+// TestMultiScope mirrors TestMixedKinds for the notifications pane's dynamic
+// Repo column predicate. The empty-slice row is load-bearing rather than
+// decorative: listview.New calls ToColumns(nil) to derive the initial column
+// specs (listview.go:110 documents relying on MixedKinds([]) == false for
+// exactly this), so a MultiScope that reported true for an empty slice would
+// build the table with a Repo column that the first single-repo ToRows call
+// then has no cell for — a table.renderRow panic (convention 7).
+func TestMultiScope(t *testing.T) {
+	tests := []struct {
+		name     string
+		scopes   []string
+		expected bool
+	}{
+		// nil → false (the ToColumns(nil) path listview.New takes)
+		{"Nil", nil, false},
+		// empty (non-nil) → false
+		{"Empty", []string{}, false},
+		// single element → false
+		{"OneElement", []string{"owner/repo"}, false},
+		// several elements, all the same scope → false
+		{"AllSame", []string{"owner/repo", "owner/repo", "owner/repo"}, false},
+		// several elements, all the empty scope → false (an absent repository
+		// payload on every row is still a single scope, not a multi-repo feed)
+		{"AllEmptyString", []string{"", "", ""}, false},
+		// two distinct scopes → true
+		{"TwoDistinct", []string{"owner/repo1", "owner/repo2"}, true},
+		// an absent repository payload alongside a real scope is still two
+		// distinct scopes → true
+		{"EmptyPlusNonEmpty", []string{"", "owner/repo"}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.MultiScope(tc.scopes)
+			if got != tc.expected {
+				t.Errorf("MultiScope(%q) = %v, want %v", tc.scopes, got, tc.expected)
+			}
+		})
+	}
+}
+
 // ─── Style function tests ─────────────────────────────────────────────────────
 
 func TestStateStyle(t *testing.T) {
@@ -402,5 +444,79 @@ func TestRunStatusStyle(t *testing.T) {
 				t.Errorf("RunStatusStyle(%v) foreground = %v, want %v", tc.status, got, tc.wantFg)
 			}
 		})
+	}
+}
+
+// ─── NotificationReason ──────────────────────────────────────────────────────
+
+// TestNotificationReasonGlyphAndStyle covers all 12 declared values (spec
+// Decision 18) plus one out-of-range value, per convention 6: it asserts the
+// glyph, the exact label, and the named style's foreground color — not a
+// label substring or a non-emptiness check.
+func TestNotificationReasonGlyphAndStyle(t *testing.T) {
+	s := styles.DefaultStyles()
+	th := s.Theme
+	tests := []struct {
+		name      string
+		reason    provider.NotificationReason
+		wantGlyph string
+		wantLabel string
+		wantFg    lipgloss.Color
+	}{
+		{"Unknown", provider.NotificationReasonUnknown, "?", "Unknown", th.ForegroundMuted},
+		{"ReviewRequested", provider.NotificationReasonReviewRequested, "◐", "Review requested", th.Warning},
+		{"Mentioned", provider.NotificationReasonMentioned, "@", "Mentioned", th.Info},
+		{"Assigned", provider.NotificationReasonAssigned, "●", "Assigned", th.Warning},
+		{"Authored", provider.NotificationReasonAuthored, "✎", "Authored", th.Info},
+		{"Commented", provider.NotificationReasonCommented, "»", "Commented", th.Info},
+		{"StateChanged", provider.NotificationReasonStateChanged, "⇄", "State changed", th.Info},
+		{"CIActivity", provider.NotificationReasonCIActivity, "▶", "CI activity", th.Info},
+		{"SecurityAlert", provider.NotificationReasonSecurityAlert, "⚠", "Security alert", th.Error},
+		{"ApprovalRequested", provider.NotificationReasonApprovalRequested, "◉", "Approval requested", th.Warning},
+		{"Subscribed", provider.NotificationReasonSubscribed, "◇", "Subscribed", th.ForegroundMuted},
+		{"Other", provider.NotificationReasonOther, "•", "Other", th.ForegroundMuted},
+		// Sentinel: an out-of-range value must render as Other, never empty.
+		{"OutOfRange", provider.NotificationReason(99), "•", "Other", th.ForegroundMuted},
+	}
+
+	seenGlyphs := map[string]bool{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotGlyph := display.NotificationReasonGlyph(tc.reason)
+			if gotGlyph != tc.wantGlyph {
+				t.Errorf("NotificationReasonGlyph(%v) = %q, want %q", tc.reason, gotGlyph, tc.wantGlyph)
+			}
+			if gotGlyph == "" {
+				t.Errorf("NotificationReasonGlyph(%v) must never be empty", tc.reason)
+			}
+			// The out-of-range sentinel deliberately reuses Other's glyph, so
+			// it is excluded from the distinctness check below.
+			if tc.name != "OutOfRange" {
+				if seenGlyphs[gotGlyph] {
+					t.Errorf("NotificationReasonGlyph(%v) = %q is not distinct — another declared reason already uses this glyph", tc.reason, gotGlyph)
+				}
+				seenGlyphs[gotGlyph] = true
+			}
+
+			gotFg := display.NotificationReasonStyle(tc.reason, s).GetForeground()
+			if gotFg != tc.wantFg {
+				t.Errorf("NotificationReasonStyle(%v) foreground = %v, want %v", tc.reason, gotFg, tc.wantFg)
+			}
+
+			if label := display.NotificationReasonLabel(tc.reason); label != tc.wantLabel {
+				t.Errorf("NotificationReasonLabel(%v) = %q, want %q", tc.reason, label, tc.wantLabel)
+			}
+		})
+	}
+}
+
+// TestNotificationReasonLabel_OutOfRangeIsOther pins that an unrecognised
+// value renders as the same label as the declared Other value, matching the
+// glyph/style fallback above.
+func TestNotificationReasonLabel_OutOfRangeIsOther(t *testing.T) {
+	got := display.NotificationReasonLabel(provider.NotificationReason(99))
+	want := display.NotificationReasonLabel(provider.NotificationReasonOther)
+	if got != want {
+		t.Errorf("NotificationReasonLabel(out-of-range) = %q, want %q (same as Other)", got, want)
 	}
 }

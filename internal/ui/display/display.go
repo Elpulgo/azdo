@@ -152,6 +152,25 @@ func MixedKinds(kinds []provider.Kind) bool {
 	return false
 }
 
+// MultiScope reports whether the given scopes span more than one distinct
+// value. Returns false for an empty slice and for a slice where every
+// element is identical (including an all-empty slice). Mirrors MixedKinds's
+// shape: it is the predicate the notifications pane's dynamic repo column
+// gates on (convention 7), driven by Identity.Scope diversity rather than
+// Identity.Kind.
+func MultiScope(scopes []string) bool {
+	if len(scopes) == 0 {
+		return false
+	}
+	first := scopes[0]
+	for _, sc := range scopes[1:] {
+		if sc != first {
+			return true
+		}
+	}
+	return false
+}
+
 // KindStyle returns the lipgloss style for a provider-kind glyph cell.
 // All kinds — including KindAzure and KindGitHub — use a muted/neutral style
 // so the glyph reads as secondary metadata rather than a status indicator.
@@ -328,6 +347,102 @@ func RunStatusStyle(r provider.RunStatus, s *styles.Styles) lipgloss.Style {
 	case provider.RunStatusSucceededWithIssues:
 		return s.Warning
 	default: // RunStatusUnknown
+		return s.Muted
+	}
+}
+
+// ─── NotificationReason ──────────────────────────────────────────────────────
+
+// NotificationReasonGlyph returns the icon for why a notification reached the
+// inbox. Every declared NotificationReason value returns a
+// distinct, non-empty glyph; any unrecognised/out-of-range value renders as
+// NotificationReasonOther's glyph rather than "" — a triage pane must never
+// render an empty cell for a row it is showing.
+func NotificationReasonGlyph(r provider.NotificationReason) string {
+	switch r {
+	case provider.NotificationReasonReviewRequested:
+		return "◐"
+	case provider.NotificationReasonMentioned:
+		return "@"
+	case provider.NotificationReasonAssigned:
+		return "●"
+	case provider.NotificationReasonAuthored:
+		return "✎"
+	case provider.NotificationReasonCommented:
+		return "»"
+	case provider.NotificationReasonStateChanged:
+		return "⇄"
+	case provider.NotificationReasonCIActivity:
+		return "▶"
+	case provider.NotificationReasonSecurityAlert:
+		return "⚠"
+	case provider.NotificationReasonApprovalRequested:
+		return "◉"
+	case provider.NotificationReasonSubscribed:
+		return "◇"
+	case provider.NotificationReasonUnknown:
+		return "?"
+	default: // NotificationReasonOther and any future/unrecognised value
+		return "•"
+	}
+}
+
+// NotificationReasonLabel returns the human-facing description of why a
+// notification reached the inbox. This is independent of
+// NotificationReason.String, which is the lowercase snake_case form used in
+// the `exclude_reasons` config key — the two need not match.
+// Every declared value returns a non-empty label; an unrecognised value
+// renders as "Other".
+func NotificationReasonLabel(r provider.NotificationReason) string {
+	switch r {
+	case provider.NotificationReasonReviewRequested:
+		return "Review requested"
+	case provider.NotificationReasonMentioned:
+		return "Mentioned"
+	case provider.NotificationReasonAssigned:
+		return "Assigned"
+	case provider.NotificationReasonAuthored:
+		return "Authored"
+	case provider.NotificationReasonCommented:
+		return "Commented"
+	case provider.NotificationReasonStateChanged:
+		return "State changed"
+	case provider.NotificationReasonCIActivity:
+		return "CI activity"
+	case provider.NotificationReasonSecurityAlert:
+		return "Security alert"
+	case provider.NotificationReasonApprovalRequested:
+		return "Approval requested"
+	case provider.NotificationReasonSubscribed:
+		return "Subscribed"
+	case provider.NotificationReasonUnknown:
+		return "Unknown"
+	default: // NotificationReasonOther and any future/unrecognised value
+		return "Other"
+	}
+}
+
+// NotificationReasonStyle returns the named lipgloss style for a notification
+// reason, grouped by urgency: security alerts are Error, reasons that
+// typically need direct action from the user are Warning, informational
+// reasons are Info, and low-signal/catch-all reasons are Muted. An
+// unrecognised value renders with the same Muted style as
+// NotificationReasonOther, never an unstyled/zero-value style.
+func NotificationReasonStyle(r provider.NotificationReason, s *styles.Styles) lipgloss.Style {
+	switch r {
+	case provider.NotificationReasonSecurityAlert:
+		return s.Error
+	case provider.NotificationReasonReviewRequested,
+		provider.NotificationReasonApprovalRequested,
+		provider.NotificationReasonAssigned:
+		return s.Warning
+	case provider.NotificationReasonMentioned,
+		provider.NotificationReasonAuthored,
+		provider.NotificationReasonCommented,
+		provider.NotificationReasonStateChanged,
+		provider.NotificationReasonCIActivity:
+		return s.Info
+	default: // Unknown, Subscribed, Other, and any future/unrecognised value
 		return s.Muted
 	}
 }

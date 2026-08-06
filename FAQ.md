@@ -68,6 +68,48 @@ The app persists a small amount of navigation state (last active tab, last opene
 
 It is created lazily on first save — a missing file is normal and not an error. Delete it to reset to the default view (Pull Requests tab, no detail open). Pipeline detail is intentionally not persisted.
 
+## I don't see a Notifications tab
+
+The Notifications tab renders your GitHub inbox, so it only appears when at least one
+configured backend supports it — in the current release that means **GitHub only**. If
+your config is Azure-only (no `github.repos`), there is nothing to show the tab for and it
+is hidden entirely; that's expected, not a bug, and Azure DevOps support is planned for a
+later release. Once it lands, the tab reappears on its own — no config change needed.
+
+If you do have `github.repos` configured and still don't see it, check `disabled_panes` in
+your config file for `notifications`, and check that your GitHub token has the required
+scope (see the next question).
+
+## The Notifications tab says my token is missing a scope
+
+The GitHub token needs an extra scope beyond what the rest of the app uses:
+`notifications` on a **classic** PAT. There is no fine-grained equivalent — GitHub's
+notifications API [only supports classic
+tokens](https://docs.github.com/en/rest/activity/notifications), so if you go looking for a
+Notifications permission in the fine-grained token form you won't find one. Everything else
+in the GitHub backend works fine on a fine-grained token; only this tab doesn't.
+
+This is a common situation if you set up your token before the Notifications tab existed —
+the fix is to tick `notifications` on your existing classic token (or create a classic one
+if yours is fine-grained) and run `azdo auth` to update the stored token. See [GitHub —
+Personal Access Token](README.md#github--personal-access-token) in the README for exactly
+where to add it.
+
+If you'd rather not touch your token, add `notifications` to `disabled_panes` in your
+config instead — or, from the pane's own error screen, press `x` twice, which writes that
+for you. Either way it takes effect on the next restart, not immediately.
+
+One thing this is **not**: if you're seeing an ordinary "unavailable" message with no
+mention of a scope, that's most likely a rate limit, not a missing permission — adding a
+scope to an already-correct token won't fix that.
+
+## How do I disable the Notifications tab?
+
+Add `notifications` to `disabled_panes` in your config file (comma-separated with any other
+panes you've already disabled), or, if the pane is showing an error, press `x` twice from
+within it — that writes `disabled_panes` for you. Either way the change takes effect on the
+**next restart**; the tab list is computed once at startup, so it won't vanish mid-session.
+
 ## The app shows connection errors, what do I do?
 
 Check the following:

@@ -7,6 +7,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/polling"
 	"github.com/Elpulgo/azdo/internal/ui/styles"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestStatusBar_New(t *testing.T) {
@@ -639,6 +640,104 @@ func TestStatusBar_SetScopes_MultiScopeWithinCap(t *testing.T) {
 	}
 }
 
+// ─── SetUnreadCount footer badge ───────────────────────────────────────────
+
+func TestStatusBar_SetUnreadCount(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(5)
+
+	if sb.unreadCount != 5 {
+		t.Errorf("expected unreadCount 5, got %d", sb.unreadCount)
+	}
+}
+
+// TestStatusBar_View_ContainsUnreadCount checks the badge is present,
+// carries the count, and renders alongside the default keybindings section
+// rather than replacing it.
+//
+// Folded from two former tests:
+// a bare strings.Contains(view, "7") is satisfied by a stray "7" from the
+// width, scroll percent or org string, so it exercised nothing beyond what
+// the "7 unread" substring check below already covers, and was dropped
+// rather than kept as a second, near-vacuous assertion.
+func TestStatusBar_View_ContainsUnreadCount(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(7)
+	sb.SetWidth(200)
+
+	view := sb.View()
+
+	if !strings.Contains(view, "7 unread") {
+		t.Errorf("view should contain the unread badge text '7 unread'; view:\n%s", view)
+	}
+	if !strings.Contains(view, "quit") {
+		t.Error("view should still contain default keybindings alongside the unread badge")
+	}
+}
+
+// TestStatusBar_View_UnreadCountHiddenAtZero pins the "hidden
+// entirely at zero" behavior: not merely the absence of the digit 0, but the absence
+// of any residue at all — no stray "unread" word and no empty badge/
+// separator left over from an unconditionally-appended part.
+func TestStatusBar_View_UnreadCountHiddenAtZero(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(0)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if strings.Contains(view, "unread") {
+		t.Error("view should NOT contain the word 'unread' when the count is 0")
+	}
+}
+
+// TestStatusBar_View_UnreadCountHiddenWhenNegative guards the same zero-hide
+// path against a negative value (e.g. a bad accessor), since <= 0 is the
+// actual guard rather than == 0.
+func TestStatusBar_View_UnreadCountHiddenWhenNegative(t *testing.T) {
+	sb := NewStatusBar(styles.DefaultStyles())
+	sb.SetUnreadCount(-1)
+	sb.SetWidth(120)
+
+	view := sb.View()
+
+	if strings.Contains(view, "unread") {
+		t.Error("view should NOT contain the word 'unread' when the count is negative")
+	}
+}
+
+// TestStatusBar_UnreadBadgeStyle_UsesThemeWarningAsBackground pins the badge's
+// style by inspecting the style
+// *object* returned by unreadBadgeStyle, not rendered bytes: lipgloss
+// resolves the Ascii profile in test binaries, which makes Render the
+// identity function there, so a style change would be invisible to any
+// assertion made against sb.View()'s output — exactly the gap that let all
+// four other unread-badge tests assert text substrings only.
+//
+// Compared against s.Theme.Warning/s.Theme.Background themselves, not
+// literal color strings, so a palette change cannot make this pass by
+// accident.
+func TestStatusBar_UnreadBadgeStyle_UsesThemeWarningAsBackground(t *testing.T) {
+	s := styles.DefaultStyles()
+	sb := NewStatusBar(s)
+
+	badgeStyle := sb.unreadBadgeStyle()
+
+	if !badgeStyle.GetBold() {
+		t.Error("unread badge style should be bold")
+	}
+	if got, want := badgeStyle.GetBackground(), lipgloss.Color(s.Theme.Warning); got != want {
+		t.Errorf("unread badge background = %v, want Theme.Warning (%v) — the badge uses Warning as a background, not a foreground", got, want)
+	}
+	if got, want := badgeStyle.GetForeground(), lipgloss.Color(s.Theme.Background); got != want {
+		t.Errorf("unread badge foreground = %v, want Theme.Background (%v)", got, want)
+	}
+	top, right, bottom, left := badgeStyle.GetPadding()
+	if top != 0 || bottom != 0 || right != 1 || left != 1 {
+		t.Errorf("unread badge padding = (top=%d,right=%d,bottom=%d,left=%d), want (0,1,0,1)", top, right, bottom, left)
+	}
+}
+
 // TestStatusBar_SetScopes_Truncation checks that scopes beyond the cap are
 // truncated and a "+N more" suffix is shown.
 func TestStatusBar_SetScopes_Truncation(t *testing.T) {
@@ -673,4 +772,3 @@ func TestStatusBar_SetScopes_Truncation(t *testing.T) {
 		t.Error("view should contain '+2 more' truncation suffix")
 	}
 }
-

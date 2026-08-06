@@ -1,5 +1,7 @@
 package provider
 
+import "time"
+
 // ListOpts carries neutral filter intent for list methods. The adapter is
 // responsible for translating these fields into backend-specific query
 // parameters (e.g. WIQL clauses, REST query params).
@@ -32,4 +34,36 @@ type ListOpts struct {
 	// Top overrides the default result-count limit when non-zero. A zero
 	// value means use the caller-supplied top argument (backwards compatible).
 	Top int
+}
+
+// NotifOpts carries neutral fetch intent for NotificationSource.List — the
+// things the fetch itself needs (server-side query shaping and pagination
+// hints). Config-driven filtering over the already-fetched merged feed
+// (repo globs, exclude_reasons, unread_only) is a separate pure function and
+// is deliberately not part of this struct.
+//
+// Zero value is always valid: all fields at zero mean "fetch the whole inbox,
+// no bound".
+// There is deliberately no UnreadOnly field. Fetching unread-only is
+// forbidden — GitHub's default response would make a row vanish the moment it
+// is marked read — so unread_only is a client-side filter over the full feed
+// and has exactly one landing site. A fetch-time hint that its only
+// implementer is required to ignore is a trap, not an option.
+type NotifOpts struct {
+	// ParticipatingOnly restricts results to notifications where the
+	// authenticated user is directly participating (assigned, mentioned,
+	// author, review-requested, etc.) rather than merely subscribed. Maps to
+	// GitHub's participating=true query parameter — a coarser, cheaper
+	// server-side bundle that composes with, and does not replace, the
+	// client-side exclude_reasons filter.
+	ParticipatingOnly bool
+
+	// Since restricts results to notifications updated at or after this
+	// time. Zero value means no lower bound. Maps to GitHub's since query
+	// parameter.
+	Since time.Time
+
+	// Max caps the number of notifications returned across all fetched
+	// pages. Zero means no cap.
+	Max int
 }

@@ -102,3 +102,161 @@ const (
 	// and a half-circle glyph, distinct from RunStatusSucceeded.
 	RunStatusSucceededWithIssues
 )
+
+// NotificationReason is a neutral semantic enum for why a notification
+// reached the inbox. Views use it to decide glyph, label, and style without
+// inspecting backend reason strings.
+//
+// GitHub's wire→enum mapping collapses several wire reasons per value — e.g.
+// "team_mention" maps to NotificationReasonMentioned, and "manual"/
+// "invitation"/"member_feature_requested" all map to NotificationReasonOther
+// — and any unrecognised wire reason also maps to NotificationReasonOther
+// rather than being dropped.
+type NotificationReason int
+
+const (
+	// NotificationReasonUnknown is the zero value; used for unmapped or
+	// unset reasons before the adapter boundary populates this field.
+	NotificationReasonUnknown NotificationReason = iota
+	// NotificationReasonReviewRequested corresponds to GitHub's
+	// "review_requested".
+	NotificationReasonReviewRequested
+	// NotificationReasonMentioned corresponds to GitHub's "mention" and
+	// "team_mention".
+	NotificationReasonMentioned
+	// NotificationReasonAssigned corresponds to GitHub's "assign".
+	NotificationReasonAssigned
+	// NotificationReasonAuthored corresponds to GitHub's "author".
+	NotificationReasonAuthored
+	// NotificationReasonCommented corresponds to GitHub's "comment".
+	NotificationReasonCommented
+	// NotificationReasonStateChanged corresponds to GitHub's "state_change".
+	NotificationReasonStateChanged
+	// NotificationReasonCIActivity corresponds to GitHub's "ci_activity".
+	NotificationReasonCIActivity
+	// NotificationReasonSecurityAlert corresponds to GitHub's
+	// "security_alert" and "security_advisory_credit".
+	NotificationReasonSecurityAlert
+	// NotificationReasonApprovalRequested corresponds to GitHub's
+	// "approval_requested".
+	NotificationReasonApprovalRequested
+	// NotificationReasonSubscribed corresponds to GitHub's "subscribed".
+	NotificationReasonSubscribed
+	// NotificationReasonOther is the catch-all: GitHub's "manual",
+	// "invitation", and "member_feature_requested" map here deliberately,
+	// and so does any reason string the mapper does not recognise. Nobody
+	// triages these differently, and an unrecognised reason must never be
+	// dropped from the feed.
+	NotificationReasonOther
+
+	// notificationReasonCount is an unexported sentinel that must stay last.
+	// It pins the enum's size so a value added or removed fails the test in
+	// notifications_test.go, rather than slipping through green as it would if
+	// the test only listed names.
+	notificationReasonCount
+)
+
+// NotificationReasonCount returns the number of declared NotificationReason
+// values. It exists so tests can assert the enum's size in both directions;
+// production code should never branch on it.
+func NotificationReasonCount() int { return int(notificationReasonCount) }
+
+// String returns a stable, lowercase snake_case identifier for the
+// NotificationReason, suitable for the `exclude_reasons` config key and for
+// on-disk/round-trip use generally. This is distinct from
+// display.NotificationReasonLabel, which returns a human-facing name.
+// NotificationReasonUnknown is an explicit case returning "unknown"; any
+// out-of-range value falls back to "other", matching the display layer
+// (display.NotificationReasonGlyph/Label/Style all fall back to Other) so the
+// four functions agree on corrupt input.
+//
+// This produces a deliberate asymmetry with ParseNotificationReason: the
+// string "unknown" round-trips out of String() for NotificationReasonUnknown,
+// but does not round-trip back in — ParseNotificationReason("unknown")
+// returns (Other, false), because the wire mapper never emits Unknown and the
+// string is reserved rather than parseable. Do not "fix" this by adding an
+// "unknown" case to ParseNotificationReason; unknown must match nothing.
+// Mirrors Kind.String's shape (see types.go).
+func (r NotificationReason) String() string {
+	switch r {
+	case NotificationReasonUnknown:
+		return "unknown"
+	case NotificationReasonReviewRequested:
+		return "review_requested"
+	case NotificationReasonMentioned:
+		return "mentioned"
+	case NotificationReasonAssigned:
+		return "assigned"
+	case NotificationReasonAuthored:
+		return "authored"
+	case NotificationReasonCommented:
+		return "commented"
+	case NotificationReasonStateChanged:
+		return "state_changed"
+	case NotificationReasonCIActivity:
+		return "ci_activity"
+	case NotificationReasonSecurityAlert:
+		return "security_alert"
+	case NotificationReasonApprovalRequested:
+		return "approval_requested"
+	case NotificationReasonSubscribed:
+		return "subscribed"
+	case NotificationReasonOther:
+		return "other"
+	default: // any future/unrecognised value
+		return "other"
+	}
+}
+
+// ParseNotificationReason maps a stable string identifier (see
+// NotificationReason.String) back to a NotificationReason, reporting via the
+// second return value whether the string was recognised. The match is
+// case-sensitive against the lowercase snake_case form String() emits, and it
+// deliberately does not fold case: a mixed-case value such as "Subscribed" or
+// "CI_ACTIVITY" is treated exactly like any other unrecognised string, so the
+// user is shown their typo rather than getting silently reinterpreted
+// behaviour. Note that `exclude_reasons` entries are list *values*, and viper
+// lowercases config *keys* only — they reach this function verbatim, so
+// nothing upstream normalises them either.
+//
+// The returned value always degrades to NotificationReasonOther when the bool
+// is false — an unrecognised string never errors and never causes a
+// config-driven filter to drop a row. Callers MUST NOT ignore the bool: it is
+// what separates "the user wrote `other`" from "the user made a typo", which
+// the value alone cannot. The config layer warns on an unrecognised
+// `exclude_reasons` entry, and the filter skips applying an unrecognised entry
+// rather than silently treating it as Other.
+//
+// "unknown" is reserved and deliberately returns (Other, false): the wire
+// mapper never emits NotificationReasonUnknown, so listing "unknown" in
+// exclude_reasons can never match a real row. This is the intentional
+// asymmetry with String(), documented there — do not add an "unknown" case
+// here to "fix" it.
+func ParseNotificationReason(s string) (NotificationReason, bool) {
+	switch s {
+	case "review_requested":
+		return NotificationReasonReviewRequested, true
+	case "mentioned":
+		return NotificationReasonMentioned, true
+	case "assigned":
+		return NotificationReasonAssigned, true
+	case "authored":
+		return NotificationReasonAuthored, true
+	case "commented":
+		return NotificationReasonCommented, true
+	case "state_changed":
+		return NotificationReasonStateChanged, true
+	case "ci_activity":
+		return NotificationReasonCIActivity, true
+	case "security_alert":
+		return NotificationReasonSecurityAlert, true
+	case "approval_requested":
+		return NotificationReasonApprovalRequested, true
+	case "subscribed":
+		return NotificationReasonSubscribed, true
+	case "other":
+		return NotificationReasonOther, true
+	default: // includes "unknown" (reserved) and any typo
+		return NotificationReasonOther, false
+	}
+}

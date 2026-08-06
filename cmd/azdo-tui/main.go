@@ -88,6 +88,7 @@ Required Azure DevOps PAT scopes:
 
 Required GitHub token scopes:
   Classic PAT:   repo          (private repos) or public_repo (public only)
+                 notifications (Notifications tab: list, mark read, mark done)
   Fine-grained:  Metadata      (read)
                  Contents      (read)
                  Issues        (read & write)
@@ -95,6 +96,9 @@ Required GitHub token scopes:
                  Actions       (read)
   Note: resolving PR comment threads requires a classic 'repo' PAT;
         fine-grained tokens are commonly rejected for that operation.
+  Note: the Notifications tab requires a CLASSIC token. GitHub's
+        notifications API supports no fine-grained permission, so
+        there is nothing to grant a fine-grained token here.
 
 Keyboard shortcuts (in TUI):
   Navigation:
@@ -105,7 +109,8 @@ Keyboard shortcuts (in TUI):
     esc          Go back
 
   Tabs:
-    1/2/3        Switch tabs (Pull Requests, Work Items, Pipelines)
+    1/2/3/4/5    Switch tabs (Notifications, Pull Requests, Work Items,
+                 Pipelines, Metrics) — only enabled tabs are numbered
     ←/→          Previous / next tab
 
   Actions:
@@ -222,11 +227,14 @@ func runAuthGitHub(store *config.KeyringStore) error {
 	fmt.Println()
 	fmt.Println(`Required token scopes:
   Classic PAT:  repo            (private repos) or public_repo (public only)
+                notifications   (Notifications tab: list, mark read, mark done)
   Fine-grained: Metadata        (read)
                 Contents        (read)
                 Issues          (read & write)
                 Pull requests   (read & write)
-                Actions         (read)`)
+                Actions         (read)
+  Note: the Notifications tab requires a CLASSIC token — GitHub's
+  notifications API supports no fine-grained permission.`)
 	fmt.Println()
 
 	var model patinput.Model
@@ -318,7 +326,8 @@ func runTUI() error {
 		if err != nil {
 			return fmt.Errorf("failed to create GitHub client: %w", err)
 		}
-		backends = append(backends, github.NewAdapter(ghMC))
+		ghNC := github.NewNotificationsClient(token)
+		backends = append(backends, github.NewAdapterWithNotifications(ghMC, ghNC))
 	}
 
 	// Defense-in-depth: config.Validate() already requires ≥1 backend, but guard

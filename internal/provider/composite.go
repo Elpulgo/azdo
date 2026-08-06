@@ -1,33 +1,25 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // CompositeProvider fans out list calls across multiple Provider backends and
 // routes detail/mutation/URL calls to the backend that owns the given scope.
 //
-// # Construction
+// Backends are stored in registration order; the scope→backend routing index
+// is built once at construction time from each backend's Scopes() output.
 //
-// Use NewCompositeProvider. Backends are stored in registration order; the
-// scope→backend routing index is built once at construction time from each
-// backend's Scopes() output.
-//
-// # Scope collision (Decision D3)
-//
-// When two backends claim the same scope string, the first-registered backend
-// wins for all routed calls. "First" means first backend in registration order,
-// not first scope string alphabetically.
-//
-// # Single-backend transparency (Decision D1)
+// Scope collision: when two backends claim the same scope string, the
+// first-registered backend wins for all routed calls ("first" in registration
+// order, not alphabetically).
 //
 // A single-backend CompositeProvider is transparent: list methods fan out to
-// that one backend, collect its results, run the sort (which is idempotent over
-// already-sorted data), and return the same slice.
-//
-// # Kind (Decision D4)
+// that one backend, run the (idempotent) sort, and return the same slice.
 //
 // Kind() returns the sole backend's Kind when there is one backend, or the
 // first backend's Kind when there are multiple. No consumer reads Kind() for
@@ -42,7 +34,7 @@ type CompositeProvider struct {
 // NewCompositeProvider constructs a CompositeProvider wrapping the given
 // backends in registration order. At least one backend must be provided.
 // The scope→backend routing index is built once here; collision resolution is
-// first-registered backend wins (see D3 above).
+// first-registered backend wins.
 func NewCompositeProvider(backends ...Provider) *CompositeProvider {
 	routing := make(map[string]Provider, len(backends))
 	for _, b := range backends {
@@ -61,6 +53,12 @@ func NewCompositeProvider(backends ...Provider) *CompositeProvider {
 // compile-time assertion: CompositeProvider must satisfy provider.Provider.
 var _ Provider = (*CompositeProvider)(nil)
 
+// compile-time assertion: CompositeProvider must satisfy
+// provider.NotificationSource. It implements this interface
+// unconditionally, fanning out only to the backends that themselves
+// implement it (see NotificationSource's doc comment).
+var _ NotificationSource = (*CompositeProvider)(nil)
+
 // backendFor returns the backend responsible for the given scope.
 // Returns nil when the scope is not registered.
 func (cp *CompositeProvider) backendFor(scope string) Provider {
@@ -75,7 +73,7 @@ func routeErr(scope string) error {
 // --- Cross-cutting ---
 
 // Kind returns the sole backend's Kind when one backend is configured, or the
-// first backend's Kind when multiple backends are present (Decision D4).
+// first backend's Kind when multiple backends are present.
 func (cp *CompositeProvider) Kind() Kind {
 	if len(cp.backends) == 0 {
 		return 0
@@ -91,7 +89,7 @@ func (cp *CompositeProvider) IsMultiProject() bool {
 
 // Scopes returns the union of all backends' scopes in registration order.
 // When two backends claim the same scope string, only the first occurrence is
-// included (first-registered wins, per D3).
+// included (first-registered wins).
 func (cp *CompositeProvider) Scopes() []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -564,4 +562,238 @@ func (cp *CompositeProvider) PipelineURL(scope string, id int) string {
 		return ""
 	}
 	return b.PipelineURL(scope, id)
+}
+
+// --- Notifications (ADR 0001) ---
+
+// capableNotificationBackends returns the backends, in registration order,
+// that implement NotificationSource. Notifications cannot reuse the
+// scope-routed fan-out (GET /notifications is user-level, not per-repo), so
+// list fan-out and mark routing both filter to this set independently rather
+// than sharing routing/backendFor.
+func (cp *CompositeProvider) capableNotificationBackends() []NotificationSource {
+	var out []NotificationSource
+	for _, b := range cp.backends {
+		if src, ok := b.(NotificationSource); ok {
+			out = append(out, src)
+		}
+	}
+	return out
+}
+
+// HasNotifications reports whether at least one backend implements
+// NotificationSource. The notifications tab is hidden on this capability
+// check alone, never on the feed being empty.
+//
+// This is the only correct capability check for a *CompositeProvider:
+// asserting a *CompositeProvider to NotificationSource always succeeds (it
+// implements the interface unconditionally, see the var _ assertion above),
+// so a type assertion against the composite reports support even when no
+// backend can supply an inbox. Assert the concrete backend, or call this.
+func (cp *CompositeProvider) HasNotifications() bool {
+	for _, b := range cp.backends {
+		if _, ok := b.(NotificationSource); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// NotificationsPollInterval reports the largest polling-cadence hint among
+// capable backends that also implement PollIntervalHinter. It is deliberately
+// a max, not a first-match or an average: the poller treats the hint as a
+// floor to raise the configured interval to, never to lower it, so the
+// composite must surface the most conservative (largest) hint across every
+// backend it fans out to. A capable backend that does not implement
+// PollIntervalHinter simply does not contribute — not the same as contributing 0.
+//
+// Returns 0 when no capable backend implements PollIntervalHinter, which the
+// caller must treat as "no hint available" and fall back to the configured
+// interval.
+func (cp *CompositeProvider) NotificationsPollInterval() time.Duration {
+	var max time.Duration
+	for _, b := range cp.capableNotificationBackends() {
+		hinter, ok := b.(PollIntervalHinter)
+		if !ok {
+			continue
+		}
+		if hint := hinter.PollInterval(); hint > max {
+			max = hint
+		}
+	}
+	return max
+}
+
+// List fans out to every backend that implements NotificationSource
+// concurrently, merges the results, and sorts by UpdatedAt descending. A
+// failing backend never empties the feed: the other backends' rows are still
+// returned alongside a *PartialError. total is the count of capable backends,
+// never len(cp.backends) — copying the PR/work-item/pipeline fan-outs' total
+// verbatim would make an incapable Azure backend count toward "all backends
+// failed" and turn a single GitHub 403 into an emptied feed. Zero capable
+// backends returns (nil, nil), not the all-failed error, which len(errs) ==
+// total would otherwise satisfy vacuously at 0 == 0.
+//
+// A backend that returns rows *and* a non-nil error has its rows discarded:
+// the error is recorded and the partial rows are not merged, because a
+// backend reporting failure cannot vouch for the completeness or ordering of
+// what it did return. No shipped implementation reaches this — github.Adapter
+// returns (nil, err) on every error path — but the choice is deliberate.
+func (cp *CompositeProvider) List(opts NotifOpts) ([]Notification, error) {
+	capable := cp.capableNotificationBackends()
+
+	type result struct {
+		notifs []Notification
+		err    error
+	}
+
+	var wg sync.WaitGroup
+	ch := make(chan result, len(capable))
+
+	for _, b := range capable {
+		wg.Add(1)
+		go func(backend NotificationSource) {
+			defer wg.Done()
+			notifs, err := backend.List(opts)
+			ch <- result{notifs, err}
+		}(b)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	var all []Notification
+	var errs []error
+	for r := range ch {
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		all = append(all, r.notifs...)
+	}
+
+	return mergeNotifications(all, errs, len(capable), opts.Max)
+}
+
+// mergeNotifications sorts notifications newest-first, caps the result at
+// maxItems, and applies partial-failure logic. maxItems is NotifOpts.Max;
+// zero means no cap.
+//
+// The sort is a total order: UpdatedAt descending, then Identity.Kind, Scope
+// and ID ascending. UpdatedAt alone is not enough — GitHub's updated_at is
+// second-resolution, so ties are routine, and the input order is itself
+// non-deterministic (the fan-out channel is drained in goroutine-completion
+// order). Tied rows must be canonicalised, not just stabilised, or a
+// stationary cursor selects a different row between polls. sort.SliceStable
+// additionally keeps rows identical in all four keys — a duplicate from an
+// overlapping page — in their input order.
+//
+// The maxItems cap re-applies NotifOpts.Max after the merge: List forwards
+// opts verbatim to every capable backend, so N capable backends would
+// otherwise return up to N×Max. It is applied *after* the sort — truncating
+// before it would keep an arbitrary N rather than the newest N — and on both
+// the clean and the partial-error return. The full slice expression makes the
+// truncation irreversible: what Max removed is gone, rather than recoverable
+// via all[:cap(all)] or overwritable by a caller's append.
+//
+// Unlike mergePRs/mergeWorkItems/mergePipelineRuns, the all-failed path
+// preserves the error chain with errors.Join rather than flattening it through
+// fmt.Errorf("%v", ...): callers recover *github.APIError (and its
+// RequiredScopes/GrantedScopes) via errors.As off this exact path to render
+// the missing-scope error in-view, and %v would destroy that chain.
+func mergeNotifications(all []Notification, errs []error, total, maxItems int) ([]Notification, error) {
+	// Zero capable backends is not "all failed" — len(errs) == total is
+	// satisfied vacuously at 0 == 0, which would otherwise report "all
+	// backends failed" for a config with no notification-capable backend.
+	if total == 0 {
+		return all, nil
+	}
+	if len(errs) == total {
+		return nil, fmt.Errorf("composite: all notification backends failed: %w", errors.Join(errs...))
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		a, b := all[i], all[j]
+		if !a.UpdatedAt.Equal(b.UpdatedAt) {
+			return a.UpdatedAt.After(b.UpdatedAt)
+		}
+		if a.Identity.Kind != b.Identity.Kind {
+			return a.Identity.Kind < b.Identity.Kind
+		}
+		if a.Identity.Scope != b.Identity.Scope {
+			return a.Identity.Scope < b.Identity.Scope
+		}
+		return a.Identity.ID < b.Identity.ID
+	})
+	if maxItems > 0 && len(all) > maxItems {
+		all = all[:maxItems:maxItems]
+	}
+	if len(errs) > 0 {
+		return all, &PartialError{Failed: len(errs), Total: total, Errors: errs}
+	}
+	return all, nil
+}
+
+// notificationMarkRouteErr returns a descriptive error naming the identity
+// kind when no capable backend claims it. %q relies on Kind's Stringer so a
+// zero/unset Kind renders as "" rather than as fmt's default numeric %v,
+// which would read as a blank hole in the message.
+func notificationMarkRouteErr(kind Kind) error {
+	return fmt.Errorf("composite: no capable notification backend registered for kind %q", kind)
+}
+
+// notificationBackendFor routes by Identity.Kind, never by backendFor(scope):
+// backendFor is built from configured Scopes(), which is nil/absent for most
+// of the inbox, so routing by scope would silently no-op mark-read/mark-done
+// on exactly the rows the pane exists to surface.
+//
+// It filters to capable backends first, then matches Kind() == kind, first
+// match wins: asserting capability after matching kind would let a GitHub row
+// route to an Azure backend that cannot mark it simply because Azure happened
+// to register first.
+//
+// A zero/unset kind is rejected by an explicit guard rather than left to fall
+// through. "No registered backend has a zero Kind" is an invariant about
+// callers, not a property of this function, and the package already contains
+// a counterexample: CompositeProvider.Kind() returns 0 on an empty backend
+// list, and the composite satisfies NotificationSource unconditionally. A
+// capable backend reporting Kind() == 0 would otherwise accept a fully
+// zero-valued Identity and return a nil error — an optimistic row update whose
+// rollback never fires, for a mark that targeted nothing.
+func (cp *CompositeProvider) notificationBackendFor(kind Kind) (NotificationSource, error) {
+	if kind == 0 {
+		return nil, notificationMarkRouteErr(kind)
+	}
+	for _, b := range cp.backends {
+		src, ok := b.(NotificationSource)
+		if !ok {
+			continue
+		}
+		if b.Kind() != kind {
+			continue
+		}
+		return src, nil
+	}
+	return nil, notificationMarkRouteErr(kind)
+}
+
+// MarkRead routes to the capable backend whose Kind matches id.Kind and marks
+// the notification read there.
+func (cp *CompositeProvider) MarkRead(id Identity) error {
+	b, err := cp.notificationBackendFor(id.Kind)
+	if err != nil {
+		return err
+	}
+	return b.MarkRead(id)
+}
+
+// MarkDone routes to the capable backend whose Kind matches id.Kind and marks
+// the notification done there.
+func (cp *CompositeProvider) MarkDone(id Identity) error {
+	b, err := cp.notificationBackendFor(id.Kind)
+	if err != nil {
+		return err
+	}
+	return b.MarkDone(id)
 }

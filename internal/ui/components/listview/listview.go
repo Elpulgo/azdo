@@ -16,10 +16,9 @@ import (
 type ViewMode int
 
 const (
-	ViewList   ViewMode = iota
+	ViewList ViewMode = iota
 	ViewDetail
 )
-
 
 // ColumnSpec defines a column with percentage-based width and minimum.
 type ColumnSpec struct {
@@ -49,11 +48,11 @@ type Config[T any] struct {
 	// effective column specs. This lets callers vary column count (e.g. a glyph
 	// column) in lock-step with the rows produced by ToRows. When nil, the
 	// static Columns field is used instead, preserving backward compatibility.
-	ToColumns      func(items []T) []ColumnSpec
-	Fetch          func() tea.Cmd
-	EnterDetail    func(item T, s *styles.Styles, w, h int) (DetailView, tea.Cmd)
-	HasContextBar  func(mode ViewMode) bool // nil = always false
-	FilterFunc     func(item T, query string) bool // nil = search disabled
+	ToColumns     func(items []T) []ColumnSpec
+	Fetch         func() tea.Cmd
+	EnterDetail   func(item T, s *styles.Styles, w, h int) (DetailView, tea.Cmd)
+	HasContextBar func(mode ViewMode) bool        // nil = always false
+	FilterFunc    func(item T, query string) bool // nil = search disabled
 }
 
 // searchBarHeight is the vertical space consumed by the search bar when active.
@@ -79,23 +78,23 @@ type Model[T any] struct {
 }
 
 func NormalizeWidths(cols []ColumnSpec) {
-    total := 0
-    for _, c := range cols {
-        total += c.WidthPct
-    }
-    if total == 0 {
-        return
-    }
+	total := 0
+	for _, c := range cols {
+		total += c.WidthPct
+	}
+	if total == 0 {
+		return
+	}
 
-    assigned := 0
-    for i := range cols {
-        if i == len(cols)-1 {
-            cols[i].WidthPct = 100 - assigned // absorb rounding remainder
-        } else {
-            cols[i].WidthPct = cols[i].WidthPct * 100 / total
-            assigned += cols[i].WidthPct
-        }
-    }
+	assigned := 0
+	for i := range cols {
+		if i == len(cols)-1 {
+			cols[i].WidthPct = 100 - assigned // absorb rounding remainder
+		} else {
+			cols[i].WidthPct = cols[i].WidthPct * 100 / total
+			assigned += cols[i].WidthPct
+		}
+	}
 }
 
 // New creates a new generic list model.
@@ -420,6 +419,46 @@ func (m Model[T]) SelectedIndex() int {
 // GetViewMode returns the current view mode.
 func (m Model[T]) GetViewMode() ViewMode {
 	return m.viewMode
+}
+
+// Err returns the error from the most recent HandleFetchResult call, or nil
+// when it has since been cleared. Exported so a caller building its own
+// render states on top of listview (e.g. internal/ui/notifications' error
+// state) can branch on the error without listview's own generic
+// "Error loading %s: %v" text.
+//
+// Only SetItems clears this field. HandleFetchResult's *success* path does
+// not (it returns early after setting m.err on the error path, and never
+// assigns nil otherwise), which is a pre-existing
+// bug, not a contract: viewList short-circuits on m.err != nil, so a pane
+// that recovers via HandleFetchResult(items, nil) stays pinned to
+// "Error loading …" forever — reachable today in pullrequests, workitems and
+// pipelines. internal/ui/notifications avoids it by routing its success path
+// through SetFeed -> SetItems. Do not rely on HandleFetchResult to reset it.
+func (m Model[T]) Err() error {
+	return m.err
+}
+
+// Loading reports whether a fetch is currently in flight (spinner visible).
+// Exported for the same reason as Err: a caller overriding listview's own
+// View() needs to tell "no items because still loading" apart from "no items
+// because the feed is genuinely empty" without reaching into the unexported
+// field.
+func (m Model[T]) Loading() bool {
+	return m.loading
+}
+
+// SetLoading sets the loading state directly, showing or hiding the spinner
+// to match. It exists because Init() cannot mutate model state (tea.Model's
+// Init has a value receiver): a caller whose first fetch begins the instant
+// the model is constructed — before Init() is ever called — must be able to
+// mark that fetch in flight at construction time instead, or Loading() reads
+// false while the fetch is outstanding and a caller's own "no items yet"
+// render (guarded on !Loading()) fires prematurely.
+func (m Model[T]) SetLoading(loading bool) Model[T] {
+	m.loading = loading
+	m.spinner.SetVisible(loading)
+	return m
 }
 
 // GetContextItems returns context bar items, delegating to detail when in detail mode.

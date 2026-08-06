@@ -27,7 +27,8 @@ azdo/
 │   │   ├── provider.go                  # Provider interface every view depends on
 │   │   ├── types.go                     # Neutral domain types (+ Identity, Kind)
 │   │   ├── enums.go                     # Neutral semantic enums (StateCategory, ItemType, VoteKind, RunStatus)
-│   │   ├── composite.go                # CompositeProvider: fan-out list calls, scope-route detail calls
+│   │   ├── notifications.go            # NotificationSource + PollIntervalHinter (optional capability interfaces)
+│   │   ├── composite.go                # CompositeProvider: fan-out list calls, scope-route detail calls, notifications fan-out
 │   │   ├── list_opts.go                # ListOpts — neutral filter intent passed to list calls
 │   │   └── errors.go                    # PartialError (shared across backends)
 │   │
@@ -48,10 +49,12 @@ azdo/
 │   ├── github/                          # GitHub backend
 │   │   ├── client.go                    # Single-repo HTTP client (REST + GraphQL)
 │   │   ├── multiclient.go              # Multi-repo wrapper, keyed by "owner/repo"
-│   │   ├── adapter.go                  # Wraps MultiClient as a provider.Provider
+│   │   ├── adapter.go                  # Wraps MultiClient as a provider.Provider (+ NotificationSource, PollIntervalHinter)
+│   │   ├── notifications.go            # User-scoped GET /notifications client: pagination, If-Modified-Since, X-Poll-Interval, mark read/done
 │   │   ├── mapping.go                  # Issues/PRs → neutral domain types
 │   │   ├── mapping_pr.go               # PR + review/vote mapping
 │   │   ├── mapping_pipeline.go         # Actions runs → neutral PipelineRun/Timeline
+│   │   ├── mapping_notifications.go    # Notification thread → neutral Notification, reason mapping, web-URL resolution
 │   │   ├── mapper_enums.go             # GitHub states → neutral enums
 │   │   ├── labels.go                   # LabelConvention: labels → ItemType/Priority/Tags
 │   │   ├── pullrequests.go             # Pulls, reviews, files, comments API
@@ -84,6 +87,10 @@ azdo/
 │   │   │   ├── statepicker.go         # Work item state picker
 │   │   │   ├── logo.go                # ASCII art logo
 │   │   │   └── contextitem.go         # Context-aware keybinding items
+│   │   │
+│   │   ├── notifications/
+│   │   │   ├── list.go                 # Notifications listview pane: reason filter, mark read/done, open in browser, error/disable states
+│   │   │   └── filter.go              # Config-driven filter (pure function over the merged feed)
 │   │   │
 │   │   ├── pipelines/
 │   │   │   ├── list.go                 # Pipeline runs list
@@ -132,6 +139,7 @@ azdo/
 │   │
 │   ├── polling/
 │   │   ├── poller.go                   # Background polling manager
+│   │   ├── notifications_poller.go    # Separate poller for the notifications feed (own tick type, own cadence)
 │   │   ├── errorhandler.go            # Error recovery & graceful degradation
 │   │   └── events.go                  # tea.Msg types for polling events
 │   │
@@ -155,7 +163,8 @@ azdo/
 ┌────────────────────────────────────────────────────────────────┐
 │                        Terminal (TUI)                           │
 │  ┌────────────────────────────────────────────────────────────┐│
-│  │  Tab Bar  [1: PRs]  [2: Work Items]  [3: Pipelines]       ││
+│  │  Tab Bar  [1: Notifications]  [2: PRs]  [3: Work Items]   ││
+│  │           [4: Pipelines]                                  ││
 │  └────────────────────────────────────────────────────────────┘│
 │  ┌────────────────────────────────────────────────────────────┐│
 │  │                                                            ││
@@ -344,11 +353,78 @@ actually hands to the views. Two routing strategies:
 - **Detail / mutation / URL calls route by scope.** A `scope → backend` index is
   built once at construction from each backend's `Scopes()`. An unknown scope
   returns a descriptive routing error (URL helpers return `""`).
+- **Notifications fan out over capable backends only** (see below) — a third
+  strategy, neither of the two above, because `GET /notifications` is
+  user-level and has no `scope` to route by.
 
 Design decisions baked in: a single-backend composite is **transparent** (D1);
 scope collisions resolve **first-registered-wins** (D3); `Kind()` returns the
 first backend's kind and is *not* used for per-row rendering — `Identity.Kind`
 is (D4).
+
+#### Notifications: an optional capability, not a `Provider` method
+
+Notifications are modeled the same way Metrics is (Decision 5's precedent,
+carried forward as Decision 1 of the notifications spec): as an **optional
+capability interface**, not a method added to `provider.Provider`. Azure
+DevOps has no inbox API, so extending `Provider` would force it to carry
+empty stub methods or a runtime "unsupported" error path — both of which
+convention 15 rules out, along with the typed-nil trap they invite.
+
+**`provider.NotificationSource`** (`internal/provider/notifications.go`) is
+the capability interface:
+
+```go
+type NotificationSource interface {
+    List(opts NotifOpts) ([]Notification, error)
+    MarkRead(id Identity) error
+    MarkDone(id Identity) error
+}
+```
+
+A backend implements it or it doesn't; nothing asserts it into existence. The
+cadence hint (GitHub's `X-Poll-Interval` header) is a *second*, independent
+optional interface, `PollIntervalHinter` — deliberately not a fourth method on
+`NotificationSource`, because widening that interface later would force every
+implementer (including a future Azure one) to also implement a hint it has no
+equivalent for.
+
+**`CompositeProvider` discovers support by type-asserting each backend it
+wraps**, never by asserting itself — `*CompositeProvider` satisfies
+`NotificationSource` unconditionally (it has `List`/`MarkRead`/`MarkDone`
+methods of its own that fan out), so asserting the composite would always
+report "capable" even when every backend inside it is Azure-only. The
+correct capability check is `HasNotifications()`, which loops over
+`cp.backends` and asserts each one individually. This is what lets the app
+decide whether to show the tab at all (Decision 11): hidden on *capability*,
+never on the feed being empty, and it flips back on by itself the moment a
+future backend implements the interface — no app-layer change required.
+
+`List` fans out concurrently to every capable backend, merges the results,
+sorts newest-first, and — per Decision 20 — never lets one backend's failure
+empty the feed: the other backends' rows still come back, wrapped alongside
+a `*PartialError` naming what failed. `MarkRead`/`MarkDone` route by the
+notification's own `Identity.Kind` over capable backends only — never by
+`backendFor(scope)`, which is built from configured scopes and would return
+nil for the (very common) case of a notification from a repo nobody
+configured a client for.
+
+**The neutral `Notification` type** (`internal/provider/types.go`) carries a
+provider-qualified `Identity` (kind + scope + native id — never a bare id,
+since a future Azure identity scheme could otherwise collide with a GitHub
+thread id) plus `Read`/`Done` fields. GitHub populates `Read`/`Done` from the
+server; a future Azure implementation would populate them from local state
+instead — the same fields, filled by a different source, so adding Azure
+support later changes *who* fills them, not the shape the UI consumes.
+
+**Single entrypoint, same rule as every other list.** The `internal/ui/notifications`
+pane consumes `[]provider.Notification` and nothing else — it never imports
+`internal/github` or knows which backend produced a given row, exactly the
+same convention the PR/work-item/pipeline lists already follow. Provider
+normalization happens once, at the adapter mapping boundary (`mapping_notifications.go`
+maps a GitHub notification thread to the neutral type); the pane, the filter
+(`internal/ui/notifications/filter.go`), and the footer's unread badge all
+operate purely on the merged, neutral feed.
 
 #### Provider-aware rendering
 
@@ -370,10 +446,22 @@ actually mix origins.
 
 ### 5. Background Polling with Graceful Degradation
 
-The polling system has two components:
+The polling system has these components:
 
 - **`Poller`** — manages fetch intervals, sends `PipelineRunsUpdated` messages via `tea.Cmd`. Supports one-shot fetches and continuous polling with configurable interval.
 - **`ErrorHandler`** — tracks consecutive failures and maintains last-known-good data. If a fetch fails, the UI keeps showing stale data instead of going blank. After a configurable threshold of consecutive failures, the error is escalated to a modal.
+- **`NotificationsPoller`** (`internal/polling/notifications_poller.go`) — a
+  separate poller for the notifications feed, with its own tick message type
+  (`NotificationsTickMsg`, never the shared `TickMsg`, since two pollers
+  emitting the same bare marker would be indistinguishable at the receiving
+  end and one arming the other's fetch loop is a runaway-timer hazard, not a
+  convenience). Its cadence is `max(configured X-Poll-Interval-derived hint,
+  notifications.poll_interval or the global polling_interval)`, re-derived on
+  every fetch so a live `X-Poll-Interval` response can only ever raise the
+  interval, never lower it below what the user configured. Gated on the same
+  predicate that decides whether the tab exists at all (capability **and**
+  the pane being enabled) — an ungated timer would keep polling GitHub every
+  cycle for the life of the process even with the tab disabled or hidden.
 
 ### 6. Styles and Theming
 
@@ -409,9 +497,29 @@ GitHub issue labels map to a neutral `ItemType` and priority. With the default
 labels that don't match (or match but carry an unrecognised value) are surfaced
 as tags. Empty/absent prefixes fall back to `DefaultLabelConvention()`.
 
+**Notifications config** (`NotificationsConfig`, `internal/config/config.go`)
+holds nine filter/cadence keys (`only_configured_repos`, `include_repos`,
+`exclude_repos`, `exclude_reasons`, `unread_only`, `participating_only`,
+`since_days`, `max_items`, `poll_interval`), every one defaulting to the
+widest possible behaviour. There is deliberately **no `notifications.enabled`
+key** — every other default-on pane disables via `disabled_panes`, and the
+Notifications tab follows the same single mechanism rather than adding a
+second knob that could disagree with it. An unrecognised `exclude_reasons`
+value or a malformed `exclude_repos`/`include_repos` glob is dropped at load
+with a warning (`Config.Warnings`, rendered in the pane) rather than treated
+as a hard config error — the same "warn and degrade, never crash the app"
+posture the rest of `internal/config` already has for optional features. See
+`README.md`'s Notifications Configuration section for the full key reference.
+
 **Auth** is per-backend, each with a keyring-first priority chain:
 - Azure PAT: system keyring → `AZDO_PAT` env fallback.
-- GitHub token: system keyring → `GITHUB_TOKEN` env fallback.
+- GitHub token: system keyring → `GITHUB_TOKEN` env fallback. The Notifications
+  tab additionally requires the `notifications` scope on top of whatever the
+  rest of the GitHub backend already needs — and specifically a **classic**
+  PAT, since GitHub's notifications endpoints support no other token flavor.
+  That asymmetry is why the pane's 403 handling treats *absent*
+  `X-Accepted-OAuth-Scopes` headers as a positive signal ("this is a
+  fine-grained token") rather than as missing information.
 
 System keyring is Windows Credential Manager / macOS Keychain / Linux
 SecretService. If a required credential is missing, `azdo auth` (which uses the
@@ -438,11 +546,12 @@ Each tab implements a drill-down navigation pattern:
 
 | Tab | Level 1 | Level 2 | Level 3 |
 |-----|---------|---------|---------|
+| Notifications | Merged feed (list only) | — | — |
 | Pipelines | Run list | Timeline tree (stages/jobs) | Log viewer |
 | Pull Requests | PR list | Detail (description, threads) | Diff view with comments |
 | Work Items | Item list | Detail (description, links) | — |
 
-Navigation is `enter` to drill down, `esc` to go back. The `viewMode` field on each model tracks the current level.
+Navigation is `enter` to drill down, `esc` to go back. The `viewMode` field on each model tracks the current level. Notifications has no detail view in phase 1 (Decision 3: `o` opens the browser, there is nothing to drill into) — `enter`/`esc` on that pane are a harmless round-trip through `listview`'s detail mode with nothing to show.
 
 ### 11. Metrics Dashboard (opt-in tab)
 

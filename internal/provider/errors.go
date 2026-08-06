@@ -6,9 +6,9 @@ import "fmt"
 // multi-source fetch. The caller receives valid data from the successful
 // sources alongside this error.
 //
-// The github.MultiClient (task 12) and any future multi-source fan-out must
-// use this type — not redefine their own — so that callers can do a single
-// errors.As check regardless of backend.
+// The github.MultiClient and any future multi-source fan-out must use this
+// type — not redefine their own — so that callers can do a single errors.As
+// check regardless of backend.
 type PartialError struct {
 	Failed int     // number of sources that failed
 	Total  int     // total number of sources
@@ -17,4 +17,12 @@ type PartialError struct {
 
 func (e *PartialError) Error() string {
 	return fmt.Sprintf("%d of %d sources failed to load", e.Failed, e.Total)
+}
+
+// Unwrap exposes the individual source errors for Go 1.20+ multi-error
+// unwrapping, so errors.As can recover a specific error type (e.g.
+// *github.APIError) buried in a partial-failure result. Purely additive:
+// no existing caller inspects PartialError.Errors via Unwrap today.
+func (e *PartialError) Unwrap() []error {
+	return e.Errors
 }

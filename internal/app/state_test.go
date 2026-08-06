@@ -187,6 +187,26 @@ func TestApplyState_IgnoresUnknownTab(t *testing.T) {
 	}
 }
 
+// TestApplyState_IgnoresIncapableNotificationsTab covers a state file that
+// names "notifications" (state.TabNotifications) — e.g. persisted from a
+// prior GitHub-capable run — being restored against today's Azure-only,
+// notification-incapable config. tabFromID resolves
+// the ID fine, but isTabEnabled must reject it because TabNotifications is
+// absent from enabledTabs, so ApplyState degrades to NewModel's default
+// (enabledTabs[0]) instead of panicking or landing on a blank/unrendered tab.
+func TestApplyState_IgnoresIncapableNotificationsTab(t *testing.T) {
+	m, _ := newTestModelWithStore(t)
+	m.ApplyState(state.State{ActiveTab: state.TabNotifications})
+
+	if m.activeTab != TabPullRequests {
+		t.Errorf("activeTab = %v, want TabPullRequests (notifications incapable, so ignored)", m.activeTab)
+	}
+
+	// The view must also render without panic — a stale disabled/incapable
+	// TabID must never leave the model in a state where View() blows up.
+	_ = m.View()
+}
+
 // TestApplyState_RestoresPRDetailOnFirstPopulate is the user-visible win:
 // quit while reading PR #7, relaunch, land on PR #7's detail.
 func TestApplyState_RestoresPRDetailOnFirstPopulate(t *testing.T) {
