@@ -56,18 +56,21 @@ func row(key string, updatedAt time.Time) provider.Notification {
 // TestReconcile table-tests decision 2's pure (rows, state) -> (rows,
 // state) reconcile step across every branch task 3 calls out: unseen,
 // unchanged stamp, newer stamp, older stamp (a separate row from unchanged,
-// since > and >= only differ on the equal case), done-row dropping, and TTL
-// pruning with a boundary row exactly at the TTL (convention 13's shape).
+// since > and >= only differ on the equal case, and proven to survive
+// orphanTTL pruning while still present in the feed -- the review's 🔴),
+// zero UpdatedAt (no activity information), an empty Identity.ID row
+// alongside a real one, done-row dropping, and TTL pruning with a boundary
+// row exactly at the TTL (convention 13's shape).
 func TestReconcile(t *testing.T) {
 	base := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
 		name      string
 		rows      []provider.Notification
-		state     map[string]TriageEntry
+		state     TriageState
 		now       time.Time
 		wantKeys  []string
-		wantState map[string]TriageEntry
+		wantState TriageState
 	}{
 		{
 			name:     "unseen subject surfaces unread with a fresh entry",
@@ -104,7 +107,7 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name: "seen subject, older stamp: state left untouched, not cleared",
+			name: "seen subject, older stamp: triage state left untouched, LastSeen still advances",
 			rows: []provider.Notification{row("review/pr/1", base.Add(-time.Hour))},
 			state: map[string]TriageEntry{
 				"review/pr/1": {Read: true, LastActivity: base, LastSeen: base.Add(-2 * time.Hour)},
@@ -112,11 +115,71 @@ func TestReconcile(t *testing.T) {
 			now:      base,
 			wantKeys: []string{"review/pr/1"},
 			wantState: map[string]TriageEntry{
-				// Completely untouched: LastActivity and LastSeen keep
-				// their pre-reconcile values rather than advancing to now,
-				// distinguishing this row from the unchanged-stamp case
-				// above.
-				"review/pr/1": {Read: true, LastActivity: base, LastSeen: base.Add(-2 * time.Hour)},
+				// Triage state (Read/Done/LastActivity) keeps its
+				// pre-reconcile values rather than clearing, distinguishing
+				// this row from the newer-stamp case above. LastSeen is
+				// presence bookkeeping, not triage, and DOES advance to
+				// now — a regressed-stamp row that keeps appearing in
+				// every poll must not freeze LastSeen, or the prune loop
+				// below TTL-deletes it while the source keeps returning
+				// it (the 🔴 review defect this test now pins).
+				"review/pr/1": {Read: true, LastActivity: base, LastSeen: base},
+			},
+		},
+		{
+			name: "regressed-stamp row still present in the feed survives past orphanTTL",
+			rows: []provider.Notification{row("review/pr/1", base.Add(-time.Hour))},
+			state: map[string]TriageEntry{
+				// LastSeen is already older than orphanTTL relative to
+				// `now` below — if the older-stamp branch failed to
+				// advance LastSeen (the reverted 🔴 defect), the prune
+				// loop would delete this entry even though the row is
+				// present in this very poll's rows, and the next poll
+				// would resurrect it as a fresh, unread subject.
+				"review/pr/1": {Done: true, LastActivity: base, LastSeen: base.Add(-orphanTTL - time.Hour)},
+			},
+			now: base,
+			// Done, so dropped from the returned rows -- but it must
+			// survive in state, not be pruned as orphaned.
+			wantKeys: nil,
+			wantState: map[string]TriageEntry{
+				"review/pr/1": {Done: true, LastActivity: base, LastSeen: base},
+			},
+		},
+		{
+			name: "zero UpdatedAt: no activity information, stamp comparison skipped, LastSeen still advances",
+			rows: []provider.Notification{row("review/pr/1", time.Time{})},
+			state: map[string]TriageEntry{
+				"review/pr/1": {Read: true, LastActivity: base, LastSeen: base.Add(-time.Hour)},
+			},
+			now:      base,
+			wantKeys: []string{"review/pr/1"},
+			wantState: map[string]TriageEntry{
+				// Stored Read/Done/LastActivity are untouched -- a zero
+				// stamp must not be read as "regressed to the beginning
+				// of time" (which would still coincidentally work via the
+				// older-stamp branch) nor as a spurious resurrection.
+				// LastSeen still advances like every other branch.
+				"review/pr/1": {Read: true, LastActivity: base, LastSeen: base},
+			},
+		},
+		{
+			name: "empty Identity.ID rows are passed through unread and untracked, and do not disturb an unrelated real row",
+			rows: []provider.Notification{
+				row("", base),
+				row("review/pr/1", base),
+			},
+			state: map[string]TriageEntry{
+				"review/pr/1": {Read: true, Done: true, LastActivity: base, LastSeen: base.Add(-time.Hour)},
+			},
+			now: base,
+			// The malformed row surfaces unread (never dropped, never
+			// tracked); the real row's stored Done applies and drops it
+			// from the result -- proving the two rows did not collapse
+			// into a shared "" entry.
+			wantKeys: []string{""},
+			wantState: map[string]TriageEntry{
+				"review/pr/1": {Read: true, Done: true, LastActivity: base, LastSeen: base},
 			},
 		},
 		{
