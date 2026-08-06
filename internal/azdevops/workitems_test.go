@@ -1081,3 +1081,91 @@ func TestClient_ListRecentlyAssignedWorkItems_QueryContainsLookbackWindow(t *tes
 		t.Errorf("WIQL query must scope to @project to prevent duplicates in multi-project mode, got query body: %s", capturedBody)
 	}
 }
+
+// TestClient_ListRecentlyAssignedWorkItems_QueryExcludesClosedAndRemoved
+// pins that the state clause matches ListMyWorkItems (workitems.go:261-266)
+// exactly. Without it, closing a work item advances System.ChangedDate (a
+// close is itself a revision), so the item would match this query again on
+// the very next poll and resurrect as unread — inverting decision 7's
+// auto-expiry.
+func TestClient_ListRecentlyAssignedWorkItems_QueryExcludesClosedAndRemoved(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListRecentlyAssignedWorkItems(14, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+
+	// The request body is JSON-encoded, which escapes `<`/`>` to
+	// `<`/`>` — decode it back to the literal query text before
+	// asserting on it, rather than matching the escaped form.
+	var decoded struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(capturedBody), &decoded); err != nil {
+		t.Fatalf("failed to decode captured WIQL request body: %v", err)
+	}
+
+	if !strings.Contains(decoded.Query, "[System.State] <> 'Closed'") {
+		t.Errorf("WIQL query must exclude Closed items, got query: %s", decoded.Query)
+	}
+	if !strings.Contains(decoded.Query, "[System.State] <> 'Removed'") {
+		t.Errorf("WIQL query must exclude Removed items, got query: %s", decoded.Query)
+	}
+}
+
+// TestClient_ListRecentlyAssignedWorkItems_NegativeLookbackDays_ClampsToZero
+// pins that a negative lookbackDays is clamped to 0 rather than interpolated
+// as-is: `@Today--5` is malformed WIQL and would fail with HTTP 400 on
+// every project, degrading this source to nothing.
+func TestClient_ListRecentlyAssignedWorkItems_NegativeLookbackDays_ClampsToZero(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListRecentlyAssignedWorkItems(-5, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+
+	if strings.Contains(capturedBody, "@Today--5") {
+		t.Errorf("negative lookbackDays must not reach the query as-is, got malformed query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@Today-0") {
+		t.Errorf("negative lookbackDays must clamp to 0, got query body: %s", capturedBody)
+	}
+}

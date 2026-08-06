@@ -361,7 +361,18 @@ ORDER BY [System.ChangedDate] DESC`
 //
 // lookbackDays is N in `[System.ChangedDate] >= @Today-N` — task 11 wires it
 // to notifications.azure.lookback_days; this method takes it as a plain
-// parameter and does no config lookups of its own.
+// parameter and does no config lookups of its own. A negative value is
+// clamped to 0 rather than interpolated as-is: `@Today--5` is malformed
+// WIQL and would fail every project's query with HTTP 400, degrading this
+// source to nothing (convention 11's habit, applied to a query parameter
+// rather than an id).
+//
+// The state clause mirrors ListMyWorkItems (workitems.go:261-266) exactly:
+// without it, closing a work item is itself a revision that advances
+// System.ChangedDate, so the one action that completes an assigned item is
+// also the one that guarantees it matches this query again on the next
+// poll — inverting decision 7's auto-expiry by making "done" the trigger
+// for "unread".
 //
 // top: maximum number of work items to return (max 50 enforced, matching
 // every other WIQL caller in this file).
@@ -369,11 +380,16 @@ func (c *Client) ListRecentlyAssignedWorkItems(lookbackDays, top int) ([]WorkIte
 	if top > 50 {
 		top = 50
 	}
+	if lookbackDays < 0 {
+		lookbackDays = 0
+	}
 
 	query := fmt.Sprintf(`SELECT [System.Id] FROM WorkItems
 WHERE [System.TeamProject] = @project
   AND [System.AssignedTo] = @Me
   AND [System.ChangedDate] >= @Today-%d
+  AND [System.State] <> 'Closed'
+  AND [System.State] <> 'Removed'
 ORDER BY [System.ChangedDate] DESC`, lookbackDays)
 
 	ids, err := c.QueryWorkItemIDs(query, top)

@@ -95,16 +95,27 @@ func mapAssigned(mc *MultiClient, wi WorkItem, now time.Time) provider.Notificat
 	}
 }
 
-// assignedActivityStamp is the row's Notification.UpdatedAt: the work item's
-// ChangedDate, the same timestamp Client.ListRecentlyAssignedWorkItems'
-// WIQL query filters and orders by, clamped against now the same way
-// prActivityStamp and mentionActivityStamp clamp their stamps — a client or
-// server clock skew is not something this function can rule out, and
-// Reconcile stores whatever this returns as LastActivity unconditionally on
-// its "newer" branch. CreatedDate is the fallback should ChangedDate ever
-// arrive zero (malformed data), so Reconcile receives a usable stamp instead
-// of "no activity information" — mirroring prActivityStamp's CreationDate
-// fallback and mentionActivityStamp's ChangedDate fallback.
+// assignedActivityStamp is the row's Notification.UpdatedAt: the work
+// item's ChangedDate, the same timestamp
+// Client.ListRecentlyAssignedWorkItems' WIQL query filters and orders by.
+// Unlike mentionActivityStamp, which treats ChangedDate as the *wrong*
+// stamp — reachable only as a fallback, because "the item changed" is not
+// "you were mentioned" — this source makes ChangedDate the primary and only
+// stamp: for "recently assigned to me", any edit to the item genuinely is
+// new activity worth surfacing, so there is no stage-2 confirmation step to
+// prefer over it. This is a deliberate choice, not an oversight: Azure
+// exposes no assignment-change timestamp on its own (no "assigned on" field
+// on WorkItemFields) short of calling the per-item `/updates` endpoint once
+// per candidate, which this source does not do.
+//
+// The stamp is clamped against now the same way prActivityStamp and
+// mentionActivityStamp clamp theirs — a client or server clock skew is not
+// something this function can rule out, and Reconcile stores whatever this
+// returns as LastActivity unconditionally on its "newer" branch. CreatedDate
+// is the fallback should ChangedDate ever arrive zero (malformed data), so
+// Reconcile receives a usable stamp instead of "no activity information" —
+// mirroring prActivityStamp's CreationDate fallback and
+// mentionActivityStamp's ChangedDate fallback.
 func assignedActivityStamp(wi WorkItem, now time.Time) time.Time {
 	stamp := wi.Fields.ChangedDate
 	if stamp.IsZero() {

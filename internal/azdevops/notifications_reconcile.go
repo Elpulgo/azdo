@@ -12,9 +12,14 @@ import (
 // Decision 6 bounds every source to a lookback window (14 days by default),
 // so a subject that has genuinely stopped matching any source's query will
 // not reappear; orphanTTL only exists so the state file does not grow
-// without bound (decision 7). It is deliberately generous relative to the
-// default lookback so a longer-than-default lookback_days configuration
-// does not prune entries a still-running source would otherwise resurrect.
+// without bound (decision 7). It is generous relative to the default
+// lookback only while notifications.azure.lookback_days stays <= 30: beyond
+// that, "inside the query window" and "returned by a given poll" are
+// different sets (a source like SourceAssigned caps each query at
+// assignedQueryTop, so an old-but-still-in-window subject can be crowded
+// out of every poll's results, its LastSeen frozen, and pruned before the
+// window says it should be) — task 11 owns clamping lookback_days to this
+// constant so that gap cannot open.
 const orphanTTL = 30 * 24 * time.Hour
 
 // NotifKey builds the stable identity key for a locally-tracked synthetic

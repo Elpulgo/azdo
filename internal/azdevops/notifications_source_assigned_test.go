@@ -19,20 +19,86 @@ import (
 // assignedServerFixture configures a per-project httptest server backing
 // SourceAssigned's single WIQL + GetWorkItems round trip.
 //
-// ids is the WIQL response's id list — it models Azure's own server-side
-// `[System.ChangedDate] >= @Today-N` filtering, since this repo's httptest
-// fixtures cannot evaluate the macro themselves (matching newMentionServer's
-// identical limitation for @RecentMentions). items is keyed by id for the
-// GetWorkItems batch response, deliberately returned in an order unrelated
-// to ids (reversed) so a caller trusting either the WIQL order or the batch
-// endpoint's own order — rather than re-sorting by Fields.ChangedDate —
-// would be caught (see Client.ListRecentlyAssignedWorkItems's doc comment).
+// ids is the WIQL response's id list. By default (now left zero) it is
+// returned as-is — the caller is asserting on ids the fixture already
+// decided should "win" and does not need window filtering. When now is
+// non-zero, matchingIDs additionally filters ids to those whose item has
+// ChangedDate >= now.AddDate(0, 0, -lookbackDays), modelling Azure's own
+// server-side `[System.ChangedDate] >= @Today-N` filtering, since this
+// repo's httptest fixtures cannot evaluate the macro themselves (matching
+// newMentionServer's identical limitation for @RecentMentions). This lets a
+// fixture declare an id that is present in the candidate set but excluded
+// by the window, so a test can prove the window bound is load-bearing
+// rather than merely absent from the fixture (see
+// TestSourceAssigned_FreshInstall_WindowBoundsFlood).
+//
+// matchingIDs also excludes any item whose Fields.State is "Closed" or
+// "Removed" — but only if the WIQL request this fixture actually captured
+// contains both state-exclusion clauses. Unlike the window filter, this is
+// not driven by a fixture field: it is driven by the literal query text the
+// client under test sent, so a fixture cannot opt out of it, and removing
+// the clause from ListRecentlyAssignedWorkItems's production query changes
+// what this fixture returns, not just what a query-content test asserts on
+// (see TestSourceAssigned_ClosedItem_DoesNotResurrect).
+//
+// items is keyed by id for the GetWorkItems batch response, deliberately
+// returned in an order unrelated to ids (reversed) so a caller trusting
+// either the WIQL order or the batch endpoint's own order — rather than
+// re-sorting by Fields.ChangedDate — would be caught (see
+// Client.ListRecentlyAssignedWorkItems's doc comment).
 type assignedServerFixture struct {
-	ids   []int
-	items map[int]WorkItem
+	ids          []int
+	items        map[int]WorkItem
+	now          time.Time
+	lookbackDays int
 
 	mu            sync.Mutex
 	capturedQuery string
+}
+
+// matchingIDs applies the window and state-clause filters described in the
+// fixture's doc comment. now.IsZero() means "no window filtering
+// configured", preserving every existing fixture's behaviour of trusting
+// ids verbatim on that axis.
+func (f *assignedServerFixture) matchingIDs() []int {
+	ids := f.ids
+
+	if !f.now.IsZero() {
+		cutoff := f.now.AddDate(0, 0, -f.lookbackDays)
+		filtered := make([]int, 0, len(ids))
+		for _, id := range ids {
+			wi, ok := f.items[id]
+			if !ok || wi.Fields.ChangedDate.Before(cutoff) {
+				continue
+			}
+			filtered = append(filtered, id)
+		}
+		ids = filtered
+	}
+
+	f.mu.Lock()
+	rawBody := f.capturedQuery
+	f.mu.Unlock()
+	// capturedQuery is the raw JSON request body, which escapes `<`/`>` —
+	// decode it back to the literal query text before matching on it.
+	var decoded struct {
+		Query string `json:"query"`
+	}
+	_ = json.Unmarshal([]byte(rawBody), &decoded)
+	excludesClosedAndRemoved := strings.Contains(decoded.Query, "<> 'Closed'") && strings.Contains(decoded.Query, "<> 'Removed'")
+	if excludesClosedAndRemoved {
+		filtered := make([]int, 0, len(ids))
+		for _, id := range ids {
+			wi, ok := f.items[id]
+			if ok && (wi.Fields.State == "Closed" || wi.Fields.State == "Removed") {
+				continue
+			}
+			filtered = append(filtered, id)
+		}
+		ids = filtered
+	}
+
+	return ids
 }
 
 func newAssignedServer(t *testing.T, f *assignedServerFixture) *httptest.Server {
@@ -46,8 +112,9 @@ func newAssignedServer(t *testing.T, f *assignedServerFixture) *httptest.Server 
 			f.capturedQuery = string(bodyBytes)
 			f.mu.Unlock()
 
-			refs := make([]WorkItemReference, len(f.ids))
-			for i, id := range f.ids {
+			ids := f.matchingIDs()
+			refs := make([]WorkItemReference, len(ids))
+			for i, id := range ids {
 				refs[i] = WorkItemReference{ID: id}
 			}
 			resp := struct {
@@ -58,11 +125,12 @@ func newAssignedServer(t *testing.T, f *assignedServerFixture) *httptest.Server 
 		}
 
 		// GetWorkItems batch: return items in reverse order relative to
-		// f.ids, modelling the endpoint's own independent ordering (see
-		// newMentionServer's identical comment).
-		value := make([]WorkItem, 0, len(f.ids))
-		for i := len(f.ids) - 1; i >= 0; i-- {
-			if wi, ok := f.items[f.ids[i]]; ok {
+		// the (window-filtered) ids, modelling the endpoint's own
+		// independent ordering (see newMentionServer's identical comment).
+		ids := f.matchingIDs()
+		value := make([]WorkItem, 0, len(ids))
+		for i := len(ids) - 1; i >= 0; i-- {
+			if wi, ok := f.items[ids[i]]; ok {
 				value = append(value, wi)
 			}
 		}
@@ -83,10 +151,11 @@ func (f *assignedServerFixture) query() string {
 
 func TestSourceAssigned_MapsWorkItemToNotification(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
+	changedDate := now.Add(-time.Hour)
 	fixture := &assignedServerFixture{
 		ids: []int{42},
 		items: map[int]WorkItem{
-			42: {ID: 42, Fields: WorkItemFields{Title: "Fix the widget", ChangedDate: now.Add(-time.Hour)}},
+			42: {ID: 42, Fields: WorkItemFields{Title: "Fix the widget", ChangedDate: changedDate}},
 		},
 	}
 	server := newAssignedServer(t, fixture)
@@ -102,6 +171,17 @@ func TestSourceAssigned_MapsWorkItemToNotification(t *testing.T) {
 	}
 
 	row := rows[0]
+	// Pins that mapAssigned actually uses assignedActivityStamp's return
+	// value rather than leaving UpdatedAt at its zero value — a zero
+	// UpdatedAt would still leave this suite green because
+	// Reconcile treats a zero stamp as "no activity information" and skips
+	// the stamp comparison entirely (see Reconcile's doc comment), which
+	// makes a resurrection mutant look idempotent by construction. Without
+	// this assertion, mapAssigned's UpdatedAt field could be deleted and
+	// nothing here would notice.
+	if !row.UpdatedAt.Equal(changedDate) {
+		t.Errorf("UpdatedAt = %v, want the work item's ChangedDate %v", row.UpdatedAt, changedDate)
+	}
 	if row.Identity.Kind != provider.KindAzure {
 		t.Errorf("Identity.Kind = %v, want KindAzure", row.Identity.Kind)
 	}
@@ -181,6 +261,148 @@ func TestSourceAssigned_PropagatesListError(t *testing.T) {
 	}
 }
 
+// --- Cross-poll resurrection (mapAssigned's UpdatedAt end-to-end) ---
+
+// TestSourceAssigned_ChangedDateAdvance_ResurrectsDismissedRow pins that
+// mapAssigned's UpdatedAt (assignedActivityStamp's return value) is what
+// Reconcile actually uses to decide resurrection, mirroring task 4's
+// TestSourceReviewRequested_NewPushResurrectsDismissedRow: poll, mark the
+// row done, re-poll unchanged data (stays dropped), then re-poll with an
+// advanced ChangedDate (resurrects unread). Without UpdatedAt reaching
+// Reconcile, this test cannot pass — the mapping-level assertion in
+// TestSourceAssigned_MapsWorkItemToNotification checks the field directly,
+// this one checks that the field does something.
+func TestSourceAssigned_ChangedDateAdvance_ResurrectsDismissedRow(t *testing.T) {
+	firstChanged := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	fixture := &assignedServerFixture{
+		ids: []int{42},
+		items: map[int]WorkItem{
+			42: {ID: 42, Fields: WorkItemFields{Title: "Fix the widget", ChangedDate: firstChanged}},
+		},
+	}
+	server := newAssignedServer(t, fixture)
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+
+	now := firstChanged.Add(time.Hour)
+	rows, err := SourceAssigned(mc, 14, now)
+	if err != nil {
+		t.Fatalf("SourceAssigned (poll 1) failed: %v", err)
+	}
+	rows, state := Reconcile(rows, TriageState{}, now)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row after first reconcile, got %d", len(rows))
+	}
+
+	// User dismisses (marks done) the row.
+	key := rows[0].Identity.ID
+	entry := state[key]
+	entry.Done = true
+	state[key] = entry
+
+	// Re-poll unchanged data: the row must stay dropped (done).
+	rows2, err := SourceAssigned(mc, 14, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("SourceAssigned (poll 2, unchanged) failed: %v", err)
+	}
+	rows2, state2 := Reconcile(rows2, state, now.Add(time.Minute))
+	if len(rows2) != 0 {
+		t.Fatalf("expected the done row to stay dropped on an unchanged poll, got %d rows", len(rows2))
+	}
+
+	// Third poll: the item is edited again (still assigned, not closed) —
+	// ChangedDate advances, served from a fresh server round-trip.
+	secondChanged := firstChanged.Add(24 * time.Hour)
+	fixture2 := &assignedServerFixture{
+		ids: []int{42},
+		items: map[int]WorkItem{
+			42: {ID: 42, Fields: WorkItemFields{Title: "Fix the widget", ChangedDate: secondChanged}},
+		},
+	}
+	server2 := newAssignedServer(t, fixture2)
+	defer server2.Close()
+	mc2 := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server2})
+
+	pollNow := secondChanged.Add(time.Minute)
+	rows3, err := SourceAssigned(mc2, 14, pollNow)
+	if err != nil {
+		t.Fatalf("SourceAssigned (poll 3, advanced ChangedDate) failed: %v", err)
+	}
+	rows3, _ = Reconcile(rows3, state2, pollNow)
+	if len(rows3) != 1 {
+		t.Fatalf("expected the item to resurrect after ChangedDate advanced, got %d rows", len(rows3))
+	}
+	if rows3[0].Done {
+		t.Error("resurrected row must not still be Done")
+	}
+	if rows3[0].Read {
+		t.Error("resurrected row must not still be Read")
+	}
+}
+
+// TestSourceAssigned_ClosedItem_DoesNotResurrect pins the state clause end
+// to end. Closing a work item is itself a revision (ChangedDate advances);
+// the second poll's fixture carries that advanced ChangedDate *and* a
+// State of "Closed" on the same item id, and assignedServerFixture.
+// matchingIDs excludes it only because the WIQL text
+// ListRecentlyAssignedWorkItems actually sent contains the
+// `<> 'Closed'`/`<> 'Removed'` clauses (see that method's doc comment) — the
+// fixture does not special-case this test. So this test is load-bearing
+// against a regression at the production query, not just against Reconcile:
+// dropping the clause from ListRecentlyAssignedWorkItems makes the fixture
+// return the closed item with its advanced stamp, and this test fails (a
+// closed item resurrecting as unread is exactly the defect the clause
+// fixes; see workitems.go's ListRecentlyAssignedWorkItems doc comment).
+func TestSourceAssigned_ClosedItem_DoesNotResurrect(t *testing.T) {
+	firstChanged := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	fixture := &assignedServerFixture{
+		ids: []int{42},
+		items: map[int]WorkItem{
+			42: {ID: 42, Fields: WorkItemFields{Title: "Fix the widget", State: "Active", ChangedDate: firstChanged}},
+		},
+	}
+	server := newAssignedServer(t, fixture)
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+
+	now := firstChanged.Add(time.Hour)
+	rows, err := SourceAssigned(mc, 14, now)
+	if err != nil {
+		t.Fatalf("SourceAssigned (poll 1) failed: %v", err)
+	}
+	rows, state := Reconcile(rows, TriageState{}, now)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row after first reconcile, got %d", len(rows))
+	}
+
+	// The item is closed on day 3: State moves to "Closed" and, since
+	// closing is a revision, ChangedDate advances too.
+	closedNow := now.Add(3 * 24 * time.Hour)
+	secondChanged := closedNow.Add(-time.Minute)
+	closedFixture := &assignedServerFixture{
+		ids: []int{42},
+		items: map[int]WorkItem{
+			42: {ID: 42, Fields: WorkItemFields{Title: "Fix the widget", State: "Closed", ChangedDate: secondChanged}},
+		},
+	}
+	closedServer := newAssignedServer(t, closedFixture)
+	defer closedServer.Close()
+	closedMC := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": closedServer})
+
+	rows2, err := SourceAssigned(closedMC, 14, closedNow)
+	if err != nil {
+		t.Fatalf("SourceAssigned (poll 2, after close) failed: %v", err)
+	}
+	if len(rows2) != 0 {
+		t.Fatalf("expected the closed item to no longer be returned by the source, got %d rows", len(rows2))
+	}
+
+	rows2, _ = Reconcile(rows2, state, closedNow)
+	if len(rows2) != 0 {
+		t.Fatalf("expected 0 rows once the closed item stops matching the query, got %d", len(rows2))
+	}
+}
+
 // --- Idempotence (decision 6: the lookback window replaces the snapshot) ---
 
 // TestSourceAssigned_Idempotence_SamePollTwiceYieldsIdenticalRowsAndState
@@ -189,10 +411,12 @@ func TestSourceAssigned_PropagatesListError(t *testing.T) {
 // rows". It drives two full poll runs (SourceAssigned + Reconcile) against
 // the same, unchanged fixture data and the same now, and asserts both the
 // raw rows and Reconcile's output rows and state are identical across the
-// two runs — the property that replaces the snapshot. Two projects with
-// distinct ChangedDate values are used so the merge-and-sort step has
-// something nontrivial to be deterministic about, not just a single item
-// trivially equal to itself.
+// two runs — the property that replaces the snapshot. Two projects are used
+// so the run exercises the multi-project merge, not just a single item
+// trivially equal to itself; their ChangedDate values are distinct, which
+// fully determines sort order on its own and so does not exercise
+// sort.Slice's stability (a pre-existing, out-of-scope trait of every
+// MultiClient fan-out — see multiclient.go:414-416).
 func TestSourceAssigned_Idempotence_SamePollTwiceYieldsIdenticalRowsAndState(t *testing.T) {
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	older := now.Add(-2 * time.Hour)
@@ -247,30 +471,36 @@ func TestSourceAssigned_Idempotence_SamePollTwiceYieldsIdenticalRowsAndState(t *
 
 // TestSourceAssigned_FreshInstall_WindowBoundsFlood pins decision 6's other
 // justification: "a fresh install with an empty state file surfaces at most
-// the window's worth of items". The fixture's items map spans both inside
-// and outside a 14-day window, but ids (modelling Azure's own server-side
-// @Today-N filtering, which this httptest fixture cannot evaluate itself)
-// lists only the in-window item — proving the feed, reconciled against an
-// empty state file, surfaces exactly what the bounded query returned and
-// nothing more. It also asserts the literal @Today-14 text reached the WIQL
-// request, so the bound is not merely coincidental to this fixture.
+// the window's worth of items". Both insideWindow and outsideWindow are
+// placed in the fixture's ids (the WIQL candidate list) *and* its items map,
+// and the fixture's own ChangedDate filter (matchingIDs, standing in for
+// Azure's server-side `[System.ChangedDate] >= @Today-N`) is what excludes
+// outsideWindow — not an absence from the fixture's wiring. That makes the
+// window bound itself the thing under test: widening the fixture's window
+// past 30 days surfaces outsideWindow and fails this test (verified
+// manually while fixing this test; not re-asserted here since it would
+// require duplicating the fixture's cutoff arithmetic in the test body). It
+// also asserts the literal @Today-14 text reached the WIQL request, so the
+// bound is not merely coincidental to this fixture.
 func TestSourceAssigned_FreshInstall_WindowBoundsFlood(t *testing.T) {
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	insideWindow := WorkItem{ID: 100, Fields: WorkItemFields{Title: "Recently assigned", ChangedDate: now.Add(-2 * 24 * time.Hour)}}
 	outsideWindow := WorkItem{ID: 200, Fields: WorkItemFields{Title: "Assigned long ago", ChangedDate: now.Add(-30 * 24 * time.Hour)}}
 
+	const lookbackDays = 14
 	fixture := &assignedServerFixture{
-		ids: []int{insideWindow.ID},
+		ids: []int{insideWindow.ID, outsideWindow.ID},
 		items: map[int]WorkItem{
 			insideWindow.ID:  insideWindow,
 			outsideWindow.ID: outsideWindow,
 		},
+		now:          now,
+		lookbackDays: lookbackDays,
 	}
 	server := newAssignedServer(t, fixture)
 	defer server.Close()
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 
-	const lookbackDays = 14
 	rows, err := SourceAssigned(mc, lookbackDays, now)
 	if err != nil {
 		t.Fatalf("SourceAssigned failed: %v", err)
