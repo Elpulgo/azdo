@@ -1,10 +1,11 @@
 # Notifications Pane — Phase 2: Azure DevOps
 
 **Ticket:** N/A
-**Branch:** feat/notifications-azdo (worktree not yet created)
+**Branch:** feat/notifications-azdo
 **Author:** Oscar Larsson
 **Created:** 2026-07-29
-**Status:** Deferred — do not start until phase 1 (`20260729-notif-p1-github.md`) has merged
+**Status:** Ready. Phase 1 (`20260729-notif-p1-github.md`) merged 2026-08-06 as `0f90acf`, 21/21 tasks.
+Decisions 2 and 3 resolved 2026-08-06 and the task list is populated.
 
 ## Goal
 
@@ -31,12 +32,14 @@ from queries we already run, with read/done state persisted locally.
 - `azdevops`: `NotificationSource` implementation composing these sources
   1. PRs awaiting my review → `review_requested`
   2. @mentions in work-item discussions → `mentioned`
-  3. Newly assigned work items (delta since last snapshot) → `assigned`
-  4. My failed pipeline runs → `ci_failed`
+  3. Recently assigned work items (bounded lookback, decision 6) → `assigned`
+  4. My failed pipeline runs → `ci_activity` — **not `ci_failed`**, which is not a member of
+     the phase-1 enum; see decision 8
 - Stable synthetic identity key + local read/done store, reusing `internal/state` patterns
-- Snapshot/delta detection so only new or changed subjects surface as unread
-- Auto-expiry rules (e.g. review completed → item auto-done)
-- Config: per-source toggles under `notifications.azure`
+- Activity-stamp reconciliation so only new or changed subjects surface as unread (decision 2)
+- Auto-expiry rules (e.g. review completed → item auto-done) — mostly free, see decision 7
+- Config: restructure `notifications` into shared + `github` + `azure` blocks, with per-source
+  toggles under `notifications.azure.sources` (decision 13)
 - Docs: ADR for the synthetic-feed and local-state design, README, Architecture.md, FAQ
 
 **Out of scope:**
@@ -151,24 +154,184 @@ not out of phase 1's prose — where the two disagreed, the source won.
 | # | Question | Decision | Rationale |
 |---|----------|----------|-----------|
 | 1 | Where does local read/done state live? | New file under the `internal/state` dir, separate from `state.yaml` | Navigation state is disposable; triage state is not. Different lifetimes, different files |
-| 2 | Identity key shape? | TBD during planning — candidate `kind:scope:entity_id:activity_stamp` | Load-bearing for the whole phase; must not be settled casually |
-| 3 | Which @mention query? | TBD — WIQL over `System.History` vs. the mentions REST surface | Depends on what returns a usable timestamp per mention |
+| 2 | Identity key shape? | `Identity{Kind: KindAzure, Scope: <project API name>, ID: "<source>/<entity>/<entity_id>"}`. The activity stamp is a **stored value, not a key component** | See "Decision 2 in full" below |
+| 3 | Which @mention query? | Two stages: WIQL **narrows** candidate work-item ids, the Comments API **confirms and timestamps** each mention via `mentions[].targetId` | See "Decision 3 in full" below. WIQL cannot answer this alone — it has no per-mention timestamp |
 | 4 | Auto-expiry? | Yes, per-source rules | A completed review that stays in the feed trains the user to ignore the pane |
-| 5 | Per-source config toggles? | Yes, under `notifications.azure` | Orgs differ wildly in which sources are signal vs. noise |
+| 5 | Per-source config toggles? | Yes, four booleans under `notifications.azure.sources`, all defaulting on | Orgs differ wildly in which sources are signal vs. noise |
+| 6 | Snapshot/delta, or a lookback window? | **Bounded lookback window**, no snapshot. Each source queries "changed within the last N days" and local read state does the rest | A snapshot is a second piece of durable state that can be lost, and losing it floods the feed. A lookback is stateless and idempotent — the same poll twice yields the same rows. Also answers the phase's own "does a fresh install flood?" unknown: it cannot, the window bounds it |
+| 7 | How does auto-expiry actually work? | It is **implicit in recomputation**. A source that stops matching a subject stops returning it, and the row is gone. The only explicit work is pruning the now-orphaned local state row on a TTL | Decision 4 asked for per-source expiry rules; recomputing the feed from scratch already provides them. Writing explicit "review completed → mark done" rules would be a second, drift-prone encoding of what the query already says |
+| 8 | Does `ci_failed` need a new reason enum member? | **No.** Failed pipeline runs map to the existing `ci_activity` | Phase 1 documented the eleven-reason vocabulary as closed and `ci_activity` as defined with Azure in mind. `ci_failed` appears in this spec's own prose and in `gh-notifications-arc.md`, but never existed in `provider.NotificationReason` — adding it would widen a user-facing config vocabulary for no triage benefit |
+| 9 | Does config validation need changing? | **Yes** — `config.go:614`'s `notificationsCounts := c.IsPaneEnabled("notifications") && c.HasGitHub()` must widen to "any notification-capable backend" | This is the one app-layer change the phase's constraints do **not** forbid: the constraint bans changes to *tab visibility* and to `ui/notifications`, and this is neither — it is the all-panes-disabled startup guard. The existing comment at `config.go:610-613` predicts this exact edit ("will need revisiting when a second notification-capable backend arrives") |
+| 10 | Azure poll cadence? | **The adapter self-throttles.** One poller and one interval stay as phase 1 shipped them; `notifications.azure.min_poll_interval` makes `Adapter.List` return its previous result when called sooner than that. Azure still does not implement `PollIntervalHinter` | Azure costs 4+ queries per project per cycle against GitHub's one conditional request, so a shared interval prices the whole feed at Azure's cost. But there is no per-backend cadence to configure: phase 1 shipped exactly one `NotificationsPoller` emitting one `NotificationsTickMsg`, and `CompositeProvider.List` fans out to every capable backend on that single tick. A second poller and tick message would contradict this phase's "the UI must not change" constraint. Self-throttling puts the cost control where the cost is, and the poller keeps no knowledge of it. **An earlier draft of this decision specified `notifications.azure.poll_interval` as a second poller interval — that is not implementable; do not reinstate it** |
+| 11 | One merged feed or per-project sections? | **One merged feed.** `Scope` already carries the project and the pane already renders a scope column | The pane is provider-agnostic by constraint; per-project sectioning would be a UI change, which this phase forbids. `MultiClient` fan-out already merges everywhere else in the app |
+| 12 | Do Releases-arc approvals mirror into this feed? | **No** — out of scope for phase 2, revisit when `release-view-arc.md` is spec'd | Mirroring needs the release arc to exist first. Deciding the ownership question now would be designing against an unwritten spec |
+| 13 | Config shape now that a second provider exists? | **Shared keys at top level, provider-specific keys nested** under `notifications.github` and `notifications.azure`. See the block below | Of phase 1's nine keys, only five are genuinely provider-neutral. `participating_only` has no Azure equivalent by phase 1's own account, and `only_configured_repos` is vacuously true on Azure (the adapter only ever queries configured projects) — both sat at top level looking shared when they never were. Nesting states the truth the flat shape obscured |
+| 14 | Migration for the moved keys? | **None. No shim, no deprecation warning, no compatibility path.** The nested shape is simply the shape | Phase 1 merged to `main` but has **not been released** — these key names have never reached a public build, so there is no installed config anywhere that uses the flat form. Writing a migration would be compatibility code for a version that never existed. Confirmed by Oscar 2026-08-06 |
+| 15 | `max_items` with two live backends? | Cap the **merged feed** after the composite's sort, not per-backend | Phase 1 applies it inside each fetch, which was unambiguous with one backend and silently becomes "up to 2×N rows" with two. A cap the user writes once should mean what it says. Requires moving the truncation from the adapter to the composite — a phase-1 refactor, which the phase's constraints permit (they forbid UI changes, not shared-code refactors) |
+
+The approved config shape:
+
+```yaml
+notifications:
+  # shared — apply to the merged feed regardless of backend
+  exclude_reasons: []
+  unread_only: false
+  exclude_repos: []
+  include_repos: []
+  max_items: 0
+  poll_interval: 0
+
+  github:
+    participating_only: false
+    only_configured_repos: false
+    since_days: 0
+
+  azure:
+    lookback_days: 14
+    min_poll_interval: 300
+    sources:
+      review_requested: true
+      mentioned: true
+      assigned: true
+      ci_failed: true
+```
+
+Two notes on names that are deliberate, not oversights:
+
+- **`sources.ci_failed` names a *source*, not a reason.** Decision 8 established that `ci_failed`
+  is not a member of `provider.NotificationReason` and that this source emits `ci_activity`. The
+  config key keeps the `ci_failed` spelling because it describes what the source *queries* (failed
+  runs) and reads better than `ci_activity: true`, which would suggest toggling a reason. Any test
+  or doc touching both must not treat the two spellings as the same vocabulary.
+- **`exclude_repos`/`include_repos` stay at top level under their phase-1 names**, even though they
+  glob over `Identity.Scope` — an `owner/repo` on GitHub but a project name on Azure. Renaming them
+  to `*_scopes` was considered and rejected: "scope" is internal vocabulary that appears nowhere in
+  the user-facing config today, and the keys do work correctly against both. Document the Azure
+  meaning rather than renaming.
+
+`since_days` moving under `github` also resolves a collision this spec would otherwise have
+carried: it and Azure's `lookback_days` are the same idea with incompatible zero values. `0` means
+"no bound" — correct for a GitHub inbox, catastrophic for "work items assigned to me", where
+unbounded means every work item ever assigned. Separate keys under separate providers, each with a
+zero value that is safe in its own context.
+
+### Decision 2 in full — the identity key
+
+Rejected: putting the activity stamp **in** the key (`kind:scope:entity_id:activity_stamp`, the
+original candidate). It makes resurrection automatic — new activity yields a key nothing has seen,
+so the row is unread by construction — but it pays for that three times over:
+
+- `Identity` stops naming an entity and starts naming an *event*. `SameItem` on the same work item
+  returns false across a comment, and phase 1's inputs record `SameItem` and `Identity.Kind` as
+  load-bearing for the composite's mark-read/mark-done routing.
+- The pane's cursor is keyed on identity, so a comment landing mid-triage moves the selection.
+- The state file grows one row per activity event forever, making TTL pruning load-bearing for
+  correctness rather than for hygiene.
+
+Chosen instead: the key names the **subject**, and the stamp is a value stored beside it.
+
+```
+Identity.ID = "<source>/<entity>/<entity_id>"     e.g. "review/pr/1234", "mention/wi/5678"
+local state  = { key: {read, done, last_activity, last_seen} }
+```
+
+- `<source>` rather than `<reason>` so a later remap of a source to a different reason does not
+  churn every key and resurrect the user's whole triaged backlog.
+- `<entity>` is required: work item 42 and PR 42 in one project would otherwise collide. `Kind` is
+  the *backend* (`azure`), not the entity type.
+- Two sources surfacing the same entity stay two rows — "PR 123 awaiting your review" and "PR 123
+  where you were mentioned" are genuinely separate attention items and are triaged separately.
+
+Resurrection becomes an explicit reconcile step instead of a side effect of key churn: on each
+poll, if a subject's current activity timestamp is newer than the stored `last_activity`, clear
+`read`/`done` and advance the stamp. That is a pure function over (rows, state) → rows, which is
+the whole point — it can be table-tested exhaustively, where key-churn semantics can only be
+tested end-to-end.
+
+Per phase 1's constraint, the key stays derivable from an `Identity`: it *is* one.
+
+### Decision 3 in full — the @mention query
+
+Neither candidate in the original framing works alone. The deciding constraint was the one the
+question itself named — a usable timestamp per mention — and **WIQL cannot supply it**: a WIQL
+query returns work items, so the newest timestamp available is `System.ChangedDate`, which says
+when the item last changed, not when *you* were mentioned. Any WIQL-only design has to treat "item
+changed" as "you were mentioned", which resurfaces a dismissed mention on every unrelated edit.
+
+The Comments API does supply it. Each `Comment` carries `createdDate` **and** a structured
+`mentions: CommentMention[]`, where `CommentMention.targetId` is "the resolved target of the
+mention… an example of this could be a user's tfid". So mentions are matched by identity, not by
+scraping display names out of HTML — and `Client.GetCurrentUserID()` (`client.go:198`) already
+resolves the id to match against. `GetWorkItemComments` already exists (`comments.go:35`).
+
+So: **WIQL narrows, Comments confirms and timestamps.**
+
+Stage 1 narrows to candidate work-item ids. Preferred form is the `@RecentMentions` macro:
+
+```sql
+SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project AND [System.Id] IN (@RecentMentions)
+```
+
+**This is unverified over REST and must be probed before it is relied on** (task 1). Microsoft's
+macro reference explicitly lists `@RecentMentions` among macros "only supported from the web
+portal", alongside `@CurrentIteration` — which genuinely does fail over REST. The list is not
+reliable as stated, since it also implies `@Me` is portal-only while `ListMyWorkItems`
+(`workitems.go:255`) ships `@Me` over the REST WIQL endpoint today and works. That makes
+`@RecentMentions` a plausible-but-unconfirmed capability, which is exactly the shape convention 28
+was written about. Probe it; do not reason from the `@Me` precedent.
+
+Fallback if the probe fails — full-text over the History field, bounded by the lookback window:
+
+```sql
+SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project
+  AND [System.History] CONTAINS WORDS '<display name>'
+  AND [System.ChangedDate] >= @Today-<N>
+```
+
+The fallback is strictly worse and its weaknesses are load-bearing, not cosmetic: it needs the
+user's display name (not the id), it matches anyone who typed that name as plain text, and
+`CONTAINS WORDS` requires a full-text index that some deployments do not have. All three are
+survivable **only because stage 2 re-filters by `targetId`** — stage 1 is allowed to over-match,
+never to under-match. Under either form, stage 2 is what decides.
+
+Sources: [Query fields, operators, macros, and variables](https://learn.microsoft.com/en-us/azure/devops/boards/queries/query-operators-variables?view=azure-devops) ·
+[Comments — Get Comments Batch (7.1-preview.4)](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/comments/get-comments-batch?view=azure-devops-rest-7.1) ·
+[Use @mentions in work items and pull requests](https://learn.microsoft.com/en-us/azure/devops/organizations/notifications/at-mentions?view=azure-devops)
 
 ## Tasks
 
-<!-- Deliberately empty. Populate after "Inputs from Phase 1" is filled and decision 2
-     is resolved — task breakdown before then would be guesswork. -->
+Task 1 is a spike and gates task 5 only; everything else can start immediately.
+
+- [ ] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
+- [ ] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
+- [ ] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → state left untouched, *not* cleared — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
+- [ ] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
+- [ ] 5. **`azdevops`: source — @mentions in work-item discussions** → `mentioned` (blocked by: 1,3). → done: stage 1 narrows via the form task 1 confirmed; stage 2 fetches comments for candidates and keeps only those with a `mentions[].targetId` equal to `GetCurrentUserID()`; key is `mention/wi/<id>`; activity stamp is the **newest matching comment's `createdDate`**, not the work item's `ChangedDate` — a test must pin that an unrelated edit after the mention does not advance the stamp, which is the entire reason stage 2 exists; candidate fan-out is bounded by a constant and the bound is logged when it truncates, never silently
+- [ ] 6. **`azdevops`: source — recently assigned work items** → `assigned` (blocked by: 3). → done: WIQL over `[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-N` (decision 6 — no snapshot, no delta state); key is `assigned/wi/<id>`; a test proves the same poll run twice yields identical rows and identical state (idempotence is the property that replaces the snapshot); a fresh install with an empty state file surfaces at most the window's worth of items, asserted with a fixture spanning items inside and outside the window
+- [ ] 7. **`azdevops`: source — my failed pipeline runs** → `ci_activity` (blocked by: 3). → done: filters `MultiClient.ListPipelineRuns` (`multiclient.go:69`) to runs triggered by me with a failed result; key is `cifail/run/<id>` — each failed run is its own item, so no stamp advance is needed and the reconcile treats it as a permanently-stable subject; reason is `NotificationReasonCIActivity` per decision 8, asserted by name so a future `ci_failed` member cannot be silently swapped in
+- [ ] 8. **`azdevops`: compose sources concurrently and implement `NotificationSource`** (blocked by: 4,5,6,7). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)` plus a conformance test following `adapter_conformance_test.go`; sources run concurrently and **one failing source degrades to the others rather than emptying the feed** — the same rule phase 1's decision 20 enforces at the composite layer, restated here because a source is to the Azure adapter what a backend is to the composite, and phase 1 lost a defect to exactly this; `Adapter` does **not** implement `PollIntervalHinter` (decision 10), asserted by a negative compile-time check; local state is folded into `Notification.Read` **at this boundary**, per phase 1's unread-semantics constraint — nothing above the adapter may learn that Azure read state is local
+- [ ] 9. **`azdevops`: `MarkRead`/`MarkDone` write to the local store** (blocked by: 2,8). → done: both take a `provider.Identity` and write through `Identity.ID` as the key; marking an id the store has never seen creates the entry rather than erroring — the composite routes by `Identity.Kind` and cannot know what the store has; `MarkDone` on an already-done id is a no-op, not a double-write; writes go through the debounced store and a `Flush()` on shutdown guarantees durability
+- [ ] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the five shared keys stay at top level; keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
+- [ ] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
+- [ ] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
+- [ ] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
+- [ ] 14. **`azdevops`: adapter self-throttling** (decision 10) (blocked by: 8,11). → done: `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and take no lock shared with `List`
+- [ ] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
+- [ ] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
 
 ## Unknowns
 
-- Cost: four queries per poll cycle across N projects. Does this need its own, slower
-  interval than the GitHub feed?
-- Can "newly assigned" be detected without a snapshot, e.g. via a changed-date filter, so a
-  fresh install does not flood the feed on first run?
-- Does any source need a PAT scope beyond what the app already requests?
-- Multi-project: one merged Azure feed, or per-project grouping when many projects are
-  configured?
-- Should approvals from the Releases arc (`release-view-arc.md`) mirror into this feed as
-  `approval_pending`, and if so which side owns that mapping?
+Resolved by the decisions above: poll cadence (10), first-run flood (6), multi-project
+grouping (11), Releases-arc mirroring (12). Still genuinely open:
+
+- **Does any source need a PAT scope beyond what the app already requests?** The comments
+  endpoint documents `vso.work`, which the work-item pane already needs, so the likely answer
+  is no — but "likely" is what convention 28 exists to catch. Task 1 confirms it against a real
+  org before it reaches the README.
+- **Cost of the mention source specifically.** Sources 1, 3 and 4 are one query per project per
+  cycle. Source 2 is one WIQL plus one comments call *per candidate work item*, so its cost
+  scales with how much a user is mentioned. Decision 10's slower interval bounds the damage and
+  task 5 bounds the fan-out, but the constant is a guess until someone runs it against a busy
+  org. Revisit after the first real-world use.
