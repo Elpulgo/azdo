@@ -172,13 +172,13 @@ func TestSourceAssigned_MapsWorkItemToNotification(t *testing.T) {
 
 	row := rows[0]
 	// Pins that mapAssigned actually uses assignedActivityStamp's return
-	// value rather than leaving UpdatedAt at its zero value — a zero
-	// UpdatedAt would still leave this suite green because
+	// value rather than leaving UpdatedAt at its zero value. This mattered:
+	// before TestSourceAssigned_ChangedDateAdvance_ResurrectsDismissedRow
+	// existed, a zero UpdatedAt survived the whole suite silently, because
 	// Reconcile treats a zero stamp as "no activity information" and skips
 	// the stamp comparison entirely (see Reconcile's doc comment), which
-	// makes a resurrection mutant look idempotent by construction. Without
-	// this assertion, mapAssigned's UpdatedAt field could be deleted and
-	// nothing here would notice.
+	// makes a resurrection mutant look idempotent by construction. Both
+	// that test and this assertion now fail on such a mutant.
 	if !row.UpdatedAt.Equal(changedDate) {
 		t.Errorf("UpdatedAt = %v, want the work item's ChangedDate %v", row.UpdatedAt, changedDate)
 	}
@@ -477,7 +477,8 @@ func TestSourceAssigned_Idempotence_SamePollTwiceYieldsIdenticalRowsAndState(t *
 // Azure's server-side `[System.ChangedDate] >= @Today-N`) is what excludes
 // outsideWindow — not an absence from the fixture's wiring. That makes the
 // window bound itself the thing under test: widening the fixture's window
-// past 30 days surfaces outsideWindow and fails this test (verified
+// to 30 days or beyond surfaces outsideWindow and fails this test — the
+// cutoff comparison is Before(cutoff), so equality already qualifies (verified
 // manually while fixing this test; not re-asserted here since it would
 // require duplicating the fixture's cutoff arithmetic in the test body). It
 // also asserts the literal @Today-14 text reached the WIQL request, so the

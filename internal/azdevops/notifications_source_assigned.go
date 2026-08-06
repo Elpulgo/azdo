@@ -100,8 +100,9 @@ func mapAssigned(mc *MultiClient, wi WorkItem, now time.Time) provider.Notificat
 // Client.ListRecentlyAssignedWorkItems' WIQL query filters and orders by.
 // Unlike mentionActivityStamp, which treats ChangedDate as the *wrong*
 // stamp — reachable only as a fallback, because "the item changed" is not
-// "you were mentioned" — this source makes ChangedDate the primary and only
-// stamp: for "recently assigned to me", any edit to the item genuinely is
+// "you were mentioned" — this source makes ChangedDate the primary stamp
+// (CreatedDate remains a fallback for the zero case, below): for "recently
+// assigned to me", any edit to the item genuinely is
 // new activity worth surfacing, so there is no stage-2 confirmation step to
 // prefer over it. This is a deliberate choice, not an oversight: Azure
 // exposes no assignment-change timestamp on its own (no "assigned on" field
