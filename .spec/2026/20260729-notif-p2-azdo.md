@@ -7,6 +7,30 @@
 **Status:** Ready. Phase 1 (`20260729-notif-p1-github.md`) merged 2026-08-06 as `0f90acf`, 21/21 tasks.
 Decisions 2 and 3 resolved 2026-08-06 and the task list is populated.
 
+## Probe results
+
+Task 1's spike, run 2026-08-06 against a live org.
+
+**(a) `[System.Id] IN (@RecentMentions)` via `POST /_apis/wit/wiql`** — **WORKS.**
+HTTP 200, 3 work items returned. The doc's blanket "macros are web-portal-only" claim is
+wrong for this macro over REST, exactly as it is for `@Me`. Decision 3 stage 1 ships as
+written; **the `System.History CONTAINS WORDS` fallback is not needed and must not be built.**
+
+**(b) `mentions[]` on `GET /wit/workItems/{id}/comments`** — **populated by default.**
+Same count of mention-bearing comments with and without `$expand=all` (2 either way), so
+`mentions` is returned despite being absent from `CommentExpandOptions`. **The client must
+not send `$expand=all`** — it would cost rendered-text payload for nothing.
+
+**(c) `CommentMention.targetId` vs `GetCurrentUserID()`** — **exact match, no normalising.**
+The comment carried mentions of three distinct users; the authenticated user's GUID matched
+one verbatim, byte-for-byte, same casing and hyphenation. A plain `==` is correct — no
+lowercasing, no GUID parsing. The two non-matching ids confirm the filter actually
+discriminates rather than trivially accepting everything.
+
+**Consequence:** decision 3 stands unchanged and task 5 is unblocked. No PAT scope beyond
+the current set was needed — all three calls succeeded with the existing token (task 16's
+"any PAT scope beyond the current set" question is answered: none).
+
 ## Goal
 
 Azure DevOps implements `provider.NotificationSource` by synthesizing an attention feed
@@ -304,7 +328,7 @@ Sources: [Query fields, operators, macros, and variables](https://learn.microsof
 
 Task 1 is a spike and gates task 5 only; everything else can start immediately.
 
-- [ ] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
+- [x] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
 - [ ] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
 - [ ] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → state left untouched, *not* cleared — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
 - [ ] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
