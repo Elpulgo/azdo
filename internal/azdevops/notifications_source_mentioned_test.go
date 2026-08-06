@@ -79,10 +79,17 @@ func newMentionServer(t *testing.T, f *mentionServerFixture) *httptest.Server {
 			return
 		}
 
-		// Stage 1's bulk GetWorkItems.
+		// Stage 1's bulk GetWorkItems. The real GET /wit/workitems batch
+		// endpoint returns response.Value in its own order, unrelated to the
+		// order ids were requested in (that is exactly the defect
+		// Client.ListRecentlyMentionedWorkItems' Fields.ChangedDate sort
+		// exists to correct for). Modelled here by walking f.ids in reverse
+		// rather than request order, so a caller that (wrongly) trusted this
+		// response's order to already be ChangedDate-descending would
+		// observe the opposite of what it expects.
 		value := make([]WorkItem, 0, len(f.ids))
-		for _, id := range f.ids {
-			if wi, ok := f.items[id]; ok {
+		for i := len(f.ids) - 1; i >= 0; i-- {
+			if wi, ok := f.items[f.ids[i]]; ok {
 				value = append(value, wi)
 			}
 		}
@@ -357,6 +364,12 @@ func TestSourceMentioned_PartialStage1Failure_ReturnsSurvivingRows(t *testing.T)
 	if rows[0].Identity.Scope != "beta" {
 		t.Errorf("Identity.Scope = %q, want %q", rows[0].Identity.Scope, "beta")
 	}
+	if partialErr.Failed != 1 {
+		t.Errorf("PartialError.Failed = %d, want 1 (project-scoped)", partialErr.Failed)
+	}
+	if partialErr.Total != 2 {
+		t.Errorf("PartialError.Total = %d, want 2 (project-scoped, two configured projects)", partialErr.Total)
+	}
 }
 
 func TestSourceMentioned_PartialStage2Failure_ReturnsSurvivingRows(t *testing.T) {
@@ -390,6 +403,166 @@ func TestSourceMentioned_PartialStage2Failure_ReturnsSurvivingRows(t *testing.T)
 	}
 	if rows[0].Identity.ID != "mention/wi/8" {
 		t.Errorf("Identity.ID = %q, want %q", rows[0].Identity.ID, "mention/wi/8")
+	}
+	if result.CommentFetchFailures != 1 {
+		t.Errorf("CommentFetchFailures = %d, want 1", result.CommentFetchFailures)
+	}
+}
+
+// TestSourceMentioned_Stage2Failure_PartialErrorStaysProjectScoped pins the
+// fix for the task 5 review's second 🟡: a single-project config where every
+// stage-1 query succeeds but several stage-2 comment fetches fail must not
+// report those candidate failures as project failures. Before the fix,
+// Failed/Total were computed as projectCount+len(candidates) and
+// len(stage1Errs)+len(stage2Errs), so this exact scenario (1 configured
+// project, 3 candidates, 2 comment-fetch failures) rendered as "2 of 4
+// projects failed to load" through PartialError.Error() — a message
+// consumed verbatim by polling/errorhandler.go — even though zero projects
+// actually failed.
+func TestSourceMentioned_Stage2Failure_PartialErrorStaysProjectScoped(t *testing.T) {
+	fixture := &mentionServerFixture{
+		ids: []int{7, 8, 9},
+		items: map[int]WorkItem{
+			7: {ID: 7, Fields: WorkItemFields{Title: "Fails"}},
+			8: {ID: 8, Fields: WorkItemFields{Title: "Also fails"}},
+			9: {ID: 9, Fields: WorkItemFields{Title: "Survives"}},
+		},
+		comments: map[int][]WorkItemComment{
+			9: {{ID: 1, CreatedDate: time.Now(), Mentions: []CommentMention{{TargetID: "user-1"}}}},
+		},
+		failCommentsForIDs: map[int]bool{7: true, 8: true},
+	}
+	server := newMentionServer(t, fixture)
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, "user-1")
+
+	result, err := SourceMentioned(mc, time.Now())
+	if err == nil {
+		t.Fatal("expected a *PartialError when two candidates' comment fetches fail")
+	}
+	var partialErr *PartialError
+	if !errors.As(err, &partialErr) {
+		t.Fatalf("expected a *PartialError, got: %v", err)
+	}
+	if partialErr.Failed != 0 {
+		t.Errorf("PartialError.Failed = %d, want 0 (no project failed, only candidates)", partialErr.Failed)
+	}
+	if partialErr.Total != 1 {
+		t.Errorf("PartialError.Total = %d, want 1 (one configured project)", partialErr.Total)
+	}
+	if got := partialErr.Error(); got != "0 of 1 projects failed to load" {
+		t.Errorf("PartialError.Error() = %q, want %q", got, "0 of 1 projects failed to load")
+	}
+	if result.CommentFetchFailures != 2 {
+		t.Errorf("CommentFetchFailures = %d, want 2", result.CommentFetchFailures)
+	}
+}
+
+// TestConfirmAndMapMentions_BoundsStage2Concurrency pins the fix for the
+// task 5 review's first 🟡: stage 2 must not launch more than
+// mentionStage2Concurrency comment fetches at once. Every candidate's
+// handler blocks briefly before responding, which forces genuine overlap
+// among the goroutines that do get to run; a highWaterMark tracked around
+// that block then upper-bounds how many were ever in flight simultaneously.
+// Before the fix (one goroutine per candidate, no semaphore) this test fails
+// by observing candidateCount concurrent requests.
+func TestConfirmAndMapMentions_BoundsStage2Concurrency(t *testing.T) {
+	const candidateCount = 20
+
+	var mu sync.Mutex
+	var inFlight, highWaterMark int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		mu.Lock()
+		inFlight++
+		if inFlight > highWaterMark {
+			highWaterMark = inFlight
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond) // hold the request open to force overlap
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+
+		resp := struct {
+			TotalCount int               `json:"totalCount"`
+			Count      int               `json:"count"`
+			Comments   []WorkItemComment `json:"comments"`
+		}{}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+
+	candidates := make([]WorkItem, candidateCount)
+	for i := range candidates {
+		candidates[i] = WorkItem{ID: i + 1, ProjectName: "alpha"}
+	}
+
+	_, errs := confirmAndMapMentions(mc, candidates, "user-1", time.Now())
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors, got %v", errs)
+	}
+
+	mu.Lock()
+	got := highWaterMark
+	mu.Unlock()
+
+	if got > mentionStage2Concurrency {
+		t.Errorf("high water mark of concurrent comment fetches = %d, want <= %d (mentionStage2Concurrency)", got, mentionStage2Concurrency)
+	}
+}
+
+// TestConfirmAndMapMentions_RowsSortedByUpdatedAtDescending pins the 🟢 fix:
+// rows otherwise arrive in goroutine-completion order (nondeterministic), so
+// confirmAndMapMentions sorts them by UpdatedAt descending before returning,
+// matching SourceReviewRequested's rows (already sorted by
+// MultiClient.ListPullRequestsAsReviewer).
+func TestConfirmAndMapMentions_RowsSortedByUpdatedAtDescending(t *testing.T) {
+	oldest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	fixture := &mentionServerFixture{
+		ids: []int{1, 2, 3},
+		items: map[int]WorkItem{
+			1: {ID: 1, Fields: WorkItemFields{Title: "Oldest"}},
+			2: {ID: 2, Fields: WorkItemFields{Title: "Middle"}},
+			3: {ID: 3, Fields: WorkItemFields{Title: "Newest"}},
+		},
+		comments: map[int][]WorkItemComment{
+			1: {{ID: 1, CreatedDate: oldest, Mentions: []CommentMention{{TargetID: "user-1"}}}},
+			2: {{ID: 1, CreatedDate: middle, Mentions: []CommentMention{{TargetID: "user-1"}}}},
+			3: {{ID: 1, CreatedDate: newest, Mentions: []CommentMention{{TargetID: "user-1"}}}},
+		},
+	}
+	server := newMentionServer(t, fixture)
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, "user-1")
+
+	result, err := SourceMentioned(mc, newest.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("SourceMentioned failed: %v", err)
+	}
+	rows := result.Rows
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+	for i := 0; i < len(rows)-1; i++ {
+		if rows[i].UpdatedAt.Before(rows[i+1].UpdatedAt) {
+			t.Fatalf("rows not sorted by UpdatedAt descending: rows[%d]=%v before rows[%d]=%v",
+				i, rows[i].UpdatedAt, i+1, rows[i+1].UpdatedAt)
+		}
+	}
+	if !rows[0].UpdatedAt.Equal(newest) {
+		t.Errorf("rows[0].UpdatedAt = %v, want newest %v", rows[0].UpdatedAt, newest)
 	}
 }
 
@@ -474,16 +647,22 @@ func TestSourceMentioned_BelowCandidateLimit_NoCandidatesDropped(t *testing.T) {
 }
 
 // TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation proves
-// the fix for defect (a): the candidate bound is a function of stage 1's
-// query order (ChangedDate DESC), never of the work-item id itself. Azure
-// DevOps ids are assigned at creation and never reused, so a low id can
-// belong to a work item created long ago that just received a brand-new
-// mention (query order: near the front) while a high id can belong to a
-// work item created yesterday whose only mention is already stale (query
-// order: near the back). Sorting the merged candidates by id — ascending
-// (the original defect) or descending (the naive "fix") — gets this
-// backwards either way; only preserving query order and truncating the tail
-// gets it right.
+// the fix for defect (a): the candidate bound is a function of ChangedDate
+// order, never of the work-item id itself, and never of the raw order the
+// GetWorkItems batch endpoint happens to respond in (newMentionServer models
+// that endpoint returning its own order, reversed relative to fixture.ids —
+// see its comment). Client.ListRecentlyMentionedWorkItems must explicitly
+// re-sort by Fields.ChangedDate descending for the low id to end up first
+// here; without that sort this test fails, either because the id-ascending
+// defect or the untouched (reversed) response order both put the high,
+// stale id ahead of the low, recent one. Azure DevOps ids are assigned at
+// creation and never reused, so a low id can belong to a work item created
+// long ago that just received a brand-new mention (ChangedDate: recent)
+// while a high id can belong to a work item created yesterday whose only
+// mention is already stale (ChangedDate: old). Sorting the merged
+// candidates by id — ascending (the original defect) or descending (the
+// naive "fix") — gets this backwards either way; only ChangedDate order,
+// truncated from the tail, gets it right.
 func TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation(t *testing.T) {
 	const total = mentionCandidateLimit + 1 // exactly one candidate must be dropped
 	const recentLowID = 5
@@ -495,10 +674,25 @@ func TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation(t *test
 		comments: make(map[int][]WorkItemComment, total),
 	}
 
+	// fixture.ids' position encodes the intended stage-1 ChangedDate-DESC
+	// order (position 0 = most recently changed): each item below is given
+	// an explicit, strictly-decreasing ChangedDate matching its position, so
+	// Client.ListRecentlyMentionedWorkItems' Fields.ChangedDate sort has
+	// something real to sort by. This is load-bearing for the test: the mock
+	// server's GetWorkItems handler (newMentionServer) deliberately returns
+	// items in an order that differs from fixture.ids (reversed), so the
+	// only way the low id ends up first and the high id last is if the
+	// client actually sorts by ChangedDate rather than trusting either the
+	// request order or the response's raw order.
+	baseChanged := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	changedAt := func(position int) time.Time {
+		return baseChanged.Add(-time.Duration(position) * time.Minute)
+	}
+
 	// Position 0: the low, recently-mentioned id — first in stage 1's
 	// ChangedDate-DESC order.
 	fixture.ids[0] = recentLowID
-	fixture.items[recentLowID] = WorkItem{ID: recentLowID, Fields: WorkItemFields{Title: "Old item, new mention"}}
+	fixture.items[recentLowID] = WorkItem{ID: recentLowID, Fields: WorkItemFields{Title: "Old item, new mention", ChangedDate: changedAt(0)}}
 	fixture.comments[recentLowID] = []WorkItemComment{
 		{ID: 1, CreatedDate: time.Now(), Mentions: []CommentMention{{TargetID: "user-1"}}},
 	}
@@ -510,13 +704,13 @@ func TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation(t *test
 	for i := 1; i < total-1; i++ {
 		id := 100 + i
 		fixture.ids[i] = id
-		fixture.items[id] = WorkItem{ID: id, Fields: WorkItemFields{Title: "Untitled"}}
+		fixture.items[id] = WorkItem{ID: id, Fields: WorkItemFields{Title: "Untitled", ChangedDate: changedAt(i)}}
 	}
 
 	// Last position: the high, stale id — last in stage 1's order, past the
 	// cap once the filler pushes the total over mentionCandidateLimit.
 	fixture.ids[total-1] = staleHighID
-	fixture.items[staleHighID] = WorkItem{ID: staleHighID, Fields: WorkItemFields{Title: "New item, stale mention"}}
+	fixture.items[staleHighID] = WorkItem{ID: staleHighID, Fields: WorkItemFields{Title: "New item, stale mention", ChangedDate: changedAt(total - 1)}}
 	fixture.comments[staleHighID] = []WorkItemComment{
 		{ID: 1, CreatedDate: time.Now(), Mentions: []CommentMention{{TargetID: "user-1"}}},
 	}
@@ -614,12 +808,27 @@ func TestBoundMentionCandidates_WithinLimit_NoTruncation(t *testing.T) {
 func TestBoundMentionCandidates_OverLimit_KeepsLeadingCandidatesInOrder(t *testing.T) {
 	candidates := make([]WorkItem, mentionCandidateLimit+10)
 	for i := range candidates {
-		// Ids deliberately run opposite to position (high id first, low id
-		// last) so this only passes if boundMentionCandidates keeps the
-		// leading elements positionally rather than re-sorting by id in
-		// either direction.
-		candidates[i] = WorkItem{ID: len(candidates) - i}
+		// Ids zigzag (alternating high/low) rather than running monotonically
+		// in either direction, so neither an ascending nor a descending sort
+		// of candidates would happen to reproduce this input order. A
+		// monotonic id order (e.g. plain descending) lets a same-direction
+		// sort masquerade as "no re-sort happened", which is exactly how the
+		// previous version of this test went blind to an injected sort.
+		if i%2 == 0 {
+			candidates[i] = WorkItem{ID: len(candidates) + i}
+		} else {
+			candidates[i] = WorkItem{ID: i}
+		}
 	}
+	// want is a defensive copy of the input taken before the call. bounded
+	// is candidates[:limit] — a subslice sharing candidates' backing array —
+	// so comparing bounded against candidates itself would trivially pass
+	// even if boundMentionCandidates sorted candidates in place before
+	// truncating: bounded and the comparison array would have been mutated
+	// identically, since they are the same memory. want is a separate copy
+	// the call cannot touch, so it pins the order this test actually claims
+	// to check.
+	want := append([]WorkItem(nil), candidates...)
 
 	bounded, truncated, total := boundMentionCandidates(candidates)
 	if !truncated {
@@ -632,9 +841,9 @@ func TestBoundMentionCandidates_OverLimit_KeepsLeadingCandidatesInOrder(t *testi
 		t.Fatalf("len(bounded) = %d, want %d", len(bounded), mentionCandidateLimit)
 	}
 	for i := range bounded {
-		if bounded[i].ID != candidates[i].ID {
+		if bounded[i].ID != want[i].ID {
 			t.Fatalf("bounded[%d].ID = %d, want %d (leading elements must survive in original order, not re-sorted)",
-				i, bounded[i].ID, candidates[i].ID)
+				i, bounded[i].ID, want[i].ID)
 		}
 	}
 }
@@ -725,6 +934,46 @@ func TestMapMentioned_ClampsFutureStamp(t *testing.T) {
 	row := mapMentioned(mc, wi, future, now)
 	if !row.UpdatedAt.Equal(now) {
 		t.Errorf("UpdatedAt = %v, want it clamped to now (%v), not the future stamp %v", row.UpdatedAt, now, future)
+	}
+}
+
+// --- mentionActivityStamp ---
+
+func TestMentionActivityStamp_FallsBackToChangedDate(t *testing.T) {
+	changed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := changed.Add(time.Hour)
+	wi := WorkItem{Fields: WorkItemFields{ChangedDate: changed}}
+
+	got := mentionActivityStamp(time.Time{}, wi, now)
+	if !got.Equal(changed) {
+		t.Errorf("mentionActivityStamp() = %v, want ChangedDate fallback %v", got, changed)
+	}
+}
+
+// TestMentionActivityStamp_NonZeroStamp_ChangedDateNeverLeaksIn pins that
+// the ChangedDate fallback only applies to a zero stamp — mapMentioned's
+// entire point is that an unrelated edit (which only moves ChangedDate)
+// must never override a real comment stamp.
+func TestMentionActivityStamp_NonZeroStamp_ChangedDateNeverLeaksIn(t *testing.T) {
+	mentionDate := time.Date(2026, 1, 15, 9, 0, 0, 0, time.UTC)
+	changed := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) // later, must not win
+	now := changed.Add(time.Hour)
+	wi := WorkItem{Fields: WorkItemFields{ChangedDate: changed}}
+
+	got := mentionActivityStamp(mentionDate, wi, now)
+	if !got.Equal(mentionDate) {
+		t.Errorf("mentionActivityStamp() = %v, want the mention stamp %v (ChangedDate %v must not leak in)", got, mentionDate, changed)
+	}
+}
+
+func TestMentionActivityStamp_ClampsFutureFallback(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+	wi := WorkItem{Fields: WorkItemFields{ChangedDate: future}}
+
+	got := mentionActivityStamp(time.Time{}, wi, now)
+	if !got.Equal(now) {
+		t.Errorf("mentionActivityStamp() = %v, want it clamped to now (%v), not the future fallback %v", got, now, future)
 	}
 }
 

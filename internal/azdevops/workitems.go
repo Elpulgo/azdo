@@ -3,6 +3,7 @@ package azdevops
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -292,12 +293,18 @@ ORDER BY [System.ChangedDate] DESC`
 // that claim did not hold for @Me either and does not hold here. Decision
 // 3's System.History CONTAINS WORDS fallback is therefore not implemented.
 //
-// Ordered by ChangedDate descending, matching ListMyWorkItems above — stage 2
-// (SourceMentioned's confirmAndMapMentions) relies on this to fetch comments
-// for the most-recently-changed candidates first, and boundMentionCandidates
-// truncates from the tail of this order when a project's candidate count
-// exceeds the fan-out bound, so an unordered result would silently drop the
-// wrong candidates under load.
+// The query's ORDER BY only sorts the ids QueryWorkItemIDs returns — the
+// GET /wit/workitems batch endpoint GetWorkItems calls next returns
+// response.Value in its own order, unrelated to the order the ids were
+// requested in. So the result below is explicitly re-sorted by
+// Fields.ChangedDate descending after the batch fetch, matching every other
+// multi-item work-item fetch in this package (MultiClient.ListWorkItems,
+// .MetricsWorkItems, .ListMyWorkItems all do the same after their own batch
+// calls). Stage 2 (SourceMentioned's confirmAndMapMentions) relies on this
+// order to fetch comments for the most-recently-changed candidates first,
+// and boundMentionCandidates truncates from the tail of this order when a
+// project's candidate count exceeds the fan-out bound, so an unsorted
+// result would silently drop the wrong candidates under load.
 //
 // top: maximum number of candidate work items to return (max 50 enforced,
 // matching every other WIQL caller in this file).
@@ -319,7 +326,16 @@ ORDER BY [System.ChangedDate] DESC`
 		return []WorkItem{}, nil
 	}
 
-	return c.GetWorkItems(ids)
+	items, err := c.GetWorkItems(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Fields.ChangedDate.After(items[j].Fields.ChangedDate)
+	})
+
+	return items, nil
 }
 
 // GetWorkItemTypeStates retrieves the available states for a work item type.

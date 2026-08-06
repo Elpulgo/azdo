@@ -29,6 +29,16 @@ const mentionCandidateQueryTop = 50
 // mid-poll would land on top of Bubble Tea's alt-screen render.
 const mentionCandidateLimit = 50
 
+// mentionStage2Concurrency bounds how many stage-2 comment fetches run
+// concurrently. Without a bound, confirmAndMapMentions launches one
+// goroutine per candidate — up to mentionCandidateLimit (50) simultaneous
+// requests — against dev.azure.com on a client with a 30s timeout and no
+// retry/backoff (client.go:65). Every other fan-out in this package is
+// naturally bounded by project count (1-5); stage 2 fans out over candidate
+// count instead, which needs its own explicit pool so a heavily-mentioned
+// user does not get rate-limited into stage2Errs.
+const mentionStage2Concurrency = 6
+
 // SourceMentionedResult is SourceMentioned's return value: the confirmed
 // mention rows plus how much stage 1's candidate fan-out was truncated, if
 // at all. Truncation is never silently swallowed and never written to
@@ -45,6 +55,14 @@ type SourceMentionedResult struct {
 	// always populated regardless of whether truncation happened, so a
 	// caller can render "N of Limit" without importing the constant.
 	CandidateLimit int
+	// CommentFetchFailures is how many stage-2 comments fetches failed.
+	// Kept separate from the returned *PartialError's Failed/Total, which
+	// stay project-scoped (see SourceMentioned's doc comment) so the
+	// rendered "%d of %d projects failed to load" message
+	// (polling/errorhandler.go) stays truthful — folding candidate-level
+	// failures into that count previously produced messages like "3 of 51
+	// projects failed to load" for a single-project config.
+	CommentFetchFailures int
 }
 
 // SourceMentioned implements the "@mentions in work-item discussions"
@@ -73,14 +91,21 @@ type SourceMentionedResult struct {
 //
 // Partial failure degrades rather than emptying the feed, matching task 4:
 // rows successfully confirmed are returned alongside a *PartialError
-// describing what failed. Failed/Total here count every unit of work this
-// two-stage source attempts — each project's stage-1 query plus each
-// candidate's stage-2 comments fetch — not backends, since a single-backend
-// source has no backend fraction to report. A project or candidate that
-// fails is simply missing from the result; it is not retried within this
-// call. Only when every stage-1 project fails does this function return
-// (SourceMentionedResult{}, err) with no *PartialError, since stage 2 has
-// nothing to run against in that case.
+// describing what failed. The returned *PartialError's Failed/Total stay
+// project-scoped — Failed is the number of projects whose stage-1 query
+// failed, Total is projectCount — matching every other PartialError in this
+// package and the "%d of %d projects failed to load" message it renders
+// into (errors.go, polling/errorhandler.go). Stage-2 comment-fetch failures
+// are real failures too, so they still land in Errors and still make this
+// function return a non-nil *PartialError, but their count is carried
+// separately on SourceMentionedResult.CommentFetchFailures rather than
+// folded into Failed/Total: a single-project config with 50 candidates and
+// 3 failed comment fetches must not render as "3 of 51 projects failed to
+// load". A project or candidate that fails is simply missing from the
+// result; it is not retried within this call. Only when every stage-1
+// project fails does this function return (SourceMentionedResult{}, err)
+// with no *PartialError, since stage 2 has nothing to run against in that
+// case.
 //
 // Candidate fan-out across projects is bounded by mentionCandidateLimit
 // (see boundMentionCandidates). Truncation, when it happens, is reported on
@@ -114,21 +139,20 @@ func SourceMentioned(mc *MultiClient, now time.Time) (SourceMentionedResult, err
 	rows, stage2Errs := confirmAndMapMentions(mc, candidates, userID, now)
 
 	result := SourceMentionedResult{
-		Rows:              rows,
-		CandidatesDropped: dropped,
-		CandidateLimit:    mentionCandidateLimit,
+		Rows:                 rows,
+		CandidatesDropped:    dropped,
+		CandidateLimit:       mentionCandidateLimit,
+		CommentFetchFailures: len(stage2Errs),
 	}
 
-	failed := len(stage1Errs) + len(stage2Errs)
-	total := projectCount + len(candidates)
-	if failed == 0 {
+	if len(stage1Errs) == 0 && len(stage2Errs) == 0 {
 		return result, nil
 	}
 
-	errs := make([]error, 0, failed)
+	errs := make([]error, 0, len(stage1Errs)+len(stage2Errs))
 	errs = append(errs, stage1Errs...)
 	errs = append(errs, stage2Errs...)
-	return result, &PartialError{Failed: failed, Total: total, Errors: errs}
+	return result, &PartialError{Failed: len(stage1Errs), Total: projectCount, Errors: errs}
 }
 
 // resolveMentionUserID fetches the authenticated user's id from any one
@@ -275,18 +299,32 @@ type mentionConfirmResult struct {
 }
 
 // confirmAndMapMentions runs stage 2: one comments fetch per candidate,
-// concurrently, keeping only work items with at least one comment whose
-// mentions[].targetId equals userID, and mapping survivors to
+// concurrently but bounded to mentionStage2Concurrency in-flight requests at
+// a time via the sem semaphore, keeping only work items with at least one
+// comment whose mentions[].targetId equals userID, and mapping survivors to
 // provider.Notification rows stamped with the newest matching comment's
 // createdDate.
+//
+// The returned rows are sorted by UpdatedAt descending before returning —
+// they otherwise arrive in goroutine-completion order, which is
+// nondeterministic — matching SourceReviewRequested's rows, which come back
+// already sorted by MultiClient.ListPullRequestsAsReviewer (CreationDate
+// descending). Reconcile itself is order-independent and the composite
+// re-sorts the merged feed, so this is not a correctness fix, only
+// consistency with task 4 and determinism for any future order-sensitive
+// test.
 func confirmAndMapMentions(mc *MultiClient, candidates []WorkItem, userID string, now time.Time) ([]provider.Notification, []error) {
 	var wg sync.WaitGroup
 	ch := make(chan mentionConfirmResult, len(candidates))
+	sem := make(chan struct{}, mentionStage2Concurrency)
 
 	for _, wi := range candidates {
 		wg.Add(1)
 		go func(item WorkItem) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
 			c := mc.ClientFor(item.ProjectName)
 			if c == nil {
 				ch <- mentionConfirmResult{item: item, err: fmt.Errorf("no client for project %q", item.ProjectName)}
@@ -320,6 +358,10 @@ func confirmAndMapMentions(mc *MultiClient, candidates []WorkItem, userID string
 		rows = append(rows, mapMentioned(mc, r.item, r.stamp, now))
 	}
 
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].UpdatedAt.After(rows[j].UpdatedAt)
+	})
+
 	return rows, errs
 }
 
@@ -331,6 +373,13 @@ func confirmAndMapMentions(mc *MultiClient, candidates []WorkItem, userID string
 // candidate is never mis-stamped if that ordering assumption ever stops
 // holding. found is false when no comment mentions userID at all, which
 // happens whenever stage 1 over-matched (decision 3 expects this).
+//
+// comments is capped at commentsTopLimit (200, see GetWorkItemComments) with
+// no pagination. order=desc normally keeps the newest matching comment
+// inside that window, but a work item whose only mention sits behind 200
+// newer comments falls outside it: this function then finds no match, the
+// row silently stops appearing in the feed, and its local triage entry
+// TTL-prunes as if the mention had never existed.
 func newestMatchingCommentStamp(comments []WorkItemComment, userID string) (stamp time.Time, found bool) {
 	for _, comment := range comments {
 		for _, m := range comment.Mentions {
@@ -349,23 +398,15 @@ func newestMatchingCommentStamp(comments []WorkItemComment, userID string) (stam
 // mapMentioned maps a confirmed-mentioned WorkItem (already tagged with
 // ProjectName/ProjectDisplayName by queryMentionCandidates) to a
 // provider.Notification for the mentioned reason. stamp is the newest
-// matching comment's createdDate (see newestMatchingCommentStamp) — never
-// WorkItem.Fields.ChangedDate, which would resurrect the row on any
-// unrelated edit and defeat the entire point of stage 2.
-//
-// now clamps a future stamp the same way prActivityStamp does: a comment's
-// createdDate is server-set, but a build-agent or client clock skew is not
-// impossible, and Reconcile stores whatever this returns as LastActivity
-// unconditionally on its "newer" branch.
+// matching comment's createdDate (see newestMatchingCommentStamp and
+// mentionActivityStamp's fallback) — never WorkItem.Fields.ChangedDate
+// directly, which would resurrect the row on any unrelated edit and defeat
+// the entire point of stage 2.
 func mapMentioned(mc *MultiClient, wi WorkItem, stamp time.Time, now time.Time) provider.Notification {
 	scope := wi.ProjectName
 	scopeDisplay := wi.ProjectDisplayName
 	if scopeDisplay == "" {
 		scopeDisplay = scope
-	}
-
-	if stamp.After(now) {
-		stamp = now
 	}
 
 	return provider.Notification{
@@ -377,9 +418,35 @@ func mapMentioned(mc *MultiClient, wi WorkItem, stamp time.Time, now time.Time) 
 		},
 		Title:     wi.Fields.Title,
 		Reason:    provider.NotificationReasonMentioned,
-		UpdatedAt: stamp,
+		UpdatedAt: mentionActivityStamp(stamp, wi, now),
 		WebURL:    mentionedWebURL(mc, wi),
 	}
+}
+
+// mentionActivityStamp is the row's Notification.UpdatedAt. It is normally
+// just stamp — the newest matching comment's createdDate, clamped against
+// now the same way prActivityStamp clamps a PR's committer date, since a
+// comment's createdDate is server-set but a build-agent or client clock skew
+// is not impossible, and Reconcile stores whatever this returns as
+// LastActivity unconditionally on its "newer" branch.
+//
+// The one exception is a zero stamp: newestMatchingCommentStamp can return
+// found=true with a zero createdDate if the matching comment's own
+// createdDate field is itself the zero value (malformed data), and passing
+// that through would give Reconcile "no activity information" rather than a
+// usable stamp. wi.Fields.ChangedDate is the fallback in that case,
+// mirroring prActivityStamp's fallback to PullRequest.CreationDate in
+// notifications_source_review.go — it is the wrong stamp in the normal case
+// (see mapMentioned's doc comment) but the right one when the correct stamp
+// is missing.
+func mentionActivityStamp(stamp time.Time, wi WorkItem, now time.Time) time.Time {
+	if stamp.IsZero() {
+		stamp = wi.Fields.ChangedDate
+	}
+	if stamp.After(now) {
+		return now
+	}
+	return stamp
 }
 
 // mentionedWebURL resolves a mentioned work item's browser URL, following
