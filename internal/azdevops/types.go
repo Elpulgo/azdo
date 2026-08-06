@@ -73,8 +73,18 @@ type PipelineRun struct {
 	Definition    PipelineDefinition `json:"definition"`
 	Project       Project            `json:"project"`
 	Links         Links              `json:"_links"`
-	ProjectName        string             `json:"-"` // Set by MultiClient, not from API
-	ProjectDisplayName string             `json:"-"` // Set by MultiClient, display name for UI
+	// RequestedFor is the identity the run was queued for. It is the field
+	// the Get Builds/List Builds REST API's own "requestedFor" query
+	// parameter filters on (Microsoft's documented mechanism for "my
+	// builds"), which is why the "my failed pipeline runs" notification
+	// source (notifications_source_cifailed.go) compares against this field
+	// rather than RequestedBy (the identity that queued the run, which can
+	// differ — e.g. a scheduled or someone-else-triggered run). Reuses the
+	// same minimal Identity projection PullRequest.CreatedBy and
+	// WorkItemComment's CreatedBy already use for other IdentityRef payloads.
+	RequestedFor       Identity `json:"requestedFor"`
+	ProjectName        string   `json:"-"` // Set by MultiClient, not from API
+	ProjectDisplayName string   `json:"-"` // Set by MultiClient, display name for UI
 }
 
 // PipelineDefinition represents a pipeline definition
