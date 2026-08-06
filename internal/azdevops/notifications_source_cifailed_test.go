@@ -18,6 +18,16 @@ import (
 // includes three runs that must each be excluded for a different reason
 // (see isMyFailedRun's doc comment), so a filter that discriminates on only
 // one axis still fails this test.
+//
+// newPipelineRunServer (multiclient_test.go) ignores every query parameter
+// on the request and always returns the fixture verbatim — it does not
+// simulate statusFilter/resultFilter/requestedFor/minTime narrowing at all.
+// So this test doubles as the belt-and-braces re-check finding 1 of task 7's
+// review required: even against a server that does none of the server-side
+// narrowing SourceCIFailed asks for, isMyFailedRun's Go-side filter must
+// still be the thing that gets this down to exactly the caller's own failed
+// run — proving the outcome degrades to over-fetching, never to attributing
+// someone else's build to the caller.
 func TestSourceCIFailed_MapsFailedRunToNotification(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	finish := now.Add(-time.Hour)
@@ -61,7 +71,7 @@ func TestSourceCIFailed_MapsFailedRunToNotification(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 50, now)
+	rows, err := SourceCIFailed(mc, 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
@@ -79,8 +89,8 @@ func TestSourceCIFailed_MapsFailedRunToNotification(t *testing.T) {
 	if row.Identity.ID != "cifail/run/1" {
 		t.Errorf("Identity.ID = %q, want %q", row.Identity.ID, "cifail/run/1")
 	}
-	if row.Title != "CI #20260101.1" {
-		t.Errorf("Title = %q, want %q", row.Title, "CI #20260101.1")
+	if row.Title != "CI #20260101.1 failed" {
+		t.Errorf("Title = %q, want %q", row.Title, "CI #20260101.1 failed")
 	}
 	if !row.UpdatedAt.Equal(finish) {
 		t.Errorf("UpdatedAt = %v, want the run's FinishTime %v", row.UpdatedAt, finish)
@@ -111,7 +121,7 @@ func TestSourceCIFailed_ReasonIsCIActivity_AssertedByName(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 50, now)
+	rows, err := SourceCIFailed(mc, 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
@@ -142,7 +152,7 @@ func TestSourceCIFailed_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 50, now)
+	rows, err := SourceCIFailed(mc, 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
@@ -155,7 +165,7 @@ func TestSourceCIFailed_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 }
 
 func TestSourceCIFailed_NilMultiClient_ReturnsError(t *testing.T) {
-	_, err := SourceCIFailed(nil, 50, time.Now())
+	_, err := SourceCIFailed(nil, 14, 50, time.Now())
 	if err == nil {
 		t.Fatal("expected error for nil MultiClient")
 	}
@@ -189,7 +199,7 @@ func TestSourceCIFailed_PropagatesListError(t *testing.T) {
 	})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 50, now)
+	rows, err := SourceCIFailed(mc, 14, 50, now)
 	if err == nil {
 		t.Fatal("expected error to propagate from ListPipelineRuns")
 	}
@@ -209,55 +219,75 @@ func TestSourceCIFailed_PropagatesListError(t *testing.T) {
 
 func TestIsMyFailedRun(t *testing.T) {
 	tests := []struct {
-		name string
-		run  PipelineRun
-		want bool
+		name   string
+		run    PipelineRun
+		userID string
+		want   bool
 	}{
 		{
-			name: "completed, failed, mine: matches",
-			run:  PipelineRun{Status: "completed", Result: "failed", RequestedFor: Identity{ID: "me"}},
-			want: true,
+			name:   "completed, failed, mine: matches",
+			run:    PipelineRun{Status: "completed", Result: "failed", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   true,
 		},
 		{
-			name: "completed, failed, someone else's: excluded",
-			run:  PipelineRun{Status: "completed", Result: "failed", RequestedFor: Identity{ID: "someone-else"}},
-			want: false,
+			name:   "completed, failed, someone else's: excluded",
+			run:    PipelineRun{Status: "completed", Result: "failed", RequestedFor: Identity{ID: "someone-else"}},
+			userID: "me",
+			want:   false,
 		},
 		{
-			name: "completed, succeeded, mine: excluded (not a failure)",
-			run:  PipelineRun{Status: "completed", Result: "succeeded", RequestedFor: Identity{ID: "me"}},
-			want: false,
+			name:   "completed, succeeded, mine: excluded (not a failure)",
+			run:    PipelineRun{Status: "completed", Result: "succeeded", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   false,
 		},
 		{
-			name: "completed, canceled, mine: excluded (aborted, not broken)",
-			run:  PipelineRun{Status: "completed", Result: "canceled", RequestedFor: Identity{ID: "me"}},
-			want: false,
+			name:   "completed, canceled, mine: excluded (cancellations are predominantly deliberate, but a timeout lands here too and is deliberately not surfaced)",
+			run:    PipelineRun{Status: "completed", Result: "canceled", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   false,
 		},
 		{
-			name: "completed, partiallySucceeded, mine: excluded",
-			run:  PipelineRun{Status: "completed", Result: "partiallySucceeded", RequestedFor: Identity{ID: "me"}},
-			want: false,
+			name:   "completed, partiallySucceeded, mine: excluded",
+			run:    PipelineRun{Status: "completed", Result: "partiallySucceeded", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   false,
 		},
 		{
-			name: "inProgress with Result none, mine: excluded (not terminal)",
-			run:  PipelineRun{Status: "inProgress", Result: "none", RequestedFor: Identity{ID: "me"}},
-			want: false,
+			name:   "inProgress with Result none, mine: excluded (not terminal)",
+			run:    PipelineRun{Status: "inProgress", Result: "none", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   false,
 		},
 		{
-			name: "canceling status, mine: excluded (not terminal)",
-			run:  PipelineRun{Status: "canceling", Result: "none", RequestedFor: Identity{ID: "me"}},
-			want: false,
+			name:   "canceling status, mine: excluded (not terminal)",
+			run:    PipelineRun{Status: "canceling", Result: "none", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   false,
 		},
 		{
-			name: "not completed but Result somehow failed, mine: excluded (Status is checked explicitly)",
-			run:  PipelineRun{Status: "inProgress", Result: "failed", RequestedFor: Identity{ID: "me"}},
-			want: false,
+			name:   "not completed but Result somehow failed, mine: excluded (Status is checked explicitly)",
+			run:    PipelineRun{Status: "inProgress", Result: "failed", RequestedFor: Identity{ID: "me"}},
+			userID: "me",
+			want:   false,
+		},
+		{
+			// Finding 6 of task 7's review: an empty userID must not match
+			// every run with an absent RequestedFor.ID (both would compare
+			// "" == ""). resolveCIFailedUserID rejects an empty id before
+			// this function's callers ever run it, but the guard belongs
+			// here too, on the identity-comparison call site itself.
+			name:   "empty userID: excluded even against a run with no RequestedFor.ID",
+			run:    PipelineRun{Status: "completed", Result: "failed", RequestedFor: Identity{ID: ""}},
+			userID: "",
+			want:   false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isMyFailedRun(tt.run, "me"); got != tt.want {
+			if got := isMyFailedRun(tt.run, tt.userID); got != tt.want {
 				t.Errorf("isMyFailedRun() = %v, want %v", got, tt.want)
 			}
 		})
@@ -367,15 +397,18 @@ func TestPipelineRun_WireFieldNames(t *testing.T) {
 	}
 }
 
-// --- Permanently stable subject (each failed run is its own item) ---
+// --- Reconcile at the source level: repoll and rerun semantics ---
 
-// TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow pins the
-// spec's exact requirement: "each failed run is its own item, so no stamp
-// advance is needed and the reconcile treats it as a permanently-stable
-// subject." It polls the same, unchanged failed run twice (a real server
-// round-trip each time, not a synthesised second row) and proves a
-// dismissed (done) row stays dropped on the second poll — there is no
-// activity for the subject to ever move.
+// TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow polls the
+// same, unchanged failed run twice (a real server round-trip each time, not
+// a synthesised second row) and proves a dismissed (done) row stays dropped
+// on the second poll when FinishTime has not moved. This is the equal-stamp
+// branch, already covered exhaustively at the Reconcile level by task 3's
+// table — kept here as a source-level smoke test, not as the test that pins
+// the interesting behaviour: see
+// TestSourceCIFailed_RerunFailsAgain_ResurfacesDismissedRow immediately
+// below for that (finding 4 of task 7's review: nothing here fails if the
+// stamp this source reports were swapped for a constant or for QueueTime).
 func TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow(t *testing.T) {
 	finish := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
 	run := PipelineRun{
@@ -394,7 +427,7 @@ func TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow(t *testing.T)
 	setUserIDs(mc, "user-1")
 
 	now := finish.Add(time.Hour)
-	rows, err := SourceCIFailed(mc, 50, now)
+	rows, err := SourceCIFailed(mc, 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed (poll 1) failed: %v", err)
 	}
@@ -418,13 +451,99 @@ func TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow(t *testing.T)
 	setUserIDs(mc2, "user-1")
 
 	pollNow := now.Add(time.Minute)
-	rows2, err := SourceCIFailed(mc2, 50, pollNow)
+	rows2, err := SourceCIFailed(mc2, 14, 50, pollNow)
 	if err != nil {
 		t.Fatalf("SourceCIFailed (poll 2) failed: %v", err)
 	}
 	rows2, _ = Reconcile(rows2, state, pollNow)
 	if len(rows2) != 0 {
 		t.Fatalf("expected the dismissed row to stay dropped on a re-poll of the same failed run, got %d rows", len(rows2))
+	}
+}
+
+// TestSourceCIFailed_RerunFailsAgain_ResurfacesDismissedRow pins finding 3 of
+// task 7's review: a YAML pipeline's "Rerun failed jobs" / "Rerun stage"
+// re-executes inside the **same run id**, so Status returns to "inProgress"
+// and, on completion, Result and FinishTime are recomputed for that same
+// id. A run this source already surfaced and the caller dismissed can fail
+// again — same Identity.ID (same run id, same BuildNumber), a later
+// FinishTime — and that must resurface it as unread via Reconcile's
+// newer-stamp branch, not leave it stranded as a stale dismissal.
+//
+// Mutation-tested per the review's instruction: swapping ciFailedActivityStamp's
+// FinishTime for QueueTime makes this test fail, because QueueTime is set once
+// at the *first* enqueue and a rerun does not change it — restoring FinishTime
+// makes it pass again.
+func TestSourceCIFailed_RerunFailsAgain_ResurfacesDismissedRow(t *testing.T) {
+	firstFinish := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
+	queued := firstFinish.Add(-time.Hour)
+	run := PipelineRun{
+		ID:           7,
+		BuildNumber:  "20260101.1",
+		Status:       "completed",
+		Result:       "failed",
+		QueueTime:    queued,
+		FinishTime:   &firstFinish,
+		RequestedFor: Identity{ID: "user-1"},
+	}
+
+	server := newPipelineRunServer(t, "alpha", []PipelineRun{run})
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, "user-1")
+
+	now := firstFinish.Add(time.Hour)
+	rows, err := SourceCIFailed(mc, 14, 50, now)
+	if err != nil {
+		t.Fatalf("SourceCIFailed (poll 1) failed: %v", err)
+	}
+	rows, state := Reconcile(rows, TriageState{}, now)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row after first reconcile, got %d", len(rows))
+	}
+
+	// User dismisses (marks done) the row.
+	key := rows[0].Identity.ID
+	entry := state[key]
+	entry.Done = true
+	state[key] = entry
+
+	// The user reruns the failed jobs. Azure re-executes inside the same run
+	// id and BuildNumber; the rerun fails again with a later FinishTime.
+	rerunFinish := firstFinish.Add(2 * time.Hour)
+	rerun := run
+	rerun.FinishTime = &rerunFinish
+
+	server2 := newPipelineRunServer(t, "alpha", []PipelineRun{rerun})
+	defer server2.Close()
+	mc2 := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server2})
+	setUserIDs(mc2, "user-1")
+
+	pollNow := rerunFinish.Add(time.Minute)
+	rows2, err := SourceCIFailed(mc2, 14, 50, pollNow)
+	if err != nil {
+		t.Fatalf("SourceCIFailed (poll 2, rerun) failed: %v", err)
+	}
+	if len(rows2) != 1 {
+		t.Fatalf("expected the rerun to still be reported as a failed run, got %d rows", len(rows2))
+	}
+	if rows2[0].Identity.ID != key {
+		t.Fatalf("rerun's Identity.ID = %q, want the same subject %q (same run id and BuildNumber)", rows2[0].Identity.ID, key)
+	}
+
+	rows2, state = Reconcile(rows2, state, pollNow)
+	if len(rows2) != 1 {
+		t.Fatalf("expected the re-failed run to resurface as one row after Reconcile, got %d rows", len(rows2))
+	}
+	if rows2[0].Read {
+		t.Errorf("Read = true, want false: the rerun's later FinishTime must clear the prior dismissal")
+	}
+	entry = state[key]
+	if entry.Done {
+		t.Errorf("state[%q].Done = true, want false: Reconcile's newer-stamp branch must clear Done, not just Read", key)
+	}
+	if !entry.LastActivity.Equal(rerunFinish) {
+		t.Errorf("state[%q].LastActivity = %v, want the rerun's FinishTime %v", key, entry.LastActivity, rerunFinish)
 	}
 }
 
@@ -488,5 +607,49 @@ func TestMapCIFailed_WebURLIsLegalEmptyString(t *testing.T) {
 	row := mapCIFailed(mc, run, time.Now())
 	if row.WebURL != "" {
 		t.Errorf("WebURL = %q, want empty string (legal degraded result)", row.WebURL)
+	}
+}
+
+// --- ciFailedTitle ---
+
+// TestCIFailedTitle pins finding 5 of task 7's review: the row's Title must
+// say the build failed, not just name it, since GitHub's ci_activity reason
+// is shared with successful runs and would otherwise render identically to
+// a genuine Azure failure in the merged feed. It also pins finding 6's
+// fallback: a definition name or build number that arrives empty must not
+// leave a bare " #123 failed" / "CI # failed" — both empty falls back to a
+// run-id-based title instead.
+func TestCIFailedTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		run  PipelineRun
+		want string
+	}{
+		{
+			name: "definition and build number present",
+			run:  PipelineRun{ID: 99, Definition: PipelineDefinition{Name: "CI"}, BuildNumber: "20260101.1"},
+			want: "CI #20260101.1 failed",
+		},
+		{
+			// Only the fully-empty case (both fields blank) gets the run-id
+			// fallback (finding 6); a single blank field still renders with
+			// a bare leading/trailing marker rather than triggering it.
+			name: "empty definition name only: renders with a bare leading marker, not the fallback",
+			run:  PipelineRun{ID: 99, Definition: PipelineDefinition{Name: ""}, BuildNumber: "20260101.1"},
+			want: " #20260101.1 failed",
+		},
+		{
+			name: "empty build number and empty definition name: falls back to run id",
+			run:  PipelineRun{ID: 99, Definition: PipelineDefinition{Name: ""}, BuildNumber: ""},
+			want: "Run 99 failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ciFailedTitle(tt.run); got != tt.want {
+				t.Errorf("ciFailedTitle() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -3,7 +3,9 @@ package azdevops
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 )
 
 func TestListPipelineRuns_Success(t *testing.T) {
@@ -184,6 +186,165 @@ func TestListPipelineRuns_HTTPError(t *testing.T) {
 	}
 }
 
+// TestListMyFailedPipelineRuns_QueryParameters pins that
+// ListMyFailedPipelineRuns narrows server-side via the List Builds 7.1
+// query parameters this method exists to add (task 7 of the phase-2
+// notifications spec, finding 1 of its review): statusFilter, resultFilter,
+// requestedFor, minTime and queryOrder, none of which ListPipelineRuns
+// sends.
+func TestListMyFailedPipelineRuns_QueryParameters(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+
+		expectedPath := "/build/builds"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"count": 0, "value": []}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.ListMyFailedPipelineRuns("user-1", 14, 25)
+	if err != nil {
+		t.Fatalf("ListMyFailedPipelineRuns() error = %v", err)
+	}
+
+	if got := gotQuery.Get("api-version"); got != "7.1" {
+		t.Errorf("api-version = %q, want 7.1", got)
+	}
+	if got := gotQuery.Get("statusFilter"); got != "completed" {
+		t.Errorf("statusFilter = %q, want completed", got)
+	}
+	if got := gotQuery.Get("resultFilter"); got != "failed" {
+		t.Errorf("resultFilter = %q, want failed", got)
+	}
+	if got := gotQuery.Get("requestedFor"); got != "user-1" {
+		t.Errorf("requestedFor = %q, want user-1", got)
+	}
+	if got := gotQuery.Get("$top"); got != "25" {
+		t.Errorf("$top = %q, want 25", got)
+	}
+	if got := gotQuery.Get("queryOrder"); got != "finishTimeDescending" {
+		t.Errorf("queryOrder = %q, want finishTimeDescending", got)
+	}
+	minTime := gotQuery.Get("minTime")
+	if minTime == "" {
+		t.Fatal("minTime is empty, want an RFC3339 timestamp roughly 14 days in the past")
+	}
+	parsed, err := time.Parse(time.RFC3339, minTime)
+	if err != nil {
+		t.Fatalf("minTime = %q is not a valid RFC3339 timestamp: %v", minTime, err)
+	}
+	wantAround := time.Now().Add(-14 * 24 * time.Hour)
+	if diff := parsed.Sub(wantAround); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("minTime = %v, want within a minute of now-14d (%v)", parsed, wantAround)
+	}
+}
+
+// TestListMyFailedPipelineRuns_NegativeLookbackDaysClampedToZero pins that a
+// negative lookbackDays is clamped to 0, matching
+// Client.ListRecentlyAssignedWorkItems's own guard: an un-clamped negative
+// would put minTime in the future and silently return zero rows rather than
+// failing loudly.
+func TestListMyFailedPipelineRuns_NegativeLookbackDaysClampedToZero(t *testing.T) {
+	var gotMinTime string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMinTime = r.URL.Query().Get("minTime")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"count": 0, "value": []}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.ListMyFailedPipelineRuns("user-1", -5, 25)
+	if err != nil {
+		t.Fatalf("ListMyFailedPipelineRuns() error = %v", err)
+	}
+
+	parsed, err := time.Parse(time.RFC3339, gotMinTime)
+	if err != nil {
+		t.Fatalf("minTime = %q is not a valid RFC3339 timestamp: %v", gotMinTime, err)
+	}
+	if diff := time.Since(parsed); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("minTime = %v, want within a minute of now (lookbackDays clamped to 0), got a diff of %v", parsed, diff)
+	}
+}
+
+func TestListMyFailedPipelineRuns_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"count": 1,
+			"value": [
+				{
+					"id": 12345,
+					"buildNumber": "20240206.1",
+					"status": "completed",
+					"result": "failed",
+					"queueTime": "2024-02-06T10:00:00Z",
+					"finishTime": "2024-02-06T10:15:00Z",
+					"definition": {"id": 42, "name": "CI-Pipeline"},
+					"requestedFor": {"id": "user-1", "displayName": "Me"}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	runs, err := client.ListMyFailedPipelineRuns("user-1", 14, 25)
+	if err != nil {
+		t.Fatalf("ListMyFailedPipelineRuns() error = %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(runs))
+	}
+	if runs[0].RequestedFor.ID != "user-1" {
+		t.Errorf("RequestedFor.ID = %q, want user-1", runs[0].RequestedFor.ID)
+	}
+}
+
+func TestListMyFailedPipelineRuns_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message": "Unauthorized"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.ListMyFailedPipelineRuns("user-1", 14, 25)
+	if err == nil {
+		t.Error("Expected error for 401 response, got nil")
+	}
+}
+
 func TestListPipelineRuns_InvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -203,4 +364,3 @@ func TestListPipelineRuns_InvalidJSON(t *testing.T) {
 		t.Error("Expected error for invalid JSON, got nil")
 	}
 }
-

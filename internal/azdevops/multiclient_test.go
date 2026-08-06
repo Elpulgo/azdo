@@ -256,6 +256,127 @@ func TestMultiClient_ListPipelineRuns_AllFail(t *testing.T) {
 	}
 }
 
+func TestMultiClient_ListMyFailedPipelineRuns_MergedSortedAndTagged(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	alphaFinish := now.Add(-2 * time.Hour)
+	betaFinish := now.Add(-1 * time.Hour)
+	alphaRuns := []PipelineRun{
+		{ID: 1, Status: "completed", Result: "failed", FinishTime: &alphaFinish, RequestedFor: Identity{ID: "user-1"}},
+	}
+	betaRuns := []PipelineRun{
+		{ID: 2, Status: "completed", Result: "failed", FinishTime: &betaFinish, RequestedFor: Identity{ID: "user-1"}},
+	}
+
+	alphaServer := newPipelineRunServer(t, "alpha", alphaRuns)
+	defer alphaServer.Close()
+	betaServer := newPipelineRunServer(t, "beta", betaRuns)
+	defer betaServer.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"alpha": alphaServer,
+		"beta":  betaServer,
+	})
+
+	runs, err := mc.ListMyFailedPipelineRuns("user-1", 14, 10)
+	if err != nil {
+		t.Fatalf("ListMyFailedPipelineRuns failed: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(runs))
+	}
+
+	// Sorted by FinishTime descending: beta run (now-1h) before alpha run (now-2h)
+	if runs[0].ID != 2 {
+		t.Errorf("expected first run ID=2 (newest FinishTime), got %d", runs[0].ID)
+	}
+	if runs[0].ProjectName != "beta" {
+		t.Errorf("expected runs[0].ProjectName = 'beta', got %q", runs[0].ProjectName)
+	}
+	if runs[1].ProjectName != "alpha" {
+		t.Errorf("expected runs[1].ProjectName = 'alpha', got %q", runs[1].ProjectName)
+	}
+}
+
+func TestMultiClient_ListMyFailedPipelineRuns_PartialFailure(t *testing.T) {
+	finish := time.Now().UTC()
+	alphaRuns := []PipelineRun{
+		{ID: 1, Status: "completed", Result: "failed", FinishTime: &finish, RequestedFor: Identity{ID: "user-1"}},
+	}
+
+	alphaServer := newPipelineRunServer(t, "alpha", alphaRuns)
+	defer alphaServer.Close()
+	errorServer := newErrorServer(t)
+	defer errorServer.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"alpha": alphaServer,
+		"beta":  errorServer,
+	})
+
+	runs, err := mc.ListMyFailedPipelineRuns("user-1", 14, 10)
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run from partial result, got %d", len(runs))
+	}
+
+	var partialErr *PartialError
+	if !errors.As(err, &partialErr) {
+		t.Fatalf("expected PartialError, got: %v", err)
+	}
+	// Failed/Total are project counts, not run counts (finding 1 of task 7's
+	// review: MultiClient's PartialError contract must match every other
+	// fan-out method's).
+	if partialErr.Total != 2 {
+		t.Errorf("expected Total=2 (project count), got %d", partialErr.Total)
+	}
+	if partialErr.Failed != 1 {
+		t.Errorf("expected Failed=1 (project count), got %d", partialErr.Failed)
+	}
+}
+
+func TestMultiClient_ListMyFailedPipelineRuns_AllFail(t *testing.T) {
+	errorServer1 := newErrorServer(t)
+	defer errorServer1.Close()
+	errorServer2 := newErrorServer(t)
+	defer errorServer2.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"alpha": errorServer1,
+		"beta":  errorServer2,
+	})
+
+	_, err := mc.ListMyFailedPipelineRuns("user-1", 14, 10)
+	if err == nil {
+		t.Fatal("expected error when all projects fail")
+	}
+}
+
+// TestMultiClient_ListMyFailedPipelineRuns_NilFinishTimeDoesNotPanic pins
+// that the merge sort survives a run with a nil FinishTime without
+// dereferencing it. A run isMyFailedRun keeps should always carry one, but
+// this method's own contract is "narrow server-side, re-check in Go" — the
+// merge sort runs before that Go-side re-check gets a chance to drop
+// anything, so a server that ignores every query parameter and returns an
+// in-progress run alongside failed ones must not crash the fan-out.
+func TestMultiClient_ListMyFailedPipelineRuns_NilFinishTimeDoesNotPanic(t *testing.T) {
+	finish := time.Now().UTC()
+	runs := []PipelineRun{
+		{ID: 1, Status: "completed", Result: "failed", FinishTime: &finish, RequestedFor: Identity{ID: "user-1"}},
+		{ID: 2, Status: "inProgress", Result: "none", FinishTime: nil, RequestedFor: Identity{ID: "user-1"}},
+	}
+
+	server := newPipelineRunServer(t, "alpha", runs)
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+
+	got, err := mc.ListMyFailedPipelineRuns("user-1", 14, 10)
+	if err != nil {
+		t.Fatalf("ListMyFailedPipelineRuns failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected both runs to pass through the fan-out (Go-side filtering is SourceCIFailed's job, not this method's), got %d", len(got))
+	}
+}
+
 func TestMultiClient_ListPullRequests_MergedSortedAndTagged(t *testing.T) {
 	now := time.Now()
 	alphaPRs := []PullRequest{

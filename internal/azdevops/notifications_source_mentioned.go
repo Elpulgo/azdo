@@ -160,6 +160,15 @@ func SourceMentioned(mc *MultiClient, now time.Time) (SourceMentionedResult, err
 // MultiClient.ListPullRequestsAsReviewer already uses. Stage 2 cannot
 // confirm a single mention without it, so a failure here aborts before
 // stage 1 does any work.
+//
+// An empty id must never reach stage 2's targetId comparison: "" == "" would
+// match a mention payload carrying no resolved target the same way it would
+// match the caller. Client.GetCurrentUserID() already rejects an empty
+// AuthenticatedUser.ID (client.go:234), so this path is unreachable today,
+// but the guard stays here anyway because SetUserID (client.go:40) writes
+// the cache unchecked and this is the identity-comparison call site that
+// matters if that ever changes (matching resolveCIFailedUserID's own guard
+// in notifications_source_cifailed.go).
 func resolveMentionUserID(mc *MultiClient) (string, error) {
 	for _, p := range mc.Projects() {
 		c := mc.ClientFor(p)
@@ -169,6 +178,9 @@ func resolveMentionUserID(mc *MultiClient) (string, error) {
 		id, err := c.GetCurrentUserID()
 		if err != nil {
 			return "", fmt.Errorf("failed to get current user ID: %w", err)
+		}
+		if id == "" {
+			return "", fmt.Errorf("resolved an empty user ID")
 		}
 		return id, nil
 	}
