@@ -276,6 +276,44 @@ ORDER BY [System.ChangedDate] DESC`
 	return c.GetWorkItems(ids)
 }
 
+// ListRecentlyMentionedWorkItems retrieves work items the @RecentMentions
+// WIQL macro considers recently mentioning the authenticated user, scoped to
+// this client's project. This is stage 1 of decision 3's two-stage @mention
+// notification source (see SourceMentioned in
+// notifications_source_mentioned.go): it only narrows candidates and is
+// deliberately allowed to over-match, because stage 2 re-filters every
+// candidate against the comments API's mentions[].targetId before anything
+// reaches the feed — @RecentMentions carries no per-mention timestamp, so it
+// cannot answer "was I mentioned" on its own.
+//
+// Confirmed working over REST by task 1's spike against a live org (phase-2
+// notifications spec, "Probe results" (a)) — Microsoft's macro reference
+// lists @RecentMentions among macros documented as "web-portal-only", but
+// that claim did not hold for @Me either and does not hold here. Decision
+// 3's System.History CONTAINS WORDS fallback is therefore not implemented.
+//
+// top: maximum number of candidate work items to return (max 50 enforced,
+// matching every other WIQL caller in this file).
+func (c *Client) ListRecentlyMentionedWorkItems(top int) ([]WorkItem, error) {
+	if top > 50 {
+		top = 50
+	}
+
+	query := `SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project AND [System.Id] IN (@RecentMentions)`
+
+	ids, err := c.QueryWorkItemIDs(query, top)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ids) == 0 {
+		return []WorkItem{}, nil
+	}
+
+	return c.GetWorkItems(ids)
+}
+
 // GetWorkItemTypeStates retrieves the available states for a work item type.
 // States in the "Removed" category are excluded since they are not typical user transitions.
 func (c *Client) GetWorkItemTypeStates(workItemType string) ([]WorkItemTypeState, error) {
