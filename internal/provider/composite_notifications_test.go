@@ -91,9 +91,8 @@ func TestPartialNotifyBackend_DoesNotSatisfyNotificationSource(t *testing.T) {
 // hintingNotifyBackend embeds *fakeNotifyBackend and additionally implements
 // PollIntervalHinter, so NotificationsPollInterval tests can exercise a mix
 // of hinting and non-hinting capable backends. fakeNotifyBackend itself
-// deliberately does NOT implement PollIntervalHinter (Decision 23: a capable
-// backend need not hint), which is what proves the "falls back" half of the
-// contract below.
+// deliberately does NOT implement PollIntervalHinter (a capable backend need
+// not hint), which is what proves the "falls back" half of the contract below.
 type hintingNotifyBackend struct {
 	*fakeNotifyBackend
 	interval time.Duration
@@ -189,7 +188,7 @@ func TestCompositeProvider_HasNotifications(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NotificationsPollInterval (Decision 23 / task 15)
+// NotificationsPollInterval
 // ---------------------------------------------------------------------------
 
 // TestCompositeProvider_NotificationsPollInterval_ZeroWhenNoCapableBackends
@@ -205,12 +204,11 @@ func TestCompositeProvider_NotificationsPollInterval_ZeroWhenNoCapableBackends(t
 }
 
 // TestCompositeProvider_NotificationsPollInterval_FallsBackToZero_WhenCapableButNotHinting
-// pins the other half of Decision 23's fallback: a capable backend that does
-// not implement PollIntervalHinter must not be mistaken for one hinting 0 —
-// there is nothing to distinguish here at the composite level, but the
-// caller (task 15's poller) must fall back to the configured interval, and
-// this fixture proves the composite does not panic or misbehave when the
-// only capable backend lacks the hinter.
+// pins the fallback: a capable backend that does not implement
+// PollIntervalHinter must not be mistaken for one hinting 0 — the caller's
+// poller must fall back to the configured interval, and this fixture proves
+// the composite does not panic or misbehave when the only capable backend
+// lacks the hinter.
 func TestCompositeProvider_NotificationsPollInterval_FallsBackToZero_WhenCapableButNotHinting(t *testing.T) {
 	nonHinting := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
 	cp := provider.NewCompositeProvider(nonHinting)
@@ -309,11 +307,10 @@ func joinIDs(ids []string) string { return strings.Join(ids, ",") }
 // across two backends, including a tie, so the sort is genuinely exercised
 // rather than validated against already-ordered input.
 //
-// Per Decision 45 the merged order is a total order, so every position is
-// pinned exactly — including the two tied t3 rows, which the Identity.Kind
-// tiebreaker orders Azure (1) before GitHub (2) no matter which goroutine
-// drains first. Asserting the tie as an unordered set (as this test once did)
-// would leave that guarantee unpinned.
+// The merged order is a total order, so every position is pinned exactly —
+// including the two tied t3 rows, which the Identity.Kind tiebreaker orders
+// Azure (1) before GitHub (2) no matter which goroutine drains first.
+// Asserting the tie as an unordered set would leave that guarantee unpinned.
 func TestCompositeProvider_Notifications_MergeSortedNewestFirst(t *testing.T) {
 	a := newFakeNotifyBackend(provider.KindGitHub, []string{"acme/repo-a"})
 	a.notifs = []provider.Notification{
@@ -350,7 +347,7 @@ func TestCompositeProvider_Notifications_MergeSortedNewestFirst(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 45: deterministic tie order (total order, not merely stable)
+// Deterministic tie order (total order, not merely stable)
 // ---------------------------------------------------------------------------
 
 // TestCompositeProvider_Notifications_TieBrokenByKind pins the second level of
@@ -514,13 +511,12 @@ func TestCompositeProvider_Notifications_EmptyResultIsNotAnError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 20 / 41: partial failure never empties the feed; total is the
-// capable count.
+// Partial failure never empties the feed; total is the capable count.
 // ---------------------------------------------------------------------------
 
-// TestCompositeProvider_Notifications_PartialFailure verifies Decision 20:
-// one backend erroring keeps the other backend's rows and surfaces a
-// *PartialError alongside them.
+// TestCompositeProvider_Notifications_PartialFailure verifies that one backend
+// erroring keeps the other backend's rows and surfaces a *PartialError
+// alongside them.
 func TestCompositeProvider_Notifications_PartialFailure(t *testing.T) {
 	healthy := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
 	healthy.notifs = []provider.Notification{mkNotif(provider.KindGitHub, "o/r", "1", t1)}
@@ -549,20 +545,19 @@ func TestCompositeProvider_Notifications_PartialFailure(t *testing.T) {
 }
 
 // TestCompositeProvider_Notifications_TotalIsCapableCountNotAllBackends
-// pins Decision 41's exact scenario: one incapable Azure backend plus one
-// capable GitHub backend that fails. total must be 1 (the capable count),
-// not 2 (len(cp.backends)) — otherwise len(errs)==1 != total==2 takes the
-// partial branch and returns (nil, &PartialError{1,2}), an empty feed
-// carrying a buried error.
+// pins the scenario: one incapable Azure backend plus one capable GitHub
+// backend that fails. total must be 1 (the capable count), not 2
+// (len(cp.backends)) — otherwise len(errs)==1 != total==2 takes the partial
+// branch and returns (nil, &PartialError{1,2}), an empty feed carrying a
+// buried error.
 //
-// This is also the only test covering the all-failed path at the shape phase 1
-// actually ships — exactly one capable backend, so len(errs) == 1 — and it
-// therefore also pins Decision 42's error chain through a *single-error*
-// errors.Join. errors.Join wraps even one error in a *joinError, so the outer
-// %w reaches it via Unwrap() []error; a %v there would leave the suite green
-// (the error is still non-nil) while silently breaking task 19's scope-error
-// recovery. The two-capable-backend chain is pinned separately below, but that
-// config cannot exist before phase 2.
+// This is also the only test covering the all-failed path with exactly one
+// capable backend, so len(errs) == 1 — and it therefore also pins the error
+// chain through a *single-error* errors.Join. errors.Join wraps even one error
+// in a *joinError, so the outer %w reaches it via Unwrap() []error; a %v there
+// would leave the suite green (the error is still non-nil) while silently
+// breaking scope-error recovery. The two-capable-backend chain is pinned
+// separately below.
 func TestCompositeProvider_Notifications_TotalIsCapableCountNotAllBackends(t *testing.T) {
 	incapable := &fakeBackend{kind: provider.KindAzure, scopes: []string{"P"}}
 	stub := &stubBackendError{msg: "403 missing scope"}
@@ -577,7 +572,7 @@ func TestCompositeProvider_Notifications_TotalIsCapableCountNotAllBackends(t *te
 	}
 	var pe *provider.PartialError
 	if errors.As(err, &pe) {
-		t.Fatalf("want a plain all-failed error (total=1 capable backend), got *PartialError with Total=%d — total must count capable backends only (Decision 41)", pe.Total)
+		t.Fatalf("want a plain all-failed error (total=1 capable backend), got *PartialError with Total=%d — total must count capable backends only", pe.Total)
 	}
 	if got != nil {
 		t.Errorf("want nil results on all-failed (1 of 1 capable backends), got %v", got)
@@ -626,7 +621,7 @@ func TestCompositeProvider_Notifications_BackendRowsWithErrorAreDiscarded(t *tes
 }
 
 // ---------------------------------------------------------------------------
-// Decision 44: NotifOpts.Max is re-applied after the merge
+// NotifOpts.Max is re-applied after the merge
 // ---------------------------------------------------------------------------
 
 // TestCompositeProvider_Notifications_MaxTruncatesToNewest verifies Max caps
@@ -732,12 +727,12 @@ func TestCompositeProvider_Notifications_MaxAppliedOnPartialPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 42: error chain preservation
+// Error chain preservation
 // ---------------------------------------------------------------------------
 
 // TestCompositeProvider_Notifications_AllFail_ErrorsAsRecovery verifies that
 // when every capable backend fails, errors.As can still recover a specific
-// underlying error type through the errors.Join chain (Decision 42).
+// underlying error type through the errors.Join chain.
 func TestCompositeProvider_Notifications_AllFail_ErrorsAsRecovery(t *testing.T) {
 	a := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
 	a.listErr = &stubBackendError{msg: "err-a"}
@@ -802,12 +797,12 @@ func TestPartialError_Unwrap(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decisions 25 / 43: MarkRead / MarkDone routing
+// MarkRead / MarkDone routing
 // ---------------------------------------------------------------------------
 
-// TestCompositeProvider_MarkRead_RoutesByKindNotScope is the test that
-// matters most for Decision 25: a row whose Identity.Scope is absent from
-// the backend's registered Scopes() must still route to that backend.
+// TestCompositeProvider_MarkRead_RoutesByKindNotScope pins routing by kind:
+// a row whose Identity.Scope is absent from the backend's registered Scopes()
+// must still route to that backend.
 func TestCompositeProvider_MarkRead_RoutesByKindNotScope(t *testing.T) {
 	b := newFakeNotifyBackend(provider.KindGitHub, []string{"configured/repo"})
 	cp := provider.NewCompositeProvider(b)
@@ -840,8 +835,8 @@ func TestCompositeProvider_MarkDone_RoutesByKindNotScope(t *testing.T) {
 	}
 }
 
-// TestCompositeProvider_MarkRead_FiltersCapableBeforeKind pins Decision 43's
-// lookup shape: an incapable backend sharing the same Kind as a later capable
+// TestCompositeProvider_MarkRead_FiltersCapableBeforeKind pins the lookup
+// shape: an incapable backend sharing the same Kind as a later capable
 // backend must not shadow it. What this catches is any implementation that
 // *gives up* at the first kind-matching-but-incapable backend — e.g. turning
 // the !ok branch into an early `return nil, notificationMarkRouteErr(kind)`
@@ -930,7 +925,7 @@ func TestCompositeProvider_Mark_ZeroIdentity(t *testing.T) {
 // capable backend reports Kind() == 0 — the shape CompositeProvider.Kind()
 // itself returns on an empty backend list — so without the guard a fully
 // zero-valued Identity matches it and MarkRead returns nil, an optimistic row
-// update (task 14) whose rollback never fires for a mark that targeted nothing.
+// update whose rollback never fires for a mark that targeted nothing.
 func TestCompositeProvider_MarkRead_ZeroKindCapableBackend(t *testing.T) {
 	b := newFakeNotifyBackend(provider.Kind(0), []string{"o/r"})
 	cp := provider.NewCompositeProvider(b)

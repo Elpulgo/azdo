@@ -107,14 +107,11 @@ const (
 // reached the inbox. Views use it to decide glyph, label, and style without
 // inspecting backend reason strings.
 //
-// The value set is settled by spec Decision 18 (20260729-notif-p1-github.md)
-// and is not left to the implementer: do not add, omit, or rename a value
-// without updating that decision first. GitHub's wire→enum mapping (task 5)
-// collapses several wire reasons per value — e.g. "team_mention" maps to
-// NotificationReasonMentioned, and "manual"/"invitation"/
-// "member_feature_requested" all map to NotificationReasonOther — and any
-// unrecognised wire reason also maps to NotificationReasonOther rather than
-// being dropped.
+// GitHub's wire→enum mapping collapses several wire reasons per value — e.g.
+// "team_mention" maps to NotificationReasonMentioned, and "manual"/
+// "invitation"/"member_feature_requested" all map to NotificationReasonOther
+// — and any unrecognised wire reason also maps to NotificationReasonOther
+// rather than being dropped.
 type NotificationReason int
 
 const (
@@ -153,9 +150,9 @@ const (
 	NotificationReasonOther
 
 	// notificationReasonCount is an unexported sentinel that must stay last.
-	// It pins the enum's size so a value added or removed without updating
-	// Decision 18 fails the test in notifications_test.go, rather than
-	// slipping through green as it would if the test only listed names.
+	// It pins the enum's size so a value added or removed fails the test in
+	// notifications_test.go, rather than slipping through green as it would if
+	// the test only listed names.
 	notificationReasonCount
 )
 
@@ -165,8 +162,8 @@ const (
 func NotificationReasonCount() int { return int(notificationReasonCount) }
 
 // String returns a stable, lowercase snake_case identifier for the
-// NotificationReason, suitable for the `exclude_reasons` config key (Decision
-// 19) and for on-disk/round-trip use generally. This is distinct from
+// NotificationReason, suitable for the `exclude_reasons` config key and for
+// on-disk/round-trip use generally. This is distinct from
 // display.NotificationReasonLabel, which returns a human-facing name.
 // NotificationReasonUnknown is an explicit case returning "unknown"; any
 // out-of-range value falls back to "other", matching the display layer
@@ -176,11 +173,10 @@ func NotificationReasonCount() int { return int(notificationReasonCount) }
 // This produces a deliberate asymmetry with ParseNotificationReason: the
 // string "unknown" round-trips out of String() for NotificationReasonUnknown,
 // but does not round-trip back in — ParseNotificationReason("unknown")
-// returns (Other, false), because the wire mapper (task 5) never emits
-// Unknown (Decision 18) and the string is reserved rather than parseable. Do
-// not "fix" this by adding an "unknown" case to ParseNotificationReason;
-// Decision 26 is explicit that unknown must match nothing in phase 1.
-// Mirrors Kind.String's shape (see types.go), following Decision 24.
+// returns (Other, false), because the wire mapper never emits Unknown and the
+// string is reserved rather than parseable. Do not "fix" this by adding an
+// "unknown" case to ParseNotificationReason; unknown must match nothing.
+// Mirrors Kind.String's shape (see types.go).
 func (r NotificationReason) String() string {
 	switch r {
 	case NotificationReasonUnknown:
@@ -219,23 +215,23 @@ func (r NotificationReason) String() string {
 // deliberately does not fold case: a mixed-case value such as "Subscribed" or
 // "CI_ACTIVITY" is treated exactly like any other unrecognised string, so the
 // user is shown their typo rather than getting silently reinterpreted
-// behaviour (Decision 26). Note that `exclude_reasons` entries are list
-// *values*, and viper lowercases config *keys* only — they reach this function
-// verbatim, so nothing upstream normalises them either.
+// behaviour. Note that `exclude_reasons` entries are list *values*, and viper
+// lowercases config *keys* only — they reach this function verbatim, so
+// nothing upstream normalises them either.
 //
-// Per Decision 26, the returned value always degrades to
-// NotificationReasonOther when the bool is false — an unrecognised string
-// never errors and never causes a config-driven filter to drop a row.
-// Callers MUST NOT ignore the bool: it is what separates "the user wrote
-// `other`" from "the user made a typo", which the value alone cannot. Task 9
-// warns on an unrecognised `exclude_reasons` entry; task 10's filter skips
-// applying an unrecognised entry rather than silently treating it as Other.
+// The returned value always degrades to NotificationReasonOther when the bool
+// is false — an unrecognised string never errors and never causes a
+// config-driven filter to drop a row. Callers MUST NOT ignore the bool: it is
+// what separates "the user wrote `other`" from "the user made a typo", which
+// the value alone cannot. The config layer warns on an unrecognised
+// `exclude_reasons` entry, and the filter skips applying an unrecognised entry
+// rather than silently treating it as Other.
 //
 // "unknown" is reserved and deliberately returns (Other, false): the wire
-// mapper (task 5) never emits NotificationReasonUnknown (Decision 18), so
-// listing "unknown" in exclude_reasons can never match a real row. This is
-// the intentional asymmetry with String(), documented there — do not add an
-// "unknown" case here to "fix" it.
+// mapper never emits NotificationReasonUnknown, so listing "unknown" in
+// exclude_reasons can never match a real row. This is the intentional
+// asymmetry with String(), documented there — do not add an "unknown" case
+// here to "fix" it.
 func ParseNotificationReason(s string) (NotificationReason, bool) {
 	switch s {
 	case "review_requested":
@@ -260,7 +256,7 @@ func ParseNotificationReason(s string) (NotificationReason, bool) {
 		return NotificationReasonSubscribed, true
 	case "other":
 		return NotificationReasonOther, true
-	default: // includes "unknown" (reserved, Decision 26) and any typo
+	default: // includes "unknown" (reserved) and any typo
 		return NotificationReasonOther, false
 	}
 }

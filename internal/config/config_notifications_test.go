@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- Task 9: notifications config block ---
-//
 // Every fixture in this file goes through LoadFrom(filepath.Join(t.TempDir(),
 // "config.yaml")) when it needs Load-time behavior (defaults, warnings,
 // mixed-case keys). Pure Validate() cases use a bare Config{} struct literal
@@ -162,16 +160,15 @@ notifications:
 		t.Errorf("PollInterval = %d, want 120", n.PollInterval)
 	}
 	// This fixture sets both only_configured_repos: true and a non-empty
-	// include_repos, which decision 50/51 (task 10) flags with exactly one
-	// warning -- include_repos is overridden, not intersected, and the user
-	// is told so rather than left to wonder why it had no effect. The
-	// exclude_reasons entries above are both valid, so this is the only
-	// warning expected.
+	// include_repos, which is flagged with exactly one warning -- include_repos
+	// is overridden, not intersected, and the user is told so rather than left
+	// to wonder why it had no effect. The exclude_reasons entries above are both
+	// valid, so this is the only warning expected.
 	if len(cfg.Warnings) != 1 {
-		t.Fatalf("Warnings = %v, want exactly 1 entry (only_configured_repos + include_repos both set, decision 50)", cfg.Warnings)
+		t.Fatalf("Warnings = %v, want exactly 1 entry (only_configured_repos + include_repos both set)", cfg.Warnings)
 	}
 	// Assert the content too, not just the count: a count-only check passes
-	// if the decision-50 warning disappears while some unrelated warning
+	// if the intended warning disappears while some unrelated warning
 	// appears in its place.
 	if !strings.Contains(cfg.Warnings[0], "include_repos") || !strings.Contains(cfg.Warnings[0], "ignored") {
 		t.Errorf("warning should say include_repos is ignored, got: %s", cfg.Warnings[0])
@@ -181,7 +178,7 @@ notifications:
 func TestLoad_NotificationsBlock_MixedCaseKeys_Convention9(t *testing.T) {
 	// Convention 9: viper lowercases all config keys on load. Mixed-case keys
 	// in the YAML must still resolve — this pins that for the notifications
-	// block specifically, since it is new in this task.
+	// block specifically.
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 	content := `organization: test-org
@@ -225,7 +222,7 @@ func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 		}
 	}
 
-	// All three rows use -1 on purpose. Decision 44 truncates only when Max >
+	// All three rows use -1 on purpose. MaxItems truncates only when it is >
 	// 0, so -1 is precisely the value that would read as "unlimited" if a
 	// guard were ever loosened from < 0 to, say, < -1 or == 0 — it is the
 	// boundary worth pinning, not an arbitrarily large negative.
@@ -349,9 +346,9 @@ func TestConfig_Validate_InvalidDisabledPane_MentionsNotifications(t *testing.T)
 	}
 }
 
-// TestConfig_Validate_NotificationsOnly_Passes covers decision 22 directly:
-// a config where only notifications is enabled (the other three panes
-// disabled) must pass Validate().
+// TestConfig_Validate_NotificationsOnly_Passes: a config where only
+// notifications is enabled (the other three panes disabled) must pass
+// Validate().
 func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 	cfg := &Config{
 		PollingInterval: 60,
@@ -360,23 +357,23 @@ func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 		DisabledPanes:   []string{"pullrequests", "workitems", "pipelines"},
 	}
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate() for notifications-only config = %v, want nil (decision 22)", err)
+		t.Errorf("Validate() for notifications-only config = %v, want nil", err)
 	}
 }
 
-// --- Decision 47: notifications counts as a remaining pane only when
-// HasGitHub() is true (phase-1-only coupling). ---
+// --- Notifications counts as a remaining pane only when HasGitHub() is true.
+// This coupling will need revisiting when a second notification-capable
+// backend arrives. ---
 
-// TestConfig_Validate_PaneGuard_Decision47 walks the three fixtures that
-// together pin both conjuncts of `IsPaneEnabled("notifications") &&
-// HasGitHub()`:
+// TestConfig_Validate_PaneGuard_NotificationsRequiresGitHub walks the three
+// fixtures that together pin both conjuncts of `IsPaneEnabled("notifications")
+// && HasGitHub()`:
 //
 //   - GitHub configured, other three panes disabled → valid (notifications is
 //     the remaining pane);
 //   - Azure-only, other three panes disabled → still rejected, because the
-//     notifications tab hides on capability (decision 11), and the message
-//     must explain the GitHub coupling rather than repeat the old three-pane
-//     text verbatim;
+//     notifications tab hides on capability, and the message must explain the
+//     GitHub coupling rather than repeat the old three-pane text verbatim;
 //   - GitHub configured, ALL FOUR panes disabled → rejected.
 //
 // The third row is the one that distinguishes the conjunction from a bare
@@ -384,10 +381,10 @@ func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 // enabled, so dropping the IsPaneEnabled("notifications") conjunct leaves
 // them both green. Without it a GitHub config that explicitly turns off every
 // pane would validate and the app would start with zero navigable tabs.
-func TestConfig_Validate_PaneGuard_Decision47(t *testing.T) {
-	// oldThreePaneText is the pre-decision-47 message. Row 2 must not be it:
-	// repeating it verbatim explains nothing about why notifications does not
-	// rescue an Azure-only config.
+func TestConfig_Validate_PaneGuard_NotificationsRequiresGitHub(t *testing.T) {
+	// oldThreePaneText is the message from before the GitHub coupling. Row 2
+	// must not be it: repeating it verbatim explains nothing about why
+	// notifications does not rescue an Azure-only config.
 	const oldThreePaneText = "cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled"
 
 	tests := []struct {
@@ -472,28 +469,27 @@ disabled_panes: pullrequests,workitems,pipelines,notifications
 	}
 }
 
-// --- Decision 26: unrecognised exclude_reasons entries warn and are dropped. ---
+// --- Unrecognised exclude_reasons entries warn and are dropped. ---
 
 // wantElevenAcceptedReasonNames is a hardcoded, independent copy of the
-// eleven accepted values from the spec's Config shape section — deliberately
-// NOT generated from production code (never by calling
-// acceptedNotificationReasons(), which would be tautological), so these tests
-// cannot pass merely because the implementation and the test share the same
-// (possibly wrong) source.
+// eleven accepted values — deliberately NOT generated from production code
+// (never by calling acceptedNotificationReasons(), which would be
+// tautological), so these tests cannot pass merely because the implementation
+// and the test share the same (possibly wrong) source.
 //
-// The order is the enum declaration order from decision 18, which is also the
-// order acceptedNotificationReasons() emits. "unknown" is absent on purpose:
-// it is the enum's twelfth value, reserved and rejected by
-// ParseNotificationReason, so advertising it as accepted would tell the user
-// to write a string the parser refuses.
+// The order is the enum declaration order, which is also the order
+// acceptedNotificationReasons() emits. "unknown" is absent on purpose: it is
+// the enum's twelfth value, reserved and rejected by ParseNotificationReason,
+// so advertising it as accepted would tell the user to write a string the
+// parser refuses.
 var wantElevenAcceptedReasonNames = []string{
 	"review_requested", "mentioned", "assigned", "authored", "commented",
 	"state_changed", "ci_activity", "security_alert", "approval_requested",
 	"subscribed", "other",
 }
 
-// acceptedValuesPrefix is the literal separator in the decision-26 warning
-// after which the accepted-values list begins.
+// acceptedValuesPrefix is the literal separator in the unrecognised-reason
+// warning after which the accepted-values list begins.
 const acceptedValuesPrefix = "accepted values: "
 
 // TestLoad_ExcludeReasons_WarningListsExactlyTheElevenAcceptedValues pins the
@@ -565,7 +561,7 @@ notifications:
 
 	cfg, err := LoadFrom(configPath)
 	if err != nil {
-		t.Fatalf("LoadFrom() should not fail on an unrecognised exclude_reasons entry (decision 26): %v", err)
+		t.Fatalf("LoadFrom() should not fail on an unrecognised exclude_reasons entry: %v", err)
 	}
 
 	if len(cfg.Warnings) != 1 {
@@ -589,7 +585,7 @@ notifications:
 
 func TestLoad_ExcludeReasons_UnknownValue_Warns(t *testing.T) {
 	// "unknown" is the enum's twelfth value but is explicitly not accepted in
-	// config (decision 26) — it must warn exactly like any other typo.
+	// config — it must warn exactly like any other typo.
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 	content := `organization: test-org
@@ -624,9 +620,9 @@ notifications:
 // TestLoad_ExcludeReasons_TwoUnrecognisedValues_WarnOnceEach pins that
 // warnings accumulate rather than collapsing to the last one. Every other
 // fixture in this file has at most one bad entry, so replacing the append with
-// an assignment would go unnoticed here — and task 13 renders the whole slice,
-// so a collapse-to-one regression would silently hide typos the user needs to
-// see.
+// an assignment would go unnoticed here — and the notifications pane renders
+// the whole slice, so a collapse-to-one regression would silently hide typos
+// the user needs to see.
 func TestLoad_ExcludeReasons_TwoUnrecognisedValues_WarnOnceEach(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
@@ -647,7 +643,7 @@ notifications:
 
 	cfg, err := LoadFrom(configPath)
 	if err != nil {
-		t.Fatalf("LoadFrom() should not fail on unrecognised exclude_reasons entries (decision 26): %v", err)
+		t.Fatalf("LoadFrom() should not fail on unrecognised exclude_reasons entries: %v", err)
 	}
 
 	if len(cfg.Warnings) != 2 {
@@ -697,10 +693,10 @@ notifications:
 	}
 }
 
-// --- Task 10 / Decision 51: malformed exclude_repos / include_repos globs
-// are dropped at load with a warning naming the pattern and the key; a
-// whitespace-only entry is a hard Validate() error, extending the existing
-// empty-entry check rather than becoming a new warning class. ---
+// --- Malformed exclude_repos / include_repos globs are dropped at load with a
+// warning naming the pattern and the key; a whitespace-only entry is a hard
+// Validate() error, extending the existing empty-entry check rather than
+// becoming a new warning class. ---
 
 func TestLoad_ExcludeRepos_BadPattern_DroppedWithWarning_ValidEntriesSurvive(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -740,7 +736,7 @@ notifications:
 	}
 	// The pattern and the error state the cause; the warning must also state
 	// the consequence, otherwise the user is told a pattern was dropped but
-	// not what their feed will now do (task 13 renders these lines).
+	// not what their feed will now do.
 	if !strings.Contains(msg, "nothing is excluded by it") {
 		t.Errorf("warning should say nothing is excluded by the dropped pattern, got: %s", msg)
 	}
@@ -791,9 +787,9 @@ notifications:
 
 // TestLoad_IncludeRepos_AllPatternsBad_WarningSaysWholeInboxIsShown pins the
 // other consequence clause: with no compilable include pattern left the list
-// is empty, and an empty include_repos selects everything (decision 51a), so
-// the user must be told their filter has stopped narrowing anything rather
-// than being left to guess.
+// is empty, and an empty include_repos selects everything, so the user must be
+// told their filter has stopped narrowing anything rather than being left to
+// guess.
 func TestLoad_IncludeRepos_AllPatternsBad_WarningSaysWholeInboxIsShown(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
@@ -855,7 +851,7 @@ notifications:
 		t.Errorf("warning should name both only_configured_repos and include_repos, got: %s", msg)
 	}
 	// include_repos itself is not mutated by the warning -- only ignored at
-	// filter time (decision 50), so it should still be present in the config.
+	// filter time, so it should still be present in the config.
 	if len(cfg.Notifications.IncludeRepos) != 1 || cfg.Notifications.IncludeRepos[0] != "owner/repo" {
 		t.Errorf("IncludeRepos = %v, want [owner/repo] (warned about, not dropped)", cfg.Notifications.IncludeRepos)
 	}

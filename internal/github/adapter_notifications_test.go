@@ -14,20 +14,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Decision 38: this compile-time assertion belongs in the default build, not
-// behind //go:build adapter (nothing runs that tag — see Decision 38's
-// rationale). Following provider/composite_test.go:13 and
-// provider/notifications_test.go:25 for the untagged var _ pattern.
+// This compile-time assertion belongs in the default build, not behind a
+// //go:build adapter tag that nothing runs. Follows provider/composite_test.go:13
+// and provider/notifications_test.go:25 for the untagged var _ pattern.
 // ---------------------------------------------------------------------------
 
 var _ provider.NotificationSource = (*github.Adapter)(nil)
 
 // ---------------------------------------------------------------------------
-// Decision 40: task 15's PollIntervalHinter does not exist yet. Declared
-// locally here and asserted against *github.Adapter; task 15 defines the real
-// interface where it is consumed and asserts again. Go's structural typing
-// makes the two independent: if Adapter loses PollInterval(), this assertion
-// breaks immediately.
+// A local PollIntervalHinter, asserted against *github.Adapter. The real
+// interface in internal/provider asserts again independently; Go's structural
+// typing keeps the two separate, so if Adapter loses PollInterval() this
+// assertion breaks immediately.
 // ---------------------------------------------------------------------------
 
 type pollIntervalHinter interface {
@@ -37,20 +35,20 @@ type pollIntervalHinter interface {
 var _ pollIntervalHinter = (*github.Adapter)(nil)
 
 // ---------------------------------------------------------------------------
-// Task 15: the real interface now exists in internal/provider, colocated with
+// The real interface now exists in internal/provider, colocated with
 // NotificationSource. This assertion is additive, not a replacement for the
-// local one above (Decision 40) — the two are structurally independent, so
-// either one breaking on its own pins a real regression.
+// local one above — the two are structurally independent, so either one
+// breaking on its own pins a real regression.
 // ---------------------------------------------------------------------------
 
 var _ provider.PollIntervalHinter = (*github.Adapter)(nil)
 
 // ---------------------------------------------------------------------------
-// nil nc — List/MarkRead/MarkDone must error, never panic (Decision 39).
+// nil nc — List/MarkRead/MarkDone must error, never panic.
 //
 // "Descriptive" is only enforced if the message itself is asserted: an
-// err != nil check passes just as happily on errors.New("x"), and task 19
-// renders this text in-view, so each of the three messages is pinned below.
+// err != nil check passes just as happily on errors.New("x"), and this text is
+// rendered in-view, so each of the three messages is pinned below.
 // ---------------------------------------------------------------------------
 
 const wantNoClientMsg = "no notifications client configured"
@@ -110,8 +108,7 @@ func TestAdapter_PollInterval_NilNotificationsClient_ReturnsZero(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Mapping: List maps wire threads to neutral notifications, resolving
 // ScopeDisplay per-row via MultiClient.DisplayNameFor for configured repos and
-// falling back to the mapper's own Scope default for unconfigured ones
-// (Decision 35).
+// falling back to the mapper's own Scope default for unconfigured ones.
 // ---------------------------------------------------------------------------
 
 const twoThreadsBody = `[
@@ -175,8 +172,8 @@ func TestAdapter_List_MapsThreadsAndResolvesScopeDisplay(t *testing.T) {
 	if unconfigured.Identity.Scope != "other/repo" {
 		t.Errorf("row[1].Identity.Scope = %q, want %q", unconfigured.Identity.Scope, "other/repo")
 	}
-	// Decision 35: mc.DisplayNameFor cannot resolve a display name for an
-	// unconfigured repo — the mapper's own fallback to Scope covers it.
+	// mc.DisplayNameFor cannot resolve a display name for an unconfigured repo —
+	// the mapper's own fallback to Scope covers it.
 	if unconfigured.Identity.ScopeDisplay != "other/repo" {
 		t.Errorf("row[1].Identity.ScopeDisplay = %q, want %q (fallback to Scope for an unconfigured repo)", unconfigured.Identity.ScopeDisplay, "other/repo")
 	}
@@ -185,8 +182,8 @@ func TestAdapter_List_MapsThreadsAndResolvesScopeDisplay(t *testing.T) {
 	}
 }
 
-// TestAdapter_List_NilMultiClient_StillMapsWithoutPanic asserts Decision 39's
-// reachable state: a GitHub config whose token never built a per-repo
+// TestAdapter_List_NilMultiClient_StillMapsWithoutPanic asserts a reachable
+// state: a GitHub config whose token never built a per-repo
 // MultiClient (mc nil) must still be able to call List through nc alone,
 // without panicking, falling back to the mapper's own ScopeDisplay default
 // for every row.
@@ -219,7 +216,7 @@ func TestAdapter_List_NilMultiClient_StillMapsWithoutPanic(t *testing.T) {
 // TestNotificationsClient_List_ParticipatingAndSince pins buildPath, but it
 // constructs NotificationListOpts itself, so it stays green if Adapter.List
 // stops populating either field — and both drops fail open and silently:
-// dropping Participating disables Decision 10's server-side narrowing (the
+// dropping Participating disables the server-side narrowing (the
 // whole inbox gets fetched), dropping Since turns since_days into a no-op
 // pulling unbounded history. Neither shows up as an error anywhere.
 //
@@ -246,7 +243,7 @@ func TestAdapter_List_ForwardsParticipatingOnlyAndSince(t *testing.T) {
 	}
 
 	if capturedParticipating != "true" {
-		t.Errorf("participating query param = %q, want %q — NotifOpts.ParticipatingOnly must reach NotificationListOpts.Participating (Decision 10)", capturedParticipating, "true")
+		t.Errorf("participating query param = %q, want %q — NotifOpts.ParticipatingOnly must reach NotificationListOpts.Participating", capturedParticipating, "true")
 	}
 	if want := "2026-07-01T12:00:00Z"; capturedSince != want {
 		t.Errorf("since query param = %q, want %q — NotifOpts.Since must reach NotificationListOpts.Since", capturedSince, want)
@@ -254,8 +251,8 @@ func TestAdapter_List_ForwardsParticipatingOnlyAndSince(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 31: NotifOpts.Max is honoured by truncating on return, never by
-// stopping nc.List's walk early.
+// NotifOpts.Max is honoured by truncating on return, never by stopping
+// nc.List's walk early.
 // ---------------------------------------------------------------------------
 
 const fiveThreadsBodyTemplate = `[
@@ -266,9 +263,9 @@ const fiveThreadsBodyTemplate = `[
   {"id":"5","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t5","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}}
 ]`
 
-// TestAdapter_List_MaxSmallerThanOnePageTruncates is the first of the two
-// required Decision 31 tests: a single-page response of 5 threads with
-// Max: 2 must come back truncated to 2 rows.
+// TestAdapter_List_MaxSmallerThanOnePageTruncates is the first of the two Max
+// tests: a single-page response of 5 threads with Max: 2 must come back
+// truncated to 2 rows.
 func TestAdapter_List_MaxSmallerThanOnePageTruncates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -303,7 +300,7 @@ func TestAdapter_List_MaxSmallerThanOnePageTruncates(t *testing.T) {
 // particular Max == len(out) — the off-by-one site, and the only one of these
 // where a >= / > slip changes nothing observable unless it is asserted. Max <= 0
 // means "no cap" per NotifOpts.Max's doc, so a negative value must not be read
-// as a cap of zero (which would empty the feed — Decision 20's worst outcome).
+// as a cap of zero (which would empty the feed).
 func TestAdapter_List_MaxBoundaries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -347,8 +344,8 @@ func TestAdapter_List_MaxBoundaries(t *testing.T) {
 	}
 }
 
-// threeThreadsPage2Body is the second page of the Decision 31 cache fixture —
-// ids 6..8, no Link rel="next", so the walk ends here.
+// threeThreadsPage2Body is the second page of the cache fixture — ids 6..8,
+// no Link rel="next", so the walk ends here.
 const threeThreadsPage2Body = `[
   {"id":"6","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t6","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}},
   {"id":"7","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t7","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}},
@@ -356,7 +353,7 @@ const threeThreadsPage2Body = `[
 ]`
 
 // TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax is the
-// second, load-bearing Decision 31 test: this is the one that catches Max being
+// second, load-bearing Max test: this is the one that catches Max being
 // pushed down into NotificationListOpts to bound nc.List's fetch. There are two
 // distinct shapes that mutation can take, and the fixture has to span more than
 // one page to catch both:
@@ -436,7 +433,7 @@ func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *te
 	// The load-bearing assertion, checked first so a mutant fails on the
 	// behaviour rather than on the bookkeeping below it.
 	if len(large) != 8 {
-		t.Fatalf("second List(Max: 8) len = %d, want 8 — a smaller Max must neither truncate what nc.List caches nor stop its page walk early (Decision 31)", len(large))
+		t.Fatalf("second List(Max: 8) len = %d, want 8 — a smaller Max must neither truncate what nc.List caches nor stop its page walk early", len(large))
 	}
 	for i, want := range []string{"1", "2", "3", "4", "5", "6", "7", "8"} {
 		if large[i].Identity.ID != want {
@@ -451,17 +448,16 @@ func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *te
 }
 
 // ---------------------------------------------------------------------------
-// Decision 28: an unsolicited 304 (no matching cache) surfaces as an error
-// from nc.List — Adapter.List must propagate it, never translate it into an
-// empty slice.
+// An unsolicited 304 (no matching cache) surfaces as an error from nc.List —
+// Adapter.List must propagate it, never translate it into an empty slice.
 //
 // Both tests below also pin the *shape* of the propagation, not just that an
 // error came back: Adapter.List returns nc.List's error verbatim, so errors.As
 // still recovers the underlying *APIError with its StatusCode and its 403 scope
-// headers intact. Task 19 reads exactly those off this exact path. A later
-// well-meaning wrap here — fmt.Errorf("github: notifications: %w", err), which
-// double-prefixes the user-visible message, or %v, which breaks errors.As
-// outright — would otherwise leave every adapter test green. Mirrors
+// headers intact. A later well-meaning wrap here —
+// fmt.Errorf("github: notifications: %w", err), which double-prefixes the
+// user-visible message, or %v, which breaks errors.As outright — would
+// otherwise leave every adapter test green. Mirrors
 // TestNotificationsClient_List_304WithNoCache_ReturnsError and
 // TestNotificationsClient_List_403_MissingScope_RecoversScopeHeaders at the
 // client layer.
@@ -481,7 +477,7 @@ func TestAdapter_List_PropagatesUnsolicited304Error(t *testing.T) {
 
 	got, err := a.List(provider.NotifOpts{})
 	if err == nil {
-		t.Fatal("List() error = nil, want an error for an unsolicited 304 (Decision 28) — an emptied feed reads as \"you're clear\"")
+		t.Fatal("List() error = nil, want an error for an unsolicited 304 — an emptied feed reads as \"you're clear\"")
 	}
 	if got != nil {
 		t.Fatalf("List() result = %+v, want nil alongside the error, not an empty-but-non-nil slice", got)
@@ -489,7 +485,7 @@ func TestAdapter_List_PropagatesUnsolicited304Error(t *testing.T) {
 
 	var apiErr *github.APIError
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("errors.As did not recover *github.APIError from %v — Adapter.List must return nc.List's error unchanged so task 19 can branch on the 304", err)
+		t.Fatalf("errors.As did not recover *github.APIError from %v — Adapter.List must return nc.List's error unchanged so the caller can branch on the 304", err)
 	}
 	if apiErr.StatusCode != http.StatusNotModified {
 		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotModified)
@@ -498,8 +494,7 @@ func TestAdapter_List_PropagatesUnsolicited304Error(t *testing.T) {
 	// No extra prefix from the adapter. Asserted against the client's own error
 	// for the same response rather than a hardcoded string, so this pins "the
 	// adapter adds nothing" without also pinning nc.List's wording (which
-	// Decision 28 deliberately wraps with %w around an already-"github:"-
-	// prefixed *APIError).
+	// deliberately wraps with %w around an already-"github:"-prefixed *APIError).
 	direct := github.NewNotificationsClient("tok")
 	direct.SetBaseURL(srv.URL)
 	_, clientErr := direct.List(github.NotificationListOpts{})
@@ -537,7 +532,7 @@ func TestAdapter_List_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
 		t.Fatalf("errors.As did not recover *github.APIError from %v", err)
 	}
 	if apiErr.RequiredScopes != "notifications" {
-		t.Errorf("RequiredScopes = %q, want %q — task 19 names the missing scope from this field", apiErr.RequiredScopes, "notifications")
+		t.Errorf("RequiredScopes = %q, want %q — the missing scope is named in this field", apiErr.RequiredScopes, "notifications")
 	}
 	if apiErr.GrantedScopes != "repo, read:org" {
 		t.Errorf("GrantedScopes = %q, want %q", apiErr.GrantedScopes, "repo, read:org")
@@ -551,7 +546,7 @@ func TestAdapter_List_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // MarkRead / MarkDone: forward id.ID straight through; reject a mismatched
-// Kind as a caller bug (Decision 14).
+// Kind as a caller bug.
 // ---------------------------------------------------------------------------
 
 func TestAdapter_MarkRead_ForwardsID(t *testing.T) {
@@ -616,8 +611,8 @@ func TestAdapter_MarkRead_MismatchedKind_ReturnsErrorAndIssuesNoRequest(t *testi
 	nc.SetBaseURL(srv.URL)
 	a := github.NewAdapterWithNotifications(nil, nc)
 
-	// An Azure identity handed to the GitHub adapter — a caller bug Decision
-	// 14 exists to catch, not a wrong-backend request to silently route.
+	// An Azure identity handed to the GitHub adapter — a caller bug to catch,
+	// not a wrong-backend request to silently route.
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "o/r", ID: "42"}
 	err := a.MarkRead(id)
 	if err == nil {
@@ -657,7 +652,7 @@ func TestAdapter_MarkDone_MismatchedKind_ReturnsErrorAndIssuesNoRequest(t *testi
 }
 
 // TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind covers the zero Identity.Kind
-// explicitly. Rejecting it is correct — Decision 25 has the composite route by
+// explicitly. Rejecting it is correct — the composite routes by
 // Identity.Kind, so only KindGitHub can legitimately arrive — but the message
 // had a hole in it: Kind.String() returns "" for the zero value and %v uses the
 // Stringer, so the rendered text was "identity kind  is not github", two spaces
@@ -712,13 +707,13 @@ func TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 37: MarkRead must not block behind an in-flight List. -race is
-// unavailable in this environment, so this is asserted structurally rather
-// than by timing: List's HTTP request is parked in the handler on a channel,
-// and MarkRead (hitting the same server, a different method/path) is proven
-// to complete before the test releases List's handler. If anything on the
-// mark path took the fetch mutex it would deadlock behind List until the
-// release, which the select below with a bounded timeout catches.
+// MarkRead must not block behind an in-flight List. -race is unavailable in
+// this environment, so this is asserted structurally rather than by timing:
+// List's HTTP request is parked in the handler on a channel, and MarkRead
+// (hitting the same server, a different method/path) is proven to complete
+// before the test releases List's handler. If anything on the mark path took
+// the fetch mutex it would deadlock behind List until the release, which the
+// select below with a bounded timeout catches.
 //
 // This is the sole test for that contract at BOTH layers. Adapter.MarkRead/
 // MarkDone forward straight through with no lock of their own, so driving the
@@ -729,13 +724,13 @@ func TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind(t *testing.T) {
 // timeout). A client-level duplicate of this choreography in
 // notifications_test.go killed a strict subset and was removed.
 //
-// Review feedback item 4: releasing the parked handler must be guaranteed on
-// every exit path, not just the happy one. Every branch of the select below can
-// t.Fatal, which runtime.Goexits into the deferred srv.Close() — and srv.Close
-// blocks until in-flight handlers return, so a GET handler still parked on
-// <-release turned this test's own failure into a package-wide test timeout and
-// goroutine dump instead of the one-line failure it is worded to produce
-// (observed for real during mutation A; CI's default timeout is 10 minutes).
+// Releasing the parked handler must be guaranteed on every exit path, not just
+// the happy one. Every branch of the select below can t.Fatal, which
+// runtime.Goexits into the deferred srv.Close() — and srv.Close blocks until
+// in-flight handlers return, so a GET handler still parked on <-release turned
+// this test's own failure into a package-wide test timeout and goroutine dump
+// instead of the one-line failure it is worded to produce (CI's default timeout
+// is 10 minutes).
 // The release is therefore wrapped in a sync.Once and deferred BEFORE
 // srv.Close() is deferred: defers run LIFO, so the handler is always freed
 // first and srv.Close() never blocks. Deliberately not t.Cleanup — cleanups run
@@ -796,7 +791,7 @@ func TestAdapter_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 	case err := <-listDone:
 		t.Fatalf("List() returned before MarkRead even though its handler is still parked on release: %v", err)
 	case <-time.After(2 * time.Second):
-		t.Fatal("MarkRead() did not complete while a List() call was in flight — structural evidence Adapter reinstated a shared lock (Decision 37)")
+		t.Fatal("MarkRead() did not complete while a List() call was in flight — structural evidence Adapter reinstated a shared lock")
 	}
 
 	releaseHandler()
@@ -806,7 +801,7 @@ func TestAdapter_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 30: PollInterval forwards nc's cadence hint.
+// PollInterval forwards nc's cadence hint.
 // ---------------------------------------------------------------------------
 
 func TestAdapter_PollInterval_ForwardsClientValue(t *testing.T) {

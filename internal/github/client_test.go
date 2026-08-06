@@ -414,11 +414,11 @@ func TestClient_Get_403_RateLimited_RetryAfter(t *testing.T) {
 	}
 }
 
-// Review feedback item 6: the APIError widening (RequiredScopes/GrantedScopes)
-// is additive and populated for every status, but nothing asserted the header
-// extraction — unlike the sibling RetryAfter, which is pinned by
-// TestClient_Get_403_RateLimited_RetryAfter above. Task 19 (missing-scope
-// error state) depends on both raw values being recovered correctly.
+// The APIError widening (RequiredScopes/GrantedScopes) is additive and
+// populated for every status, but nothing asserted the header extraction —
+// unlike the sibling RetryAfter, which is pinned by
+// TestClient_Get_403_RateLimited_RetryAfter above. The missing-scope error
+// state depends on both raw values being recovered correctly.
 func TestClient_Get_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Accepted-OAuth-Scopes", "notifications")

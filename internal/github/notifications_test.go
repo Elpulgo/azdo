@@ -12,11 +12,10 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// The default request shape, pinned in one place: Decision 12's mandatory
-// all=true, plus the method, path and per_page that review feedback item 7
-// found unpinned (mutating the endpoint to "/notificationz" left the suite
-// green). One List call observes all four, so they share a server rather than
-// standing up two identical ones.
+// The default request shape, pinned in one place: the mandatory all=true, plus
+// the method, path and per_page that were previously unpinned (mutating the
+// endpoint to "/notificationz" left the suite green). One List call observes
+// all four, so they share a server rather than standing up two identical ones.
 //
 // Every expectation is a literal, never derived from the code under test.
 // ---------------------------------------------------------------------------
@@ -47,7 +46,7 @@ func TestNotificationsClient_List_RequestShape(t *testing.T) {
 		t.Errorf("path = %q, want %q", capturedPath, "/notifications")
 	}
 	if capturedAll != "true" {
-		t.Errorf("all query param = %q, want %q (Decision 12)", capturedAll, "true")
+		t.Errorf("all query param = %q, want %q", capturedAll, "true")
 	}
 	if capturedPerPage != "100" {
 		t.Errorf("per_page = %q, want %q", capturedPerPage, "100")
@@ -55,17 +54,17 @@ func TestNotificationsClient_List_RequestShape(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Decision 27: List always hands out a copy, on the 304 path too — not just
-// the 200 path. The previous version of this test only ever mutated a result
-// that traced back to a 200 response (both here and in
+// List always hands out a copy, on the 304 path too — not just the 200 path.
+// The previous version of this test only ever mutated a result that traced
+// back to a 200 response (both here and in
 // TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged), so reverting
 // *only* the 304 path's cloneThreads(c.cached) call back to a bare
 // `return c.cached, nil` left the whole suite green — nothing exercised
 // mutating a result that itself came from a 304. This three-call version
 // closes that gap: 200 (caches), then 304 (mutate *that* result in place),
 // then 304 again (assert the mutation left no trace) — which is exactly the
-// corruption fold-in 2 measured: a caller in-place-filtering [1 2 3] down to
-// [2] left the cache [2 2 3].
+// corruption measured: a caller in-place-filtering [1 2 3] down to [2] left the
+// cache [2 2 3].
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_200_MutatingResultDoesNotAffectLaterCall(t *testing.T) {
@@ -191,9 +190,8 @@ func TestNotificationsClient_List_FollowsLinkHeader_MultipleRels(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 5 / Decision 29: a self-referential Link rel="next"
-// must not loop forever. Measured on the unfixed code: 501 requests, 500
-// rows, err == nil.
+// A self-referential Link rel="next" must not loop forever. Measured on the
+// unfixed code: 501 requests, 500 rows, err == nil.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_CyclicNextLink_ReturnsError(t *testing.T) {
@@ -267,9 +265,9 @@ func TestNotificationsClient_List_IfModifiedSince_OnlyAfterCache(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Round-3 review item 9: List assigns c.lastModified unconditionally from
-// the response header (List's final lines), not only when the header is
-// non-empty as an earlier revision did. A 200 that omits Last-Modified
+// List assigns c.lastModified unconditionally from the response header (List's
+// final lines), not only when the header is non-empty as an earlier revision
+// did. A 200 that omits Last-Modified
 // therefore clears any previously cached validator, even though it still
 // sets cached/cachedPath — making the NEXT call's request unconditional
 // again. This is the correct trade (a validator must pair with the cache it
@@ -325,13 +323,12 @@ func TestNotificationsClient_List_200WithoutLastModified_ClearsValidator(t *test
 // ---------------------------------------------------------------------------
 // 304 Not Modified: cached slice returned unchanged, never cleared.
 //
-// Review feedback item 2: the previous version of this test compared
-// second[i] against first[i] — two aliases of one backing array — which is a
-// content-tautology that stays green even if the 304 path clobbers every
-// cached row's fields, because both "first" and "second" would read the
-// clobbered value back. Pinned against independently-declared expected
-// values, and re-checked after mutating the first result, so the copy
-// (Decision 27) is actually exercised.
+// The previous version of this test compared second[i] against first[i] — two
+// aliases of one backing array — which is a content-tautology that stays green
+// even if the 304 path clobbers every cached row's fields, because both "first"
+// and "second" would read the clobbered value back. Pinned against
+// independently-declared expected values, and re-checked after mutating the
+// first result, so the copy is actually exercised.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged(t *testing.T) {
@@ -376,8 +373,8 @@ func TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged(t *testing.T) 
 
 	// Mutate the first result in place before asking for the second. If the
 	// 304 path returned an alias of the cache (rather than a copy), this
-	// would corrupt what the next call hands back — the whole point of
-	// Decision 27's copy requirement.
+	// would corrupt what the next call hands back — the whole point of the
+	// copy requirement.
 	first[0].Unread = false
 	first[0].Reason = "CLOBBERED-BY-TEST"
 
@@ -396,8 +393,8 @@ func TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 3 / Decision 27 fold-in: the cached validator must be
-// scoped to the request shape that produced it. List({}) then
+// The cached validator must be scoped to the request shape that produced it.
+// List({}) then
 // List({Participating: true}) must not condition the second query's request
 // on the first query's validator — otherwise a 304 for the participating-only
 // query would hand back the whole-inbox cache as if it were the complete
@@ -445,8 +442,8 @@ func TestNotificationsClient_List_DifferentRequestShape_NeverSendsMismatchedVali
 }
 
 // ---------------------------------------------------------------------------
-// Round-3 review item 4: cachedPath is buildPath(opts), which has no host
-// component. Without SetBaseURL invalidating the cache, switching base URLs
+// cachedPath is buildPath(opts), which has no host component. Without
+// SetBaseURL invalidating the cache, switching base URLs
 // (e.g. github.com -> a GitHub Enterprise instance, or any demo-mode
 // redirect) with the same NotificationListOpts would still match cachedPath,
 // so a validator captured against one host would be offered to another —
@@ -502,21 +499,20 @@ func TestNotificationsClient_SetBaseURL_InvalidatesCache(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 4 / Decision 28: a 304 with nothing cached (or nothing
-// cached for this request shape) is an error, never an empty feed.
+// A 304 with nothing cached (or nothing cached for this request shape) is an
+// error, never an empty feed.
 //
-// Round-3 review item 6: the returned error must wrap the underlying
-// *APIError (StatusCode == 304) with %w, not just format it into a plain
-// string — otherwise a caller (tasks 13, 19) needing to branch on "was this
-// an unsolicited 304" versus "a transport failure" has no route but string
-// matching. Asserted here via errors.As.
+// The returned error must wrap the underlying *APIError (StatusCode == 304)
+// with %w, not just format it into a plain string — otherwise a caller needing
+// to branch on "was this an unsolicited 304" versus "a transport failure" has
+// no route but string matching. Asserted here via errors.As.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_304WithNoCache_ReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A caching proxy/MITM appliance synthesising a 304 nobody asked for
-		// (Decision 28's rationale) — the first-ever call has no cached
-		// validator to condition on, so this is unsolicited.
+		// A caching proxy/MITM appliance synthesising a 304 nobody asked for —
+		// the first-ever call has no cached validator to condition on, so this
+		// is unsolicited.
 		w.WriteHeader(http.StatusNotModified)
 	}))
 	defer srv.Close()
@@ -632,9 +628,9 @@ func TestNotificationsClient_PollInterval_AbsentHeaderKeepsPreviousValue(t *test
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback nit 8: fmt.Errorf("github: list notifications: %w", ...)
-// double-prefixed, since APIError.Error() already starts with "github:" —
-// user-visible in the error pane. List now returns the *APIError unwrapped.
+// fmt.Errorf("github: list notifications: %w", ...) double-prefixed, since
+// APIError.Error() already starts with "github:" — user-visible in the error
+// pane. List now returns the *APIError unwrapped.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_ErrorIsNotDoublePrefixed(t *testing.T) {
@@ -662,14 +658,12 @@ func TestNotificationsClient_List_ErrorIsNotDoublePrefixed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Round-3 review item 5: getPage (List's HTTP call site) is a SECOND,
-// independent newAPIError call site from Client.get — TestClient_Get_403_
-// MissingScope_RecoversScopeHeaders in client_test.go only exercises the
-// other one. Changing getPage's newAPIError call to pass an empty
-// http.Header{} instead of resp.Header leaves that suite green (Required/
-// GrantedScopes come back empty and nothing at the List level notices).
-// Pinned here at the List level, via errors.As, the same way task 19 will
-// need to detect it.
+// getPage (List's HTTP call site) is a SECOND, independent newAPIError call
+// site from Client.get — TestClient_Get_403_MissingScope_RecoversScopeHeaders
+// in client_test.go only exercises the other one. Changing getPage's
+// newAPIError call to pass an empty http.Header{} instead of resp.Header leaves
+// that suite green (Required/GrantedScopes come back empty and nothing at the
+// List level notices). Pinned here at the List level, via errors.As.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
@@ -702,14 +696,14 @@ func TestNotificationsClient_List_403_MissingScope_RecoversScopeHeaders(t *testi
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback nit 9: a 304 on page >= 2 fails the whole List rather than
-// being special-cased — documented here since the pagination loop reads as
-// though 304 is handled everywhere.
+// A 304 on page >= 2 fails the whole List rather than being special-cased —
+// documented here since the pagination loop reads as though 304 is handled
+// everywhere.
 //
-// Round-3 review item 10: the comment above the mid-walk fetch in List
-// claims "the cache from the prior successful fetch is left untouched", but
-// nothing asserted it — this test only ever checked that the failing call
-// itself returned an error. Extended to a three-call sequence: a first
+// The comment above the mid-walk fetch in List claims "the cache from the prior
+// successful fetch is left untouched", but nothing asserted it — this test only
+// ever checked that the failing call itself returned an error. Extended to a
+// three-call sequence: a first
 // successful List() populates the cache and validator; a second List() fails
 // mid-walk on an unsolicited page-2 304 (after a fresh, different page-1 200
 // — so there's something-other-than-the-original-cache in flight for the
@@ -789,9 +783,9 @@ func TestNotificationsClient_List_304OnSecondPage_FailsWholeList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 6: MarkRead / MarkDone — method and path pinned as literals, not
-// derived from the code under test (a test that reads a constant it is meant
-// to be pinning has already slipped through this run once).
+// MarkRead / MarkDone — method and path pinned as literals, not derived from
+// the code under test (a test that reads a constant it is meant to be pinning
+// has already slipped through once).
 // ---------------------------------------------------------------------------
 
 // markCall names one of the two mark operations and how to invoke it, so the
@@ -851,11 +845,11 @@ func TestNotificationsClient_Mark_RequestsCorrectMethodAndPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 6: rejected thread ids must issue zero requests — the id guard runs
-// before any HTTP request is built. Rows per task 6's acceptance criteria:
-// "", "abc", "-5" (the convention-11 negative-input shape), "0", and "007"
-// (isItemNumber's extra leading-zero strictness, reused from
-// mapping_notifications.go — see MarkRead's doc comment).
+// Rejected thread ids must issue zero requests — the id guard runs before any
+// HTTP request is built. Rows: "", "abc", "-5" (the convention-11
+// negative-input shape), "0", and "007" (isItemNumber's extra leading-zero
+// strictness, reused from mapping_notifications.go — see MarkRead's doc
+// comment).
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_Mark_RejectedIds_IssueZeroRequests(t *testing.T) {
@@ -886,16 +880,15 @@ func TestNotificationsClient_Mark_RejectedIds_IssueZeroRequests(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 6: a non-2xx response surfaces as an error carrying the status code.
+// A non-2xx response surfaces as an error carrying the status code.
 //
-// Review feedback item 5: the status-code assertions alone did not pin
-// markThread's bare-*APIError return — wrapping it as
-// fmt.Errorf("github: mark thread: %w", ...) kept errors.As and StatusCode
-// working and left the suite green, while double-prefixing the user-visible
-// message (APIError.Error() already starts with "github:"). Task 19 also needs
-// the bare *APIError so it can read RequiredScopes/GrantedScopes off a 403.
-// Mirrors TestNotificationsClient_List_ErrorIsNotDoublePrefixed for the List
-// path.
+// The status-code assertions alone did not pin markThread's bare-*APIError
+// return — wrapping it as fmt.Errorf("github: mark thread: %w", ...) kept
+// errors.As and StatusCode working and left the suite green, while
+// double-prefixing the user-visible message (APIError.Error() already starts
+// with "github:"). A caller also needs the bare *APIError so it can read
+// RequiredScopes/GrantedScopes off a 403. Mirrors
+// TestNotificationsClient_List_ErrorIsNotDoublePrefixed for the List path.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_Mark_NonSuccessStatus_ReturnsErrorWithStatusCode(t *testing.T) {
@@ -940,9 +933,9 @@ func TestNotificationsClient_Mark_NonSuccessStatus_ReturnsErrorWithStatusCode(t 
 }
 
 // ---------------------------------------------------------------------------
-// Decision 37, the important regression test: List (200, populates the
-// cache) -> MarkRead -> List again against a server that would answer 304 to
-// any conditional request. Without cacheGen invalidation, the second List
+// The important regression test: List (200, populates the cache) -> MarkRead ->
+// List again against a server that would answer 304 to any conditional request.
+// Without cacheGen invalidation, the second List
 // would send the cached If-Modified-Since, get a 304, and
 // cloneThreads(c.cached) would faithfully replay the row the user just
 // dismissed with Unread: true. Asserted on observable behaviour (the returned
@@ -1004,13 +997,13 @@ func TestNotificationsClient_MarkRead_InvalidatesCache_SecondListNotStale(t *tes
 		t.Fatalf("second List() len = %d, want 1", len(second))
 	}
 	if second[0].Unread {
-		t.Fatal("second List()[0].Unread = true, want false — MarkRead must invalidate the cache so a 304 cannot resurrect the row the user just dismissed (Decision 37)")
+		t.Fatal("second List()[0].Unread = true, want false — MarkRead must invalidate the cache so a 304 cannot resurrect the row the user just dismissed")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 3 / Decision 37: MarkDone's twin of the test above.
-// Deleting cacheGen.Add(1) from MarkDone alone SURVIVED the suite — only the
+// MarkDone's twin of the test above. Deleting cacheGen.Add(1) from MarkDone
+// alone SURVIVED the suite — only the
 // MarkRead half was pinned. MarkDone is the more damaging of the two: the
 // thread is gone server-side, so a stale 304 replays a row on which both `o`
 // and `u` then 404 against a thread that no longer exists.
@@ -1066,13 +1059,13 @@ func TestNotificationsClient_MarkDone_InvalidatesCache_SecondListNotStale(t *tes
 		t.Fatalf("second List() error = %v", err)
 	}
 	if len(second) != 0 {
-		t.Fatalf("second List() = %+v, want an empty feed — MarkDone must invalidate the cache so a 304 cannot replay a thread that no longer exists server-side (Decision 37)", second)
+		t.Fatalf("second List() = %+v, want an empty feed — MarkDone must invalidate the cache so a 304 cannot replay a thread that no longer exists server-side", second)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Decision 37, the important regression test: a SECOND mark in the same
-// sitting. Every other mark->List test in this suite does exactly one mark,
+// The important regression test: a SECOND mark in the same sitting. Every other
+// mark->List test in this suite does exactly one mark,
 // which does not distinguish cacheGen.Add(1) from cacheGen.Store(1) in
 // MarkRead/MarkDone — both take the counter from 0 to 1 on a single call. A
 // second mark tells them apart: Store(1) leaves the counter at 1 again
@@ -1080,8 +1073,8 @@ func TestNotificationsClient_MarkDone_InvalidatesCache_SecondListNotStale(t *tes
 // refetch (cachedGen == 1) is wrongly re-certified as valid against the
 // post-second-mark generation (also 1, under the mutant) — the server is
 // then offered If-Modified-Since, answers 304, and the row dismissed by the
-// SECOND mark is replayed forever. This is exactly decision 37's resurrection
-// bug, one mark later than the single-mark tests above can see.
+// SECOND mark is replayed forever. This is exactly the resurrection bug, one
+// mark later than the single-mark tests above can see.
 //
 // Asserted purely on observable behaviour (the rows List returns and their
 // Unread values) — the private cacheGen/cachedGen fields are never read.
@@ -1171,14 +1164,14 @@ func TestNotificationsClient_TwoSequentialMarkReads_SecondListNotStale(t *testin
 	}
 	for i, row := range third {
 		if row.Unread {
-			t.Errorf("third List()[%d] = %+v, want Unread=false — a second mark-read must not leave any row resurrected as unread (Decision 37)", i, row)
+			t.Errorf("third List()[%d] = %+v, want Unread=false — a second mark-read must not leave any row resurrected as unread", i, row)
 		}
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 1 (🔴) / Decision 37's snapshot-once semantics: the
-// regression test for a mark landing MID-FETCH.
+// The regression test for a mark landing MID-FETCH, pinning snapshot-once
+// semantics.
 //
 // List used to commit c.cachedGen = c.cacheGen.Load(), re-reading the counter
 // after the walk instead of committing the snapshot taken before it. Because
@@ -1268,7 +1261,7 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_NextListSendsNoValidato
 			t.Fatalf("MarkRead() error = %v, want nil", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("MarkRead() did not complete while a List() call was parked — it must never take the fetch mutex (Decision 37)")
+		t.Fatal("MarkRead() did not complete while a List() call was parked — it must never take the fetch mutex")
 	}
 
 	releaseHandler()
@@ -1281,7 +1274,7 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_NextListSendsNoValidato
 		t.Fatalf("second List() error = %v", err)
 	}
 	if secondIfModifiedSince != "" {
-		t.Errorf("second List() sent If-Modified-Since = %q, want none — a fetch that was in flight when the mark landed must not be cached as already reflecting it (Decision 37, snapshot-once)", secondIfModifiedSince)
+		t.Errorf("second List() sent If-Modified-Since = %q, want none — a fetch that was in flight when the mark landed must not be cached as already reflecting it (snapshot-once)", secondIfModifiedSince)
 	}
 	if len(second) != 1 {
 		t.Fatalf("second List() len = %d, want 1", len(second))
@@ -1292,20 +1285,19 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_NextListSendsNoValidato
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 2 / Decisions 28 and 37: cacheValid is computed before
-// the request goes out, so it can be stale by the time a 304 comes back — the
-// marker is lock-free, so a mark can complete in exactly that window. Serving
-// cloneThreads(c.cached) on the strength of the pre-request check hands back
-// the dismissed row once.
+// cacheValid is computed before the request goes out, so it can be stale by the
+// time a 304 comes back — the marker is lock-free, so a mark can complete in
+// exactly that window. Serving cloneThreads(c.cached) on the strength of the
+// pre-request check hands back the dismissed row once.
 //
 // The generation is re-checked against the snapshot at the serve site, which
 // makes this 304 unprompted by definition (the next call would offer no
-// validator), so Decision 28's error path applies — and it must still wrap the
-// underlying *APIError with %w so errors.As recovers StatusCode == 304.
+// validator), so the error path applies — and it must still wrap the underlying
+// *APIError with %w so errors.As recovers StatusCode == 304.
 //
 // The If-Modified-Since assertion is what stops this test being vacuous: it
 // proves the cache really was considered valid when the request went out, so
-// the narrow post-request window is what is being exercised — not item 1's
+// the narrow post-request window is what is being exercised — not the
 // already-invalid-at-entry path.
 // ---------------------------------------------------------------------------
 
@@ -1380,7 +1372,7 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_304IsNotServedFromCache
 			t.Fatalf("MarkRead() error = %v, want nil", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("MarkRead() did not complete while a List() call was parked — it must never take the fetch mutex (Decision 37)")
+		t.Fatal("MarkRead() did not complete while a List() call was parked — it must never take the fetch mutex")
 	}
 
 	releaseHandler()
@@ -1397,7 +1389,7 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_304IsNotServedFromCache
 	}
 	var apiErr *APIError
 	if !errors.As(got.err, &apiErr) {
-		t.Fatalf("errors.As did not recover *APIError from %v — Decision 28 requires the underlying error to stay wrapped with %%w", got.err)
+		t.Fatalf("errors.As did not recover *APIError from %v — the underlying error must stay wrapped with %%w", got.err)
 	}
 	if apiErr.StatusCode != http.StatusNotModified {
 		t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, http.StatusNotModified)
@@ -1405,17 +1397,17 @@ func TestNotificationsClient_MarkRead_DuringInFlightList_304IsNotServedFromCache
 }
 
 // ---------------------------------------------------------------------------
-// Review feedback item 6 / Decision 37: the bump's timing is documented on
-// MarkRead ("a failed request changed nothing server-side and does not bump
-// cacheGen") but nothing pinned it — moving cacheGen.Add(1) to before the HTTP
-// call, or applying it on a failed mark too, both SURVIVED the suite. Either
-// mutation costs a full refetch of every page for a mark that never happened.
+// The bump's timing is documented on MarkRead ("a failed request changed
+// nothing server-side and does not bump cacheGen") but nothing pinned it —
+// moving cacheGen.Add(1) to before the HTTP call, or applying it on a failed
+// mark too, both SURVIVED the suite. Either mutation costs a full refetch of
+// every page for a mark that never happened.
 //
 // After a 404 MarkRead the cache is untouched, so the next List must still
 // offer its validator and must still be allowed to serve the 304 that comes
 // back. The second GET answers 304 unconditionally: under either mutation the
-// cache is invalid, no validator is sent, and that 304 is unprompted — so
-// Decision 28's error path fires and the assertions below fail loudly.
+// cache is invalid, no validator is sent, and that 304 is unprompted — so the
+// error path fires and the assertions below fail loudly.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_MarkRead_FailedMark_DoesNotInvalidateCache(t *testing.T) {
@@ -1460,15 +1452,15 @@ func TestNotificationsClient_MarkRead_FailedMark_DoesNotInvalidateCache(t *testi
 		t.Fatalf("second List() error = %v, want nil — a failed mark changed nothing server-side, so the cache and its validator must survive and the 304 must still be served from them", err)
 	}
 	if secondIfModifiedSince != lastModified {
-		t.Errorf("second List() sent If-Modified-Since = %q, want %q — a failed mark must not invalidate the cache (Decision 37)", secondIfModifiedSince, lastModified)
+		t.Errorf("second List() sent If-Modified-Since = %q, want %q — a failed mark must not invalidate the cache", secondIfModifiedSince, lastModified)
 	}
 	if len(second) != 1 || !second[0].Unread {
 		t.Errorf("second List() = %+v, want the single unread cached row", second)
 	}
 }
 
-// Decision 37 / concurrency: MarkRead must not block while a List is in
-// flight. That contract is pinned once, at the adapter boundary, by
+// Concurrency: MarkRead must not block while a List is in flight. That contract
+// is pinned once, at the adapter boundary, by
 // TestAdapter_MarkRead_DoesNotBlockOnInFlightList in
 // adapter_notifications_test.go — it drives Adapter.List/Adapter.MarkRead,
 // which forward straight into this file's List/MarkRead, so it covers both
@@ -1479,15 +1471,14 @@ func TestNotificationsClient_MarkRead_FailedMark_DoesNotInvalidateCache(t *testi
 // mutants, so it was folded into that one test.
 
 // ---------------------------------------------------------------------------
-// Optional query params (participating, since) — not part of the acceptance
-// criteria's numbered list but documented in the API shapes section.
+// Optional query params (participating, since).
 //
-// Review feedback item 10: the original version of this test computed "want"
-// with the same since.Format(time.RFC3339) call the production code makes,
-// on an already-UTC fixture — so the ".UTC()" normalisation in buildPath was
-// never actually pinned; a production bug that dropped the .UTC() call would
-// still pass on a UTC-already input. Asserts the literal expected string and
-// adds a non-UTC input row so the normalisation itself is exercised.
+// The original version of this test computed "want" with the same
+// since.Format(time.RFC3339) call the production code makes, on an already-UTC
+// fixture — so the ".UTC()" normalisation in buildPath was never actually
+// pinned; a production bug that dropped the .UTC() call would still pass on a
+// UTC-already input. Asserts the literal expected string and adds a non-UTC
+// input row so the normalisation itself is exercised.
 // ---------------------------------------------------------------------------
 
 func TestNotificationsClient_List_ParticipatingAndSince(t *testing.T) {

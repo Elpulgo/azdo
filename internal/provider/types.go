@@ -251,51 +251,49 @@ type WorkItemComment struct {
 }
 
 // Notification is the neutral representation of a single inbox notification
-// (a GitHub thread today; an Azure-derived row in phase 2).
+// (a GitHub thread today; an Azure-derived row in a future backend).
 //
-// Identity is provider-qualified from day one (Decision 14): Kind + Scope +
-// native ID, never a bare ID. Scope carries the repo the notification
-// belongs to (GitHub's "owner/repo", mirroring the PullRequest convention),
-// so the same numeric thread ID from two different repos — or the same
-// numeric ID reused by a future Azure-derived key — can never collide in a
-// merged feed. Views read the repo for the dynamic repo column off
-// Identity.Scope / Identity.ScopeDisplay, the same fields the PR list uses
-// for its project column.
+// Identity is provider-qualified: Kind + Scope + native ID, never a bare ID.
+// Scope carries the repo the notification belongs to (GitHub's "owner/repo",
+// mirroring the PullRequest convention), so the same numeric thread ID from
+// two different repos — or the same numeric ID reused by a future
+// Azure-derived key — can never collide in a merged feed. Views read the repo
+// for the dynamic repo column off Identity.Scope / Identity.ScopeDisplay, the
+// same fields the PR list uses for its project column.
 //
 // SameItem's collision-safety here does not actually depend on Scope being
 // populated: GitHub notification thread IDs are globally unique on the wire,
-// so even a row with an empty Scope (e.g. a partial/absent repository
-// payload) cannot collide with another GitHub row on ID alone. Scope only
-// starts to matter once a second backend's IDs are not globally unique —
-// phase 2's Azure-derived keys are exactly that case, which is why Scope is
-// still compared unconditionally rather than only when non-empty.
+// so even a row with an empty Scope (e.g. a partial/absent repository payload)
+// cannot collide with another GitHub row on ID alone. Scope only starts to
+// matter once a second backend's IDs are not globally unique — a future
+// Azure-derived key is exactly that case, which is why Scope is still compared
+// unconditionally rather than only when non-empty.
 type Notification struct {
 	Identity Identity
 
 	Title string
 
 	// Reason is why this notification reached the inbox. Populated by the
-	// adapter's wire→enum mapping (task 5); see NotificationReason for the
-	// settled value set (Decision 18).
+	// adapter's wire→enum mapping; see NotificationReason for the value set.
 	Reason NotificationReason
 
-	// Read and Done both exist in phase 1 even though phase 1 keeps no local
-	// state (Decision 15). GitHub fills them from the server; Azure fills
-	// them from local state in phase 2. Do not simplify them away while
-	// GitHub is the only source.
+	// Read and Done both exist even though no local state is kept today.
+	// GitHub fills them from the server; a future Azure backend would fill
+	// them from local state. Do not simplify them away while GitHub is the
+	// only source.
 	Read bool
 	Done bool
 
-	// UpdatedAt drives the merged feed's newest-first sort (Decision 7).
+	// UpdatedAt drives the merged feed's newest-first sort.
 	UpdatedAt time.Time
 
-	// WebURL is the browser URL to open on `o`, resolved from the wire
-	// subject at the adapter boundary (task 5). It is a best-effort
-	// resolution, not a guaranteed per-item link: it falls back to the
-	// notification's repository URL when the subject type is unrecognised,
-	// when the wire subject carries no URL, and when the URL's trailing id
-	// segment fails shape validation (Decision 33/36 — a wrong-but-clickable
-	// 404 is worse than the repo page). A `Release` subject always resolves to
+	// WebURL is the browser URL to open on `o`, resolved from the wire subject
+	// at the adapter boundary. It is a best-effort resolution, not a guaranteed
+	// per-item link: it falls back to the notification's repository URL when the
+	// subject type is unrecognised, when the wire subject carries no URL, and
+	// when the URL's trailing id segment fails shape validation (a
+	// wrong-but-clickable 404 is worse than the repo page). A `Release` subject
+	// always resolves to
 	// the repository's `/releases` list page, since the per-release route
 	// needs a tag name the notification payload does not carry. It is "" when
 	// the wire carries no usable repository URL at all; consumers must treat

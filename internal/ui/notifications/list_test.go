@@ -23,9 +23,9 @@ import (
 
 // mkNotification builds a fixture row with just the fields the pane cares
 // about. scopeDisplay is left equal to scope unless the caller sets it
-// explicitly on the returned value, mirroring MapNotification's fallback
-// (Decision 35) — tests that need the mapper's one unfixable case (an empty
-// repository payload) zero it out explicitly.
+// explicitly on the returned value, mirroring MapNotification's fallback —
+// tests that need the mapper's one unfixable case (an empty repository
+// payload) zero it out explicitly.
 func mkNotification(id, scope, title string, reason provider.NotificationReason, read bool, updatedAt time.Time) provider.Notification {
 	return provider.Notification{
 		Identity: provider.Identity{
@@ -54,7 +54,7 @@ func keyRune(r rune) tea.KeyMsg {
 //
 // Without it lipgloss resolves the Ascii profile in a test binary, so Render is
 // the identity function and every styled-vs-unstyled comparison collapses into
-// a tautology (decision 56). Style-object assertions are the primary form and
+// a tautology. Style-object assertions are the primary form and
 // need no profile; this is for the few places where only bytes are reachable —
 // that titleCell applies its style at all, and that the "—" fallback is
 // substituted *before* styling rather than after. Mirrors
@@ -219,7 +219,7 @@ func TestToRows_CellCountMatchesColumnCount(t *testing.T) {
 // style change there was nothing at all to see. Reported from real use.
 //
 // The assertion is on the glyph rune rather than on rendered escape
-// sequences, per decision 56: lipgloss resolves the Ascii profile in a test
+// sequences: lipgloss resolves the Ascii profile in a test
 // binary, so a styled-vs-unstyled byte comparison is vacuous. Emphasis is
 // asserted separately, on the style object, in
 // TestReadStyle_UnreadEmphasised_ReadPlain.
@@ -239,7 +239,7 @@ func TestToRows_UnreadGlyph_PresentOnlyForUnread(t *testing.T) {
 
 // TestReadStyle_UnreadEmphasised_ReadPlain asserts the marker's emphasis on
 // the lipgloss.Style object, which no color profile can flatten — the same
-// technique, and the same reason, as titleStyle's own test (decision 56).
+// technique, and the same reason, as titleStyle's own test.
 //
 // It also pins the marker and the title to the *same* named style, so a theme
 // change can never emphasise one and not the other.
@@ -313,7 +313,7 @@ func TestView_RendersAfterWindowSizeMsg_MultiRepo(t *testing.T) {
 
 // TestTitleStyle_ReadVsUnread_NamedStyles is the primary convention 6
 // assertion, and it deliberately inspects the *style object* rather than
-// rendered text (decision 56). lipgloss resolves the Ascii profile in a test
+// rendered text. lipgloss resolves the Ascii profile in a test
 // binary, so Render is the identity function there and styled/unstyled bytes
 // are identical — which is why the previous rendered-string comparisons stayed
 // green after the entire unread branch was deleted.
@@ -420,9 +420,9 @@ func TestToRows_TitleCell_UsesTitleStyleForBothStates(t *testing.T) {
 	}
 }
 
-// ─── Empty Title renders "—" (decision 58) ───────────────────────────────────
+// ─── Empty Title renders "—" ─────────────────────────────────────────────────
 
-// TestTitleCell_EmptyTitle_RendersDash pins decision 58's dash-before-styling
+// TestTitleCell_EmptyTitle_RendersDash pins the dash-before-styling
 // order: an untitled *unread* row must still show the dash, so dashIfEmpty has
 // to run before the style is applied rather than after.
 //
@@ -506,7 +506,7 @@ func TestToRows_EmptyScopeDisplay_RendersDash(t *testing.T) {
 	}
 }
 
-// ─── f reason filter: cycle mechanics (decision 53) ──────────────────────────
+// ─── f reason filter: cycle mechanics ───────────────────────────────────────
 
 func TestPresentReasons_OnlyReasonsInFeed_NotFullEnum(t *testing.T) {
 	feed := []provider.Notification{
@@ -550,7 +550,7 @@ func TestPresentReasons_NeverIncludesUnknown(t *testing.T) {
 
 	for _, r := range present {
 		if r == provider.NotificationReasonUnknown {
-			t.Fatalf("presentReasons = %v, must never include NotificationReasonUnknown (decision 53)", present)
+			t.Fatalf("presentReasons = %v, must never include NotificationReasonUnknown", present)
 		}
 	}
 	if len(present) != 1 || present[0] != provider.NotificationReasonOther {
@@ -598,8 +598,7 @@ func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
 
 	// Never once must the cycle have stopped on Unknown.
 	// (Covered structurally above since Mentioned/Subscribed/all are the
-	// only three positions visited, but restated explicitly per the task's
-	// criterion.)
+	// only three positions visited, but restated explicitly.)
 	if m.reasonFilter == provider.NotificationReasonUnknown && m.reasonFilterActive {
 		t.Fatal("cycle must never stop on NotificationReasonUnknown")
 	}
@@ -607,18 +606,16 @@ func TestCycleReasonFilter_EnumOrder_AllPositionReachable(t *testing.T) {
 
 // ─── f filter collapse: dynamic column shrink + cursor survival ─────────────
 //
-// This is the direction that matters most (the task's own words): the expand
-// direction passing does not prove the shrink direction. Start multi-repo
-// with the cursor on a non-first row, cycle until the feed narrows to a
-// single repo, and assert View() does not panic and the cursor/selection
-// survives — still on the *same item*, per decision 55.
+// The shrink direction is what matters: the expand direction passing does not
+// prove it. Start multi-repo with the cursor on a non-first row, cycle until
+// the feed narrows to a single repo, and assert View() does not panic and the
+// cursor/selection survives — still on the *same item*.
 //
 // This test previously also asserted that the Repo column *disappeared* on
-// the collapse. That was the documented intent at the time and it is now
-// inverted: the column is unconditional, and the assertion below pins it
-// surviving. See notificationColumns for why — in short, a column vanishing
-// as a side effect of filtering hid the answer the filter was asked for, and
-// was reported as a bug from real use.
+// the collapse; that intent is now inverted: the column is unconditional, and
+// the assertion below pins it surviving. A column vanishing as a side effect of
+// filtering hid the answer the filter was asked for, and was reported as a bug
+// from real use.
 //
 // The fixture is shaped so that no accidental cursor behaviour can satisfy the
 // same-item assertion: ≥2 rows survive the collapse, the pre-filter cursor
@@ -688,7 +685,7 @@ func TestCycleReasonFilter_Collapse_RepoColumnSurvives_CursorSurvives(t *testing
 
 	// (c) the cursor is still on the *same item* (id "3"), not merely in
 	// range: listview.setColumnsAndRows restores the cursor positionally, so
-	// without the pane's identity-based restore (decision 55) the saved index
+	// without the pane's identity-based restore the saved index
 	// 2 would now point at id "5".
 	idx := m.list.SelectedIndex()
 	if idx < 0 || idx >= len(visible) {
@@ -703,8 +700,9 @@ func TestCycleReasonFilter_Collapse_RepoColumnSurvives_CursorSurvives(t *testing
 }
 
 // TestCycleReasonFilter_Collapse_CursorClamped_ItemDropped covers the other
-// half of decision 55: when the cursor's own row does NOT survive the filter
-// there is no identity to restore to, and listview's positional clamp is the
+// half of the cursor-restore behaviour: when the cursor's own row does NOT
+// survive the filter there is no identity to restore to, and listview's
+// positional clamp is the
 // correct behaviour. The saved cursor (index 3) is past the end of the
 // 2-row result, so it must clamp to the last row (index 1) — which also pins
 // that the clamp is to len(rows)-1 and not to 0.
@@ -742,7 +740,7 @@ func TestCycleReasonFilter_Collapse_CursorClamped_ItemDropped(t *testing.T) {
 }
 
 // TestSetFeed_PreservesSelectedItemAcrossReorder covers the poll-refresh
-// direction of decision 55: SetFeed replaces the whole feed, and a row that
+// direction: SetFeed replaces the whole feed, and a row that
 // moved (the merge sorts newest-first, so ties and new arrivals reshuffle
 // constantly) must keep the cursor rather than keeping the index.
 func TestSetFeed_PreservesSelectedItemAcrossReorder(t *testing.T) {
@@ -770,7 +768,7 @@ func TestSetFeed_PreservesSelectedItemAcrossReorder(t *testing.T) {
 	}
 }
 
-// ─── f filter: observability (decision 57) ──────────────────────────────────
+// ─── f filter: observability ────────────────────────────────────────────────
 
 func TestReasonFilter_Accessor_ReportsCyclePosition(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
@@ -797,10 +795,10 @@ func TestReasonFilter_Accessor_ReportsCyclePosition(t *testing.T) {
 	}
 }
 
-// TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox is decision 57's
-// measured failure: filter to a reason, then poll in a feed that has no rows of
-// that reason. Without the indicator the pane renders the plain "no
-// notifications" text while a user-set filter is what hides every row.
+// TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox: filter to a reason,
+// then poll in a feed that has no rows of that reason. Without the indicator the
+// pane renders the plain "no notifications" text while a user-set filter is what
+// hides every row.
 func TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -833,16 +831,13 @@ func TestView_ActiveFilter_RendersIndicator_NotBareEmptyInbox(t *testing.T) {
 	}
 }
 
-// ─── r now drives a real fetch (task 15 removes decision 58's stopgap) ──────
+// ─── r now drives a real fetch ──────────────────────────────────────────────
 
-// TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves is
-// TestUpdate_RKey_DoesNotStrandSpinner's replacement: decision 58's stopgap
-// swallowed `r` because the Fetch hook was a stub that would never resolve.
-// Task 15 wires a real Fetch (fetchNotifications), which inverts the
-// premise — pressing `r` legitimately shows the loading spinner immediately
-// (listview's own "r" handling turns it on before batching config.Fetch()),
-// and resolving the returned cmd must clear it again and land the fetch's
-// rows, exactly like the initial Init()-triggered fetch does.
+// TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves: `r` drives a real
+// Fetch (fetchNotifications), so pressing `r` legitimately shows the loading
+// spinner immediately (listview's own "r" handling turns it on before batching
+// config.Fetch()), and resolving the returned cmd must clear it again and land
+// the fetch's rows, exactly like the initial Init()-triggered fetch does.
 func TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves(t *testing.T) {
 	marker := &fakeMarker{listItems: []provider.Notification{
 		mkNotification("1", "owner/repo", "Freshly fetched", provider.NotificationReasonMentioned, false, fixedNow),
@@ -885,10 +880,9 @@ func TestUpdate_RKey_TriggersRealFetch_ShowsLoadingThenResolves(t *testing.T) {
 }
 
 // TestUpdate_RKey_NilMarker_ResolvesWithoutStranding pins the nil-marker
-// half: Decision 61's reachable capability-absent/disabled-pane state must
-// not strand the spinner either, even though there is no real fetch to
-// perform — fetchNotifications' nil-marker branch still resolves
-// synchronously to an empty, error-free result.
+// half: the capability-absent/disabled-pane state must not strand the spinner
+// either, even though there is no real fetch to perform — fetchNotifications'
+// nil-marker branch still resolves synchronously to an empty, error-free result.
 func TestUpdate_RKey_NilMarker_ResolvesWithoutStranding(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -917,7 +911,7 @@ func TestUpdate_RKey_NilMarker_ResolvesWithoutStranding(t *testing.T) {
 // call to FilterNotifications (mutation survivor S4): the closure must not
 // hand the marker's raw rows straight to the pane, or a repo the config
 // excludes would flash back onto screen on every refresh, undoing the
-// initial-load filtering task 10 already guarantees.
+// initial-load filtering.
 func TestUpdate_RKey_RealFetch_AppliesFilterNotifications(t *testing.T) {
 	marker := &fakeMarker{listItems: []provider.Notification{
 		mkNotification("1", "owner/repo", "Keep me", provider.NotificationReasonMentioned, false, fixedNow),
@@ -997,7 +991,7 @@ func flattenBatch(cmd tea.Cmd) []tea.Msg {
 
 // TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll pins the `idx < 0`
 // branch: a poll can replace the feed with one that has no rows of the
-// currently selected reason (decision 57's measured scenario), and the next `f`
+// currently selected reason, and the next `f`
 // must then return to the "all" position rather than jumping to the first
 // present reason — which would silently move the user's filter sideways.
 func TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll(t *testing.T) {
@@ -1033,9 +1027,9 @@ func TestCycleReasonFilter_SelectedReasonVanished_ResetsToAll(t *testing.T) {
 // ─── listview.ViewMode sanity: `f` is a no-op while a detail view is open ───
 
 // TestUpdate_FKey_NoopOutsideListMode drives the pane into ViewDetail and then
-// presses `f`, asserting the cycle does not advance. Per decision 57 this pane
-// sets no FilterFunc, so listview's search mode is unreachable in phase 1 and
-// the ViewList half of the guard is the only testable one.
+// presses `f`, asserting the cycle does not advance. This pane sets no
+// FilterFunc, so listview's search mode is unreachable and the ViewList half of
+// the guard is the only testable one.
 func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -1068,18 +1062,18 @@ func TestUpdate_FKey_NoopOutsideListMode(t *testing.T) {
 // meant to forward, on a seeded feed and in both view modes the pane can reach.
 //
 // Honest limitation, stated so nobody reads more into this test than it gives:
-// in phase 1 all four *are* the zero value whatever the pane does. HasContextBar
+// today all four *are* the zero value whatever the pane does. HasContextBar
 // resolves through listview.Model.config.HasContextBar, which this pane leaves
 // nil (always false), and the other three only return non-zero when
-// `viewMode == ViewDetail && detail != nil` — unreachable here because decision
-// 3 gives the pane no detail view, so its EnterDetail hook returns a nil
-// DetailView. Replacing any of the four with a hardcoded zero literal is
-// therefore a genuine equivalent today, not an unpinned regression.
+// `viewMode == ViewDetail && detail != nil` — unreachable here because the pane
+// has no detail view, so its EnterDetail hook returns a nil DetailView.
+// Replacing any of the four with a hardcoded zero literal is therefore a genuine
+// equivalent today, not an unpinned regression.
 //
 // What this does pin is the delegation itself: any forwarder that starts
 // returning something *other* than its listview counterpart fails, including
-// after task 13 gives the pane a real detail view and turns these into live,
-// non-zero values. The `!= m.list.X()` form is deliberate — comparing against a
+// once the pane gains a real detail view and turns these into live, non-zero
+// values. The `!= m.list.X()` form is deliberate — comparing against a
 // hand-written zero constant would keep passing when listview's own contract
 // changes underneath.
 func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
@@ -1123,8 +1117,8 @@ func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
 			if got, want := m.HasContextBar(), m.list.HasContextBar(); got != want {
 				t.Errorf("HasContextBar() = %v, listview has %v", got, want)
 			}
-			// IsSearching is deliberately not covered here: decision 57 leaves
-			// FilterFunc nil, so listview's search mode is unreachable and both
+			// IsSearching is deliberately not covered here: FilterFunc is left
+			// nil, so listview's search mode is unreachable and both
 			// branches return false permanently. It is a confirmed genuine
 			// equivalent, and a row asserting false == false would only look
 			// like coverage.
@@ -1132,7 +1126,7 @@ func TestChromeForwarders_MatchUnderlyingListview(t *testing.T) {
 	}
 }
 
-// ─── Task 13: the four render states (decisions 11, 17, 57, 58, 63) ─────────
+// ─── The four render states ─────────────────────────────────────────────────
 //
 // Each state below is asserted by its own test, and every test checks both
 // its own state's discriminating substring AND the absence of the other three
@@ -1166,10 +1160,10 @@ func assertOtherStatesAbsent(t *testing.T, view string, own string) {
 	}
 }
 
-// TestView_EmptyInbox_ReadsAsClear_NotError pins decision 63's first state:
+// TestView_EmptyInbox_ReadsAsClear_NotError pins the first state:
 // the feed itself has no rows and no `f` filter is active. It must read as
-// "you're clear", never as an error, and per decision 58's `r` stopgap must
-// not tell the user to press a key this pane currently swallows.
+// "you're clear", never as an error, and must not tell the user to press a key
+// this pane currently swallows.
 func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -1181,15 +1175,14 @@ func TestView_EmptyInbox_ReadsAsClear_NotError(t *testing.T) {
 		t.Errorf("empty-inbox view = %q, want to contain %q", view, emptyInboxMarker)
 	}
 	if strings.Contains(view, pressRToRefreshText) {
-		t.Errorf("empty-inbox view = %q, must not tell the user to press r (decision 58: r is swallowed)", view)
+		t.Errorf("empty-inbox view = %q, must not tell the user to press r (r is swallowed)", view)
 	}
 	assertOtherStatesAbsent(t, view, emptyInboxMarker)
 }
 
-// TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter pins decision
-// 63's second, genuinely reachable state (decision 57's measured bug): the
-// feed has rows, but the active `f` reason filter matches none of them. This
-// must not render as the plain empty-inbox text.
+// TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter pins the second,
+// genuinely reachable state: the feed has rows, but the active `f` reason filter
+// matches none of them. This must not render as the plain empty-inbox text.
 func TestView_FilterEmpty_DistinctFromEmptyInbox_NamesActiveFilter(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -1257,16 +1250,14 @@ func TestView_ActiveFilter_GenuinelyEmptyFeed_ReadsAsClear_NotFilterEmpty(t *tes
 	assertOtherStatesAbsent(t, view, emptyInboxMarker)
 }
 
-// TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner pins
-// decision 63's error state for the generic-failure branch task 19
-// introduces. The error is constructed from a real *github.Adapter with no
-// NotificationsClient configured, so the nil-client message asserted here is
-// the adapter's actual production string, not a hand-typed guess that could
-// drift from it. That error is a plain fmt.Errorf, not a *github.APIError, so
-// errors.As in errorBody cannot recover one — this is exactly the generic
-// case task 19 requires must never show decision 17's scope banner, since
-// doing so here would misleadingly blame a missing scope for what is
-// actually a wiring gap.
+// TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner pins the
+// error state for the generic-failure branch. The error is constructed from a
+// real *github.Adapter with no NotificationsClient configured, so the nil-client
+// message asserted here is the adapter's actual production string, not a
+// hand-typed guess that could drift from it. That error is a plain fmt.Errorf,
+// not a *github.APIError, so errors.As in errorBody cannot recover one — this
+// generic case must never show the scope banner, since doing so here would
+// misleadingly blame a missing scope for what is actually a wiring gap.
 //
 // The feed is seeded with a row before HandleFetchResult(nil, err) lands, to
 // pin that the error state pre-empts the table view rather than rendering
@@ -1299,7 +1290,7 @@ func TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner(t *testing
 		t.Errorf("error view = %q, want to fold in the adapter's real nil-client message %q", view, nilClientMsgMarker)
 	}
 	if strings.Contains(view, tokenScopeSkeleton) {
-		t.Errorf("error view = %q, must NOT carry decision 17's scope banner for a generic/nil-client failure", view)
+		t.Errorf("error view = %q, must NOT carry the scope banner for a generic/nil-client failure", view)
 	}
 	if strings.Contains(view, "Must not render once errored") {
 		t.Errorf("error view = %q, must not fall through to stale table rows", view)
@@ -1328,7 +1319,7 @@ func TestView_Error_ScopeError_WithHeaders_NamesGrantedAndRequiredScopes(t *test
 		t.Errorf("scope-error view = %q, want to contain %q", view, errorMarker)
 	}
 	if !strings.Contains(view, tokenScopeSkeleton) {
-		t.Errorf("scope-error view = %q, want decision 17's scope skeleton naming notifications", view)
+		t.Errorf("scope-error view = %q, want the scope skeleton naming notifications", view)
 	}
 	if !strings.Contains(view, "repo,read:org") {
 		t.Errorf("scope-error view = %q, want the granted scopes named concretely", view)
@@ -1364,7 +1355,7 @@ func TestView_Error_ScopeError_Headerless_TellsUserToSwitchToAClassicToken(t *te
 		t.Errorf("headerless-scope-error view = %q, want to contain %q", view, errorMarker)
 	}
 	if !strings.Contains(view, tokenScopeSkeleton) {
-		t.Errorf("headerless-scope-error view = %q, want decision 17's scope skeleton naming notifications", view)
+		t.Errorf("headerless-scope-error view = %q, want the scope skeleton naming notifications", view)
 	}
 	if !strings.Contains(view, "fine-grained") {
 		t.Errorf("headerless-scope-error view = %q, want it to name the likely cause (a fine-grained token)", view)
@@ -1425,11 +1416,11 @@ func TestView_Error_ExpiredToken_DistinctFromScopeError_AndGeneric(t *testing.T)
 	assertOtherStatesAbsent(t, view, errorMarker)
 }
 
-// TestView_Error_ThreeVariants_ArePairwiseDistinguishable restates decision
-// 63's mutual-distinguishability rule across the three error-body variants
-// task 19 introduces: the 403-scope render, the 401-expired render, and the
-// generic render must each carry content the other two do not, even though
-// all three share errorMarker and disableHint's common suffix.
+// TestView_Error_ThreeVariants_ArePairwiseDistinguishable restates the
+// mutual-distinguishability rule across the three error-body variants:
+// the 403-scope render, the 401-expired render, and the generic render must
+// each carry content the other two do not, even though all three share
+// errorMarker and disableHint's common suffix.
 func TestView_Error_ThreeVariants_ArePairwiseDistinguishable(t *testing.T) {
 	newModel := func() Model {
 		m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
@@ -1507,7 +1498,7 @@ func TestView_Error_RateLimited403_DoesNotClaimMissingScope(t *testing.T) {
 // TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty covers the
 // ordering gap the row-seeded test above cannot: an errored fetch whose feed
 // was never populated at all (items == 0) must still render the error state,
-// not decision 63's empty-inbox text, even though both share the same
+// not the empty-inbox text, even though both share the same
 // "len(items) == 0" precondition. View()'s error check must run before its
 // items-emptiness check for this to hold.
 func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
@@ -1558,7 +1549,7 @@ func newDisableTestConfig(t *testing.T, preDisabled string) (*config.Config, str
 	return cfg, configPath
 }
 
-// errorPane builds a Model already in decision 63's error state, wired to
+// errorPane builds a Model already in the error state, wired to
 // cfg, ready to receive disablePaneKey presses.
 func errorPane(t *testing.T, cfg *config.Config) Model {
 	t.Helper()
@@ -1618,9 +1609,9 @@ func TestDisableAction_AnyOtherKey_CancelsArm_NoWrite(t *testing.T) {
 
 // TestDisableAction_SecondPress_WritesConfig_AppendingToExistingEntries pins
 // the confirmed write: disabled_panes gains "notifications" via Config.Save()
-// while preserving a pre-existing entry (task 18's round-trip preservation
-// must not be bypassed by a second write path), verified by reloading the
-// file from disk rather than trusting the in-memory struct alone.
+// while preserving a pre-existing entry (round-trip preservation must not be
+// bypassed by a second write path), verified by reloading the file from disk
+// rather than trusting the in-memory struct alone.
 func TestDisableAction_SecondPress_WritesConfig_AppendingToExistingEntries(t *testing.T) {
 	cfg, configPath := newDisableTestConfig(t, "pipelines")
 	m := errorPane(t, cfg)
@@ -1749,12 +1740,11 @@ func TestDisableAction_UnreachableOutsideErrorState(t *testing.T) {
 	}
 }
 
-// TestView_CapabilityUnsupported_DistinctFromOtherThreeStates pins decision
-// 63's third state at the pane level, per its own instruction: this state is
-// unreachable through the tab in phase 1 (see SetCapabilityUnsupported's doc
-// comment), so it is asserted here by putting the pane in that state
-// directly, rather than as an app-level test that could never fail for the
-// right reason.
+// TestView_CapabilityUnsupported_DistinctFromOtherThreeStates pins the third
+// state at the pane level: this state is currently unreachable through the tab
+// (see SetCapabilityUnsupported's doc comment), so it is asserted here by
+// putting the pane in that state directly, rather than as an app-level test
+// that could never fail for the right reason.
 func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -1780,7 +1770,7 @@ func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
 // SetItems, and SetItems does clear the field. Rewriting that forward as
 // `m.list = m.list.HandleFetchResult(items, nil)` looks like a harmless
 // simplification, keeps the whole suite green without this test, and silently
-// makes one failed fetch permanent. Task 15's poller is what calls this.
+// makes one failed fetch permanent. The poller is what calls this.
 func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
 	adapter := github.NewAdapterWithNotifications(nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
@@ -1813,20 +1803,19 @@ func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
 
 // TestView_Loading_DoesNotClaimCaughtUp pins View()'s !m.list.Loading()
 // conjunct: a fetch in flight with zero rows so far must show listview's
-// spinner, never decision 63's "you're all caught up" text, which would be an
-// outright lie while data is still on the way.
+// spinner, never the "you're all caught up" text, which would be an outright
+// lie while data is still on the way.
 //
-// The `r` message goes to m.list directly rather than through m.Update,
-// because the pane deliberately swallows `r` at its own level while the Fetch
-// hook is a stub (decision 58) — the state under test here is listview's
-// loading flag, not the pane's key handling.
+// The `r` message goes to m.list directly rather than through m.Update: the
+// state under test here is listview's loading flag, not the pane's key
+// handling.
 //
-// FORWARD: task 15 — this conjunct does NOT currently protect the *initial*
-// fetch. listview.Init sets the spinner visible but never sets m.loading
+// Known gap: this conjunct does NOT currently protect the *initial* fetch.
+// listview.Init sets the spinner visible but never sets m.loading
 // (listview.go's Init), so Loading() is false while the first fetch is in
-// flight and this pane will render "you're all caught up" during startup once
-// a real Fetch replaces the stub. Task 15 must set loading on the initial
-// fetch, or move this pane off listview's flag.
+// flight and this pane will render "you're all caught up" during startup. The
+// fix is to set loading on the initial fetch, or move this pane off listview's
+// flag.
 func TestView_Loading_DoesNotClaimCaughtUp(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -1848,7 +1837,7 @@ func TestView_Loading_DoesNotClaimCaughtUp(t *testing.T) {
 }
 
 // TestView_CapabilityUnsupported_OutranksError pins the documented priority
-// order between decision 63's first two states. Every other state pair is
+// order between the first two states. Every other state pair is
 // already distinguished by assertOtherStatesAbsent, but capability and error
 // are the one pair no other fixture sets *together*, so swapping their two
 // checks in View() is otherwise a genuine equivalent that no test can see.
@@ -1873,28 +1862,27 @@ func TestView_CapabilityUnsupported_OutranksError(t *testing.T) {
 	assertOtherStatesAbsent(t, view, capabilityMarker)
 }
 
-// ─── task 14: u mark-read / d mark-done, optimistic update + rollback ───────
+// ─── u mark-read / d mark-done, optimistic update + rollback ────────────────
 
-// fakeMarker is a test double for provider.NotificationSource (task 14). It
-// records every MarkRead/MarkDone call it receives — including the exact
-// Identity — and returns readErr/doneErr (nil unless a test sets them) so
-// failure/rollback paths can be driven deterministically.
+// fakeMarker is a test double for provider.NotificationSource. It records every
+// MarkRead/MarkDone call it receives — including the exact Identity — and
+// returns readErr/doneErr (nil unless a test sets them) so failure/rollback
+// paths can be driven deterministically.
 type fakeMarker struct {
 	readCalls []provider.Identity
 	doneCalls []provider.Identity
 	readErr   error
 	doneErr   error
 
-	// listItems/listErr/listCalls drive fetchNotifications' List call — added
-	// for task 15's real Fetch wiring (the r-key/Init path), which every
-	// pre-task-15 fakeMarker user leaves at their zero value (nil, nil, 0),
-	// unaffected by this addition.
+	// listItems/listErr/listCalls drive fetchNotifications' List call (the
+	// r-key/Init path); users that don't exercise it leave them at their zero
+	// value (nil, nil, 0).
 	listItems []provider.Notification
 	listErr   error
 	listCalls int
-	// listOpts records the opts passed on the most recent List call — added
-	// to pin fetchNotifications' NotifOptsFromConfig(cfg) forwarding (task
-	// 15's mutation survivor S5).
+	// listOpts records the opts passed on the most recent List call — pins
+	// fetchNotifications' NotifOptsFromConfig(cfg) forwarding (mutation
+	// survivor S5).
 	listOpts provider.NotifOpts
 }
 
@@ -1992,10 +1980,9 @@ func TestMarkRead_Failure_RollsBackOptimisticUpdate(t *testing.T) {
 		t.Errorf("after a failed MarkRead result, item = %+v, ok=%v, want Read rolled back to false", item, ok)
 	}
 
-	// Part C of task 19: the rollback above must not be silent — closes
-	// reviewer finding 6, where a failed u/d used to roll back with nothing
-	// telling the user why. GetStatusMessage() is the pane-level half of
-	// decisions 81/82; app_test.go covers the app-level status-bar half.
+	// The rollback above must not be silent — a failed u/d used to roll back
+	// with nothing telling the user why. GetStatusMessage() is the pane-level
+	// half; app_test.go covers the app-level status-bar half.
 	got := m.GetStatusMessage()
 	if !strings.Contains(got, "Mark read failed") || !strings.Contains(got, "boom") {
 		t.Errorf("GetStatusMessage() after failed MarkRead = %q, want it to name the action and the error", got)
@@ -2005,8 +1992,8 @@ func TestMarkRead_Failure_RollsBackOptimisticUpdate(t *testing.T) {
 // TestMarkRead_AlreadyRead_IsOneWay_NoSecondCall is the mutation target for
 // "u turned into a toggle": pressing u a second time on a row already marked
 // Read (via a prior successful u) must not issue a second MarkRead call and
-// must not flip Read back to false. Decision 13 gives GitHub no mark-unread
-// endpoint at all, so a toggle here would have nothing real to call.
+// must not flip Read back to false. GitHub has no mark-unread endpoint at all,
+// so a toggle here would have nothing real to call.
 func TestMarkRead_AlreadyRead_IsOneWay_NoSecondCall(t *testing.T) {
 	marker := &fakeMarker{}
 	want := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
@@ -2081,8 +2068,8 @@ func TestMarkDone_Success_RemovesRowAndStaysRemoved(t *testing.T) {
 
 // TestMarkDone_Failure_RestoresRow is the mutation target for "rollback made
 // a no-op" on the d path: a failed MarkDone must bring the row back, and by
-// dropping the override rather than re-inserting into m.feed (so decision
-// 45's merge order is never reproduced by hand).
+// dropping the override rather than re-inserting into m.feed (so the merge
+// order is never reproduced by hand).
 func TestMarkDone_Failure_RestoresRow(t *testing.T) {
 	marker := &fakeMarker{doneErr: errors.New("boom")}
 	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonReviewRequested, false, fixedNow)
@@ -2169,12 +2156,11 @@ func TestMarkRead_ExactIdentity_SelectsRowUnderCursor_NotFirstRow(t *testing.T) 
 	}
 }
 
-// TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack is the core task
-// 14 criterion from the spec's Unknowns section, and the mutation target for
-// both "dropping the override for a still-unread polled row" and "debounce
-// window forced to zero": a poll landing well inside the 30s window, still
-// reporting the row unread, must not un-mark it — the local intent is held
-// until the server agrees or the window elapses, whichever comes first.
+// TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack is the mutation
+// target for both "dropping the override for a still-unread polled row" and
+// "debounce window forced to zero": a poll landing well inside the 30s window,
+// still reporting the row unread, must not un-mark it — the local intent is
+// held until the server agrees or the window elapses, whichever comes first.
 func TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack(t *testing.T) {
 	marker := &fakeMarker{}
 	stale := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
@@ -2187,8 +2173,7 @@ func TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack(t *testing.T) {
 	}
 
 	// A poll lands 1s later (well inside the 30s debounce window) and still
-	// reports the row unread — GitHub's read state is eventually consistent
-	// (spec's Unknowns section).
+	// reports the row unread — GitHub's read state is eventually consistent.
 	m.now = func() time.Time { return fixedNow.Add(1 * time.Second) }
 	m = m.SetFeed([]provider.Notification{
 		mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow),
@@ -2203,7 +2188,7 @@ func TestMarkRead_PollWithinDebounceWindow_DoesNotFlickerBack(t *testing.T) {
 // TestMarkRead_PollAfterDebounceWindowExpires_TrustsPoll is the mutation
 // target for "debounce window forced to infinite": once the window has
 // genuinely elapsed, a poll that still disagrees must win — the override is
-// a short-lived buffer (decision 5), not a second permanent source of truth.
+// a short-lived buffer, not a second permanent source of truth.
 func TestMarkRead_PollAfterDebounceWindowExpires_TrustsPoll(t *testing.T) {
 	marker := &fakeMarker{}
 	stale := mkNotification("1", "owner/repo", "PR one", provider.NotificationReasonReviewRequested, false, fixedNow)
@@ -2379,8 +2364,8 @@ func TestCanTriage_Blocks_UAndD_WhenNoRows(t *testing.T) {
 	}
 }
 
-// TestCanTriage_Blocks_UAndD_WhenErrored pins that a pane in decision 63's
-// error render state swallows u/d rather than acting on whatever stale items
+// TestCanTriage_Blocks_UAndD_WhenErrored pins that a pane in the error render
+// state swallows u/d rather than acting on whatever stale items
 // listview.HandleFetchResult left behind (listview never clears m.items on
 // its error path).
 func TestCanTriage_Blocks_UAndD_WhenErrored(t *testing.T) {
@@ -2408,7 +2393,7 @@ func TestCanTriage_Blocks_UAndD_WhenErrored(t *testing.T) {
 }
 
 // TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported pins the third gate:
-// decision 63's capability-unsupported state must also block u/d.
+// the capability-unsupported state must also block u/d.
 func TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported(t *testing.T) {
 	marker := &fakeMarker{}
 	m := newTriagePane(t, marker, []provider.Notification{
@@ -2427,7 +2412,7 @@ func TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported(t *testing.T) {
 	}
 }
 
-// TestMarkRead_NilMarker_IsNoop pins decision 61's nil-safety requirement:
+// TestMarkRead_NilMarker_IsNoop pins the nil-safety requirement:
 // a pane built with no marker (the capability-absent / nil provider case)
 // must swallow u/d without panicking rather than dereferencing a nil
 // interface.
@@ -2456,7 +2441,7 @@ func TestMarkRead_NilMarker_IsNoop(t *testing.T) {
 // TestMarkDone_CursorLandsOnAConcreteRow pins where the cursor actually ends up
 // after `d`, for every position in the list plus the single-row case.
 //
-// It deliberately does NOT claim to pin decision 55's identity-based restore,
+// It deliberately does NOT claim to pin the identity-based restore,
 // and an earlier version of this test that did was vacuous: after `d` the
 // removed row is no longer in Items(), so its only assertion ("the selected id
 // is not the removed one") held for every possible cursor value and could not
@@ -2577,9 +2562,9 @@ func TestMarkResult_StaleKind_DoesNotRollBackANewerAction(t *testing.T) {
 // "Notifications unavailable: …" with "No notifications found. / You're all
 // caught up." — telling the user their inbox is clear when the fetch failed, and
 // hiding the very error that explains why there is no data. That is the lie
-// decisions 57 and 63 exist to prevent.
+// this pane exists to prevent.
 //
-// This is reachable today (task 15): both this pane's own Init()/`r` fetch and
+// This is reachable today: both this pane's own Init()/`r` fetch and
 // the app-level poller's push land through HandleFetchResult, either of which
 // can fail while a `u`/`d` override is still settling — a poll failing
 // mid-debounce, or an unsolicited 304 surfacing as an error (see
@@ -2618,7 +2603,7 @@ func TestMarkResult_DoesNotClearAFailedFetchsErrorState(t *testing.T) {
 // — one with no matching cached validator, so there is nothing to replay
 // transparently and the response surfaces as a failure rather than the
 // existing list being left intact. *github.APIError is the concrete type
-// errors.As recovers downstream (task 19); the pane itself only ever reads it
+// errors.As recovers downstream; the pane itself only ever reads it
 // as a plain error, which is exactly what this fixture exercises.
 func unsolicitedNotModifiedErr() error {
 	return fmt.Errorf("github: notifications: %w", &github.APIError{
@@ -2627,13 +2612,12 @@ func unsolicitedNotModifiedErr() error {
 	})
 }
 
-// TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox pins FORWARD
-// item 4 of task 15: widening 304 handling beyond "a matching-cache 304 leaves
-// the list intact". An *unsolicited* 304 reaches this pane exactly like any
-// other failed fetch — through HandleFetchResult's error argument — and must
-// render decision 63's error state, never the empty-inbox text a naive reading
-// of "304 Not Modified" might suggest ("nothing changed" is not "no
-// notifications").
+// TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox widens 304
+// handling beyond "a matching-cache 304 leaves the list intact". An
+// *unsolicited* 304 reaches this pane exactly like any other failed fetch —
+// through HandleFetchResult's error argument — and must render the error state,
+// never the empty-inbox text a naive reading of "304 Not Modified" might suggest
+// ("nothing changed" is not "no notifications").
 func TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox(t *testing.T) {
 	m := NewModelWithStyles(styles.DefaultStyles(), nil, nil)
 	m.list, _ = m.list.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -2654,11 +2638,10 @@ func TestView_UnsolicitedNotModified_RendersErrorState_NotEmptyInbox(t *testing.
 }
 
 // TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError is
-// TestMarkResult_DoesNotClearAFailedFetchsErrorState's companion using FORWARD
-// item 4's exact error shape (an unsolicited 304) rather than a generic
-// fetch error, so the specific failure mode named in the spec has its own
-// direct regression test rather than relying on a generic error string to
-// stand in for it.
+// TestMarkResult_DoesNotClearAFailedFetchsErrorState's companion using an
+// unsolicited 304's exact error shape rather than a generic fetch error, so
+// that specific failure mode has its own direct regression test rather than
+// relying on a generic error string to stand in for it.
 func TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError(t *testing.T) {
 	marker := &fakeMarker{}
 	target := mkNotification("1", "owner/repo", "Done me", provider.NotificationReasonMentioned, false, fixedNow)
@@ -2675,7 +2658,7 @@ func TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError(t *testing.T) {
 		t.Fatalf("precondition: want the error render, got:\n%s", m.View())
 	}
 
-	// The DELETE result lands — successfully. task 14's mark-rollback path
+	// The DELETE result lands — successfully. The mark-rollback path
 	// (handleMarkResult) must decide purely from res.err (nil here), never
 	// from the concurrent 304-shaped fetch error the pane is still displaying,
 	// which arrived on an entirely different message type
@@ -2714,8 +2697,8 @@ func TestMarkResult_DoesNotClearAnUnsolicitedNotModifiedError(t *testing.T) {
 // is the map itself, hence the direct read of m.overrides (same package).
 //
 // Absent this, the map grows once per u/d for the life of the session, since
-// decision 65 keeps a *successful* override's entry and only a failure removes
-// one. Both halves are asserted: the expired entry goes, the live one stays —
+// a *successful* override's entry is kept and only a failure removes one. Both
+// halves are asserted: the expired entry goes, the live one stays —
 // a prune that clears the map wholesale would pass the first check alone and is
 // exactly the mutation that reintroduces the flicker the debounce window exists
 // to prevent.
@@ -2749,7 +2732,7 @@ func TestSetFeed_PrunesExpiredOverrides_ButKeepsLiveOnes(t *testing.T) {
 	}
 }
 
-// ─── task 17: o open in browser (decision 3) ────────────────────────────────
+// ─── o open in browser ──────────────────────────────────────────────────────
 
 // withOpenURLSpy substitutes the package-level openURL seam with a spy that
 // records the URL(s) it was called with and returns result, restoring the
@@ -2769,7 +2752,7 @@ func withOpenURLSpy(t *testing.T, result error) *[]string {
 
 // TestOpenInBrowser_OpensSelectedRowsWebURL pins the happy path: `o` issues
 // exactly one openURL call, for the selected row's own WebURL, and a
-// successful result is silent (decision 3, reviewer finding): the browser
+// successful result is silent (reviewer finding): the browser
 // window appearing is the feedback, and a persistent "Opened in browser"
 // that never cleared was rejected as its own defect during review.
 func TestOpenInBrowser_OpensSelectedRowsWebURL(t *testing.T) {
@@ -2794,7 +2777,7 @@ func TestOpenInBrowser_OpensSelectedRowsWebURL(t *testing.T) {
 }
 
 // TestOpenInBrowser_SuccessClearsAPriorFailureMessage pins the other half of
-// decision 3's clearing rule: a successful `o` clears whatever failure text
+// the clearing rule: a successful `o` clears whatever failure text
 // a previous `o` attempt left behind, so retrying after a transient browser
 // error does not leave stale text on screen once it works.
 func TestOpenInBrowser_SuccessClearsAPriorFailureMessage(t *testing.T) {
@@ -2842,7 +2825,7 @@ func TestOpenInBrowser_FailedOpen_SurfacesStatusMessage(t *testing.T) {
 // that "" means nothing to open, so o must not hand it to openURL at all.
 func TestOpenInBrowser_EmptyWebURL_DoesNotCallOpenURL(t *testing.T) {
 	item := mkNotification("1", "owner/repo", "No URL", provider.NotificationReasonReviewRequested, false, fixedNow)
-	// WebURL left "" deliberately — task 5's fallback chain exhausted.
+	// WebURL left "" deliberately — the fallback chain is exhausted.
 	m := newTriagePane(t, nil, []provider.Notification{item})
 
 	calls := withOpenURLSpy(t, nil)
@@ -2879,7 +2862,7 @@ func TestOpenInBrowser_NoRows_DoesNotCallOpenURL(t *testing.T) {
 }
 
 // TestOpenInBrowser_Blocks_WhenErrored mirrors TestCanTriage_Blocks_UAndD_WhenErrored:
-// o is gated by the same canTriage() as u/d, so a pane in decision 63's error
+// o is gated by the same canTriage() as u/d, so a pane in the error
 // render state must swallow o rather than acting on whatever stale items
 // listview.HandleFetchResult left behind — even though selectedItem() itself
 // has no opinion about m.list.Err() and would happily return the stale row.
@@ -2906,7 +2889,7 @@ func TestOpenInBrowser_Blocks_WhenErrored(t *testing.T) {
 }
 
 // TestOpenInBrowser_Blocks_WhenCapabilityUnsupported mirrors
-// TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported: decision 63's
+// TestCanTriage_Blocks_UAndD_WhenCapabilityUnsupported: the
 // capability-unsupported state must also block o, for the same reason it
 // blocks u/d — canTriage is the single shared gate.
 func TestOpenInBrowser_Blocks_WhenCapabilityUnsupported(t *testing.T) {
@@ -2974,7 +2957,7 @@ func TestOpenInBrowser_ActiveFilter_OpensHighlightedRow_NotRawFeedIndex(t *testi
 }
 
 // TestOpenInBrowser_NextFetchClearsAFailureMessage pins the clearing rule's
-// other trigger (decision 3, reviewer finding): "a poll refreshes the feed"
+// other trigger (reviewer finding): "a poll refreshes the feed"
 // must clear a stale `o` failure message just as reliably as a subsequent
 // successful `o` does, so a message about a browser launch that failed
 // minutes ago does not survive an inbox refresh the user has moved on to.
@@ -2997,7 +2980,7 @@ func TestOpenInBrowser_NextFetchClearsAFailureMessage(t *testing.T) {
 	}
 }
 
-// ─── task 16: UnreadCount() footer badge accessor (decision 68) ────────────
+// ─── UnreadCount() footer badge accessor ────────────────────────────────────
 
 // TestUnreadCount_CountsUnreadRowsInFeed pins the base case: three rows, two
 // unread, one read — UnreadCount reports 2, not len(feed) and not the read
@@ -3043,8 +3026,8 @@ func TestUnreadCount_ZeroOnEmptyFeed(t *testing.T) {
 	}
 }
 
-// TestUnreadCount_ReflectsOptimisticMarkRead_BeforeAnyPoll is decision 68's
-// first half: `u` applies the mark synchronously inside Update (task 14), so
+// TestUnreadCount_ReflectsOptimisticMarkRead_BeforeAnyPoll is the badge's
+// first half: `u` applies the mark synchronously inside Update, so
 // UnreadCount must decrement immediately — before the tea.Cmd carrying the
 // actual MarkRead call ever runs, let alone before any poll lands. A version
 // of UnreadCount that reads m.feed's raw Read field (ignoring
@@ -3081,7 +3064,7 @@ func TestUnreadCount_ReflectsOptimisticMarkRead_BeforeAnyPoll(t *testing.T) {
 // TestUnreadCount_ReflectsOptimisticMarkDone mirrors the mark-read case for
 // `d`: a row removed via mark-done must stop counting toward the unread
 // total immediately, even though it is still present, unread, in m.feed
-// itself (decision 68 requires overrides applied, not m.feed read raw).
+// itself (the count applies overrides, not m.feed read raw).
 func TestUnreadCount_ReflectsOptimisticMarkDone(t *testing.T) {
 	marker := &fakeMarker{}
 	feed := []provider.Notification{
@@ -3119,7 +3102,7 @@ func TestUnreadCount_ReflectsOptimisticMarkDone(t *testing.T) {
 	}
 }
 
-// TestUnreadCount_IgnoresReasonFilter_CountsOverWholeFeed is decision 68's
+// TestUnreadCount_IgnoresReasonFilter_CountsOverWholeFeed is the badge's
 // second half, and the one most likely to regress: cycling `f` to narrow the
 // visible rows to a single reason must NOT change UnreadCount. A version
 // counting over reasonFiltered() instead of m.feed would drop to the

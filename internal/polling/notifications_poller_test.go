@@ -44,8 +44,8 @@ func TestNotificationsPoller_MinimumInterval(t *testing.T) {
 	}
 }
 
-// TestNotificationsPoller_MinimumInterval_FloorsPollIntervalOne pins the
-// sixth FORWARD item: notifications.poll_interval: 1 is accepted by config
+// TestNotificationsPoller_MinimumInterval_FloorsPollIntervalOne pins that
+// notifications.poll_interval: 1 is accepted by config
 // validation, and on GitHub Enterprise (where the server may send no
 // X-Poll-Interval) that would otherwise mean 1-second polling. The floor
 // lives here, at the same MinInterval the pipeline Poller already enforces,
@@ -134,7 +134,7 @@ func TestNotificationsPoller_StartPolling_RespectsStopState(t *testing.T) {
 }
 
 // TestNotificationsPoller_StartPolling_EmitsNotificationsTickMsg is the
-// mutation-guarding test for Decision 69: if NotificationsTickMsg were
+// mutation-guarding test: if NotificationsTickMsg were
 // changed back to (or aliased as) polling.TickMsg, app.go's existing
 // `case polling.TickMsg:` would silently swallow notifications ticks into
 // the pipeline poller's OnTick, and this assertion is what would catch it —
@@ -156,10 +156,10 @@ func TestNotificationsPoller_StartPolling_EmitsNotificationsTickMsg(t *testing.T
 
 	msg := cmd()
 	if _, ok := msg.(NotificationsTickMsg); !ok {
-		t.Fatalf("StartPolling produced %T, want NotificationsTickMsg — reusing polling.TickMsg here would let app.go's pipeline-poller case swallow this tick (Decision 69)", msg)
+		t.Fatalf("StartPolling produced %T, want NotificationsTickMsg — reusing polling.TickMsg here would let app.go's pipeline-poller case swallow this tick", msg)
 	}
 	if _, ok := msg.(TickMsg); ok {
-		t.Fatal("StartPolling must never produce polling.TickMsg (Decision 69): app.go's `case polling.TickMsg:` drives the pipeline poller unconditionally")
+		t.Fatal("StartPolling must never produce polling.TickMsg: app.go's `case polling.TickMsg:` drives the pipeline poller unconditionally")
 	}
 }
 

@@ -444,7 +444,7 @@ func TestSelectedIndex(t *testing.T) {
 
 // TestErr_ReflectsHandleFetchResult pins the Err() accessor a caller needs to
 // build its own render states on top of listview (internal/ui/notifications'
-// task-13 error state): it must report the last HandleFetchResult error, and
+// error state): it must report the last HandleFetchResult error, and
 // a subsequent successful SetItems/HandleFetchResult call must clear it back
 // to nil rather than leaving the accessor permanently sticky.
 func TestErr_ReflectsHandleFetchResult(t *testing.T) {
@@ -913,7 +913,7 @@ func TestToColumns_UpdatesWhenSetItemsChanges(t *testing.T) {
 // TestView_WithToColumns_MixedItems_NoPanic constructs a listview model whose
 // ToColumns callback adds an extra column for certain items, sets those items,
 // sends a resize, then calls View(). It must not panic and columns must equal
-// cells (the exact defect described in the Validation: Task 3 section).
+// cells.
 func TestView_WithToColumns_MixedItems_NoPanic(t *testing.T) {
 	s := styles.DefaultStyles()
 	cfg := testConfigWithToColumns()

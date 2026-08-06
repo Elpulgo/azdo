@@ -16,7 +16,7 @@ type PipelineRunsUpdated struct {
 type TickMsg struct{}
 
 // NotificationsTickMsg is a tea.Msg sent on each notifications polling
-// interval tick. It is a distinct type from TickMsg (Decision 69), not the
+// interval tick. It is a distinct type from TickMsg, not the
 // same struct discriminated by a field: app.go's `case polling.TickMsg:`
 // calls the pipeline poller's OnTick unconditionally, so reusing TickMsg
 // here — even with an added field — would still match that case and drive
@@ -33,7 +33,7 @@ type NotificationsTickMsg struct{}
 // and cost a review cycle: the GitHub client answers a 304 by replaying its
 // cached threads, never nil (see internal/github/notifications.go, "a 304
 // must never be read as 'the inbox is now empty'"), an unsolicited 304 with
-// no matching cache surfaces as an error (Decision 28), and a skipped fetch
+// no matching cache surfaces as an error, and a skipped fetch
 // emits no message at all because FetchNotifications returns a nil tea.Cmd.
 // No producer emits nil/nil to mean "unchanged".
 type NotificationsFetchedMsg struct {

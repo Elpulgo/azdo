@@ -640,7 +640,7 @@ func TestStatusBar_SetScopes_MultiScopeWithinCap(t *testing.T) {
 	}
 }
 
-// ─── task 16: SetUnreadCount footer badge (decision 21) ────────────────────
+// ─── SetUnreadCount footer badge ───────────────────────────────────────────
 
 func TestStatusBar_SetUnreadCount(t *testing.T) {
 	sb := NewStatusBar(styles.DefaultStyles())
@@ -655,7 +655,7 @@ func TestStatusBar_SetUnreadCount(t *testing.T) {
 // carries the count, and renders alongside the default keybindings section
 // rather than replacing it.
 //
-// Folded from two former tests (task 16 independent-review finding 7):
+// Folded from two former tests:
 // a bare strings.Contains(view, "7") is satisfied by a stray "7" from the
 // width, scroll percent or org string, so it exercised nothing beyond what
 // the "7 unread" substring check below already covers, and was dropped
@@ -675,8 +675,8 @@ func TestStatusBar_View_ContainsUnreadCount(t *testing.T) {
 	}
 }
 
-// TestStatusBar_View_UnreadCountHiddenAtZero pins decision 21's "hidden
-// entirely at zero": not merely the absence of the digit 0, but the absence
+// TestStatusBar_View_UnreadCountHiddenAtZero pins the "hidden
+// entirely at zero" behavior: not merely the absence of the digit 0, but the absence
 // of any residue at all — no stray "unread" word and no empty badge/
 // separator left over from an unconditionally-appended part.
 func TestStatusBar_View_UnreadCountHiddenAtZero(t *testing.T) {
@@ -707,7 +707,7 @@ func TestStatusBar_View_UnreadCountHiddenWhenNegative(t *testing.T) {
 }
 
 // TestStatusBar_UnreadBadgeStyle_UsesThemeWarningAsBackground pins the badge's
-// style (task 16 independent-review finding 6) by inspecting the style
+// style by inspecting the style
 // *object* returned by unreadBadgeStyle, not rendered bytes: lipgloss
 // resolves the Ascii profile in test binaries, which makes Render the
 // identity function there, so a style change would be invisible to any

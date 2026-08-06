@@ -24,12 +24,12 @@ func (s stubNotificationSource) MarkDone(id provider.Identity) error { return ni
 // provider.NotificationSource.
 var _ provider.NotificationSource = stubNotificationSource{}
 
-// TestNotificationReasonEnum_MatchesDecision18 pins the exact value set from
-// spec Decision 18 in both directions: naming every value catches a rename or
-// removal at compile time, and comparing the count against the enum's own
-// sentinel catches an *addition* — the drift the enum's doc comment forbids
-// first, and the one a name-only list cannot see.
-func TestNotificationReasonEnum_MatchesDecision18(t *testing.T) {
+// TestNotificationReasonEnum_MatchesDeclaredValues pins the exact value set in
+// both directions: naming every value catches a rename or removal at compile
+// time, and comparing the count against the enum's own sentinel catches an
+// *addition* — the drift the enum's doc comment forbids first, and the one a
+// name-only list cannot see.
+func TestNotificationReasonEnum_MatchesDeclaredValues(t *testing.T) {
 	want := []provider.NotificationReason{
 		provider.NotificationReasonUnknown,
 		provider.NotificationReasonReviewRequested,
@@ -45,11 +45,11 @@ func TestNotificationReasonEnum_MatchesDecision18(t *testing.T) {
 		provider.NotificationReasonOther,
 	}
 
-	// Decision 18 lists exactly twelve reasons. Asserting against the enum's
-	// own sentinel is what catches an added value: a thirteenth constant makes
+	// The enum has exactly twelve reasons. Asserting against the enum's own
+	// sentinel is what catches an added value: a thirteenth constant makes
 	// NotificationReasonCount() 13 while this list stays at 12.
 	if got := provider.NotificationReasonCount(); got != len(want) {
-		t.Fatalf("enum has %d values but Decision 18 lists %d — a value was added or removed without updating the decision", got, len(want))
+		t.Fatalf("enum has %d values but the test lists %d — a value was added or removed without updating this list", got, len(want))
 	}
 
 	// NotificationReasonUnknown must remain the zero value so an unset field
@@ -59,9 +59,9 @@ func TestNotificationReasonEnum_MatchesDecision18(t *testing.T) {
 	}
 }
 
-// TestNotification_IdentityIsProviderQualified asserts Decision 14: identity
-// is kind + scope + native id, never a bare id. Two notifications with the
-// same native id but a different Kind or Scope must not collide.
+// TestNotification_IdentityIsProviderQualified asserts identity is kind +
+// scope + native id, never a bare id. Two notifications with the same native
+// id but a different Kind or Scope must not collide.
 func TestNotification_IdentityIsProviderQualified(t *testing.T) {
 	githubRepoA := provider.Notification{
 		Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "acme/repo-a", ID: "1"},
@@ -87,10 +87,10 @@ func TestNotification_IdentityIsProviderQualified(t *testing.T) {
 	}
 
 	// ScopeDisplay must stay out of the comparison. It is a human-facing label
-	// that can change (a repo rename, a fallback display name), and phase 2
-	// keys its local read/done store on this identity — if display text leaked
-	// in, a changed label would silently resurrect everything the user
-	// dismissed. This is the only test of SameItem in the repo.
+	// that can change (a repo rename, a fallback display name), and the local
+	// read/done store keys on this identity — if display text leaked in, a
+	// changed label would silently resurrect everything the user dismissed.
+	// This is the only test of SameItem in the repo.
 	displayA := provider.Identity{Kind: provider.KindGitHub, Scope: "acme/repo-a", ScopeDisplay: "Repo A", ID: "1"}
 	displayB := provider.Identity{Kind: provider.KindGitHub, Scope: "acme/repo-a", ScopeDisplay: "acme/repo-a", ID: "1"}
 	if !displayA.SameItem(displayB) {
@@ -98,9 +98,8 @@ func TestNotification_IdentityIsProviderQualified(t *testing.T) {
 	}
 }
 
-// TestNotificationReason_String pins Decision 19's config-facing contract:
-// lowercase snake_case, exactly the strings task 3's design notes settle on.
-// Tasks 9 and 10 parse user config through ParseNotificationReason, so these
+// TestNotificationReason_String pins the config-facing contract: lowercase
+// snake_case. User config is parsed through ParseNotificationReason, so these
 // strings are effectively public API — a rename here is a breaking change.
 func TestNotificationReason_String(t *testing.T) {
 	tests := []struct {
@@ -136,7 +135,7 @@ func TestNotificationReason_String(t *testing.T) {
 }
 
 // TestNotificationReason_StringRoundTripsThroughParse asserts the round-trip
-// contract for all 12 declared values, per Decision 26's asymmetry:
+// contract for all 12 declared values, with a deliberate asymmetry:
 //   - The 11 non-Unknown values survive String() -> ParseNotificationReason()
 //     unchanged, with the recognised bool true. This is what guarantees
 //     exclude_reasons config values map back to the exact reason the user
@@ -161,7 +160,7 @@ func TestNotificationReason_StringRoundTripsThroughParse(t *testing.T) {
 		provider.NotificationReasonOther,
 	}
 	if len(all) != provider.NotificationReasonCount() {
-		t.Fatalf("test lists %d values but the enum declares %d — update this list alongside Decision 18", len(all), provider.NotificationReasonCount())
+		t.Fatalf("test lists %d values but the enum declares %d — update this list", len(all), provider.NotificationReasonCount())
 	}
 	for _, r := range all {
 		t.Run(r.String(), func(t *testing.T) {
@@ -169,7 +168,7 @@ func TestNotificationReason_StringRoundTripsThroughParse(t *testing.T) {
 
 			if r == provider.NotificationReasonUnknown {
 				if got != provider.NotificationReasonOther || ok {
-					t.Errorf("ParseNotificationReason(%q) = (%v, %v), want (Other, false) — unknown is reserved and must not round-trip to itself (Decision 26)", r.String(), got, ok)
+					t.Errorf("ParseNotificationReason(%q) = (%v, %v), want (Other, false) — unknown is reserved and must not round-trip to itself", r.String(), got, ok)
 				}
 				return
 			}
@@ -184,13 +183,13 @@ func TestNotificationReason_StringRoundTripsThroughParse(t *testing.T) {
 	}
 }
 
-// TestParseNotificationReason_UnparseableYieldsOther asserts Decision 26's
-// hard rule end to end: a config value the parser does not recognise must
-// resolve to (NotificationReasonOther, false) — never an error that would
-// cause a filter to drop the row, never the zero value (which would misfile
-// it as "unset" rather than "recognised but uncategorised"), and never a bool
-// that claims recognition it did not have — task 9's warning and task 10's
-// skip-unrecognised behaviour both depend on the bool being accurate.
+// TestParseNotificationReason_UnparseableYieldsOther asserts the hard rule end
+// to end: a config value the parser does not recognise must resolve to
+// (NotificationReasonOther, false) — never an error that would cause a filter
+// to drop the row, never the zero value (which would misfile it as "unset"
+// rather than "recognised but uncategorised"), and never a bool that claims
+// recognition it did not have — the warning and skip-unrecognised behaviour
+// both depend on the bool being accurate.
 func TestParseNotificationReason_UnparseableYieldsOther(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -203,10 +202,10 @@ func TestParseNotificationReason_UnparseableYieldsOther(t *testing.T) {
 		// list *values*, and viper lowercases config *keys* only, so they
 		// arrive verbatim. A mixed-case match is deliberately NOT folded: it
 		// is treated the same as any other unrecognised string, surfacing the
-		// typo instead of silently reinterpreting it (Decision 26).
+		// typo instead of silently reinterpreting it.
 		{"mixed case", "Review_Requested"},
 		{"upper case", "REVIEW_REQUESTED"},
-		// Decision 26: "unknown" is reserved. The wire mapper never emits
+		// "unknown" is reserved. The wire mapper never emits
 		// NotificationReasonUnknown, so this string must be reported as
 		// unrecognised even though it is what Unknown.String() emits.
 		{"reserved unknown", "unknown"},

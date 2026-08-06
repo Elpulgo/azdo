@@ -16,7 +16,7 @@ import (
 // github.NewAdapter. Without this, a.nc stays nil forever (see
 // internal/github/adapter.go's NewAdapter doc comment), and every List call
 // on the GitHub backend returns "no notifications client configured" even
-// though the notifications tab shows up under Decision 11's capability
+// though the notifications tab shows up under the capability
 // check — *Adapter satisfies provider.NotificationSource at compile time
 // regardless of nc, so a type-assertion-only test cannot catch a regression
 // back to NewAdapter here. Parsing the AST (rather than grepping source
@@ -80,7 +80,7 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 		t.Error("runTUI must not call github.NewAdapter (leaves the notifications client nil); use github.NewAdapterWithNotifications instead")
 	}
 
-	// Pinning the callee is only half the mutation space (Decision 62). The
+	// Pinning the callee is only half the mutation space. The
 	// walk above keys on sel.Sel.Name, so deleting the
 	// `ghNC := github.NewNotificationsClient(token)` line and passing nil as
 	// the second argument satisfies every assertion so far while reproducing
@@ -95,7 +95,7 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 		t.Errorf("github.NewAdapterWithNotifications called with %d args, want 2 (MultiClient, NotificationsClient)", notifAdapterArgCount)
 	}
 	if notifAdapterSecondArgIsNil {
-		t.Error("github.NewAdapterWithNotifications's second argument must not be nil — a nil NotificationsClient makes every notifications List call fail with \"no notifications client configured\" while the tab still shows up under Decision 11's capability check")
+		t.Error("github.NewAdapterWithNotifications's second argument must not be nil — a nil NotificationsClient makes every notifications List call fail with \"no notifications client configured\" while the tab still shows up under the capability check")
 	}
 	if !sawNewNotificationsClient {
 		t.Error("expected runTUI to construct the user-scoped client via github.NewNotificationsClient, found no such call")

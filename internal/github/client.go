@@ -1,10 +1,7 @@
 // Package github implements a per-repository GitHub REST API client.
 // It mirrors the internal/azdevops layering: a per-repo Client handles HTTP
-// auth + JSON decode; a MultiClient (task 12) fans out across repos using
-// provider.PartialError; an Adapter (task 12) satisfies provider.Provider.
-//
-// Phase 3 constraint: this package is unwired. Nothing in cmd/, internal/app,
-// or main.go references it until Phase 4.
+// auth + JSON decode; a MultiClient fans out across repos using
+// provider.PartialError; an Adapter satisfies provider.Provider.
 package github
 
 import (
@@ -69,7 +66,7 @@ func (c *Client) Owner() string { return c.owner }
 func (c *Client) Repo() string { return c.repo }
 
 // Scope returns the canonical "owner/repo" identifier used as the
-// provider.Identity.Scope value at the mapping boundary (tasks 5–12).
+// provider.Identity.Scope value at the mapping boundary.
 func (c *Client) Scope() string { return c.owner + "/" + c.repo }
 
 // newRequest builds an authenticated HTTP request targeting baseURL+path
@@ -239,7 +236,7 @@ func extractArray[T any](body []byte) ([]T, error) {
 // APIError is the typed error returned for every non-2xx GitHub response.
 // Callers recover it with errors.As(err, &apiErr) — mirroring how the codebase
 // already inspects provider.PartialError — to branch on the status code rather
-// than string-matching the message. Later tasks rely on this: UpdateThreadStatus
+// than string-matching the message. Callers rely on this: UpdateThreadStatus
 // no-ops on 404/422, and rate-limit handling keys off RateLimited/RetryAfter.
 //
 // Error() never includes Message or any response body, so server-side details
@@ -256,15 +253,14 @@ type APIError struct {
 	// returned this error (e.g. "notifications" or "repo"). GitHub sends
 	// this header only for classic PATs, not fine-grained tokens, so an
 	// empty value here does not itself prove the token has enough scope —
-	// it just means the header wasn't sent. Documented GitHub behaviour, not
-	// observed live (no token in this environment). Task 19 uses this,
+	// it just means the header wasn't sent. Documented GitHub behaviour. Used,
 	// together with StatusCode == 403, to render a scope-specific error
 	// instead of a generic one.
 	RequiredScopes string
 	// GrantedScopes is the raw X-OAuth-Scopes response header, when present:
 	// the scopes the caller's token actually carries. Comparing this against
-	// RequiredScopes is how task 19 distinguishes "token lacks the
-	// `notifications` scope" from an unrelated 403.
+	// RequiredScopes distinguishes "token lacks the `notifications` scope"
+	// from an unrelated 403.
 	GrantedScopes string
 }
 

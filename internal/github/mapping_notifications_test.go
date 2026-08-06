@@ -8,9 +8,9 @@ import (
 	"github.com/Elpulgo/azdo/internal/provider"
 )
 
-// ── MapNotificationReason: every Decision-18 wire string, plus unknowns ─────
+// ── MapNotificationReason: every wire string, plus unknowns ─────────────────
 
-func TestMapNotificationReason_Decision18Table(t *testing.T) {
+func TestMapNotificationReason_WireStringTable(t *testing.T) {
 	cases := []struct {
 		wire string
 		want provider.NotificationReason
@@ -33,7 +33,7 @@ func TestMapNotificationReason_Decision18Table(t *testing.T) {
 		// Invented, never-issued-by-GitHub strings. "unknown" is called out
 		// separately from the other bogus values because it is the one input
 		// most likely to tempt an implementation into echoing the reserved
-		// NotificationReasonUnknown back out — Decision 18 forbids that, and
+		// NotificationReasonUnknown back out — this is forbidden, and
 		// the per-case check below is what pins it.
 		{"some_future_reason_nobody_has_seen_yet", provider.NotificationReasonOther},
 		{"unknown", provider.NotificationReasonOther},
@@ -48,9 +48,9 @@ func TestMapNotificationReason_Decision18Table(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("MapNotificationReason(%q) = %v, want %v", tc.wire, got, tc.want)
 			}
-			// Decision 18: the mapper must never emit Unknown.
+			// The mapper must never emit Unknown.
 			if got == provider.NotificationReasonUnknown {
-				t.Errorf("MapNotificationReason(%q) = Unknown; the wire mapper must never emit Unknown (Decision 18)", tc.wire)
+				t.Errorf("MapNotificationReason(%q) = Unknown; the wire mapper must never emit Unknown", tc.wire)
 			}
 		})
 	}
@@ -130,7 +130,7 @@ func TestMapNotification_UnreadFalseWhenThreadRead(t *testing.T) {
 // thread through the mapper and pins what that must produce: Kind GitHub, an
 // empty wire reason mapped to Other (never Unknown), WebURL "" (no subject url
 // and no repository url to build one from) and ScopeDisplay "" (Scope is empty
-// too, so the Decision 35 fallback has nothing to default to). The no-panic
+// too, so the fallback has nothing to default to). The no-panic
 // criterion holds by construction — the mapper reads no pointer field, in
 // particular not LastReadAt — so the recover below is a tripwire, not the
 // thing this test pins.
@@ -158,15 +158,15 @@ func TestMapNotification_NearlyEmptyThread_NoPanic(t *testing.T) {
 		t.Errorf("WebURL = %q, want empty — no subject url and no repository url present", got.WebURL)
 	}
 	if got.Identity.ScopeDisplay != "" {
-		t.Errorf("Identity.ScopeDisplay = %q, want empty — Scope is also empty on a zero-value thread, so the Decision 35 fallback has nothing to default to", got.Identity.ScopeDisplay)
+		t.Errorf("Identity.ScopeDisplay = %q, want empty — Scope is also empty on a zero-value thread, so the fallback has nothing to default to", got.Identity.ScopeDisplay)
 	}
 }
 
-// TestMapNotification_ScopeDisplayDefaultsToScope pins Decision 35: the
-// mapper is the adapter boundary for notifications (it derives scope from
-// the thread itself, so no caller can precompute the fallback before
-// calling), so an empty scopeDisplay argument must default to Scope here,
-// not stay blank and leave the repo column empty in every list view.
+// TestMapNotification_ScopeDisplayDefaultsToScope pins the ScopeDisplay
+// fallback: the mapper is the adapter boundary for notifications (it derives
+// scope from the thread itself, so no caller can precompute the fallback before
+// calling), so an empty scopeDisplay argument must default to Scope here, not
+// stay blank and leave the repo column empty in every list view.
 func TestMapNotification_ScopeDisplayDefaultsToScope(t *testing.T) {
 	thread := github.NotificationThread{
 		ID:     "1",
@@ -179,7 +179,7 @@ func TestMapNotification_ScopeDisplayDefaultsToScope(t *testing.T) {
 	got := github.MapNotification(thread, "")
 
 	if got.Identity.ScopeDisplay != "octo/repo" {
-		t.Errorf("Identity.ScopeDisplay = %q, want %q (falls back to Scope per Decision 35)", got.Identity.ScopeDisplay, "octo/repo")
+		t.Errorf("Identity.ScopeDisplay = %q, want %q (falls back to Scope)", got.Identity.ScopeDisplay, "octo/repo")
 	}
 }
 
@@ -213,7 +213,7 @@ func TestNotificationWebURL_ResolvesPerSubjectType(t *testing.T) {
 			want: "https://github.com/octo/repo/issues/7",
 		},
 		{
-			// Decision 33, verified against live github.com:
+			// Verified against live github.com:
 			// "/cli/cli/releases/348300685" → 404 (per-release-id is not a
 			// real route; the real one needs a tag name the wire payload
 			// does not carry), "/cli/cli/releases" → 200. So every Release
@@ -249,8 +249,8 @@ func TestNotificationWebURL_ResolvesPerSubjectType(t *testing.T) {
 }
 
 // TestNotificationWebURL_AcceptsValidIDShapes is the positive counterpart to
-// TestNotificationWebURL_FallsBackWhenIDSegmentInvalid: Decision 36 tightened
-// the numeric guard, so pin that the shapes GitHub really issues still resolve
+// TestNotificationWebURL_FallsBackWhenIDSegmentInvalid: the numeric guard was
+// tightened, so pin that the shapes GitHub really issues still resolve
 // to a per-item URL — the smallest legal item number, an ordinary one, a full
 // 40-char SHA, an abbreviated 7-char one, and hex in upper and mixed case
 // (isHex is case-insensitive and, unlike the numeric guard, allows a leading
@@ -338,7 +338,7 @@ func TestNotificationWebURL_FallsBackForUnrecognisedSubjectType(t *testing.T) {
 // TestNotificationWebURL_FallsBackWhenIDSegmentInvalid covers every measured
 // 404-producing id shape: an absent subject.url, no id segment at all, a
 // trailing-slash URL, a non-URL string, a non-numeric id where a number is
-// required, the implausible numbers Decision 36 rejects ("0", "007", a
+// required, the implausible numbers rejected ("0", "007", a
 // 26-digit id), and — on the Commit side, where the guard is isHex rather
 // than isItemNumber — a missing and a non-hex segment. Each must fall back to
 // the repository URL rather than emit a clickable 404.
@@ -377,7 +377,7 @@ func TestNotificationWebURL_FallsBackWhenIDSegmentInvalid(t *testing.T) {
 			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/abc"},
 		},
 		{
-			// Decision 36: GitHub PR/issue numbers start at 1, so "0" is not a
+			// GitHub PR/issue numbers start at 1, so "0" is not a
 			// real item — "/pull/0" is a measured dead page.
 			name:    "zero pr number",
 			subject: github.NotificationSubject{Type: "PullRequest", URL: "https://api.github.com/repos/o/r/pulls/0"},
@@ -447,9 +447,9 @@ func TestNotificationWebURL_EmptyFullNameUsesHTMLURL(t *testing.T) {
 	}
 }
 
-// TestNotificationWebURL_HonoursGHEHost pins Decision 34: every per-type URL
-// is built on the Repository.HTMLURL prefix, so a GHE thread gets the GHE
-// host on the four handled subject types, not just on the fallback path.
+// TestNotificationWebURL_HonoursGHEHost pins that every per-type URL is built
+// on the Repository.HTMLURL prefix, so a GHE thread gets the GHE host on the
+// four handled subject types, not just on the fallback path.
 func TestNotificationWebURL_HonoursGHEHost(t *testing.T) {
 	repo := github.NotificationRepository{
 		FullName: "o/r",

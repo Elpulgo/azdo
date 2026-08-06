@@ -189,7 +189,7 @@ type Step struct {
 // NotificationSubject is the "subject" sub-object of a notification thread,
 // identifying the thing the notification is about (an issue, pull request,
 // release, commit, discussion, or check suite). URL is an API URL (not a
-// browser URL); task 5 resolves it to a web URL per subject Type.
+// browser URL); it is resolved to a web URL per subject Type.
 type NotificationSubject struct {
 	Title            string `json:"title"`
 	URL              string `json:"url"`
@@ -199,8 +199,8 @@ type NotificationSubject struct {
 
 // NotificationRepository is the "repository" sub-object of a notification
 // thread — a partial repository representation (GitHub's full repository
-// wire shape has far more fields; only what task 5's mapping and web-URL
-// fallback need is decoded here).
+// wire shape has far more fields; only what the mapping and web-URL fallback
+// need is decoded here).
 type NotificationRepository struct {
 	ID       int64  `json:"id"`
 	Name     string `json:"name"`
@@ -211,12 +211,11 @@ type NotificationRepository struct {
 
 // NotificationThread represents a single entry from GET /notifications
 // (GitHub's user-level notification inbox). Reason is GitHub's wire string
-// (e.g. "review_requested", "mention", "subscribed") — task 5 maps it onto
-// the neutral provider.NotificationReason enum (Decision 18); this type keeps
-// the raw string so no reason is silently dropped before that mapping runs.
-// LastReadAt is null for a thread that has never been read. Unread is the
-// server's read/unread flag — GitHub, not this client, owns that state
-// (Decision 15).
+// (e.g. "review_requested", "mention", "subscribed") — it is mapped onto the
+// neutral provider.NotificationReason enum; this type keeps the raw string so
+// no reason is silently dropped before that mapping runs. LastReadAt is null
+// for a thread that has never been read. Unread is the server's read/unread
+// flag — GitHub, not this client, owns that state.
 type NotificationThread struct {
 	ID              string                 `json:"id"`
 	Unread          bool                   `json:"unread"`

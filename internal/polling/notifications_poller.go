@@ -17,7 +17,7 @@ type NotificationsClient interface {
 }
 
 // NotificationsPoller manages background polling of the notifications inbox.
-// It is a distinct type from Poller (Decision 69), not a generalisation of
+// It is a distinct type from Poller, not a generalisation of
 // it: app.go's single `case polling.TickMsg:` drives the pipeline Poller's
 // OnTick unconditionally, so this poller emits its own NotificationsTickMsg
 // rather than reusing TickMsg, and app.go dispatches it through its own
@@ -25,7 +25,7 @@ type NotificationsClient interface {
 //
 // The interval this poller uses is driven entirely by its caller (app.go)
 // via SetInterval — mirroring Poller, which has no notion of a
-// server-suggested cadence hint either. Decision 8's max(configured, hint)
+// server-suggested cadence hint either. The max(configured, hint)
 // computation lives in app.go, not here, so this type has no dependency on
 // provider.PollIntervalHinter.
 type NotificationsPoller struct {
@@ -93,15 +93,15 @@ func (p *NotificationsPoller) SetInterval(interval time.Duration) {
 //
 // It exists as a test seam. Applying GitHub's X-Poll-Interval hint is a single
 // SetInterval call in app's NotificationsFetchedMsg handler, and that call is
-// the whole of task 15's "cadence is max(X-Poll-Interval, configured)"
-// criterion — delete it and the configured interval is used forever while the
+// the whole of the "cadence is max(X-Poll-Interval, configured)" behavior —
+// delete it and the configured interval is used forever while the
 // hint is computed and discarded. With no way to observe the poller's interval
 // there is nothing to assert against, and the deletion is invisible: the pure
 // interval-arithmetic functions still pass, because they are not what broke.
 //
 // Poller deliberately does not gain the same method. It has no equivalent
 // hint-driven mutation to pin, and adding an accessor to it on grounds of
-// symmetry alone would widen this task's blast radius into three other panes
+// symmetry alone would widen this change's blast radius into three other panes
 // for no test.
 func (p *NotificationsPoller) Interval() time.Duration {
 	p.mu.RLock()
@@ -119,7 +119,7 @@ func (p *NotificationsPoller) SetOpts(opts provider.NotifOpts) {
 
 // Opts reports the fetch options the next poll will use.
 //
-// It exists as a test seam, mirroring Interval() above: task 15's review fix
+// It exists as a test seam, mirroring Interval() above: the app
 // re-derives NotifOpts once per fetch (app's NotificationsFetchedMsg handler
 // calls SetOpts alongside SetInterval) instead of freezing it at poller
 // construction. With no way to observe the poller's opts there is nothing to

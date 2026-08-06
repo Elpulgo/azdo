@@ -190,7 +190,7 @@ func TestApplyState_IgnoresUnknownTab(t *testing.T) {
 // TestApplyState_IgnoresIncapableNotificationsTab covers a state file that
 // names "notifications" (state.TabNotifications) — e.g. persisted from a
 // prior GitHub-capable run — being restored against today's Azure-only,
-// notification-incapable config (Decision 9, Decision 11). tabFromID resolves
+// notification-incapable config. tabFromID resolves
 // the ID fine, but isTabEnabled must reject it because TabNotifications is
 // absent from enabledTabs, so ApplyState degrades to NewModel's default
 // (enabledTabs[0]) instead of panicking or landing on a blank/unrendered tab.

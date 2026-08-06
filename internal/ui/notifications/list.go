@@ -38,19 +38,19 @@ func SetOpenURLForTesting(fn func(string) error) (restore func()) {
 }
 
 // Model is the notifications pane: a listview.Model[provider.Notification]
-// plus the interactive `f` reason-filter cycle (Decisions 53, 54).
+// plus the interactive `f` reason-filter cycle.
 //
 // The pane holds two layers over the merged feed:
-//   - feed: the config-filtered rows (task 10's FilterNotifications output),
-//     set wholesale by the caller via SetFeed whenever a fetch/poll lands.
+//   - feed: the config-filtered rows (FilterNotifications output), set
+//     wholesale by the caller via SetFeed whenever a fetch/poll lands.
 //   - the `f` cycle, which narrows feed further to a single NotificationReason
 //     (or "all", the default/reset position).
 //
-// Per decision 54, the narrowed result is always handed to listview via
-// SetItems — never a second, independently-narrower slice fed to ToRows
-// alone — so the column/row-cell invariant convention 7 relies on never
-// diverges (convention 8: a divergence surfaces as a table.renderRow panic,
-// not a failed assertion).
+// The narrowed result is always handed to listview via SetItems — never a
+// second, independently-narrower slice fed to ToRows alone — so the
+// column/row-cell invariant convention 7 relies on never diverges
+// (convention 8: a divergence surfaces as a table.renderRow panic, not a
+// failed assertion).
 type Model struct {
 	list listview.Model[provider.Notification]
 
@@ -62,35 +62,33 @@ type Model struct {
 
 	// reasonFilterActive and reasonFilter together encode the `f` cycle's
 	// current position. reasonFilterActive == false means "all reasons" —
-	// the reset/default position reachable by cycling alone (decision 53).
+	// the reset/default position reachable by cycling alone.
 	reasonFilterActive bool
 	reasonFilter       provider.NotificationReason
 
-	// capabilityUnsupported puts View() into decision 63's fourth render
-	// state (see capabilityUnsupportedBody's doc comment for why it is
-	// unreachable through the tab in phase 1). Set only by
-	// SetCapabilityUnsupported; nothing in production ever calls it today.
+	// capabilityUnsupported puts View() into its fourth render state (see
+	// capabilityUnsupportedBody's doc comment for why it is unreachable
+	// through the tab today). Set only by SetCapabilityUnsupported; nothing in
+	// production ever calls it today.
 	capabilityUnsupported bool
 
-	// marker issues the mark-read/mark-done API calls behind `u`/`d` (task
-	// 14, decisions 13, 25, 43). It is exactly provider.NotificationSource —
-	// the composite already routes MarkRead/MarkDone by Identity.Kind over
-	// capable backends and reports a descriptive per-kind error when none
-	// match, so the pane needs no routing logic of its own, only the two
-	// mutating methods.
+	// marker issues the mark-read/mark-done API calls behind `u`/`d`. It is
+	// exactly provider.NotificationSource — the composite already routes
+	// MarkRead/MarkDone by Identity.Kind over capable backends and reports a
+	// descriptive per-kind error when none match, so the pane needs no routing
+	// logic of its own, only the two mutating methods.
 	//
 	// Nil-safe by construction: NewModelWithStyles is called unconditionally
-	// from app.NewModel even for a capability-absent or nil provider
-	// (Decision 61), so a nil marker is a reachable state, not a defensive
-	// fallback. markRead/markDone both guard it explicitly before issuing a
-	// tea.Cmd.
+	// from app.NewModel even for a capability-absent or nil provider, so a nil
+	// marker is a reachable state, not a defensive fallback. markRead/markDone
+	// both guard it explicitly before issuing a tea.Cmd.
 	marker provider.NotificationSource
 
 	// overrides holds the pane's local optimistic intent for in-flight or
 	// already-confirmed `u`/`d` actions, applied on top of the feed by
-	// visibleItems until the debounce window expires (the spec's Unknowns
-	// section: GitHub's read state can be eventually consistent, so a poll
-	// landing right after a PATCH can still report unread).
+	// visibleItems until the debounce window expires (GitHub's read state can
+	// be eventually consistent, so a poll landing right after a PATCH can still
+	// report unread).
 	//
 	// An entry outliving its own API call is the point, not an oversight: once
 	// the call succeeds commitOverride writes the mark into feed and the entry
@@ -98,42 +96,40 @@ type Model struct {
 	// Nothing removes a successful entry at the time it settles, so SetFeed
 	// sweeps expired ones (prunedOverrides) to stop the map growing for the
 	// life of the session. Rollback on API failure is dropping the entry here —
-	// never deleting/re-inserting a row — so decision 45's merge-sort total
-	// order is never reproduced by hand and can never be gotten wrong.
+	// never deleting/re-inserting a row — so the merge-sort total order is
+	// never reproduced by hand and can never be gotten wrong.
 	//
 	// Keyed by identityKey (Kind+Scope+ID) rather than provider.Identity
 	// itself, matching Identity.SameItem's own comparison: ScopeDisplay is a
 	// presentation detail that must never split one logical row's override
 	// in two.
 	//
-	// Task 16's UnreadCount() applies these same overrides (via applyOverrides)
-	// over m.feed, so a successful `u` clears the row on screen and decrements
-	// the footer badge in the same tick — the count and the rows never
-	// disagree, per decision 68.
+	// UnreadCount() applies these same overrides (via applyOverrides) over
+	// m.feed, so a successful `u` clears the row on screen and decrements the
+	// footer badge in the same tick — the count and the rows never disagree.
 	overrides map[identityKey]override
 
 	// now lets tests replace time.Now for deterministic debounce-window
 	// assertions, mirroring internal/ui/metrics/list.go's own now field.
 	// Always set by NewModelWithStyles; use the clock() accessor rather than
-	// calling m.now directly so a zero-value Model (Decision 61's documented
-	// latent hazard — never reachable through production code today) cannot
-	// nil-deref here even if some future caller reaches this path.
+	// calling m.now directly so a zero-value Model cannot nil-deref here even
+	// if some future caller reaches this path.
 	now func() time.Time
 
 	// statusMessage carries the outcome of the last `o` (open in browser)
 	// attempt, mirroring internal/ui/metrics/list.go's own statusMessage
 	// field (metrics has the identical dead-rendering-path bug this field's
 	// own consumer, app.syncNotificationsActionMessage, exists to work
-	// around for this pane — out of scope to also fix for metrics). Phase 1
-	// has no detail view (EnterDetail is a no-op stub), so unlike
+	// around for this pane — out of scope to also fix for metrics). There is
+	// no detail view today (EnterDetail is a no-op stub), so unlike
 	// pullrequests.DetailModel this is the pane's only status-message
 	// surface — GetStatusMessage returns it in preference to
 	// m.list.GetStatusMessage(), which always reports "" in list mode.
 	//
 	// Only ever non-empty for `o`'s two failure outcomes (empty WebURL, a
-	// failed browser launch), a failed `u`/`d` (task 19, task 14 reviewer
-	// finding 6), and the disable action's outcome (task 19, decision 17) —
-	// success sets it back to "" for `o` and for a mark (see handleMarkResult),
+	// failed browser launch), a failed `u`/`d`, and the disable action's
+	// outcome — success sets it back to "" for `o` and for a mark (see
+	// handleMarkResult),
 	// a deliberately silent outcome for `o` (the browser window appearing is
 	// the feedback) that doubles as one of two clearing triggers. The other is
 	// HandleFetchResult, which resets it unconditionally on every fetch, so a
@@ -141,31 +137,29 @@ type Model struct {
 	// poll refreshed the feed while they were gone."
 	statusMessage string
 
-	// cfg is the config the disable action (task 19, decision 17, Part B)
-	// mutates and saves. It is the same *config.Config the rest of app.Model
-	// holds — NewModelWithStyles never copies it — so a successful disable is
-	// visible to the rest of the app immediately, even though (per disablePane's
-	// doc comment) it only changes what the *next* restart's tab list looks
-	// like. May be nil (NewModel's zero-config path, and any pane built before
-	// a config existed); disablePane reports failure rather than panicking.
+	// cfg is the config the disable action mutates and saves. It is the same
+	// *config.Config the rest of app.Model holds — NewModelWithStyles never
+	// copies it — so a successful disable is visible to the rest of the app
+	// immediately, even though (per disablePane's doc comment) it only changes
+	// what the *next* restart's tab list looks like. May be nil (NewModel's
+	// zero-config path, and any pane built before a config existed); disablePane
+	// reports failure rather than panicking.
 	cfg *config.Config
 
-	// disableConfirmPending is the confirm gate for the `x` disable action
-	// (task 19, decision 17, Part B): true only in the window between the
-	// first (arming) press and the second (confirming) press, so a single
-	// keypress can never write the user's config. Reset by any key other than
-	// a second x, and unconditionally by HandleFetchResult, so an arm can
-	// never survive past the error occurrence that raised it into some later,
-	// unrelated error.
+	// disableConfirmPending is the confirm gate for the `x` disable action:
+	// true only in the window between the first (arming) press and the second
+	// (confirming) press, so a single keypress can never write the user's
+	// config. Reset by any key other than a second x, and unconditionally by
+	// HandleFetchResult, so an arm can never survive past the error occurrence
+	// that raised it into some later, unrelated error.
 	disableConfirmPending bool
 }
 
 // markDebounceWindow bounds how long a local u/d override outweighs a poll
-// that has not yet caught up. It is finite on purpose: Decision 5 keeps
-// phase 1 free of persisted local read/done state, so this is a short-lived
-// debounce buffer, not a second source of truth — once it elapses, a poll
-// that still disagrees with the local action is trusted again rather than
-// held back forever.
+// that has not yet caught up. It is finite on purpose: the pane keeps no
+// persisted local read/done state, so this is a short-lived debounce buffer,
+// not a second source of truth — once it elapses, a poll that still disagrees
+// with the local action is trusted again rather than held back forever.
 const markDebounceWindow = 30 * time.Second
 
 // overrideKind distinguishes the two `u`/`d` optimistic intents held in
@@ -174,8 +168,8 @@ type overrideKind int
 
 const (
 	// overrideRead forces the row's effective Read to true — u's optimistic
-	// mark-read. One-way per Decision 13: there is no corresponding
-	// "unread" kind, since GitHub exposes no mark-unread endpoint.
+	// mark-read. One-way: there is no corresponding "unread" kind, since GitHub
+	// exposes no mark-unread endpoint.
 	overrideRead overrideKind = iota
 	// overrideHidden removes the row from the visible feed entirely — d's
 	// optimistic mark-done.
@@ -215,9 +209,10 @@ func keyOf(id provider.Identity) identityKey {
 // is issued from the notifications tab but its result lands one HTTP round trip
 // later, by which point the user may well have pressed 2 — and a result handed
 // to the pull-requests pane is silently discarded, leaving the override as the
-// sole holder of the mark and re-opening decision 65's resurrection defect.
-// `polling.PipelineRunsUpdated` is the existing precedent for a pane-bound
-// message the top-level switch must handle regardless of active tab.
+// sole holder of the mark and re-opening the defect where a dropped result lets
+// an expired override resurrect the row. `polling.PipelineRunsUpdated` is the
+// existing precedent for a pane-bound message the top-level switch must handle
+// regardless of active tab.
 //
 // Its fields stay unexported deliberately: app needs to *recognise* and forward
 // this message, never construct or inspect one. The pane owns the payload.
@@ -227,11 +222,11 @@ type MarkResultMsg struct {
 	err  error
 }
 
-// openURLResultMsg reports the outcome of an `o` (open in browser) attempt
-// (decision 3). Unlike MarkResultMsg it needs no cross-tab routing: a
-// browser launch is a near-instant OS call, not an API round trip the user
-// is likely to have switched tabs during, so app forwards it like any other
-// message — only while the notifications tab is active.
+// openURLResultMsg reports the outcome of an `o` (open in browser) attempt.
+// Unlike MarkResultMsg it needs no cross-tab routing: a browser launch is a
+// near-instant OS call, not an API round trip the user is likely to have
+// switched tabs during, so app forwards it like any other message — only
+// while the notifications tab is active.
 type openURLResultMsg struct {
 	err error
 }
@@ -278,11 +273,10 @@ var notificationColumns = []listview.ColumnSpec{
 // "read" glyph would compete with the Reason column's own glyph for
 // attention.
 //
-// Decision 56's caveat applies here exactly as it does to titleStyle: a
-// rendered-bytes comparison cannot distinguish styled from unstyled output
-// in a test binary, so the emphasis is asserted on the style object while
-// the glyph itself — a plain rune, not an escape sequence — is asserted on
-// the cell text.
+// The same testing caveat as titleStyle applies here: a rendered-bytes
+// comparison cannot distinguish styled from unstyled output in a test binary,
+// so the emphasis is asserted on the style object while the glyph itself — a
+// plain rune, not an escape sequence — is asserted on the cell text.
 const unreadGlyph = "●"
 
 // Cell indices into the row layout built by toRows, matching
@@ -308,17 +302,16 @@ func NewModel() Model {
 }
 
 // NewModelWithStyles creates a new notifications pane model with custom
-// styles, the marker used for `u`/`d` (task 14), and the config used to
-// derive fetch-time NotifOpts (task 15, decision 52). marker may be nil —
-// see Model.marker's doc comment; that is a reachable state, not a caller
-// error. cfg may also be nil (NotifOptsFromConfig's own nil contract).
+// styles, the marker used for `u`/`d`, and the config used to derive
+// fetch-time NotifOpts. marker may be nil — see Model.marker's doc comment;
+// that is a reachable state, not a caller error. cfg may also be nil
+// (NotifOptsFromConfig's own nil contract).
 //
-// The constructed pane starts in listview's loading state (decision 64):
-// Init() cannot mutate model state (tea.Model.Init has a value receiver), so
-// the spinner has to be turned on here, at construction, to cover the gap
-// between the model existing and Init()'s own fetch cmd resolving — without
-// this, Loading() reads false and View()'s empty-inbox render fires for the
-// whole of that window.
+// The constructed pane starts in listview's loading state: Init() cannot
+// mutate model state (tea.Model.Init has a value receiver), so the spinner has
+// to be turned on here, at construction, to cover the gap between the model
+// existing and Init()'s own fetch cmd resolving — without this, Loading() reads
+// false and View()'s empty-inbox render fires for the whole of that window.
 func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource, cfg *config.Config) Model {
 	lvCfg := listview.Config[provider.Notification]{
 		LoadingMessage: "Loading notifications...",
@@ -327,10 +320,9 @@ func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource, cf
 		ToRows:         toRows,
 		ToColumns:      toColumns,
 		Fetch:          fetchNotifications(marker, cfg),
-		// No detail view in phase 1 (`o` opens the browser per decision 3;
-		// there is nothing else to drill into). A harmless no-op stub avoids
-		// a nil-func panic if enter is pressed, without building real
-		// navigation (out of scope for this task).
+		// No detail view today (`o` opens the browser; there is nothing else
+		// to drill into). A harmless no-op stub avoids a nil-func panic if
+		// enter is pressed, without building real navigation.
 		EnterDetail: func(item provider.Notification, st *styles.Styles, w, h int) (listview.DetailView, tea.Cmd) {
 			return nil, nil
 		},
@@ -346,7 +338,7 @@ func NewModelWithStyles(s *styles.Styles, marker provider.NotificationSource, cf
 
 // notificationsFetchMsg is the private, pane-owned result of the pane's own
 // Fetch closure — the result of Init()'s initial fetch and of a real `r`
-// refresh (FORWARD item 1). It is deliberately unexported, mirroring
+// refresh. It is deliberately unexported, mirroring
 // internal/ui/pipelines/list.go's pipelineRunsMsg: the app-level poller's
 // own fetch result is a separate, exported message
 // (polling.NotificationsFetchedMsg) that reaches this pane through
@@ -359,11 +351,11 @@ type notificationsFetchMsg struct {
 
 // fetchNotifications returns the listview.Config.Fetch closure this pane's
 // own Init()/`r` path uses: it calls marker.List with cfg-derived NotifOpts
-// (decision 52) and applies task 10's config filter to a successful result,
-// mirroring exactly what HandleFetchResult expects a caller to have already
-// done for a poller-driven result. A nil marker (Decision 61's reachable
-// capability-absent/disabled-pane state) fetches nothing and reports no
-// error — there is no capability to report a failure about.
+// and applies the config filter to a successful result, mirroring exactly what
+// HandleFetchResult expects a caller to have already done for a poller-driven
+// result. A nil marker (the reachable capability-absent/disabled-pane state)
+// fetches nothing and reports no error — there is no capability to report a
+// failure about.
 func fetchNotifications(marker provider.NotificationSource, cfg *config.Config) func() tea.Cmd {
 	return func() tea.Cmd {
 		return func() tea.Msg {
@@ -381,8 +373,7 @@ func fetchNotifications(marker provider.NotificationSource, cfg *config.Config) 
 
 // clock returns the pane's current time, via now when set (always true for
 // a pane built through NewModelWithStyles) and falling back to time.Now
-// otherwise, so a zero-value Model (Decision 61's documented latent hazard)
-// cannot nil-deref here.
+// otherwise, so a zero-value Model cannot nil-deref here.
 func (m Model) clock() time.Time {
 	if m.now != nil {
 		return m.now()
@@ -402,11 +393,9 @@ func (m Model) Init() tea.Cmd {
 // openURLResultMsg (the result of an `o` browser-launch attempt) is likewise
 // handled unconditionally here rather than in the key-guarded switch below,
 // since it is not itself a tea.KeyMsg. Otherwise: the `f` key cycles the
-// reason filter (decision 53), `u`/`d` mark read/done (task 14) and `o` opens
-// the selected row's WebURL (decision 3) when canTriage allows it, `r` now
-// reaches listview's own real refresh handling (decision 58's stopgap is
-// gone — fetchNotifications is a real Fetch hook, not a stub), and every
-// other message is forwarded to the underlying listview.
+// reason filter, `u`/`d` mark read/done and `o` opens the selected row's
+// WebURL when canTriage allows it, `r` reaches listview's own real refresh
+// handling, and every other message is forwarded to the underlying listview.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if res, ok := msg.(MarkResultMsg); ok {
 		return m.handleMarkResult(res), nil
@@ -418,12 +407,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if res.err != nil {
 			m.statusMessage = "Failed to open browser: " + res.err.Error()
 		} else {
-			// Silent success (decision 3, reviewer finding): the browser
-			// window appearing is the feedback. Setting statusMessage to ""
-			// here also doubles as "the next successful action clears it" —
-			// one of two clearing triggers, alongside HandleFetchResult's own
-			// unconditional reset on every fetch below — so a prior failure
-			// message never lingers past the next `o` that actually works.
+			// Silent success: the browser window appearing is the feedback.
+			// Setting statusMessage to "" here also doubles as "the next
+			// successful action clears it" — one of two clearing triggers,
+			// alongside HandleFetchResult's own unconditional reset on every
+			// fetch below — so a prior failure message never lingers past the
+			// next `o` that actually works.
 			m.statusMessage = ""
 		}
 		return m, nil
@@ -469,9 +458,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 // canTriage reports whether `u`/`d`/`o` make sense right now: there must be a
 // visible row under the cursor, and the pane must not be showing one of
-// View()'s error/capability render states (task 13, decisions 17, 63) — both
-// hide the table entirely, so a keypress reaching m.list in either state
-// would act on a row the user cannot even see. listview.HandleFetchResult's
+// View()'s error/capability render states — both hide the table entirely, so
+// a keypress reaching m.list in either state would act on a row the user
+// cannot even see. listview.HandleFetchResult's
 // error path leaves stale items in place (see listview.Err's doc comment),
 // so the error check is needed in addition to the emptiness check, not
 // implied by it.
@@ -483,9 +472,9 @@ func (m Model) canTriage() bool {
 }
 
 // markRead issues one MarkRead call for the row under the cursor and marks
-// it read optimistically (task 14). One-way per Decision 13: an already-Read
-// row — whether the feed itself says so, or a still-active overrideRead
-// already does — is left alone: no second MarkRead call, and no toggle back
+// it read optimistically. One-way: an already-Read row — whether the feed
+// itself says so, or a still-active overrideRead already does — is left
+// alone: no second MarkRead call, and no toggle back
 // to unread. item.Read here is the row's *effective* state (visibleItems
 // already applied any active override), so this single check covers both
 // cases without consulting m.overrides directly.
@@ -504,9 +493,9 @@ func (m Model) markRead() (Model, tea.Cmd) {
 }
 
 // markDone issues one MarkDone call for the row under the cursor and removes
-// it from view optimistically (task 14). Restoring it on failure is dropping
-// the override — never re-inserting into m.feed — so Decision 45's merge-sort
-// total order is never reproduced by hand.
+// it from view optimistically. Restoring it on failure is dropping the
+// override — never re-inserting into m.feed — so the merge-sort total order is
+// never reproduced by hand.
 func (m Model) markDone() (Model, tea.Cmd) {
 	item, ok := m.selectedItem()
 	if !ok || m.marker == nil {
@@ -528,19 +517,18 @@ func (m Model) markDone() (Model, tea.Cmd) {
 	return m, m.markCmd(id, overrideHidden)
 }
 
-// openInBrowser opens the selected row's WebURL (decision 3). The row comes
-// from selectedItem, which reads m.list.Items() — the filtered/overridden
-// view the user is actually looking at (visibleItems' output), never the raw
-// m.feed — so an active `f` reason filter can never make `o` open something
-// other than the highlighted row. The !ok guard mirrors markRead/markDone's
-// own defensive re-check even though the call site already gated on
-// canTriage.
+// openInBrowser opens the selected row's WebURL. The row comes from
+// selectedItem, which reads m.list.Items() — the filtered/overridden view the
+// user is actually looking at (visibleItems' output), never the raw m.feed —
+// so an active `f` reason filter can never make `o` open something other than
+// the highlighted row. The !ok guard mirrors markRead/markDone's own defensive
+// re-check even though the call site already gated on canTriage.
 //
 // An empty WebURL (types.go's documented "no usable repository URL at all"
-// case, task 5's fallback chain exhausted) is treated as nothing to open,
-// per that field's contract — not attempted, and openURL is never called for
-// it. A status message tells the user why nothing happened rather than
-// staying silent.
+// case, the fallback chain exhausted) is treated as nothing to open, per that
+// field's contract — not attempted, and openURL is never called for it. A
+// status message tells the user why nothing happened rather than staying
+// silent.
 func (m Model) openInBrowser() (Model, tea.Cmd) {
 	item, ok := m.selectedItem()
 	if !ok {
@@ -558,7 +546,7 @@ func (m Model) openInBrowser() (Model, tea.Cmd) {
 // withOverride returns a copy of m with an override recorded for key,
 // expiring markDebounceWindow after the current clock reading, and
 // immediately re-applies it to the visible list (the "optimistic" half of
-// task 14 — the row updates before the API call resolves).
+// `u`/`d` — the row updates before the API call resolves).
 //
 // Always allocates a new map rather than mutating m.overrides in place: every
 // other mutating method on this pane (reasonFiltered, visibleItems) hands
@@ -576,8 +564,8 @@ func (m Model) withOverride(key identityKey, kind overrideKind) Model {
 }
 
 // dropOverride returns a copy of m with key's override removed — the
-// rollback path for a failed MarkRead/MarkDone (task 14). This is
-// deliberately NOT a no-op: dropping the override is what un-hides a failed
+// rollback path for a failed MarkRead/MarkDone. This is deliberately NOT a
+// no-op: dropping the override is what un-hides a failed
 // `d` and un-marks-read a failed `u`. It is a complete rollback because only
 // commitOverride ever writes a mark into m.feed and it runs solely on the
 // success path, so on failure the override is still the only thing holding the
@@ -621,15 +609,13 @@ func (m Model) markCmd(id provider.Identity, kind overrideKind) tea.Cmd {
 // held feed via commitOverride while deliberately leaving the override entry
 // in place.
 //
-// Part C of task 19 closes reviewer finding 6 here: a failed `u`/`d` used to
-// roll back silently, so a user pressing `d` against a 403 saw the row vanish
-// and silently reappear a round trip later, indistinguishable from a
-// rendering glitch. Failure now sets m.statusMessage to a message naming the
-// action and the underlying error; app.go's syncNotificationsActionMessage
-// (which already implements decisions 81/82 correctly) mirrors it onto the
-// status bar. A success clears statusMessage rather than leaving a stale
-// failure message from an earlier action lingering after a later one
-// succeeds.
+// A failed `u`/`d` used to roll back silently, so a user pressing `d` against
+// a 403 saw the row vanish and silently reappear a round trip later,
+// indistinguishable from a rendering glitch. Failure now sets m.statusMessage
+// to a message naming the action and the underlying error; app.go's
+// syncNotificationsActionMessage mirrors it onto the status bar. A success
+// clears statusMessage rather than leaving a stale failure message from an
+// earlier action lingering after a later one succeeds.
 //
 // Success must not be a no-op. The override alone is a *finite* debounce
 // buffer, so leaving the confirmed mark resting on it means the row reappears
@@ -686,9 +672,9 @@ func markFailureMessage(kind overrideKind, err error) string {
 //     with stale `unread`, because SetFeed replaces m.feed wholesale and would
 //     otherwise reintroduce the row GitHub has not caught up on yet.
 //
-// Once the window elapses a disagreeing poll is trusted again, exactly as
-// Decision 5 intends: phase 1 keeps no persisted local read/done state, so the
-// server is the only long-term source of truth.
+// Once the window elapses a disagreeing poll is trusted again: the pane keeps
+// no persisted local read/done state, so the server is the only long-term
+// source of truth.
 //
 // A key that matches no row in the feed leaves the model untouched (a poll may
 // already have dropped it); the override stays live so a later poll that still
@@ -721,27 +707,26 @@ func (m Model) commitOverride(key identityKey, kind overrideKind) Model {
 	return m.refreshItems()
 }
 
-// View renders task 13's four render states, in priority order, per decision
-// 63:
+// View renders the four render states, in priority order:
 //
 //  1. capability-unsupported (SetCapabilityUnsupported) — unreachable through
-//     the tab in phase 1; see capabilityUnsupportedBody.
-//  2. error — a failed List (decisions 17, 63), differentiated per task 19
-//     into a 403-missing-scope, a 401-expired-token and a generic render (see
-//     errorBody) — or, while the `x` disable action's confirm is armed, task
-//     19/decision 17's confirmation overlay instead (see disableConfirmBody).
+//     the tab today; see capabilityUnsupportedBody.
+//  2. error — a failed List, differentiated into a 403-missing-scope, a
+//     401-expired-token and a generic render (see errorBody) — or, while the
+//     `x` disable action's confirm is armed, the confirmation overlay instead
+//     (see disableConfirmBody).
 //  3. filter-empty — the feed has rows but the active `f` filter matches
-//     none of them (the bug decision 57 measured); see filterEmptyBody.
+//     none of them; see filterEmptyBody.
 //  4. empty inbox — the feed itself has no rows; see emptyInboxBody.
 //
 // Otherwise it delegates to listview's table render, appending the
 // `Filter: <reason>` indicator whenever the `f` cycle is off its "all
-// reasons" position (decision 57): without it, a feed containing no rows of
-// the selected reason would render as the plain empty-inbox text while a
-// user-set filter is what is hiding everything — which is exactly what state
-// 3 above exists to prevent for the *zero-rows* case; the indicator here
-// covers the *non-zero* case, where the table itself is still the right
-// content but needs the same "a filter is active" disclosure.
+// reasons" position: without it, a feed containing no rows of the selected
+// reason would render as the plain empty-inbox text while a user-set filter is
+// what is hiding everything — which is exactly what state 3 above exists to
+// prevent for the *zero-rows* case; the indicator here covers the *non-zero*
+// case, where the table itself is still the right content but needs the same
+// "a filter is active" disclosure.
 func (m Model) View() string {
 	if m.capabilityUnsupported {
 		return capabilityUnsupportedBody()
@@ -761,7 +746,7 @@ func (m Model) View() string {
 		// for a genuinely empty inbox with a stale-but-active `f` position
 		// (e.g. the previously-selected reason's last row was marked done),
 		// which must still read as "you're clear", not "a filter is hiding
-		// something" (decisions 57, 63).
+		// something".
 		if m.reasonFilterActive && len(m.feed) > 0 {
 			return filterEmptyBody(m.reasonFilter)
 		}
@@ -785,20 +770,17 @@ func (m Model) filterIndicator() string {
 	return "Filter: " + display.NotificationReasonLabel(m.reasonFilter)
 }
 
-// SetCapabilityUnsupported puts the pane into decision 63's fourth render
-// state.
+// SetCapabilityUnsupported puts the pane into its fourth render state.
 //
-// UNREACHABLE THROUGH THE TAB in phase 1 — nothing in production ever calls
-// this. CompositeProvider.HasNotifications gates the tab itself on
-// capability (decision 11), and the only backend this pane is ever wired to
-// in phase 1 (*github.Adapter, via NewAdapterWithNotifications) satisfies
-// provider.NotificationSource unconditionally once constructed — a nil
-// NotificationsClient is the *error* arm's nil-client message
-// ("github: notifications: no notifications client configured"), not this
-// one (decision 63). This method and capabilityUnsupportedBody exist purely
-// so the state task 13 names is implemented and testable at the pane level,
-// instead of an app-level test that could never fail for the right reason —
-// the same trap decision 59 documents for a nil-provider capability fixture.
+// UNREACHABLE THROUGH THE TAB today — nothing in production ever calls this.
+// CompositeProvider.HasNotifications gates the tab itself on capability, and
+// the only backend this pane is ever wired to today (*github.Adapter, via
+// NewAdapterWithNotifications) satisfies provider.NotificationSource
+// unconditionally once constructed — a nil NotificationsClient is the *error*
+// arm's nil-client message ("github: notifications: no notifications client
+// configured"), not this one. This method and capabilityUnsupportedBody exist
+// purely so the state is implemented and testable at the pane level, instead
+// of an app-level test that could never fail for the right reason.
 func (m Model) SetCapabilityUnsupported() Model {
 	m.capabilityUnsupported = true
 	return m
@@ -806,28 +788,25 @@ func (m Model) SetCapabilityUnsupported() Model {
 
 // HandleFetchResult forwards a fetch outcome to the underlying listview.
 //
-// On success it behaves like SetFeed (task 10's config-filtered feed,
-// re-applying whatever `f` position is active per decision 54) so a future
-// caller — task 15's poller — gets the same cursor-preserving behavior
-// whichever entry point it uses. On failure it puts the pane into task 13's
-// error render state without touching the held feed, so a transient failure
-// does not discard rows a later successful poll could otherwise have
-// resumed showing.
+// On success it behaves like SetFeed (the config-filtered feed, re-applying
+// whatever `f` position is active) so a future caller — the poller — gets the
+// same cursor-preserving behavior whichever entry point it uses. On failure it
+// puts the pane into the error render state without touching the held feed, so
+// a transient failure does not discard rows a later successful poll could
+// otherwise have resumed showing.
 //
-// Also clears statusMessage unconditionally, success or failure alike
-// (decision 3, reviewer finding): a fresh fetch is "the next fetch" clearing
-// trigger for a stale `o` outcome — the scenario the reviewer named
-// explicitly ("after ... a poll refreshes the feed"). Cleared here rather
-// than only on the next successful `o` so the message does not survive
+// Also clears statusMessage unconditionally, success or failure alike: a fresh
+// fetch is "the next fetch" clearing trigger for a stale `o` outcome — a stale
+// failure message must not survive a poll refreshing the feed. Cleared here
+// rather than only on the next successful `o` so the message does not survive
 // indefinitely on an inbox the user has since navigated away from and back
 // to, or one a poll has since moved on from entirely.
 //
-// Also resets disableConfirmPending unconditionally (task 19, decision 17,
-// Part B): a fresh fetch means whichever error occurrence armed the confirm
-// is over — success clears the error state outright, and even a repeat
-// failure deserves its own fresh confirm rather than letting a stale arm from
-// a *previous* failure silently confirm on the next `x` press against an
-// unrelated one.
+// Also resets disableConfirmPending unconditionally: a fresh fetch means
+// whichever error occurrence armed the confirm is over — success clears the
+// error state outright, and even a repeat failure deserves its own fresh
+// confirm rather than letting a stale arm from a *previous* failure silently
+// confirm on the next `x` press against an unrelated one.
 func (m Model) HandleFetchResult(items []provider.Notification, err error) Model {
 	m.statusMessage = ""
 	m.disableConfirmPending = false
@@ -838,27 +817,26 @@ func (m Model) HandleFetchResult(items []provider.Notification, err error) Model
 	return m.SetFeed(items)
 }
 
-// emptyInboxBody renders decision 63's first state: the config-filtered feed
+// emptyInboxBody renders the first render state: the config-filtered feed
 // itself has no rows — distinct from filterEmptyBody, where rows exist but
 // the active `f` filter hides all of them. Reads as "you're clear", never as
-// an error, and per decision 58's `r` stopgap must not tell the user to
-// press a key this pane currently swallows.
+// an error, and must not tell the user to press a key this pane currently
+// swallows.
 //
 // Keeps listview's original "No notifications found." headline on purpose:
 // internal/app/app_test.go's notificationsPaneMarker constant pins that
 // exact string as the discriminator between this pane rendering and a
-// sibling pane's fall-through (decision 60) — only the misleading "Press r
-// to refresh" instruction is removed.
+// sibling pane's fall-through — only the misleading "Press r to refresh"
+// instruction is removed.
 func emptyInboxBody() string {
 	return "No notifications found.\n\nYou're all caught up."
 }
 
-// filterEmptyBody renders decision 63's second, genuinely reachable state:
-// the feed has rows, but the active `f` reason filter matches none of them.
-// Rendering emptyInboxBody here is the bug decision 57 measured — it tells
-// the user "you're clear" while a filter they set is what is hiding every
-// row. Names the active filter and how to clear it; `f` is never swallowed
-// (decision 58's stopgap is `r`-only), so telling the user to press it is
+// filterEmptyBody renders the second, genuinely reachable state: the feed has
+// rows, but the active `f` reason filter matches none of them. Rendering
+// emptyInboxBody here would be a bug — it tells the user "you're clear" while a
+// filter they set is what is hiding every row. Names the active filter and how
+// to clear it; `f` is never swallowed, so telling the user to press it is
 // honest.
 func filterEmptyBody(reason provider.NotificationReason) string {
 	return fmt.Sprintf(
@@ -875,10 +853,9 @@ func filterEmptyBody(reason provider.NotificationReason) string {
 // to offer: every fixable failure here is fixed with a classic token.
 const classicTokenSettingsURL = "https://github.com/settings/tokens"
 
-// errorBody renders decision 63's fourth state: a failed List call. Task 19
-// recovers *github.APIError via errors.As to tell three cases apart, each
-// with its own distinct render so decision 63's mutual-distinguishability
-// rule holds pairwise:
+// errorBody renders the error state: a failed List call. It recovers
+// *github.APIError via errors.As to tell three cases apart, each with its own
+// distinct render so no two error renders can be confused:
 //
 //   - A 403 that is not rate-limiting: scopeErrorBody — names the
 //     "notifications" scope and how to add it.
@@ -892,8 +869,8 @@ const classicTokenSettingsURL = "https://github.com/settings/tokens"
 //     misleading.
 //
 // All three end with disableHint, the shared "press x to disable this pane"
-// pointer into task 19's Part B — a shared suffix does not erase each
-// variant's distinct, unique-substring identifying content above it.
+// pointer — a shared suffix does not erase each variant's distinct,
+// unique-substring identifying content above it.
 func errorBody(err error) string {
 	var apiErr *github.APIError
 	if errors.As(err, &apiErr) {
@@ -963,17 +940,17 @@ func expiredTokenErrorBody(err error) string {
 
 // genericErrorBody renders every other failure: non-*APIError errors (the
 // nil-client message chief among them), rate-limited 403s, and any status
-// code that is neither 403 nor 401. Never shows the scope banner — this is
-// exactly the case task 19 stops attaching it to falsely.
+// code that is neither 403 nor 401. Never shows the scope banner — attaching
+// it here would be falsely misleading.
 func genericErrorBody(err error) string {
 	return fmt.Sprintf("Notifications unavailable: %v\n\n%s", err, disableHint())
 }
 
 // disableHint is the shared closing line across all three error renders,
-// pointing at task 19 Part B's in-view disable action. Takes effect at the
-// next restart (decision 61: buildEnabledTabs computes the tab list once at
-// NewModel construction), which this sentence says outright rather than
-// implying the tab disappears immediately.
+// pointing at the in-view disable action. Takes effect at the next restart
+// (buildEnabledTabs computes the tab list once at NewModel construction),
+// which this sentence says outright rather than implying the tab disappears
+// immediately.
 func disableHint() string {
 	return fmt.Sprintf("Press %s to disable this pane (takes effect on next restart).", disablePaneKey)
 }
@@ -988,19 +965,18 @@ func orNone(s string) string {
 	return s
 }
 
-// capabilityUnsupportedBody renders decision 63's third, unreachable-in-phase-1
-// state. See SetCapabilityUnsupported's doc comment for why nothing in
-// production ever reaches this.
+// capabilityUnsupportedBody renders the third, currently-unreachable state.
+// See SetCapabilityUnsupported's doc comment for why nothing in production
+// ever reaches this.
 func capabilityUnsupportedBody() string {
 	return "Notifications are not supported by this configuration.\n\nNo configured backend implements the notifications capability."
 }
 
-// disablePaneKey is task 19 Part B's in-view disable action, reachable only
-// from the error state (see errorBody's disableHint and View()'s
-// disableConfirmPending branch). Chosen deliberately free of every key this
-// pane and app.go's top-level switch already reserve: not d/u/o (triage),
-// not f (reason filter), not r (decision 58's refresh stopgap), and not
-// app.go's q/ctrl+c/?/t/1-5/left/right.
+// disablePaneKey is the in-view disable action, reachable only from the error
+// state (see errorBody's disableHint and View()'s disableConfirmPending
+// branch). Chosen deliberately free of every key this pane and app.go's
+// top-level switch already reserve: not d/u/o (triage), not f (reason filter),
+// not r (the refresh key), and not app.go's q/ctrl+c/?/t/1-5/left/right.
 const disablePaneKey = "x"
 
 // disableConfirmBody renders the one-press-armed, confirm-on-second-press
@@ -1038,17 +1014,17 @@ func (m Model) handleDisableKey() Model {
 	return m.disablePane()
 }
 
-// disablePane commits task 19 Part B's confirmed disable action: it
-// idempotently appends "notifications" to m.cfg.DisabledPanes and calls
-// Config.Save() — the same *config.Config pointer app.go holds (see the cfg
-// field's doc comment), never a second write path, so task 18's round-trip
-// preservation guarantees apply here too. Existing entries (e.g. a prior
-// "metrics" disable) are preserved, not replaced.
+// disablePane commits the confirmed disable action: it idempotently appends
+// "notifications" to m.cfg.DisabledPanes and calls Config.Save() — the same
+// *config.Config pointer app.go holds (see the cfg field's doc comment), never
+// a second write path, so the config round-trip preservation guarantees apply
+// here too. Existing entries (e.g. a prior "metrics" disable) are preserved,
+// not replaced.
 //
 // A nil m.cfg (never true in production, since app.go always passes its own
 // config pointer, but possible in a hand-built test Model) and a Save()
 // failure both surface visibly through m.statusMessage rather than looking
-// like they worked — Part C's routing of statusMessage to the status bar via
+// like they worked — the routing of statusMessage to the status bar via
 // app.go's syncNotificationsActionMessage applies here identically.
 func (m Model) disablePane() Model {
 	m.disableConfirmPending = false
@@ -1091,15 +1067,14 @@ func containsString(list []string, s string) bool {
 
 // ReasonFilter reports the `f` cycle's current position: the selected
 // NotificationReason and whether a reason filter is active at all. A false
-// second return is the "all reasons" position (decision 57) — exported
-// because tasks 13 and 16 cannot tell an empty inbox from a filter that hides
-// every row without it.
+// second return is the "all reasons" position — exported because callers
+// cannot tell an empty inbox from a filter that hides every row without it.
 func (m Model) ReasonFilter() (provider.NotificationReason, bool) {
 	return m.reasonFilter, m.reasonFilterActive
 }
 
-// GetContextItems returns context bar items for the current view. Phase 1
-// has no detail view (EnterDetail is a no-op stub), so this forwards straight
+// GetContextItems returns context bar items for the current view. There is no
+// detail view today (EnterDetail is a no-op stub), so this forwards straight
 // to the underlying listview with no branching, unlike pullrequests.Model's
 // diff-view special case.
 func (m Model) GetContextItems() []components.ContextItem {
@@ -1114,8 +1089,8 @@ func (m Model) GetScrollPercent() float64 {
 // GetStatusMessage returns the status message for the current view.
 // statusMessage (the outcome of the pane's own `o` handling) takes
 // precedence over the underlying listview's, which always reports "" in
-// list mode — phase 1's only view mode for this pane (see the statusMessage
-// field's doc comment).
+// list mode — this pane's only view mode (see the statusMessage field's doc
+// comment).
 func (m Model) GetStatusMessage() string {
 	if m.statusMessage != "" {
 		return m.statusMessage
@@ -1129,16 +1104,16 @@ func (m Model) HasContextBar() bool {
 }
 
 // IsSearching returns true if the view has an active text input that should
-// suppress global keyboard shortcuts. Decision 57 sets no FilterFunc in
-// phase 1, so this always forwards false — kept for symmetry with every
-// other pane's app.isActiveViewCapturingInput wiring.
+// suppress global keyboard shortcuts. This pane sets no FilterFunc, so this
+// always forwards false — kept for symmetry with every other pane's
+// app.isActiveViewCapturingInput wiring.
 func (m Model) IsSearching() bool {
 	return m.list.IsSearching()
 }
 
-// SetFeed sets the config-filtered feed (task 10's FilterNotifications
-// output) and re-applies whatever `f` reason filter is currently active on
-// top of it, routing the result through listview.SetItems per decision 54.
+// SetFeed sets the config-filtered feed (FilterNotifications output) and
+// re-applies whatever `f` reason filter is currently active on top of it,
+// routing the result through listview.SetItems.
 func (m Model) SetFeed(feed []provider.Notification) Model {
 	m.feed = feed
 	m.overrides = prunedOverrides(m.overrides, m.clock())
@@ -1172,10 +1147,10 @@ func prunedOverrides(overrides map[identityKey]override, now time.Time) map[iden
 }
 
 // cycleReasonFilter advances the `f` cycle by one step and re-applies it.
-// The cycle visits reasons present in m.feed, in enum order (decision 53) —
-// never feed order (which reshuffles every poll per decision 45) and never
-// the full enum (which would offer Unknown, a value no mapped row can
-// carry — decision 18). The "all reasons" position is the implicit reset:
+// The cycle visits reasons present in m.feed, in enum order — never feed
+// order (which reshuffles every poll) and never the full enum (which would
+// offer Unknown, a value no mapped row can carry). The "all reasons" position
+// is the implicit reset:
 // cycling past the last present reason returns to it, and an empty feed
 // (or a feed with no reasons at all) also resets to it defensively.
 func (m Model) cycleReasonFilter() Model {
@@ -1207,8 +1182,9 @@ func (m Model) cycleReasonFilter() Model {
 // re-derivation landing while a fetch has failed silently replaces the error
 // render with "No notifications found. / You're all caught up." — telling the
 // user their inbox is clear when the fetch actually failed. That is precisely
-// the lie decisions 57 and 63 exist to prevent, and it is worse than either,
-// because the error it hides is the one explaining why there is no data.
+// the lie the empty/filter-empty render states exist to prevent, and it is
+// worse than either, because the error it hides is the one explaining why
+// there is no data.
 //
 // Reachable as: press `d`, a poll fails, then the DELETE result lands. Only the
 // mark-result paths need this — canTriage already refuses `u`/`d` while
@@ -1219,13 +1195,12 @@ func (m Model) cycleReasonFilter() Model {
 // a previous error is the recovery path, and it is asserted by
 // TestView_SuccessfulFeedAfterError_ClearsErrorState.
 //
-// This guard is live, not merely theoretical: task 15 wires both this pane's
-// own Init()/`r` fetch and the app-level poller's push through
-// HandleFetchResult, either of which can now land a failure while a `u`/`d`
-// override is settling. A poll failing mid-debounce, or a real 304 surfacing
-// as an error (an unsolicited 304 — no matching cache — per
-// internal/github/notifications.go), reaches here exactly as the reachability
-// note above describes.
+// This guard is live, not merely theoretical: both this pane's own Init()/`r`
+// fetch and the app-level poller's push route through HandleFetchResult,
+// either of which can land a failure while a `u`/`d` override is settling. A
+// poll failing mid-debounce, or a real 304 surfacing as an error (an
+// unsolicited 304 — no matching cache — per internal/github/notifications.go),
+// reaches here exactly as the reachability note above describes.
 func (m Model) refreshItems() Model {
 	if m.list.Err() != nil {
 		return m
@@ -1234,20 +1209,19 @@ func (m Model) refreshItems() Model {
 }
 
 // setItemsPreservingSelection hands the current override-applied,
-// `f`-filtered view to listview.SetItems (decision 54) and restores the
-// cursor onto the *same item* it was on before, by Identity.SameItem
-// (decision 55).
+// `f`-filtered view to listview.SetItems and restores the cursor onto the
+// *same item* it was on before, by Identity.SameItem.
 //
 // listview.setColumnsAndRows restores the cursor purely positionally — it
 // saves table.Cursor() and re-applies it clamped to the new row count — so
-// narrowing the feed silently moves the selection to a different row.
-// Decision 45 canonicalised the merge's sort order to protect exactly this
-// index-held cursor; an in-pane filter reintroduces the hazard from the other
-// direction, and task 14's `d` would then mark the wrong row done. This same
-// call is what applies a fresh `u`/`d` override immediately (the "optimistic"
-// half of task 14) and what re-applies one after a poll (SetFeed) or a
-// rollback (dropOverride) — a single call site for every path that changes
-// the visible row set, per convention 7.
+// narrowing the feed silently moves the selection to a different row. The
+// merge's sort order was canonicalised to protect exactly this index-held
+// cursor; an in-pane filter reintroduces the hazard from the other direction,
+// and `d` would then mark the wrong row done. This same call is what applies a
+// fresh `u`/`d` override immediately (the "optimistic" half of the mark) and
+// what re-applies one after a poll (SetFeed) or a rollback (dropOverride) — a
+// single call site for every path that changes the visible row set, per
+// convention 7.
 //
 // When the previously selected item did not survive the filter there is
 // nothing to restore to, and listview's clamp is the correct behaviour — so
@@ -1295,9 +1269,9 @@ func (m Model) selectedIdentity() (provider.Identity, bool) {
 // feed (reasonFiltered) with any active `u`/`d` override applied on top —
 // overrideHidden rows dropped, overrideRead rows shown with Read forced true.
 // An override past its debounce window is treated as expired and skipped, so
-// the polled feed's own data wins again (Decision 5: this is a short-lived
-// buffer, not persisted local state) — this is exactly what makes "the
-// debounce window" a real, finite window rather than a permanent override.
+// the polled feed's own data wins again (this is a short-lived buffer, not
+// persisted local state) — this is exactly what makes "the debounce window" a
+// real, finite window rather than a permanent override.
 //
 // Expiry is safe for a mark whose result has been *applied*: commitOverride
 // folded it into m.feed, so the entry left here is redundant with the feed and
@@ -1309,9 +1283,9 @@ func (m Model) selectedIdentity() (provider.Identity, bool) {
 // the sole holder of the mark, so lapsing it re-derives the pre-mark row from an
 // unchanged m.feed with no poll involved. For an *in-flight* mark that is
 // correct — an unconfirmed action reverting after 30s is the intended contract
-// (Decision 5: no persisted local state). It is a defect only if a confirmed
-// result was dropped in transit, which is why app must route MarkResultMsg
-// unconditionally rather than through its active-tab delegate switch.
+// (no persisted local state). It is a defect only if a confirmed result was
+// dropped in transit, which is why app must route MarkResultMsg unconditionally
+// rather than through its active-tab delegate switch.
 //
 // Always a freshly allocated slice when any override is active, for the same
 // reason reasonFiltered is: the pane's held feed must never be aliased or
@@ -1323,11 +1297,11 @@ func (m Model) visibleItems() []provider.Notification {
 // applyOverrides folds Model.overrides on top of base: an overrideHidden
 // entry drops the row, an overrideRead entry forces Read to true, and an
 // expired entry (past its debounce window) is skipped entirely so the
-// underlying data wins again. Factored out of visibleItems so UnreadCount
-// (task 16, decision 68) can apply the exact same override semantics over
-// m.feed directly, without going through reasonFiltered's `f`-cycle
-// narrowing — reusing this logic rather than re-deriving it is what keeps
-// the two call sites from silently drifting apart.
+// underlying data wins again. Factored out of visibleItems so UnreadCount can
+// apply the exact same override semantics over m.feed directly, without going
+// through reasonFiltered's `f`-cycle narrowing — reusing this logic rather
+// than re-deriving it is what keeps the two call sites from silently drifting
+// apart.
 //
 // Always a freshly allocated slice when any override is active, mirroring
 // reasonFiltered: the pane's held feed must never be aliased or mutated by a
@@ -1355,16 +1329,15 @@ func (m Model) applyOverrides(base []provider.Notification) []provider.Notificat
 }
 
 // UnreadCount returns the number of unread rows in m.feed — the
-// config-filtered inbox (decision 21: filters from decision 19's
-// exclude_reasons/exclude_repos/unread_only/only_configured_repos are
-// already applied before the feed reaches the pane) — with any active `u`/`d`
-// override folded on top via applyOverrides, so a row the user has just
-// cleared with `u` (or removed with `d`) is reflected immediately, before the
-// next poll lands.
+// config-filtered inbox (the exclude_reasons/exclude_repos/unread_only/
+// only_configured_repos filters are already applied before the feed reaches
+// the pane) — with any active `u`/`d` override folded on top via
+// applyOverrides, so a row the user has just cleared with `u` (or removed with
+// `d`) is reflected immediately, before the next poll lands.
 //
 // Deliberately over m.feed, never reasonFiltered(): the `f` cycle is an
-// interactive, local view narrowing, not a config filter, and decision 68
-// requires the badge to ignore it — otherwise the count would drop to a
+// interactive, local view narrowing, not a config filter, and the badge must
+// ignore it — otherwise the count would drop to a
 // per-reason subtotal the moment the user pressed `f`, and since the badge
 // is meant to be visible from every tab, that wrong number would follow the
 // user to a tab where the `f` filter producing it is invisible.
@@ -1397,8 +1370,8 @@ func (m Model) reasonFiltered() []provider.Notification {
 
 // presentReasons returns the NotificationReason values that appear in feed,
 // in enum declaration order. NotificationReasonUnknown (the zero value) is
-// always excluded: the wire mapper never emits it (Decision 18), and
-// including it would offer a cycle stop that can never match a real row.
+// always excluded: the wire mapper never emits it, and including it would
+// offer a cycle stop that can never match a real row.
 // Iterating provider.NotificationReasonCount() rather than a hardcoded slice
 // means the cycle stays in sync automatically if the enum ever grows.
 func presentReasons(feed []provider.Notification) []provider.NotificationReason {
@@ -1448,15 +1421,14 @@ func toColumns(_ []provider.Notification) []listview.ColumnSpec {
 //
 //   - The read cell carries unreadGlyph for an unread row and a blank cell
 //     for a read one, styled through readStyle.
-//   - The Repo cell falls back to "—" for an empty ScopeDisplay: decision 35
-//     defaults it to Scope at the adapter boundary, but a thread whose
-//     repository payload is absent leaves both empty, the one case the
-//     mapper cannot fix.
+//   - The Repo cell falls back to "—" for an empty ScopeDisplay: it defaults
+//     to Scope at the adapter boundary, but a thread whose repository payload
+//     is absent leaves both empty, the one case the mapper cannot fix.
 //   - The Title cell is rendered through titleStyle's named style —
 //     styles.Styles.Title (bold) for unread rows, an empty style for read
 //     ones — so unread emphasis is a named style rather than an inline
 //     lipgloss.NewStyle() (convention 6). An empty Title dashes to "—"
-//     before styling (decision 58).
+//     before styling.
 //   - The Updated cell renders "—" for a zero UpdatedAt (the mapper leaves it
 //     zero when the wire omits updated_at), never a year-0001 date.
 func toRows(items []provider.Notification, s *styles.Styles) []table.Row {
@@ -1523,8 +1495,8 @@ func readCell(n provider.Notification, s *styles.Styles) string {
 // that trade deliberately, because persisting the emphasis is the point; read
 // rows have nothing to gain from it.
 //
-// This is split out from titleCell on purpose (decision 56). lipgloss resolves
-// the Ascii profile in a test binary, so Render is the identity function there
+// This is split out from titleCell on purpose. lipgloss resolves the Ascii
+// profile in a test binary, so Render is the identity function there
 // and a rendered-bytes comparison of styled vs. unstyled output is vacuous —
 // deleting the unread branch entirely left the suite green. Returning the
 // lipgloss.Style itself makes convention 6 assertable on the *style object*
@@ -1540,8 +1512,8 @@ func titleStyle(n provider.Notification, s *styles.Styles) lipgloss.Style {
 // titleCell returns the Title column's cell text for a notification, rendered
 // through titleStyle's named style.
 //
-// An empty Title falls back to "—" (decision 58), dashed *before* the style is
-// applied so an untitled unread row still shows the dash: Title comes verbatim
+// An empty Title falls back to "—", dashed *before* the style is applied so an
+// untitled unread row still shows the dash: Title comes verbatim
 // from thread.Subject.Title with no wire-level fallback, and a blank cell in
 // the 60%-width column reads as a rendering bug rather than as missing data.
 func titleCell(n provider.Notification, s *styles.Styles) string {

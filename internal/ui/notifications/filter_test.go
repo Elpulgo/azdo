@@ -51,10 +51,10 @@ func TestFilterNotifications_NilConfig_ReturnsCopyOfEveryRow(t *testing.T) {
 	got := FilterNotifications(rows, nil)
 	assertIDs(t, got, "1", "2")
 
-	// Decision 52a: the nil-cfg path allocates like every other path, so the
-	// caller's slice is not handed back. `return rows` would make this
-	// mutation visible in the caller's feed, which the pane keeps unfiltered
-	// so it can re-apply task 11's interactive `f` filter.
+	// The nil-cfg path allocates like every other path, so the caller's slice
+	// is not handed back. `return rows` would make this mutation visible in
+	// the caller's feed, which the pane keeps unfiltered so it can re-apply its
+	// interactive `f` filter.
 	got[0].Title = "MUTATED"
 	if rows[0].Title == "MUTATED" {
 		t.Fatal("nil-cfg result aliases the caller's slice (return rows instead of a copy?)")
@@ -90,7 +90,7 @@ func TestFilterNotifications_ZeroValueConfig_PassesEverythingThrough(t *testing.
 	assertIDs(t, got, "1", "2", "3")
 }
 
-// TestFilterNotifications_ZeroValueConfig_NotAliased pins decision 52a on the
+// TestFilterNotifications_ZeroValueConfig_NotAliased pins non-aliasing on the
 // zero-knob `default:` selection branch. That branch is the shipped default
 // config -- the most-exercised path in the product -- and it is also the only
 // one where no row is ever dropped, so no length or content assertion can
@@ -127,10 +127,10 @@ func TestFilterNotifications_OnlyConfiguredRepos_Alone(t *testing.T) {
 }
 
 // TestFilterNotifications_OnlyConfiguredRepos_CaseInsensitiveBothDirections
-// pins that BOTH sides of the github.repos lookup are lower-cased (decision
-// 51's case rule, applied to the strict-mode selector). One direction per
-// case, because either half alone passes one of them: with only the config
-// key lowered, an uppercase Scope misses; with only the Scope lowered, an
+// pins that BOTH sides of the github.repos lookup are lower-cased. One
+// direction per case, because either half alone passes one of them: with only
+// the config key lowered, an uppercase Scope misses; with only the Scope
+// lowered, an
 // uppercase config entry misses. GitHub owner/repo names are
 // case-insensitive while Scope carries the wire's canonical casing, so a user
 // who types `Acme/Repo` must still see their rows.
@@ -163,8 +163,8 @@ func TestFilterNotifications_OnlyConfiguredRepos_CaseInsensitiveBothDirections(t
 // pins that a stray space in github.repos does not silently empty the feed.
 // `Validate()` accepts "acme/repo " today (its slug check only rejects extra
 // slashes and empty entries), and an untrimmed lookup key then matches no row
-// at all -- the strict-mode equivalent of the empty feed decision 51 avoids
-// for globs by trimming them.
+// at all -- the strict-mode equivalent of the empty feed the glob path avoids
+// by trimming them.
 func TestFilterNotifications_OnlyConfiguredRepos_TrimsConfiguredRepoWhitespace(t *testing.T) {
 	rows := []provider.Notification{
 		row("match", "acme/repo", provider.NotificationReasonOther, false),
@@ -189,11 +189,11 @@ func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
 	assertIDs(t, got, "1")
 }
 
-// --- Decision 51a: the filter mirrors the load-time sanitizer, so a
-// struct-literal config that bypassed it behaves identically ---
+// --- The filter mirrors the load-time sanitizer, so a struct-literal config
+// that bypassed it behaves identically ---
 
 // TestFilterNotifications_IncludeRepos_AllPatternsBad_SelectsEverything pins
-// the fail-open half of decision 51 in the filter itself. Treating an
+// the fail-open half of the guarantee in the filter itself. Treating an
 // uncompilable pattern as "no match" is fail-OPEN for exclude_repos (nothing
 // is excluded) but fail-CLOSED for include_repos: `["[bad"]` would select
 // zero rows and the user's whole feed would vanish. `LoadFrom` drops the
@@ -228,11 +228,11 @@ func TestFilterNotifications_IncludeRepos_OneBadOneGood_GoodStillSelects(t *test
 }
 
 // TestFilterNotifications_IncludeRepos_BadPattern_SameResultFromLoadFromAndLiteral
-// is the property decision 51a actually buys: identical output whatever the
+// is the property the mirror actually buys: identical output whatever the
 // construction path. The LoadFrom config has been through the sanitizer (the
 // bad pattern is gone from the slice); the struct literal has not (it is still
-// there). Tasks 11-13 build their fixtures the second way, so a divergence
-// here would only show up as an empty pane in a hand-built fixture.
+// there). The pane builds its fixtures the second way, so a divergence here
+// would only show up as an empty pane in a hand-built fixture.
 func TestFilterNotifications_IncludeRepos_BadPattern_SameResultFromLoadFromAndLiteral(t *testing.T) {
 	rows := []provider.Notification{
 		row("1", "acme/repo", provider.NotificationReasonOther, false),
@@ -381,14 +381,14 @@ func TestFilterNotifications_FullPrecedenceChain(t *testing.T) {
 	assertIDs(t, got, "survivor")
 }
 
-// --- Decision 50: only_configured_repos overrides include_repos, not intersects ---
+// --- only_configured_repos overrides include_repos, not intersects ---
 
 func TestFilterNotifications_OnlyConfiguredRepos_OverridesIncludeRepos(t *testing.T) {
 	// The configured repo does NOT match include_repos's pattern. Under
-	// override semantics (decision 50) the row survives because
-	// include_repos is ignored entirely. Under (wrong) intersection
-	// semantics it would be dropped for failing the include_repos glob --
-	// this fixture is built specifically so the two behaviours diverge.
+	// override semantics the row survives because include_repos is ignored
+	// entirely. Under (wrong) intersection semantics it would be dropped for
+	// failing the include_repos glob -- this fixture is built specifically so
+	// the two behaviours diverge.
 	cfg := &config.Config{
 		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
 		Notifications: config.NotificationsConfig{
@@ -430,15 +430,15 @@ func TestFilterNotifications_ExcludeReasons_OtherOnlyWhenListedExplicitly(t *tes
 	})
 }
 
-// --- Decision 52: the three knobs the filter must NOT read ---
+// --- The three knobs the filter must NOT read ---
 
-// TestFilterNotifications_NonFilterKnobs_NotReadByFilter pins decision 52's
-// knob scope for all three out-of-scope knobs, not just participating_only.
+// TestFilterNotifications_NonFilterKnobs_NotReadByFilter pins the knob scope
+// for all three out-of-scope knobs, not just participating_only.
 // participating_only and since_days are fetch-time knobs (provider.NotifOpts)
-// and max_items is applied by the composite after the merge sort (decisions
-// 31, 44); honouring any of them here would double-filter -- max_items would
-// truncate a feed the composite already capped, and since_days would re-cut a
-// window the server already applied.
+// and max_items is applied by the composite after the merge sort; honouring
+// any of them here would double-filter -- max_items would truncate a feed the
+// composite already capped, and since_days would re-cut a window the server
+// already applied.
 //
 // The fixture is three rows old enough that any plausible since_days cutoff
 // would drop them, and each case sets a value that would visibly shrink the
@@ -474,8 +474,8 @@ func TestFilterNotifications_NonFilterKnobs_NotReadByFilter(t *testing.T) {
 }
 
 // TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob keeps the
-// original decision 10 compose case: an out-of-scope knob set alongside an
-// in-scope one changes nothing about what the in-scope knob does.
+// compose case: an out-of-scope knob set alongside an in-scope one changes
+// nothing about what the in-scope knob does.
 func TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob(t *testing.T) {
 	rows := []provider.Notification{
 		row("review-row", "acme/repo", provider.NotificationReasonReviewRequested, false),
@@ -499,7 +499,7 @@ func TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob(t *testing.
 	assertIDs(t, got2, "review-row")
 }
 
-// --- Task 9 guarantee: every entry the filter receives via LoadFrom parses ---
+// --- Every entry the filter receives via LoadFrom parses ---
 
 func TestFilterNotifications_ExcludeReasons_EveryLoadedEntryParses(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -524,7 +524,7 @@ notifications:
 	}
 	for _, raw := range cfg.Notifications.ExcludeReasons {
 		if _, ok := provider.ParseNotificationReason(raw); !ok {
-			t.Errorf("cfg.Notifications.ExcludeReasons contains unparseable entry %q; task 9 should have dropped it at load", raw)
+			t.Errorf("cfg.Notifications.ExcludeReasons contains unparseable entry %q; the load-time sanitizer should have dropped it", raw)
 		}
 	}
 	// The typo was dropped, the valid entry survived.
@@ -541,8 +541,8 @@ notifications:
 }
 
 // --- Defence in depth: an unrecognised exclude_reasons entry, even if it
-// bypasses task 9's load-time sanitizer, must be skipped rather than
-// silently degrading to Other (decision 26/52). ---
+// bypasses the load-time sanitizer, must be skipped rather than silently
+// degrading to Other. ---
 
 func TestFilterNotifications_ExcludeReasons_UnrecognisedEntry_SkippedNotOther(t *testing.T) {
 	rows := []provider.Notification{
@@ -666,7 +666,7 @@ func TestMatchesAnyGlob_BadPattern_NeverMatchesAll(t *testing.T) {
 	// a pattern, so it never matches -- match-all would be the worse error
 	// here, since a malformed exclude_repos entry matching everything wipes
 	// the feed. Skipping is the whole story for a subtractive list; a
-	// selection list additionally needs compilableGlobs (decision 51a), which
+	// selection list additionally needs compilableGlobs, which
 	// TestFilterNotifications_IncludeRepos_AllPatternsBad_SelectsEverything
 	// pins.
 	got := matchesAnyGlob([]string{"[bad"}, "acme/repo")
@@ -701,7 +701,7 @@ func TestCompilableGlobs(t *testing.T) {
 	}
 }
 
-// --- NotifOptsFromConfig (task 15, decision 52) ---
+// --- NotifOptsFromConfig ---
 
 func TestNotifOptsFromConfig_NilConfig_ReturnsZeroValue(t *testing.T) {
 	got := NotifOptsFromConfig(nil)
@@ -748,11 +748,10 @@ func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
 }
 
 // TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls
-// pins task 15's decision 75: NotifOpts is now re-derived on every fetch
-// (not frozen at poller construction), so Since must be truncated to the day
-// boundary — otherwise two calls a second apart would each compute a
-// slightly different Since, changing the GitHub request path (buildPath) on
-// every single poll tick.
+// pins that NotifOpts is re-derived on every fetch (not frozen at poller
+// construction), so Since must be truncated to the day boundary — otherwise
+// two calls a second apart would each compute a slightly different Since,
+// changing the GitHub request path (buildPath) on every single poll tick.
 func TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls(t *testing.T) {
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{SinceDays: 3},
@@ -781,8 +780,8 @@ func TestNotifOptsFromConfig_SinceDaysZero_LeavesSinceZeroValue(t *testing.T) {
 
 func TestNotifOptsFromConfig_DoesNotReadFilterOnlyKnobs(t *testing.T) {
 	// exclude_repos/exclude_reasons/unread_only/include_repos/
-	// only_configured_repos are FilterNotifications' concern (decision 52),
-	// not NotifOptsFromConfig's -- this pins that populating them produces no
+	// only_configured_repos are FilterNotifications' concern, not
+	// NotifOptsFromConfig's -- this pins that populating them produces no
 	// observable effect on the derived NotifOpts.
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{

@@ -182,8 +182,8 @@ theme: dark
 	}
 }
 
-// TestConfigSave_PreservesMetricsAndNotifications is the task-18 regression
-// test. Save() only ever calls v.Set() for organization, projects,
+// TestConfigSave_PreservesMetricsAndNotifications is a regression test.
+// Save() only ever calls v.Set() for organization, projects,
 // polling_interval, theme, disabled_panes, terms and github (config.go:718) --
 // it never sets "metrics" or "notifications". Those two sections survive a
 // Save() only because of the v.ReadInConfig() round-trip at config.go:744-748,

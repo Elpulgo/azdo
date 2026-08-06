@@ -354,7 +354,7 @@ func RunStatusStyle(r provider.RunStatus, s *styles.Styles) lipgloss.Style {
 // ─── NotificationReason ──────────────────────────────────────────────────────
 
 // NotificationReasonGlyph returns the icon for why a notification reached the
-// inbox. Every declared NotificationReason value (spec Decision 18) returns a
+// inbox. Every declared NotificationReason value returns a
 // distinct, non-empty glyph; any unrecognised/out-of-range value renders as
 // NotificationReasonOther's glyph rather than "" — a triage pane must never
 // render an empty cell for a row it is showing.
@@ -390,7 +390,7 @@ func NotificationReasonGlyph(r provider.NotificationReason) string {
 // NotificationReasonLabel returns the human-facing description of why a
 // notification reached the inbox. This is independent of
 // NotificationReason.String, which is the lowercase snake_case form used in
-// the `exclude_reasons` config key (Decision 19) — the two need not match.
+// the `exclude_reasons` config key — the two need not match.
 // Every declared value returns a non-empty label; an unrecognised value
 // renders as "Other".
 func NotificationReasonLabel(r provider.NotificationReason) string {

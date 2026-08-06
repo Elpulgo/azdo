@@ -39,23 +39,23 @@ type ListOpts struct {
 // NotifOpts carries neutral fetch intent for NotificationSource.List — the
 // things the fetch itself needs (server-side query shaping and pagination
 // hints). Config-driven filtering over the already-fetched merged feed
-// (repo globs, exclude_reasons, unread_only) is a separate pure function
-// (task 10) and is deliberately not part of this struct.
+// (repo globs, exclude_reasons, unread_only) is a separate pure function and
+// is deliberately not part of this struct.
 //
-// Zero value is always valid: all fields at zero mean "fetch the whole
-// inbox, no bound".
-// There is deliberately no UnreadOnly field. Decision 12 forbids fetching
-// unread-only — GitHub's default response would make a row vanish the moment
-// it is marked read — so unread_only is a client-side filter over the full
-// feed (task 10) and has exactly one landing site. A fetch-time hint that its
-// only implementer is required to ignore is a trap, not an option.
+// Zero value is always valid: all fields at zero mean "fetch the whole inbox,
+// no bound".
+// There is deliberately no UnreadOnly field. Fetching unread-only is
+// forbidden — GitHub's default response would make a row vanish the moment it
+// is marked read — so unread_only is a client-side filter over the full feed
+// and has exactly one landing site. A fetch-time hint that its only
+// implementer is required to ignore is a trap, not an option.
 type NotifOpts struct {
 	// ParticipatingOnly restricts results to notifications where the
 	// authenticated user is directly participating (assigned, mentioned,
 	// author, review-requested, etc.) rather than merely subscribed. Maps to
-	// GitHub's participating=true query parameter (Decision 10) — a coarser,
-	// cheaper server-side bundle that composes with, and does not replace,
-	// the client-side exclude_reasons filter.
+	// GitHub's participating=true query parameter — a coarser, cheaper
+	// server-side bundle that composes with, and does not replace, the
+	// client-side exclude_reasons filter.
 	ParticipatingOnly bool
 
 	// Since restricts results to notifications updated at or after this

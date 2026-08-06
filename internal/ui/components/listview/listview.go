@@ -423,8 +423,8 @@ func (m Model[T]) GetViewMode() ViewMode {
 
 // Err returns the error from the most recent HandleFetchResult call, or nil
 // when it has since been cleared. Exported so a caller building its own
-// render states on top of listview (e.g. internal/ui/notifications' task-13
-// error state) can branch on the error without listview's own generic
+// render states on top of listview (e.g. internal/ui/notifications' error
+// state) can branch on the error without listview's own generic
 // "Error loading %s: %v" text.
 //
 // Only SetItems clears this field. HandleFetchResult's *success* path does
