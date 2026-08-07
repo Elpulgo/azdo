@@ -222,9 +222,14 @@ type NotificationsAzureConfig struct {
 	// Both of those are LoadFrom post-conditions, not a guarantee this field
 	// carries everywhere: by the time Validate() runs a value that reached
 	// LoadFrom's body is negative (a config error Validate() rejects below)
-	// or in [1, 30], but a *Config not built via LoadFrom -- NewWithPath's
-	// setup-wizard constructor, or any bare struct literal -- has had none of
-	// this normalization applied and may simply be the Go zero value, 0.
+	// or in [1, 30]. NewWithPath reaches the same [1, 30] range a different
+	// way — it has no config file to normalize a value out of, so it starts
+	// this field at DefaultAzureLookbackDays directly via
+	// defaultNotificationsConfig, which is where the "default, not the Go
+	// zero value" guarantee actually lives for both constructors (see that
+	// function's doc comment). A bare struct literal built without either
+	// constructor is the one case with none of this applied: it may simply
+	// be the Go zero value, 0.
 	LookbackDays int `mapstructure:"lookback_days"`
 	// MinPollInterval is the shortest interval, in seconds, between two real
 	// Azure notification queries; the adapter self-throttles to it (task 14
@@ -233,9 +238,15 @@ type NotificationsAzureConfig struct {
 	// Like LookbackDays, zero is NOT "no self-throttle" here: LoadFrom
 	// treats an explicit `min_poll_interval: 0` the same as an absent key
 	// and falls back to the default, because a literal zero would mean the
-	// adapter never throttles at all (task-11 review decision B). This
-	// field's own Validate() check only rejects a negative value — the
-	// zero-fallback happens earlier, in LoadFrom.
+	// adapter never throttles at all (task-11 review decision B). LoadFrom
+	// also clamps a value above AzureMinPollIntervalMax (86400 seconds) down
+	// to it and records a Config.Warnings entry when that clamp actually
+	// fires — see that constant's own doc comment for why. This field's own
+	// Validate() check only rejects a negative value; both the zero-fallback
+	// and the upper clamp happen earlier, in LoadFrom. As with LookbackDays
+	// above, NewWithPath starts this field at DefaultAzureMinPollInterval
+	// directly via defaultNotificationsConfig rather than normalizing a
+	// value out of a config file that does not exist for it.
 	MinPollInterval int `mapstructure:"min_poll_interval"`
 	// Sources holds the per-source enable toggles, all defaulting to true.
 	Sources NotificationsAzureSourcesConfig `mapstructure:"sources"`
@@ -490,7 +501,118 @@ const (
 	// own doc comment points back at this constant, and this comment points
 	// back at that one, for a human reading either file in isolation.
 	AzureLookbackDaysMax = 30
+
+	// AzureMinPollIntervalMax is the upper bound
+	// notifications.azure.min_poll_interval (seconds) is clamped to. Nothing
+	// currently stops a user writing an arbitrarily large value, and
+	// cmd/azdo-tui's azureNotificationArgs converts it with
+	// time.Duration(seconds) * time.Second, which silently wraps once
+	// seconds exceeds roughly 9.2e9 (math.MaxInt64 nanoseconds) -- so an
+	// unclamped huge value would not just throttle for a very long time, it
+	// could wrap into a small or even negative Duration and throttle for
+	// barely any time at all, the opposite of what was configured. This
+	// bound is chosen far below that wraparound point on its own merits, not
+	// just to dodge it: 86400 seconds (24 hours) is already long enough that
+	// a self-throttle window that wide makes the notifications pane
+	// effectively static for a session: task 14 review, 🟢 finding 6.
+	AzureMinPollIntervalMax = 86400
 )
+
+// notificationsDefaultEntry is one viper.SetDefault registration for the
+// notifications.* config tree: a dotted key exactly as LoadFrom's v.Get/
+// v.Unmarshal would resolve it, and the literal Go value SetDefault should
+// register for it.
+type notificationsDefaultEntry struct {
+	key   string
+	value any
+}
+
+// notificationsDefaults is the single source of truth for every
+// notifications.* viper default. Both LoadFrom (against a real config file)
+// and defaultNotificationsConfig (against no file at all, for NewWithPath)
+// register defaults by looping over this same list, so the two cannot drift
+// apart the way they did before task 14's review (🔴 finding 2, where
+// NewWithPath left Notifications at its Go zero value entirely) —
+// see TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults.
+//
+// The first six entries are currently no-ops — every one of those defaults
+// is a Go zero value, which mapstructure leaves in place anyway — and are
+// kept deliberately so a future genuinely non-zero default has a correct
+// landing site instead of being bolted on ad hoc. max_items and
+// notifications.github.since_days stay unbounded on purpose.
+//
+// notifications.azure.* is different: two of its six entries are genuinely
+// non-zero (lookback_days, min_poll_interval), and all four source toggles
+// default to true against bool's false zero value — a plain "leave it at
+// the Go zero value" default cannot express "defaults on" at all, only
+// "defaults off". lookback_days and min_poll_interval's entries are
+// redundant-on-purpose, not load-bearing for LoadFrom specifically: each has
+// its own `== 0` fallback later in LoadFrom (LookbackDays via decision A,
+// MinPollInterval via decision B of the task-11 review) that restores the
+// exact same default whether or not SetDefault ever ran. They are load-
+// bearing for defaultNotificationsConfig, though, which has no equivalent
+// `== 0` fallback of its own — it relies on this list alone. The four
+// sources.* entries are load-bearing for both: a bool has no `== false`
+// fallback that could tell "unset" apart from "explicitly disabled", so
+// SetDefault is the only mechanism that makes an absent toggle default to
+// true.
+var notificationsDefaults = []notificationsDefaultEntry{
+	{"notifications.exclude_repos", []string{}},
+	{"notifications.include_repos", []string{}},
+	{"notifications.exclude_reasons", []string{}},
+	{"notifications.unread_only", false},
+	{"notifications.max_items", 0},
+	{"notifications.poll_interval", 0},
+	{"notifications.github.only_configured_repos", false},
+	{"notifications.github.participating_only", false},
+	{"notifications.github.since_days", 0},
+	{"notifications.azure.lookback_days", DefaultAzureLookbackDays},
+	{"notifications.azure.min_poll_interval", DefaultAzureMinPollInterval},
+	{"notifications.azure.sources.review_requested", true},
+	{"notifications.azure.sources.mentioned", true},
+	{"notifications.azure.sources.assigned", true},
+	{"notifications.azure.sources.ci_failed", true},
+}
+
+// defaultNotificationsConfig builds a NotificationsConfig purely from
+// notificationsDefaults, through the same viper.SetDefault + Unmarshal
+// mechanism LoadFrom uses against a real file — a fresh viper instance with
+// nothing but these defaults registered and no config file read at all. It
+// is NewWithPath's building block: NewWithPath has no config file to read
+// and must not touch disk (it also backs internal/demo's fixture config;
+// see that package's own comment on why it builds fields it cares about by
+// hand rather than relying on a bypass like this one), so this is the
+// closest equivalent to "the notifications block LoadFrom would have
+// produced against a file that sets nothing" without actually reading one.
+func defaultNotificationsConfig() NotificationsConfig {
+	v := viper.New()
+	for _, d := range notificationsDefaults {
+		v.SetDefault(d.key, d.value)
+	}
+	// Unmarshal into the full Config, not directly into NotificationsConfig:
+	// every key in notificationsDefaults is written with its full
+	// "notifications."-prefixed path (matching what LoadFrom's v.Get would
+	// resolve against a real file), and mapstructure only strips that prefix
+	// when the target struct has a field tagged mapstructure:"notifications"
+	// to strip it against — Config.Notifications is that field. Unmarshalling
+	// straight into a bare NotificationsConfig looks for keys named "azure",
+	// "exclude_repos" etc at the top level instead, none of which exist, so
+	// every field would silently come back as its Go zero value.
+	var cfg Config
+	// Unmarshal's error return is unreachable here in practice: every
+	// default above is a statically-typed Go literal matching the field
+	// it targets exactly, and with no config file, environment variable or
+	// flag layer in play there is nothing that could introduce a type
+	// mismatch for mapstructure to reject. Ignoring it rather than
+	// panicking matches this package's existing style (no panic call
+	// appears anywhere else in internal/config); if notificationsDefaults
+	// is ever edited to include a value that does not actually unmarshal,
+	// TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults fails
+	// against the resulting zero-value fields rather than this failing
+	// silently in production.
+	_ = v.Unmarshal(&cfg)
+	return cfg.Notifications
+}
 
 // GetPath returns the path to the config file
 func GetPath() (string, error) {
@@ -546,52 +668,18 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
 	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
 	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
-	// The six shared/GitHub registrations below are currently no-ops — every
-	// one of those defaults is a Go zero value, which mapstructure leaves in
-	// place anyway — and are kept deliberately so a future genuinely
-	// non-zero default has a correct landing site instead of being bolted on
-	// ad hoc. max_items and notifications.github.since_days stay unbounded
-	// on purpose.
-	//
-	// notifications.azure.* is different: two of its six registrations below
-	// are genuinely non-zero (lookback_days, min_poll_interval), and all four
-	// source toggles default to true against bool's false zero value — a
-	// plain "leave it at the Go zero value" default cannot express
-	// "defaults on" at all, only "defaults off". SetDefault is verified to
-	// resolve correctly through v.Unmarshal at every depth this block
-	// touches, including a config file that sets only one of the four
-	// sources.* keys and leaves the other three to their defaults (see
-	// TestLoad_NotificationsAzureSourcesConfig_* below).
-	//
-	// lookback_days and min_poll_interval's registrations just below are
-	// redundant-on-purpose, not load-bearing: each has its own `== 0`
-	// fallback later in this function (LookbackDays via decision A,
-	// MinPollInterval via decision B of the task-11 review) that restores
-	// the exact same default whether or not SetDefault ever ran, since an
-	// absent key leaves the Go zero value 0 for viper's Unmarshal to
-	// materialize and the `== 0` branch catches it just as it catches an
-	// explicit `: 0` in the file. Deleting either registration therefore
-	// changes no observable behaviour and fails no test; both are kept
-	// anyway for symmetry with the always-registered shared/GitHub keys
-	// above. The four sources.* registrations are the genuinely load-bearing
-	// ones in this block: a bool has no `== false` fallback that could tell
-	// "unset" apart from "explicitly disabled", so SetDefault is the only
-	// mechanism that makes an absent toggle default to true.
-	v.SetDefault("notifications.exclude_repos", []string{})
-	v.SetDefault("notifications.include_repos", []string{})
-	v.SetDefault("notifications.exclude_reasons", []string{})
-	v.SetDefault("notifications.unread_only", false)
-	v.SetDefault("notifications.max_items", 0)
-	v.SetDefault("notifications.poll_interval", 0)
-	v.SetDefault("notifications.github.only_configured_repos", false)
-	v.SetDefault("notifications.github.participating_only", false)
-	v.SetDefault("notifications.github.since_days", 0)
-	v.SetDefault("notifications.azure.lookback_days", DefaultAzureLookbackDays)
-	v.SetDefault("notifications.azure.min_poll_interval", DefaultAzureMinPollInterval)
-	v.SetDefault("notifications.azure.sources.review_requested", true)
-	v.SetDefault("notifications.azure.sources.mentioned", true)
-	v.SetDefault("notifications.azure.sources.assigned", true)
-	v.SetDefault("notifications.azure.sources.ci_failed", true)
+	// notifications.* defaults come from the shared notificationsDefaults
+	// list (see its own doc comment for which entries are load-bearing vs.
+	// no-ops-kept-for-symmetry) so LoadFrom and defaultNotificationsConfig
+	// (NewWithPath's building block) can never register a different default
+	// for the same key. SetDefault is verified to resolve correctly through
+	// v.Unmarshal at every depth this touches, including a config file that
+	// sets only one of the four sources.* keys and leaves the other three
+	// to their defaults (see TestLoad_NotificationsAzureSourcesConfig_*
+	// below).
+	for _, d := range notificationsDefaults {
+		v.SetDefault(d.key, d.value)
+	}
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -742,6 +830,18 @@ func LoadFrom(configPath string) (*Config, error) {
 	if cfg.Notifications.Azure.MinPollInterval == 0 {
 		cfg.Notifications.Azure.MinPollInterval = DefaultAzureMinPollInterval
 	}
+	// Clamp to AzureMinPollIntervalMax (see that constant's own doc comment
+	// for why: cmd/azdo-tui's azureNotificationArgs converts this value with
+	// time.Duration(seconds) * time.Second, which wraps silently well above
+	// this bound). Mirrors LookbackDays' clamp above, including warning
+	// rather than staying silent, for the same reason: the user expressed a
+	// specific, larger intent that this overrides.
+	if cfg.Notifications.Azure.MinPollInterval > AzureMinPollIntervalMax {
+		cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
+			"notifications.azure.min_poll_interval: %d exceeds the %d-second maximum — using %d",
+			cfg.Notifications.Azure.MinPollInterval, AzureMinPollIntervalMax, AzureMinPollIntervalMax))
+		cfg.Notifications.Azure.MinPollInterval = AzureMinPollIntervalMax
+	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -751,14 +851,28 @@ func LoadFrom(configPath string) (*Config, error) {
 	return &cfg, nil
 }
 
-// NewWithPath creates a Config with all fields set and the internal configPath
-// populated so that Save() writes to the correct location.
+// NewWithPath builds a Config from the setup wizard's own inputs
+// (Organization, Projects, PollingInterval, Theme) plus configPath, so
+// Save() writes to the right location, and gives Notifications the same
+// fully-populated defaults LoadFrom would produce against a config file that
+// sets nothing (see defaultNotificationsConfig). It does not set every field
+// on Config: Metrics, GitHub, DisplayNames, Terms, DisabledPanes and
+// Warnings are all left at their Go zero value, for callers to fill in
+// themselves — GetConfig (internal/ui/setupwizard) sets GitHub when the
+// wizard collected repos, and internal/demo's fixture config sets Metrics by
+// hand for the same reason (see that package's own comment on the bypass).
+// Before task 14's review (🔴 finding 2), Notifications was one of the
+// fields left at its Go zero value too: every Azure source toggle silently
+// off and self-throttling disabled for a setup-wizard-produced config's
+// entire first TUI session, until the user edited or re-saved the file and
+// LoadFrom's own defaulting finally ran.
 func NewWithPath(org string, projects []string, pollingInterval int, theme string, configPath string) *Config {
 	return &Config{
 		Organization:    org,
 		Projects:        projects,
 		PollingInterval: pollingInterval,
 		Theme:           theme,
+		Notifications:   defaultNotificationsConfig(),
 		configPath:      configPath,
 	}
 }
@@ -882,9 +996,14 @@ func (c *Config) Validate() error {
 	// Both non-zero defaults still satisfy ">= 0" below, so an absent or
 	// all-default block remains valid — what actually fails these checks is
 	// a user-supplied negative, not the absence of the block. That
-	// zero-fallback happens in LoadFrom, before Validate() is ever called —
-	// a *Config built any other way (a struct literal, NewWithPath) reaches
-	// this method with no such normalization applied.
+	// zero-fallback (and the upper clamps on both fields) happens in
+	// LoadFrom, before Validate() is ever called; NewWithPath reaches this
+	// method already at the same defaults a different way, via
+	// defaultNotificationsConfig (see that function's doc comment) — a bare
+	// struct literal is the one construction path that reaches this method
+	// with no normalization applied at all, and would fail the checks below
+	// only if it explicitly set a negative value, since Go's own zero value
+	// for these fields is 0.
 	if c.Notifications.GitHub.SinceDays < 0 {
 		return fmt.Errorf("notifications.github.since_days must be >= 0, got %d", c.Notifications.GitHub.SinceDays)
 	}

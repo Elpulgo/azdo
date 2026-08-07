@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -958,6 +959,51 @@ func TestSortNotificationsDeterministically_TieBreaksOnScopeThenID(t *testing.T)
 		}
 		if row.Identity.ID != want[i] {
 			t.Fatalf("rows[%d].Identity.ID = %q, want %q (order: %v)", i, row.Identity.ID, want[i], identityIDs(rows))
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// copyNotifications — reflect-based guard on the claim its doc comment makes
+// (task 14 review, 🟢 finding 5): no field of provider.Notification, at any
+// depth, is something a caller holding a copied slice could mutate through
+// to reach state copyNotifications' caller did not hand them, since a
+// per-element slice copy only copies one level of value — it does not
+// deep-copy a slice, map or pointer field.
+// ---------------------------------------------------------------------------
+
+// TestCopyNotifications_NoMutableFieldAliasing walks provider.Notification's
+// fields recursively and fails on any slice, map, pointer, chan, func or
+// interface field found at any depth — the field kinds a shallow per-element
+// copy does not protect against — with one explicit, documented exception:
+// time.Time itself, whose only fields are unexported and whose exported
+// method set gives no caller a way to reach through a copied value and
+// mutate the *time.Location the original pointed at. A field added to
+// Notification (or to a struct it embeds) of any of the failing kinds makes
+// this test fail without anyone having to remember to update it by hand,
+// which is the point: copyNotifications' doc comment's claim should not be
+// able to go stale the way the comment it replaced did.
+func TestCopyNotifications_NoMutableFieldAliasing(t *testing.T) {
+	assertNoMutableFieldAliasing(t, reflect.TypeOf(provider.Notification{}), "provider.Notification")
+}
+
+func assertNoMutableFieldAliasing(t *testing.T, typ reflect.Type, path string) {
+	t.Helper()
+
+	if typ == reflect.TypeOf(time.Time{}) {
+		// See this test's own doc comment for why time.Time is exempted
+		// rather than walked: it is a documented immutable value type
+		// despite holding an unexported pointer internally.
+		return
+	}
+
+	switch typ.Kind() {
+	case reflect.Slice, reflect.Map, reflect.Ptr, reflect.Chan, reflect.Func, reflect.Interface, reflect.UnsafePointer:
+		t.Errorf("%s is a %s — copyNotifications' per-element slice copy does not deep-copy this field, so a caller holding its result could mutate through it and corrupt state the caller was not handed ownership of; either replace it with a value type or teach copyNotifications to deep-copy it explicitly and update its doc comment", path, typ.Kind())
+	case reflect.Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			assertNoMutableFieldAliasing(t, field.Type, path+"."+field.Name)
 		}
 	}
 }

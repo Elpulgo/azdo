@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -882,6 +883,35 @@ func TestNewWithPath_CreatesValidConfig(t *testing.T) {
 	}
 	if loaded.Organization != "my-org" {
 		t.Errorf("loaded Organization = %q, want %q", loaded.Organization, "my-org")
+	}
+}
+
+// TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults pins task 14
+// review finding 2: NewWithPath (the setup wizard's constructor) must
+// produce exactly the same Notifications defaults LoadFrom produces against
+// a config file that sets nothing in that block. It drives the comparison
+// off notificationsDefaults itself, not a second hand-maintained expectation
+// — a config file that set nothing in notifications.* would exercise the
+// exact same viper.SetDefault registrations LoadFrom always runs, so a
+// minimal file with only organization/projects set is equivalent to "every
+// notifications.* key absent" for this purpose.
+func TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("organization: my-org\nprojects:\n  - proj-a\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() failed: %v", err)
+	}
+
+	loaded, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() failed: %v", err)
+	}
+
+	wizardConfigPath := filepath.Join(tmpDir, "wizard-config.yaml")
+	fromWizard := NewWithPath("my-org", []string{"proj-a"}, 90, "nord", wizardConfigPath)
+
+	if !reflect.DeepEqual(loaded.Notifications, fromWizard.Notifications) {
+		t.Errorf("NewWithPath's Notifications = %+v, want it to match LoadFrom's %+v — both must derive from the same notificationsDefaults list (see defaultNotificationsConfig)", fromWizard.Notifications, loaded.Notifications)
 	}
 }
 

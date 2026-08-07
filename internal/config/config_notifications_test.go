@@ -602,6 +602,125 @@ notifications:
 	}
 }
 
+// TestLoad_AzureMinPollInterval_ClampedToMax pins task 14 review finding 6's
+// boundary shape, the same way TestLoad_AzureLookbackDays_ClampedToOrphanTTL
+// pins lookback_days' clamp: exactly at AzureMinPollIntervalMax is left
+// unchanged, one past it is silently clamped down. Without this clamp,
+// cmd/azdo-tui's azureNotificationArgs converts min_poll_interval with
+// time.Duration(seconds) * time.Second, which wraps silently once seconds
+// exceeds roughly 9.2e9 -- an unbounded value here would eventually mean the
+// adapter throttles for a wildly wrong, possibly negative, duration instead
+// of the huge-but-sane one the user wrote.
+func TestLoad_AzureMinPollInterval_ClampedToMax(t *testing.T) {
+	tests := []struct {
+		name    string
+		seconds int
+		want    int
+	}{
+		{name: "one below the clamp is unaffected", seconds: AzureMinPollIntervalMax - 1, want: AzureMinPollIntervalMax - 1},
+		{name: "exactly at the clamp is unchanged", seconds: AzureMinPollIntervalMax, want: AzureMinPollIntervalMax},
+		{name: "one past the clamp is pulled down to it", seconds: AzureMinPollIntervalMax + 1, want: AzureMinPollIntervalMax},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			content := fmt.Sprintf(`organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    min_poll_interval: %d
+`, tt.seconds)
+			if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := LoadFrom(configPath)
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+
+			if cfg.Notifications.Azure.MinPollInterval != tt.want {
+				t.Errorf("Azure.MinPollInterval = %d, want %d", cfg.Notifications.Azure.MinPollInterval, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoad_AzureMinPollInterval_ClampWarns is
+// TestLoad_AzureLookbackDays_ClampWarns's min_poll_interval counterpart: the
+// clamp above AzureMinPollIntervalMax is silent-in-value, warned-in-Warnings,
+// the same normalization-with-a-warning treatment lookback_days gets.
+func TestLoad_AzureMinPollInterval_ClampWarns(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := fmt.Sprintf(`organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    min_poll_interval: %d
+`, AzureMinPollIntervalMax+1)
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.Azure.MinPollInterval != AzureMinPollIntervalMax {
+		t.Fatalf("Azure.MinPollInterval = %d, want %d", cfg.Notifications.Azure.MinPollInterval, AzureMinPollIntervalMax)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	msg := cfg.Warnings[0]
+	if !strings.Contains(msg, "notifications.azure.min_poll_interval") || !strings.Contains(msg, fmt.Sprintf("%d", AzureMinPollIntervalMax+1)) || !strings.Contains(msg, fmt.Sprintf("%d", AzureMinPollIntervalMax)) {
+		t.Errorf("warning should name the key, the supplied value and the maximum, got: %s", msg)
+	}
+}
+
+// TestLoad_AzureMinPollInterval_ZeroFallback_NoWarning is
+// TestLoad_AzureLookbackDays_ZeroFallback_NoWarning's min_poll_interval
+// counterpart: the zero-means-unset fallback must stay silent, since zero
+// reads as "unset" rather than an expressed intent the clamp above overrides.
+func TestLoad_AzureMinPollInterval_ZeroFallback_NoWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    min_poll_interval: 0
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.Azure.MinPollInterval != DefaultAzureMinPollInterval {
+		t.Fatalf("Azure.MinPollInterval = %d, want %d", cfg.Notifications.Azure.MinPollInterval, DefaultAzureMinPollInterval)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want empty (an explicit min_poll_interval: 0 falling back to the default must stay silent)", cfg.Warnings)
+	}
+}
+
 // TestLoad_AzureLookbackDaysNegative_RejectedByLoadFrom is the LoadFrom-level
 // counterpart TestConfig_Validate_NotificationsRejectsNegative's
 // "azure lookback_days negative" row cannot substitute for:

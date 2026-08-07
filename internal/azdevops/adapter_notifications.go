@@ -85,11 +85,25 @@ func DefaultNotificationSourceToggles() NotificationSourceToggles {
 // minPollInterval after its last real query. A non-positive value disables
 // throttling outright — every List call runs a real query — which is what
 // every call site in this package's own tests wants unless it is
-// specifically exercising the throttle; internal/config's LoadFrom is what
-// keeps a real user from ever reaching this constructor with a literal zero
-// (task-11 review decision B: notifications.azure.min_poll_interval: 0 falls
-// back to its own default there, before cmd/azdo-tui ever calls this
-// constructor).
+// specifically exercising the throttle.
+//
+// A real *Config reaching cmd/azdo-tui's runTUI comes from exactly two
+// places: internal/config.LoadFrom (an existing config file) or the setup
+// wizard's internal/ui/setupwizard.Model.GetConfig, which builds its
+// *Config via internal/config.NewWithPath. Both now populate
+// Notifications.Azure.MinPollInterval to DefaultAzureMinPollInterval (300)
+// whenever the value is not otherwise set: LoadFrom via its own `== 0`
+// fallback (task-11 review decision B), NewWithPath via
+// internal/config.defaultNotificationsConfig, which registers the exact
+// same default through the same viper mechanism LoadFrom uses (see
+// notificationsDefaults in internal/config/config.go). So neither
+// production path reaches this constructor with a literal zero. That was
+// not true of NewWithPath before task 14's review (🔴 finding 2): it left
+// Notifications at its Go zero value entirely, which is what let a
+// setup-wizard-produced config's first TUI session run with every Azure
+// source toggle off and this constructor called with a literal zero here —
+// disabling throttling for that entire session, not just leaving it at a
+// wrong-but-still-positive default.
 func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDays int, toggles NotificationSourceToggles, minPollInterval time.Duration) *Adapter {
 	if lookbackDays <= 0 {
 		lookbackDays = DefaultNotificationLookbackDays
@@ -173,17 +187,27 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 //
 // Self-throttle (decision 10, task 14): before any of the above runs, this
 // method checks notifThrottled(now) and, if the call falls inside the
-// window opened by the last real query, returns a copy of notifLastResult
-// with a nil error and skips runSourcesConcurrently, Reconcile and
+// window opened by the last real query, skips runSourcesConcurrently and
 // notifStore.Swap entirely — no network work, no store write, for that
-// call. Only a real query that lands in this method's absorb branch (at
-// least one source succeeded) advances notifLastPollAt/notifLastResult and
-// so opens the next window; a real query that fails outright (the
-// error-propagating branch below) leaves them exactly as they were, so a
-// total outage is retried on the very next call rather than being
-// remembered as a throttle anchor — see notifThrottled's own doc comment
-// for the first-call case and copyNotifications' for why the cached slice
-// itself cannot be corrupted by a caller mutating what they were handed.
+// call. It does not, however, skip Reconcile: it re-runs Reconcile in memory
+// against notifLastRawRows (the raw, pre-Reconcile rows the last real query
+// produced) and a fresh read of the store's current triage state
+// (notifStore.State()), discarding the state Reconcile returns rather than
+// writing it back. This is what makes a mark (MarkRead/MarkDone) made after
+// the last real query visible on the very next throttled call, instead of
+// being masked until the throttle window closes and a real query finally
+// runs (task 14 review, 🔴 finding 1) — reusing the cached, pre-Reconcile
+// rows verbatim means this still costs no network work, and discarding the
+// recomputed state means it still writes nothing to the store: both halves
+// of the "throttled call" contract hold. Only a real query that lands in
+// this method's absorb branch (at least one source succeeded) advances
+// notifLastPollAt/notifLastRawRows/notifLastResult and so opens the next
+// window; a real query that fails outright (the error-propagating branch
+// below) leaves them exactly as they were, so a total outage is retried on
+// the very next call rather than being remembered as a throttle anchor —
+// see notifThrottled's own doc comment for the first-call case and
+// copyNotifications' for why the cached slice itself cannot be corrupted by
+// a caller mutating what they were handed.
 func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notification, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("azdevops: notifications: no client configured")
@@ -206,7 +230,18 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 	defer a.notifThrottleMu.Unlock()
 
 	if a.notifThrottled(now) {
-		return copyNotifications(a.notifLastResult), nil
+		// Re-reconcile rather than replay: notifLastRawRows is the raw,
+		// pre-Reconcile data from the last real query, and a.notifStore.State()
+		// is a fresh read of whatever triage state MarkRead/MarkDone have
+		// written since then (State only takes notifStore's own mu, never
+		// notifThrottleMu, so this cannot deadlock against them — see the
+		// lock-order comment on the Adapter struct). The state Reconcile
+		// returns is discarded: a throttled call must write nothing to the
+		// store. No network work happens on this path.
+		state := a.notifStore.State()
+		reconciled, _ := Reconcile(a.notifLastRawRows, state, now)
+		sortNotificationsDeterministically(reconciled)
+		return copyNotifications(reconciled), nil
 	}
 
 	rows, errs, jobCount := a.runSourcesConcurrently(now)
@@ -230,6 +265,7 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 		// notifLastResult untouched, so it never starts a throttle window
 		// and never gets cached — see notifThrottled's doc comment.
 		a.notifLastPollAt = now
+		a.notifLastRawRows = rows
 		a.notifLastResult = reconciled
 		return copyNotifications(a.notifLastResult), nil
 	}
@@ -260,15 +296,21 @@ func (a *Adapter) notifThrottled(now time.Time) bool {
 }
 
 // copyNotifications returns a fresh slice holding the same elements as rows,
-// so a caller that mutates the result cannot corrupt notifLastResult (the
-// throttle cache list reads from on every throttled return) or reconciled
-// (which becomes notifLastResult on a real query) — phase 1 lost a defect to
-// exactly this aliasing in its conditional-request cache. A per-element copy
-// into a new backing array is already a true value copy here:
-// provider.Notification's fields (Identity's strings, Title, Reason, Read,
-// Done, UpdatedAt, WebURL) are all value types, none a slice, map or
-// pointer, so no field within a copied element can alias anything the
-// caller does not own.
+// so a caller that mutates the result cannot corrupt notifLastResult — the
+// slice a real query's absorb branch caches and every subsequent call reads
+// from until the next real query replaces it — by mutating what list handed
+// back on some earlier call. Phase 1 lost a defect to exactly this aliasing
+// in its conditional-request cache.
+//
+// A per-element copy into a new backing array is already a true value copy
+// here: every field of provider.Notification (Identity's strings, Title,
+// Reason, Read, Done, UpdatedAt, WebURL) is a value type with no field a
+// caller can mutate through — even time.Time, whose only field is an
+// unexported *time.Location, exposes no way to reach through a
+// Notification and mutate the Location a cached row's UpdatedAt points at.
+// TestCopyNotifications_NoMutableFieldAliasing guards this claim with
+// reflection over provider.Notification's fields, so a future field added
+// to Notification without updating this comment still gets checked.
 func copyNotifications(rows []provider.Notification) []provider.Notification {
 	if rows == nil {
 		return nil

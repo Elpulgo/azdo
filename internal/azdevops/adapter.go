@@ -18,19 +18,19 @@ type Adapter struct {
 
 	// notifStore, notifLookbackDays and notifSources back the
 	// provider.NotificationSource surface (adapter_notifications.go) only.
-	// A plain NewAdapter(mc) leaves all five fields below at their zero
-	// value; List, MarkRead and MarkDone all treat a nil notifStore as
-	// "notifications not configured" the same way every other method on
-	// this type treats a nil mc — see NewAdapterWithNotifications.
+	// A plain NewAdapter(mc) leaves every notification-related field below
+	// at its zero value; List, MarkRead and MarkDone all treat a nil
+	// notifStore as "notifications not configured" the same way every other
+	// method on this type treats a nil mc — see NewAdapterWithNotifications.
 	notifStore        *TriageStore
 	notifLookbackDays int
 	notifSources      NotificationSourceToggles
 
-	// notifThrottleMu, notifMinPollInterval, notifLastPollAt and
-	// notifLastResult implement decision 10's self-throttle (List returns
-	// its previous result unchanged when called sooner than
-	// notifMinPollInterval after its last real query). This lock is
-	// intentionally distinct from notifStore's own mu/writeMu
+	// notifThrottleMu, notifMinPollInterval, notifLastPollAt,
+	// notifLastRawRows and notifLastResult implement decision 10's
+	// self-throttle (List returns its previous result unchanged when called
+	// sooner than notifMinPollInterval after its last real query). This lock
+	// is intentionally distinct from notifStore's own mu/writeMu
 	// (notifications_store.go): List holds notifThrottleMu for its entire
 	// call, including the network round trip in runSourcesConcurrently and
 	// the later notifStore.Swap, while MarkRead/MarkDone only ever acquire
@@ -39,9 +39,46 @@ type Adapter struct {
 	// holds both — list — is notifThrottleMu before notifStore's mu; no
 	// other code acquires them in the opposite order, so there is no cycle
 	// to deadlock on.
+	//
+	// A throttled call still re-runs Reconcile — in memory, against
+	// notifLastRawRows (the pre-Reconcile rows from the last real query) and
+	// the store's *current* triage state (read via notifStore.State(), which
+	// only takes notifStore's mu, honouring the same lock order) — so a mark
+	// made after the last real query is reflected on the very next throttled
+	// return instead of being masked until the throttle window closes (task
+	// 14 review, 🔴 finding 1). The state Reconcile returns from that call is
+	// discarded, not written back: a throttled call still does no network
+	// work and writes nothing to the store.
+	//
+	// The consequence of list holding notifThrottleMu across its whole body:
+	// two concurrent List calls on one *Adapter serialise, the second
+	// waiting out the first's full network round trip rather than getting a
+	// cheap throttled return. Reachable in this codebase — internal/app.go
+	// hands the same CompositeProvider to both the notifications pane's own
+	// fetch and polling.NewNotificationsPoller's timer, each its own
+	// goroutine. This is a deliberate latency trade, not a defect (task 14
+	// review, 🟡 finding 3): whenever throttling is enabled (a positive
+	// notifMinPollInterval — the only case any real caller uses;
+	// non-positive only appears in this package's own tests, see
+	// NewAdapterWithNotifications), List reads time.Now() before locking, so
+	// a blocked caller's now is always <= the winner's notifLastPollAt by
+	// the time it acquires the lock, meaning notifThrottled is always true
+	// for it — no ordering produces a second real query. The blocked caller
+	// gets the cache the winner *just wrote*, which is fresher than an
+	// immediate throttled return would have been, not staler — the one edge
+	// case is cosmetic: if the winner hits the total-failure branch, the
+	// loser returns the older cached rows with a nil error instead of the
+	// winner's error. (With throttling disabled the guarantee does not
+	// apply and is not needed: the loser is simply not throttled and runs
+	// its own real query after the winner's, which is exactly what
+	// disabling throttling asks for.) Do not "fix" the serialisation with a
+	// per-caller lock or a singleflight variant without accounting for
+	// this: either trades away the freshness guarantee this paragraph
+	// documents.
 	notifThrottleMu      sync.Mutex
 	notifMinPollInterval time.Duration
 	notifLastPollAt      time.Time
+	notifLastRawRows     []provider.Notification
 	notifLastResult      []provider.Notification
 }
 

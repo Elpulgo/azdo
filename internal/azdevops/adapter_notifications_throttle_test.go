@@ -322,6 +322,107 @@ func TestAdapter_List_FullFailure_DoesNotEstablishThrottleWindow(t *testing.T) {
 	}
 }
 
+// TestAdapter_List_Throttled_ReflectsMarkReadMadeDuringWindow pins task 14
+// review finding 1: a throttled call must not simply replay the previous
+// result verbatim once a mark has landed in between. It re-reconciles the
+// cached raw rows against the store's current state on every throttled
+// call, so a MarkRead issued after the real query — but still inside the
+// throttle window — must be visible on the very next throttled List, not
+// just once the window closes and a real query finally runs.
+func TestAdapter_List_Throttled_ReflectsMarkReadMadeDuringWindow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f := newComposerFixture(now)
+	server := newComposerServer(t, f)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, composerTestUserID)
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(mc, store, 14, DefaultNotificationSourceToggles(), 5*time.Minute)
+
+	rows1, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("first list() error = %v", err)
+	}
+	for _, row := range rows1 {
+		if row.Identity.ID == "review/pr/42" && row.Read {
+			t.Fatalf("review/pr/42 is already Read before any mark — fixture assumption broken")
+		}
+	}
+
+	if err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}); err != nil {
+		t.Fatalf("MarkRead() error = %v", err)
+	}
+
+	// Still inside the throttle window: no real query, but the mark above
+	// must be reflected because the throttled path re-reconciles against
+	// the store's current state rather than replaying rows1 unchanged.
+	rows2, err := a.list(provider.NotifOpts{}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("throttled list() error = %v", err)
+	}
+	if len(rows2) != len(rows1) {
+		t.Fatalf("throttled list() len = %d, want %d — MarkRead must not remove a row (only MarkDone does)", len(rows2), len(rows1))
+	}
+	found := false
+	for _, row := range rows2 {
+		if row.Identity.ID == "review/pr/42" {
+			found = true
+			if !row.Read {
+				t.Errorf("review/pr/42.Read = false on a throttled call made after MarkRead, want true — a throttled List must re-reconcile against the store's current state, not just replay notifLastResult verbatim")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("throttled list() rows = %v, want review/pr/42 present", identityIDs(rows2))
+	}
+}
+
+// TestAdapter_List_Throttled_ReflectsMarkDoneMadeDuringWindow is
+// TestAdapter_List_Throttled_ReflectsMarkReadMadeDuringWindow's MarkDone
+// counterpart: Reconcile drops a Done row from its output entirely (see
+// notifications_reconcile.go), so the assertion here is the row's absence,
+// not a flipped field.
+func TestAdapter_List_Throttled_ReflectsMarkDoneMadeDuringWindow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f := newComposerFixture(now)
+	server := newComposerServer(t, f)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, composerTestUserID)
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(mc, store, 14, DefaultNotificationSourceToggles(), 5*time.Minute)
+
+	rows1, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("first list() error = %v", err)
+	}
+	if len(rows1) != 4 {
+		t.Fatalf("first list() len = %d, want 4: %v", len(rows1), identityIDs(rows1))
+	}
+
+	if err := a.MarkDone(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}); err != nil {
+		t.Fatalf("MarkDone() error = %v", err)
+	}
+
+	// Still inside the throttle window: no real query, but the mark above
+	// must be reflected because the throttled path re-reconciles against
+	// the store's current state rather than replaying rows1 unchanged.
+	rows2, err := a.list(provider.NotifOpts{}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("throttled list() error = %v", err)
+	}
+	if len(rows2) != 3 {
+		t.Fatalf("throttled list() len = %d, want 3 — MarkDone must drop review/pr/42 from a throttled call made after the mark, not just after the window closes: %v", len(rows2), identityIDs(rows2))
+	}
+	for _, row := range rows2 {
+		if row.Identity.ID == "review/pr/42" {
+			t.Errorf("throttled list() rows = %v, want review/pr/42 absent after MarkDone", identityIDs(rows2))
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Lock discipline — MarkRead/MarkDone must never block behind an in-flight
 // List's network work. -race cannot build in the sandbox this was written
@@ -329,24 +430,42 @@ func TestAdapter_List_FullFailure_DoesNotEstablishThrottleWindow(t *testing.T) {
 // is meant to also be run with -race elsewhere.
 // ---------------------------------------------------------------------------
 
-// TestAdapter_MarkRead_NotBlockedByInFlightList delays every response from
-// the fixture server so a concurrent List call is guaranteed to still be
-// holding notifThrottleMu (and doing network work under it) when MarkRead is
-// called. If MarkRead acquired notifThrottleMu — the bug this test exists to
-// catch — it would block for roughly the remainder of that delay; instead it
-// must return in a small fraction of it, only ever touching notifStore's own
-// mu (via ApplyIfChanged), which List's Swap call briefly holds but does not
-// hold across the network round trip itself.
+// TestAdapter_MarkRead_NotBlockedByInFlightList proves ordering, not timing:
+// the fixture server blocks on a channel the test controls, so a concurrent
+// List call is guaranteed to still be holding notifThrottleMu (and doing
+// network work under it, waiting on that channel) when MarkRead is called.
+// MarkRead is required to complete and signal markDone *before* the test
+// releases the server — if MarkRead acquired notifThrottleMu, the bug this
+// test exists to catch, it would deadlock behind the in-flight List and
+// never reach that signal, so the release would never happen and the test
+// would time out instead of hanging forever (a real deadlock still fails
+// fast here via the select's timeout, rather than the 10-minute suite
+// timeout). serverEntered proves the handler is actually blocked mid-request
+// before MarkRead is even attempted, so a passing test cannot be explained
+// by MarkRead simply winning a race to run first.
 func TestAdapter_MarkRead_NotBlockedByInFlightList(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	f := newComposerFixture(now)
 	server := newComposerServer(t, f)
 	defer server.Close()
 
-	const delay = 200 * time.Millisecond
+	const testTimeout = 5 * time.Second
+	serverEntered := make(chan struct{})
+	releaseServer := make(chan struct{})
 	orig := server.Config.Handler
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(delay)
+		select {
+		case serverEntered <- struct{}{}:
+		default:
+			// Only the first request signals; the composer fixture issues
+			// several concurrent requests per real query, and only one
+			// needs to prove the server side has been reached.
+		}
+		select {
+		case <-releaseServer:
+		case <-time.After(testTimeout):
+			return
+		}
 		orig.ServeHTTP(w, r)
 	})
 
@@ -361,21 +480,31 @@ func TestAdapter_MarkRead_NotBlockedByInFlightList(t *testing.T) {
 		a.list(provider.NotifOpts{}, now)
 	}()
 
-	// Give the goroutine time to actually enter list(), acquire
-	// notifThrottleMu and start the delayed network round trip, so the
-	// MarkRead below genuinely races an in-flight List rather than
-	// happening to run before it starts.
-	time.Sleep(delay / 4)
-
-	markStart := time.Now()
-	if err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}); err != nil {
-		t.Fatalf("MarkRead() error = %v", err)
-	}
-	markElapsed := time.Since(markStart)
-
-	if markElapsed >= delay/2 {
-		t.Errorf("MarkRead took %v while a List call was in flight (server delay %v) — MarkRead must not block behind List's network work; see the Adapter struct's lock-order comment", markElapsed, delay)
+	select {
+	case <-serverEntered:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for the in-flight List call to reach the server — cannot exercise the concurrent-with-List case")
 	}
 
-	<-listDone
+	markDone := make(chan struct{})
+	go func() {
+		defer close(markDone)
+		if err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}); err != nil {
+			t.Errorf("MarkRead() error = %v", err)
+		}
+	}()
+
+	select {
+	case <-markDone:
+	case <-time.After(testTimeout):
+		t.Fatal("MarkRead did not return while a List call was in flight — MarkRead must not block behind List's network work; see the Adapter struct's lock-order comment")
+	}
+
+	close(releaseServer)
+
+	select {
+	case <-listDone:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for the in-flight List call to finish after releasing the server")
+	}
 }
