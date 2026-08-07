@@ -341,7 +341,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). *(Re-validated 2026-08-07 against `0eeb10a`, which fixes all seven review findings and implements both settled decisions, plus `6556b25`, which kills the two mutants that re-validation found surviving and corrects three stale comments; the original `→ done:` clauses were re-checked against the current code and still hold. See the two re-validation records at the end of `## Validation: task 11`.)* → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
 - [x] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). *(Re-validated 2026-08-07 against `7040c11` + `8a03257`, which fixes both review findings and implements Decision C; re-ticked. See the re-validation record at the end of `## Validation: task 12`.)* → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
 - [x] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). *(Re-validated 2026-08-07 against `f478f74` + `d72f98b` + `4274a3e`, which drop the dead `HasAzure()||HasGitHub()` conjunct the review found, correct both the comment and the error message, and add three rows closing the same widening gap on the other three conjuncts; re-ticked. See the re-validation record at the end of `## Validation: task 13`.)* → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
-- [x] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
+- [ ] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). *(Un-ticked 2026-08-07: the opus review of `9b127eb` returned REQUEST_CHANGES with two 🔴 findings, both reproduced against real fixtures rather than argued. See `## Review feedback: task 14`.)* **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [x] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). *(Landed as `docs/adr/0002-azure-synthetic-notification-feed.md` in `d694235`, corrected in `1cb1a5a`. See `## Validation: task 15`.)* → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
 - [ ] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
 
@@ -2045,6 +2045,198 @@ mutation was restored via `cp` (never `git checkout --`); `git status
 clean; the repo-wide `gofmt -l .` count is 19, matching the pre-existing,
 task-unrelated figure noted in the validation instructions.
 
+## Review feedback: task 14
+
+Opus review of `9b127eb`, 2026-08-07. **REQUEST_CHANGES**, two 🔴, two 🟡, three 🟢.
+Build, vet, gofmt on all six touched files and the full suite were clean at the
+reviewed commit — every finding below is a behaviour defect, not a hygiene one.
+Both 🔴s were reproduced with throwaway probes against the real four-source
+fixture, not inferred.
+
+Half A's blast radius was checked file-by-file and is clean: all 21 updates in
+`adapter_notifications_test.go` are a literal `, 0` appended to the argument
+list, changing no assertion or fixture. One consequence worth knowing: every
+pre-existing `List` test therefore runs with throttling *disabled*, so the
+throttle is pinned only by the new test file.
+
+### 🔴 1 — the throttle cache masks `MarkRead`/`MarkDone`; a dismissed row comes back
+
+`adapter_notifications.go:205-210`. The throttled path returns
+`copyNotifications(a.notifLastResult)` — a snapshot computed *before* any
+subsequent mark — and so skips `notifStore.Swap` and with it `Reconcile`, the
+only thing that folds local triage state into `Read`/`Done` and drops done rows.
+Nothing in `MarkRead`/`MarkDone` invalidates the cache. Reproduced:
+
+```
+rows1                    = [mention/wi/100 review/pr/42 assigned/wi/100 cifail/run/7]
+MarkDone(mention/wi/100)
+rows2 (throttled, +1min) = [mention/wi/100 review/pr/42 assigned/wi/100 cifail/run/7]
+                           -> dismissed row still present, Done=false Read=false
+rows3 (post-window, +6m) = [review/pr/42 assigned/wi/100 cifail/run/7]
+```
+
+At shipped defaults (`min_poll_interval: 300`, `polling.DefaultInterval` 30s,
+`markDebounceWindow` 30s at `internal/ui/notifications/list.go:163`): user
+presses `d` at T=10 and the row hides optimistically; the override expires at
+T=40; the T=60 poller tick returns the pre-mark cache and **the dismissed row
+reappears, unread**, and stays until T=300. Pressing `r` does not help — the
+manual refresh is throttled too. `min_poll_interval` has no upper bound
+(`config.go:900` only rejects negatives), so this scales with the knob. This is
+convention 19/31's failure class and worse than a no-op: the action visibly
+works, then silently undoes itself.
+
+**Settled: re-reconcile on the throttled path, do not invalidate from the mark.**
+Cache the raw pre-`Reconcile` rows alongside the reconciled ones, and on a
+throttled return call `Reconcile(cachedRaw, <current state>, now)` and **discard**
+the returned state. `Reconcile` is a pure function
+(`notifications_reconcile.go:141`) and this is in-memory only, so a throttled
+call still does no network work and still writes nothing to the store — the task
+constraint holds. It is also idempotent by construction: the raw rows are
+unchanged, so their stamps already match stored, which is precisely the
+statelessness the ADR claims. The two alternatives — invalidating
+`notifLastPollAt` from a mark, or patching `notifLastResult` in place — both
+require a mark to acquire `notifThrottleMu`, which this task forbids outright.
+Skipping the orphan TTL prune on throttled calls is fine; that is hygiene, not
+correctness. Pin it with a mark-then-throttled-`List` test for *both* `MarkRead`
+and `MarkDone`; nothing in the current suite covers that pair.
+
+### 🔴 2 — the setup-wizard path gets all four sources off and throttling disabled
+
+`main.go:331` + `adapter_notifications.go:88-92`. `runTUI` (`main.go:277`) uses
+`runSetupWizard()`'s return value for the rest of the process. That `*Config`
+comes from `setupwizard.GetConfig()` → `config.NewWithPath` (`config.go:756`), a
+bare struct literal that never touches `Notifications`, so neither viper's
+`SetDefault` registrations (`config.go:590`) nor `LoadFrom`'s explicit
+zero-fallbacks (`config.go:742`) are ever reached. First run after the wizard:
+`Sources` is the zero value → `NotificationSourceToggles{false,false,false,false}`
+→ `runSourcesConcurrently` gets `jobCount == 0` → `list` takes task 8's absorb
+branch → **empty feed, nil error, for the whole session**, with the tab still
+shown (`buildEnabledTabs` gates on the method-set-based `notifCapable`).
+Restarting fixes it, because run two goes through `LoadFrom`. `MinPollInterval`
+is 0 on the same path, so decision 10 is silently off for that session.
+`LookbackDays` is the only survivor, because the constructor still defends it
+with its own `<= 0` guard — the asymmetry is the tell. This is a regression: the
+pre-change call site passed `DefaultNotificationSourceToggles()`, which worked.
+
+The doc at `adapter_notifications.go:88-92` asserts the opposite as fact
+("`LoadFrom` is what keeps a real user from ever reaching this constructor with a
+literal zero"). `main.go:277` is the counterexample.
+
+**Settled: fix `NewWithPath`, not the constructor.** The reviewer offered
+"default zero toggles inside `NewAdapterWithNotifications`" as the small-diff
+option; **do not take it** — it is wrong. Nothing in `Validate` rejects all four
+toggles being false, so `sources: {review_requested: false, mentioned: false,
+assigned: false, ci_failed: false}` is a legitimate, reachable user config, and a
+constructor that reads all-false as "use defaults" would silently switch on four
+sources the user deliberately turned off. Instead make `NewWithPath` return a
+genuinely fully-defaulted `*Config` — its own doc already claims "creates a
+Config with all fields set", which is false today, and `internal/demo/metrics.go:44`
+already carries a comment noting the bypass. Populate the whole `Notifications`
+block there with the same values viper's `SetDefault` registrations produce, and
+factor the constants so the two lists cannot drift (a test that fails when a
+`SetDefault` key has no `NewWithPath` counterpart is the durable form). Both
+callers — `setupwizard.go:546` and `demo.go:64` — benefit. Then delete the false
+claim at `adapter_notifications.go:88-92` and say what is actually true.
+Re-reading the saved file through `LoadFrom` after the wizard was the reviewer's
+other suggestion; rejected, because the wizard holds credentials in memory that
+`Save` does not write to the file, and a re-read would drop them.
+
+### 🟡 3 — concurrent `List` calls serialise across the network fan-out — accepted as-is
+
+`adapter_notifications.go:205-206`. This is the finding the validator surfaced and
+was told not to judge. The reviewer's judgment, which I accept: **a latency trade,
+not a defect.** `List` reads `time.Now()` before locking, so a blocked caller's
+`now` is always ≤ the winner's `notifLastPollAt` and `notifThrottled` is always
+true when it finally acquires the lock — no ordering produces a double fetch. The
+blocked caller gets the cache the winner *just wrote*, i.e. fresher data than an
+immediate cached return would give, so there is no staleness either (the one
+exception is cosmetic: if the winner takes the total-failure branch, the loser
+returns the older rows with `nil` and the pane flips error → stale feed). `OnTick`
+re-arms via `tea.Batch` independently of the fetch, so ticks can queue, but each
+queued caller returns at lock-handoff speed — no unbounded pileup.
+
+The cost is real and measured: against a 300ms-per-request fixture the "cheap
+throttled return" took 754ms against the winner's 904ms, and because
+`CompositeProvider.List` waits for every backend, that also holds the GitHub half
+of the merged feed.
+
+**Settled: leave the behaviour, document it.** The struct comment at
+`adapter.go:34-41` explains why marks are safe and is silent on the
+`List`-vs-`List` consequence, which is the non-obvious half — state it plainly
+there, including that the loser gets fresher data rather than staler, so nobody
+"optimises" it later into the singleflight variant and trades freshness away
+without knowing that is the trade.
+
+### 🟡 4 — stale field count in the lock-order comment (convention 25)
+
+`adapter.go:21`: "leaves all five fields below at their zero value". There are
+seven notification fields below that line, or six excluding the mutex, or three
+if "below" means only that comment's own group. Five matches none. The
+pre-change text said "three", correct for its group; the edit widened the scope
+and kept arithmetic that no longer applies. Drop the number entirely.
+
+The substantive claim in the same block — `list` is the only call path holding
+both, order `notifThrottleMu` before the store's `mu`, no opposite-order
+acquirer — was verified independently and holds.
+
+### 🟢 5 — `copyNotifications`' "none a slice, map or pointer" is unenforced prose
+
+`adapter_notifications.go:264-271`. The conclusion is right for what callers can
+mutate (`provider.Notification` and `provider.Identity` are strings, bools, a
+`Kind` and a `time.Time`), but the sentence is literally false — `time.Time`
+carries an unexported `loc *time.Location`, harmless because it is a shared
+immutable singleton, but the kind of claim a future reader trusts verbatim.
+Reword to "no field a caller can mutate through", and add a cheap reflect-based
+guard test over `provider.Notification` that fails when a slice, map or pointer
+field appears. Today the comment is the only thing standing between a future
+`Labels []string` and a silently shallow copy.
+
+### 🟢 6 — `notifThrottled`'s zero-value argument has an unstated upper bound
+
+`adapter_notifications.go:249-254` reasons that `time.Time`'s year-1 zero value
+plus the interval always lands before any real `now`. True only for intervals
+under roughly 2025 years, and nothing enforces that: `Validate` (`config.go:900`)
+rejects negatives and imposes no ceiling. `min_poll_interval: 99999999999` throttles
+the **first** call, so `List` returns `nil, nil` — empty feed, no error, forever.
+Separately `time.Duration(azure.MinPollInterval) * time.Second` (`main.go:437`)
+overflows int64 above ~9.2e9 seconds and can flip sign, disabling throttling
+instead. Add an upper clamp in `LoadFrom` mirroring `AzureLookbackDaysMax`, which
+makes the removed `IsZero()` guard genuinely dead rather than dead-under-an-
+unstated-bound, and puts the bound where a user can find it.
+
+### 🟢 7 — replace the 100ms timing assertion with an ordering assertion
+
+`adapter_notifications_throttle_test.go:346,368,376`. The test does discriminate
+— a `MarkRead` that acquired `notifThrottleMu` would block ~150ms and trip the
+threshold — but it is a wall-clock assertion on shared CI, and its
+`time.Sleep(delay / 4)` handshake is unasserted, so it cannot distinguish "not
+blocked" from "never contended". Gate the fixture handler on a channel instead:
+handler blocks on `<-releaseServer`, test closes a `markDone` channel after
+`MarkRead` returns, handler asserts `markDone` is already closed before
+releasing. That turns the property into the ordering claim it actually is — the
+mark completed while a request was parked inside the handler — needs no
+threshold, and pins the handshake the sleep currently only hopes for. Keep a
+generous `select` timeout so a real deadlock fails fast.
+
+### Confirmed correct, no action
+
+The three throttle-anchor decisions match decision 10 and task 8's absorb rule,
+each with a dedicated test. **Partial-failure caching is not a defect**: not
+advancing the anchor would let any persistently-failing source disable the
+throttle entirely and price the feed at Azure's cost exactly when things are
+broken. The five-minute silent hole is real but its cause is the already-approved
+combination of task 8's absorb rule and decision 10's window — what this commit
+adds is a *multiplier*, 30s becoming 300s, now appended to the existing
+`## Unknowns` warnings-channel entry so it is costed rather than re-litigated.
+
+`now` injection: `List` reads `time.Now()` once and threads it down; nothing
+below reads the wall clock. Because both sides originate from `time.Now()`, the
+comparison is on **monotonic** readings in production and is immune to NTP steps
+— genuinely better than the forward-clamp path in `## Unknowns`, and worth
+saying so in the doc comment so nobody "fixes" it later by round-tripping
+through UTC. Absorb/propagate branch untouched; the anchor write sits inside the
+absorb branch only; no `polling` or `app` file touched.
+
 ## Unknowns
 
 Resolved by the decisions above: poll cadence (10), first-run flood (6), multi-project
@@ -2080,7 +2272,15 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   A second return value, or a `Warnings []error` field the pane could render as a subdued
   status line, would close it. **Deferred to Oscar deliberately:** it widens an interface
   phase 1 shipped and that GitHub also implements, so it is a cross-provider design decision,
-  not a fix for this loop to make on its own.
+  not a fix for this loop to make on its own. **Task 14's review adds a multiplier to this,
+  2026-08-07:** decision 10's self-throttle caches the *degraded* result and holds it for the
+  whole `min_poll_interval`, so a transient one-source blip no longer hides rows for one poll
+  interval (30s) but for the throttle window (300s at defaults, unbounded above by config).
+  That is not a new defect — it is the same silence, priced higher — but it raises what the
+  warnings channel is worth, and the reviewer judged the alternative (not anchoring the
+  throttle on a partial failure) strictly worse, since it would let a persistently failing
+  source disable throttling entirely and price the feed at Azure's cost precisely when
+  things are broken.
 
 - **Does any source need a PAT scope beyond what the app already requests?** The comments
   endpoint documents `vso.work`, which the work-item pane already needs, so the likely answer
