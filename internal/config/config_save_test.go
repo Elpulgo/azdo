@@ -282,6 +282,19 @@ notifications:
 			ParticipatingOnly:   true,
 			SinceDays:           14,
 		},
+		// The fixture writes no azure: block at all, so every Azure field
+		// lands on task 11's defaults: LookbackDays/MinPollInterval from
+		// v.SetDefault, and all four source toggles on.
+		Azure: NotificationsAzureConfig{
+			LookbackDays:    DefaultAzureLookbackDays,
+			MinPollInterval: DefaultAzureMinPollInterval,
+			Sources: NotificationsAzureSourcesConfig{
+				ReviewRequested: true,
+				Mentioned:       true,
+				Assigned:        true,
+				CIFailed:        true,
+			},
+		},
 	}
 
 	// Sanity-check the fixture actually parsed as seeded, before mutating

@@ -18,8 +18,12 @@ import (
 // different sets (a source like SourceAssigned caps each query at
 // assignedQueryTop, so an old-but-still-in-window subject can be crowded
 // out of every poll's results, its LastSeen frozen, and pruned before the
-// window says it should be) — task 11 owns clamping lookback_days to this
-// constant so that gap cannot open.
+// window says it should be). internal/config.azureLookbackDaysMax duplicates
+// this value in days (config deliberately does not import this package for
+// one constant) and clamps notifications.azure.lookback_days to it before
+// Validate() ever runs, so that gap cannot open through ordinary config
+// loading. If this constant's value ever changes, azureLookbackDaysMax must
+// change with it — that comment points back here for the same reason.
 const orphanTTL = 30 * 24 * time.Hour
 
 // NotifKey builds the stable identity key for a locally-tracked synthetic

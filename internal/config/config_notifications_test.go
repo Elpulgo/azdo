@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,19 @@ theme: dark
 	}
 	if n.PollInterval != 0 {
 		t.Errorf("PollInterval = %d, want 0", n.PollInterval)
+	}
+	// Unlike the shared/GitHub fields above, Azure's two numeric fields do
+	// NOT default to the Go zero value — LoadFrom's v.SetDefault registers
+	// 14 and 300 (decision 13's YAML), and all four source toggles default
+	// to true.
+	if n.Azure.LookbackDays != DefaultAzureLookbackDays {
+		t.Errorf("Azure.LookbackDays = %d, want %d (default)", n.Azure.LookbackDays, DefaultAzureLookbackDays)
+	}
+	if n.Azure.MinPollInterval != DefaultAzureMinPollInterval {
+		t.Errorf("Azure.MinPollInterval = %d, want %d (default)", n.Azure.MinPollInterval, DefaultAzureMinPollInterval)
+	}
+	if !n.Azure.Sources.ReviewRequested || !n.Azure.Sources.Mentioned || !n.Azure.Sources.Assigned || !n.Azure.Sources.CIFailed {
+		t.Errorf("Azure.Sources = %+v, want all four true by default", n.Azure.Sources)
 	}
 	if len(cfg.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want empty for a clean config", cfg.Warnings)
@@ -269,9 +283,9 @@ notifications:
     MIN_POLL_INTERVAL: 600
     sources:
       Review_Requested: true
-      MENTIONED: true
+      MENTIONED: false
       Assigned: true
-      Ci_Failed: true
+      Ci_Failed: false
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -289,22 +303,194 @@ notifications:
 	if a.MinPollInterval != 600 {
 		t.Errorf("Azure.MinPollInterval = %d, want 600 (mixed-case key MIN_POLL_INTERVAL should still resolve)", a.MinPollInterval)
 	}
-	// Every source is set to true here specifically because task 10 sets no
-	// default for these fields (task 11 owns "defaults on"), so their Go
-	// zero value is false -- asserting true is the only way this test can
-	// fail if the mixed-case key never resolved and the field silently kept
-	// its zero value instead.
+	// Two of the four sources are explicitly false here, on purpose: task 11
+	// defaults every source to true, so a fixture that sets all four to true
+	// would pass even if the mixed-case keys below never resolved at all
+	// (the default would produce the same "true" by coincidence). Setting
+	// MENTIONED/Ci_Failed to false is the only way this test can tell "the
+	// mixed-case key resolved to an explicit false" apart from "the key
+	// never resolved and the field fell back to its default".
 	if !a.Sources.ReviewRequested {
 		t.Error("Azure.Sources.ReviewRequested = false, want true (mixed-case key Review_Requested should still resolve)")
 	}
-	if !a.Sources.Mentioned {
-		t.Error("Azure.Sources.Mentioned = false, want true (mixed-case key MENTIONED should still resolve)")
+	if a.Sources.Mentioned {
+		t.Error("Azure.Sources.Mentioned = true, want false (mixed-case key MENTIONED should resolve to its explicit false, not the true default)")
 	}
 	if !a.Sources.Assigned {
 		t.Error("Azure.Sources.Assigned = false, want true (mixed-case key Assigned should still resolve)")
 	}
-	if !a.Sources.CIFailed {
-		t.Error("Azure.Sources.CIFailed = false, want true (mixed-case key Ci_Failed should still resolve)")
+	if a.Sources.CIFailed {
+		t.Error("Azure.Sources.CIFailed = true, want false (mixed-case key Ci_Failed should resolve to its explicit false, not the true default)")
+	}
+}
+
+// TestLoad_AzureSourceToggle_ExplicitFalse_OverridesDefaultTrue is the whole
+// point of task 11's defaults-on design. All four source toggles default to
+// true against bool's false zero value, so "the user explicitly disabled
+// this source" and "the user never mentioned it" are indistinguishable in a
+// plain bool unless SetDefault genuinely resolves through v.Unmarshal. A
+// test that only checks the *defaults* (all true, nothing set) would pass
+// against a broken implementation that hardcodes true and ignores the file
+// entirely — this fixture sets exactly one source to false and leaves the
+// other three unset, so it can only pass if the explicit false is honoured
+// AND the unset three still fall back to their default.
+func TestLoad_AzureSourceToggle_ExplicitFalse_OverridesDefaultTrue(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    sources:
+      review_requested: false
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	s := cfg.Notifications.Azure.Sources
+	if s.ReviewRequested {
+		t.Error("Sources.ReviewRequested = true, want false (explicit review_requested: false must override the true default)")
+	}
+	if !s.Mentioned {
+		t.Error("Sources.Mentioned = false, want true (unset key must still fall back to the default)")
+	}
+	if !s.Assigned {
+		t.Error("Sources.Assigned = false, want true (unset key must still fall back to the default)")
+	}
+	if !s.CIFailed {
+		t.Error("Sources.CIFailed = false, want true (unset key must still fall back to the default)")
+	}
+}
+
+// TestLoad_AzureSources_AllDisabled_IsLegal pins that turning off every
+// source is a legal, empty-feed configuration, not a load or validation
+// error — Validate() has no "at least one Azure source must be enabled"
+// guard, and NotificationsAzureSourcesConfig's own doc comment says so.
+func TestLoad_AzureSources_AllDisabled_IsLegal(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    sources:
+      review_requested: false
+      mentioned: false
+      assigned: false
+      ci_failed: false
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom() with every Azure source disabled = %v, want nil", err)
+	}
+
+	s := cfg.Notifications.Azure.Sources
+	if s.ReviewRequested || s.Mentioned || s.Assigned || s.CIFailed {
+		t.Errorf("Sources = %+v, want all four false", s)
+	}
+}
+
+// TestLoad_AzureLookbackDays_Zero_FallsBackToDefault pins decision 13's
+// closing note: zero is NOT "unbounded" for lookback_days the way it is for
+// the shared/GitHub numeric keys. An explicit `lookback_days: 0` must land
+// on DefaultAzureLookbackDays, the same value an absent key gets, rather
+// than surviving as a literal 0 that Azure's sources could read as "every
+// work item ever assigned".
+func TestLoad_AzureLookbackDays_Zero_FallsBackToDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    lookback_days: 0
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.Azure.LookbackDays != DefaultAzureLookbackDays {
+		t.Errorf("Azure.LookbackDays = %d, want %d (explicit zero must fall back to the default, not be treated as unbounded)",
+			cfg.Notifications.Azure.LookbackDays, DefaultAzureLookbackDays)
+	}
+}
+
+// TestLoad_AzureLookbackDays_ClampedToOrphanTTL pins the boundary shape
+// convention 13 asks for: exactly at the clamp (30) is left unchanged, one
+// past it (31) is silently clamped down. Beyond azureLookbackDaysMax an item
+// can be pruned from the local triage store (azdevops.orphanTTL) while
+// still inside the query window and resurface as unread with nothing having
+// actually happened to it.
+//
+// The "29, unchanged" row exists specifically to pin the threshold's exact
+// value (30), not just the shape of the clamp: a clamp whose comparison
+// mistakenly fires one day early (e.g. `> 25` instead of `> 30`) still
+// passes the 30/31 rows above — 30 and 31 both land on the clamp target
+// (30) either way, since clamping 30 to 30 is a no-op regardless of which
+// threshold triggered it. 29 is far enough inside the true window that any
+// threshold lower than 30 clamps it down and gets caught, while any correct
+// or higher threshold leaves it alone.
+func TestLoad_AzureLookbackDays_ClampedToOrphanTTL(t *testing.T) {
+	tests := []struct {
+		name string
+		days int
+		want int
+	}{
+		{name: "one below the clamp is unaffected", days: 29, want: 29},
+		{name: "exactly at the clamp is unchanged", days: 30, want: 30},
+		{name: "one past the clamp is pulled down to it", days: 31, want: 30},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			content := fmt.Sprintf(`organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    lookback_days: %d
+`, tt.days)
+			if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := LoadFrom(configPath)
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+
+			if cfg.Notifications.Azure.LookbackDays != tt.want {
+				t.Errorf("Azure.LookbackDays = %d, want %d", cfg.Notifications.Azure.LookbackDays, tt.want)
+			}
+		})
 	}
 }
 
@@ -342,6 +528,16 @@ func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 			mutate:  func(c *Config) { c.Notifications.PollInterval = -1 },
 			wantErr: "poll_interval",
 		},
+		{
+			name:    "azure lookback_days negative",
+			mutate:  func(c *Config) { c.Notifications.Azure.LookbackDays = -1 },
+			wantErr: "lookback_days",
+		},
+		{
+			name:    "azure min_poll_interval negative",
+			mutate:  func(c *Config) { c.Notifications.Azure.MinPollInterval = -1 },
+			wantErr: "min_poll_interval",
+		},
 	}
 
 	for _, tt := range tests {
@@ -362,6 +558,14 @@ func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 func TestConfig_Validate_NotificationsAcceptsZeroBounds(t *testing.T) {
 	// Zero is the documented "no bound" default for all three — must not be
 	// rejected by a >= 0 guard (only negatives are invalid).
+	//
+	// Azure.LookbackDays/MinPollInterval are included at zero too: Validate()
+	// itself only rejects negatives, the same >= 0 guard as the other three.
+	// LoadFrom is what turns a zero LookbackDays into the 14-day default
+	// before Validate() ever sees it (TestLoad_AzureLookbackDays_Zero_FallsBackToDefault
+	// pins that pipeline); Validate() called directly on a struct literal
+	// (as here) has no such normalization and must not treat either as an
+	// error on its own.
 	cfg := &Config{
 		Organization:    "org",
 		Projects:        []string{"p"},
@@ -371,6 +575,7 @@ func TestConfig_Validate_NotificationsAcceptsZeroBounds(t *testing.T) {
 			MaxItems:     0,
 			PollInterval: 0,
 			GitHub:       NotificationsGitHubConfig{SinceDays: 0},
+			Azure:        NotificationsAzureConfig{LookbackDays: 0, MinPollInterval: 0},
 		},
 	}
 	if err := cfg.Validate(); err != nil {

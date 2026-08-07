@@ -152,11 +152,14 @@ type NotificationsConfig struct {
 	// GitHub holds GitHub-only notifications knobs — the phase-1 keys that
 	// have no Azure equivalent.
 	GitHub NotificationsGitHubConfig `mapstructure:"github"`
-	// Azure holds Azure-only notifications knobs. Its fields are declared
-	// already and match decision 13's YAML; what the phase-2 spec's task 11
-	// adds is their defaults and validation, which task 10 deliberately does
-	// not invent. The declared fields are the landing site, not a stub to be
-	// replaced.
+	// Azure holds Azure-only notifications knobs, matching decision 13's
+	// YAML exactly. Disabling every entry under Azure.Sources is legal and
+	// yields an empty Azure share of the feed, not a config error — nothing
+	// here gates whether the Azure backend implements
+	// provider.NotificationSource, since that is a compile-time method-set
+	// fact about *azdevops.Adapter, not a config-driven capability. An
+	// Azure-only config with every source toggle off still shows the
+	// Notifications tab; it is simply always empty.
 	Azure NotificationsAzureConfig `mapstructure:"azure"`
 }
 
@@ -191,24 +194,41 @@ type NotificationsGitHubConfig struct {
 }
 
 // NotificationsAzureConfig holds the notifications knobs that apply to the
-// Azure DevOps backend only. The three fields below are task 10's deliberate
-// landing site for task 11, shaped to match decision 13's YAML exactly — they
-// are not a stub to be replaced. What task 10 left out is their defaults and
-// validation, both of which are task 11's job (see each field's own comment).
+// Azure DevOps backend only, shaped to match decision 13's YAML exactly.
+// Both numeric fields have LoadFrom v.SetDefault registrations, so an absent
+// notifications.azure block (or one that omits a given key) lands on a
+// non-zero default, not the Go zero value — see each field's own comment for
+// the exact number and what a user-supplied zero means.
 type NotificationsAzureConfig struct {
 	// LookbackDays bounds every Azure notification source to activity within
-	// the last N days. Populated by task 11.
+	// the last N days. Defaults to DefaultAzureLookbackDays (14). Unlike
+	// notifications.github.since_days, zero is NOT "unbounded" here: LoadFrom
+	// treats an explicit `lookback_days: 0` the same as an absent key and
+	// falls back to the default, because Azure's sources have no snapshot
+	// state and an unbounded window means "every work item ever assigned to
+	// me" (decision 13's closing note). LoadFrom also clamps this to
+	// azureLookbackDaysMax (30, mirroring azdevops.orphanTTL) after applying
+	// the default, so by the time Validate() runs this field is always
+	// either 0 (a config error caught below) or in [1, 30].
 	LookbackDays int `mapstructure:"lookback_days"`
 	// MinPollInterval is the shortest interval, in seconds, between two real
-	// Azure notification queries; the adapter self-throttles to it. Populated
-	// by task 11.
+	// Azure notification queries; the adapter self-throttles to it (task 14).
+	// Defaults to DefaultAzureMinPollInterval (300). A user-supplied zero is
+	// left as zero — task 14 owns what a zero self-throttle interval means to
+	// the adapter; this struct only rejects a negative one.
 	MinPollInterval int `mapstructure:"min_poll_interval"`
-	// Sources holds the per-source enable toggles. Populated by task 11.
+	// Sources holds the per-source enable toggles, all defaulting to true.
 	Sources NotificationsAzureSourcesConfig `mapstructure:"sources"`
 }
 
 // NotificationsAzureSourcesConfig holds the four independent per-source
-// enable toggles for the Azure notifications feed. Defaults are task 11's.
+// enable toggles for the Azure notifications feed. All four default to true
+// (LoadFrom registers a v.SetDefault for each), so an absent
+// notifications.azure.sources block — or one that sets only some of the four
+// keys — leaves every unset toggle on. There is no validation here: every
+// bool value is legal, including all four false, which is not a config error
+// and does not affect whether the Azure backend implements
+// provider.NotificationSource (see NotificationsConfig.Azure's doc comment).
 //
 // CIFailed names a *source* ("my failed pipeline runs"), not a
 // provider.NotificationReason: that source emits NotificationReasonCIActivity
@@ -408,6 +428,29 @@ const (
 	DefaultMetricsActiveState       = "Active"
 	DefaultMetricsReadyForTestState = "Ready for Test"
 	DefaultMetricsClosedState       = "Closed"
+
+	// DefaultAzureLookbackDays is notifications.azure.lookback_days' default
+	// (decision 13's YAML). It intentionally matches
+	// azdevops.DefaultNotificationLookbackDays; the two are declared in
+	// separate packages (see azureLookbackDaysMax's comment for why config
+	// does not import azdevops) and must be changed together.
+	DefaultAzureLookbackDays = 14
+	// DefaultAzureMinPollInterval is notifications.azure.min_poll_interval's
+	// default, in seconds (decision 13's YAML).
+	DefaultAzureMinPollInterval = 300
+
+	// azureLookbackDaysMax duplicates azdevops.orphanTTL (30 days) expressed
+	// in days rather than a time.Duration, and is the upper bound
+	// notifications.azure.lookback_days is clamped to. config deliberately
+	// does not import internal/azdevops to read the real constant -- that
+	// would make a leaf config package depend on one backend's internals for
+	// a single number, and internal/azdevops does not import internal/config
+	// either, so nothing here forces the duplication beyond the choice to
+	// keep config free of a backend dependency. The two are kept from
+	// silently drifting apart by cross-references instead:
+	// azdevops.orphanTTL's own doc comment points back at this constant, and
+	// this comment points back at that one. If either changes, change both.
+	azureLookbackDaysMax = 30
 )
 
 // GetPath returns the path to the config file
@@ -464,15 +507,22 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
 	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
 	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
-	// These registrations are currently no-ops — every notifications default
-	// is a Go zero value, which mapstructure leaves in place anyway — and are
-	// kept deliberately so the first genuinely non-zero default has a correct
-	// landing site instead of being bolted on ad hoc. max_items and
-	// notifications.github.since_days stay unbounded on purpose.
+	// The six shared/GitHub registrations below are currently no-ops — every
+	// one of those defaults is a Go zero value, which mapstructure leaves in
+	// place anyway — and are kept deliberately so a future genuinely
+	// non-zero default has a correct landing site instead of being bolted on
+	// ad hoc. max_items and notifications.github.since_days stay unbounded
+	// on purpose.
 	//
-	// notifications.azure.* has no registrations here on purpose: its
-	// defaults (source toggles on, lookback_days, min_poll_interval) are
-	// task 11's, not task 10's.
+	// notifications.azure.* is different: two of its six registrations below
+	// are genuinely non-zero (lookback_days, min_poll_interval), and all four
+	// source toggles default to true against bool's false zero value — a
+	// plain "leave it at the Go zero value" default cannot express
+	// "defaults on" at all, only "defaults off". SetDefault is verified to
+	// resolve correctly through v.Unmarshal at every depth this block
+	// touches, including a config file that sets only one of the four
+	// sources.* keys and leaves the other three to their defaults (see
+	// TestLoad_NotificationsAzureSourcesConfig_* below).
 	v.SetDefault("notifications.exclude_repos", []string{})
 	v.SetDefault("notifications.include_repos", []string{})
 	v.SetDefault("notifications.exclude_reasons", []string{})
@@ -482,6 +532,12 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("notifications.github.only_configured_repos", false)
 	v.SetDefault("notifications.github.participating_only", false)
 	v.SetDefault("notifications.github.since_days", 0)
+	v.SetDefault("notifications.azure.lookback_days", DefaultAzureLookbackDays)
+	v.SetDefault("notifications.azure.min_poll_interval", DefaultAzureMinPollInterval)
+	v.SetDefault("notifications.azure.sources.review_requested", true)
+	v.SetDefault("notifications.azure.sources.mentioned", true)
+	v.SetDefault("notifications.azure.sources.assigned", true)
+	v.SetDefault("notifications.azure.sources.ci_failed", true)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -583,6 +639,31 @@ func LoadFrom(configPath string) (*Config, error) {
 	if cfg.Notifications.GitHub.OnlyConfiguredRepos && len(cfg.Notifications.IncludeRepos) > 0 {
 		cfg.Warnings = append(cfg.Warnings,
 			"notifications.github.only_configured_repos is true — notifications.include_repos is ignored")
+	}
+
+	// notifications.azure.lookback_days: zero means "use the default", never
+	// "unbounded" (decision 13's closing note). The shared-key convention
+	// elsewhere in this file is that zero is the widest possible behaviour;
+	// that convention is exactly what would be dangerous here, since Azure's
+	// sources have no snapshot state and a truly unbounded window means
+	// "every work item ever assigned to me". A config that never sets this
+	// key already lands on DefaultAzureLookbackDays via v.SetDefault above,
+	// so this branch only fires when the file explicitly writes
+	// `lookback_days: 0`.
+	if cfg.Notifications.Azure.LookbackDays == 0 {
+		cfg.Notifications.Azure.LookbackDays = DefaultAzureLookbackDays
+	}
+	// Clamp to azureLookbackDaysMax (mirrors azdevops.orphanTTL, 30 days —
+	// see that constant's own doc comment). Beyond this bound a subject can
+	// be pruned from the local triage store while still inside the query
+	// window and resurface as unread with nothing having actually changed,
+	// because "inside the window" and "returned by a given poll" are
+	// different sets once a source's own per-poll query cap starts crowding
+	// out older-but-still-in-window rows. This is a silent normalization,
+	// not a validation error — the same treatment azdevops's own WIQL
+	// builders already give a negative lookbackDays.
+	if cfg.Notifications.Azure.LookbackDays > azureLookbackDaysMax {
+		cfg.Notifications.Azure.LookbackDays = azureLookbackDaysMax
 	}
 
 	// Validate configuration
@@ -713,20 +794,19 @@ func (c *Config) Validate() error {
 	}
 
 	// Notifications validation. There is no `notifications.enabled` guard —
-	// the block is always present, if only at its all-zero default, so these
-	// checks must hold even when the user never wrote a
-	// `notifications:` section at all. That default (0 for each of the
-	// three numeric fields checked below -- MaxItems, PollInterval and
-	// GitHub.SinceDays; no entries in the two glob lists) already satisfies
-	// every check below, so an absent block is valid today. The nested Azure
-	// block also has two numeric fields (LookbackDays, MinPollInterval) that
-	// this task deliberately does not validate (task 11's job). The premise
-	// that an absent/all-zero block is always valid stops holding the moment
-	// task 11 gives LookbackDays a non-zero default (14, per decision 13's
-	// YAML) -- a loaded-but-unset Azure block would then need its own
-	// zero-means-"use the default" handling before this comment's "always
-	// valid" claim is true again, so task 11's implementer should revisit
-	// this whole comment rather than just append two more checks to it.
+	// the block is always present, if only at its defaults, so these checks
+	// must hold even when the user never wrote a `notifications:` section at
+	// all. Three of the five numeric fields checked below default to the Go
+	// zero value (MaxItems, PollInterval, GitHub.SinceDays; no entries in the
+	// two glob lists), which trivially satisfies a ">= 0" check. The other
+	// two, Azure.LookbackDays and Azure.MinPollInterval, do NOT default to
+	// zero: LoadFrom's v.SetDefault calls populate them at 14 and 300
+	// (decision 13's YAML) before Unmarshal runs, and the zero-means-default
+	// normalization above (LoadFrom, right before this call) backstops an
+	// explicit `lookback_days: 0` the same way. Both non-zero defaults still
+	// satisfy ">= 0" below, so an absent or all-default block remains valid
+	// — what actually fails these checks is a user-supplied negative, not
+	// the absence of the block.
 	if c.Notifications.GitHub.SinceDays < 0 {
 		return fmt.Errorf("notifications.github.since_days must be >= 0, got %d", c.Notifications.GitHub.SinceDays)
 	}
@@ -735,6 +815,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Notifications.PollInterval < 0 {
 		return fmt.Errorf("notifications.poll_interval must be >= 0, got %d", c.Notifications.PollInterval)
+	}
+	if c.Notifications.Azure.LookbackDays < 0 {
+		return fmt.Errorf("notifications.azure.lookback_days must be >= 0, got %d", c.Notifications.Azure.LookbackDays)
+	}
+	if c.Notifications.Azure.MinPollInterval < 0 {
+		return fmt.Errorf("notifications.azure.min_poll_interval must be >= 0, got %d", c.Notifications.Azure.MinPollInterval)
 	}
 	for _, r := range c.Notifications.ExcludeRepos {
 		if strings.TrimSpace(r) == "" {
