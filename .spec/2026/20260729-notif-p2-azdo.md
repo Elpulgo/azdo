@@ -341,7 +341,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). *(Re-validated 2026-08-07 against `0eeb10a`, which fixes all seven review findings and implements both settled decisions, plus `6556b25`, which kills the two mutants that re-validation found surviving and corrects three stale comments; the original `→ done:` clauses were re-checked against the current code and still hold. See the two re-validation records at the end of `## Validation: task 11`.)* → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
 - [x] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). *(Re-validated 2026-08-07 against `7040c11` + `8a03257`, which fixes both review findings and implements Decision C; re-ticked. See the re-validation record at the end of `## Validation: task 12`.)* → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
 - [x] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). *(Re-validated 2026-08-07 against `f478f74` + `d72f98b` + `4274a3e`, which drop the dead `HasAzure()||HasGitHub()` conjunct the review found, correct both the comment and the error message, and add three rows closing the same widening gap on the other three conjuncts; re-ticked. See the re-validation record at the end of `## Validation: task 13`.)* → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
-- [ ] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). *(Un-ticked 2026-08-07: the opus review of `9b127eb` returned REQUEST_CHANGES with two 🔴 findings, both reproduced against real fixtures rather than argued. See `## Review feedback: task 14`.)* **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
+- [x] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). *(Re-validated 2026-08-07 against `b0c6d9e`, which closes R1-R5 from round 2; re-ticked. The "returned **by copy**" mechanism in the `→ done:` line below was superseded by round 2's settled decision — `copyNotifications` is deleted and the same guarantee is now delivered by `Reconcile`'s fresh allocation plus `provider.Notification` having no mutable-through field, both pinned by tests. See the third re-validation record at the end of `## Validation: task 14`.)* **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [x] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). *(Landed as `docs/adr/0002-azure-synthetic-notification-feed.md` in `d694235`, corrected in `1cb1a5a`. See `## Validation: task 15`.)* → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
 - [ ] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
 
@@ -2214,6 +2214,144 @@ receiving the same `p` — was verified and holds).
 Convention 29: clean — no added string literal contains a phase/task/decision
 number or a review glyph; the one new user-facing string is the
 `min_poll_interval` clamp warning.
+
+### Re-validation 2026-08-07 against `b0c6d9e` — COMPLETE (task re-ticked)
+
+Third pass, scoped to R1-R5 plus regression. Every claim below was falsified in
+both directions where a predicate exists to narrow, and by throwaway probe where
+the claim is about behaviour. `git show --stat b0c6d9e`: six files —
+`internal/azdevops/adapter.go`, `adapter_notifications.go`,
+`adapter_notifications_test.go`, `adapter_notifications_throttle_test.go`,
+`notifications_reconcile_test.go`, `internal/config/config_notifications_test.go`.
+**No `polling` or `app` file touched.** Build/vet clean;
+`go test -count=1 ./internal/... ./cmd/...` green; `./internal/azdevops` green at
+`-count=3`; `gofmt -l` clean on all six touched files; `git status --porcelain`
+empty at start and end. Every mutation `cp`-backed and `cp`-restored, each restore
+`diff`-verified (never `git checkout --`); the two throwaway probe files were
+deleted. `-race` still cannot build (`cc1` blocked at OS level), so the
+concurrency argument remains inspection-plus-probe.
+
+**R1 — closed, all four sub-checks.**
+- (a) *The by-copy contract still holds.* Probe against the real four-source
+  `composerFixture`: real query → throttled call → mutate `rows2[0]`'s
+  `Title`/`Read`/`Identity.ID` → next throttled call is untouched. Asserted
+  `&rows1[0] != &rows2[0]` and `&rows2[0] != &rows3[0]` **first**, so neither
+  check is a tautology over one backing array.
+- (b) *`TestReconcile_ReturnedRowsDoNotAliasInputSlice` discriminates.* Mutating
+  `Reconcile` to `return rows, newState` fails it (plus four other tests).
+  Mutating only the allocation to a **partial** alias — `result := rows[:0]`,
+  semantics otherwise identical — fails it too, at the
+  `&gotRows[0] == &rows[0]` check. So it catches the subtle form, not only
+  wholesale `return rows`.
+- (c) *The renamed `TestAdapter_List_Throttled_ReturnsFreshSliceNotAlias` now
+  fails for the reason its comment states.* The same `result := rows[:0]` mutant
+  — which breaks exactly the stated mechanism ("both branches return
+  `Reconcile`'s own freshly allocated result slice") — kills it, on its own
+  aliasing message at line 237. Its predecessor survived deleting
+  `copyNotifications` outright; this one does not survive breaking the mechanism
+  it now names.
+- (d) Repo-wide grep for `notifLastResult`/`copyNotifications` outside `.spec/`:
+  three hits, all in comments and all describing the deletion as history ("the
+  former copyNotifications helper was dead code and was deleted" ×2, "there is
+  no copyNotifications helper" ×1). No live reference in production or test code.
+  Both `list()` branches return `reconciled` directly
+  (`adapter_notifications.go:248`, `:273`).
+
+**R2 — closed, on both clamps and in both directions.** `>` → `>=` on
+`AzureMinPollIntervalMax` now dies on
+`TestLoad_AzureMinPollInterval_ClampedToMax/exactly_at_the_clamp_is_unchanged`;
+the identical mutant on `AzureLookbackDaysMax` dies on its twin. Widening probes:
+forcing either clamp predicate to `true` fails 9+ tests including all three rows
+of both tables; forcing it to `false` fails the "one past the clamp" row and the
+`ClampWarns` test of each. Neither clamp branch is dead and neither boundary row
+is vacuous.
+
+**R3/R4/R5 — closed; every sentence of the rewritten block checked.** R4: the
+block now opens with "List re-reconciles and returns fresh rows on every call,
+but skips the network round trip and the store write" — matched to code
+(`adapter_notifications.go:236-248`) and to the probe below. R5:
+`internal/app/app.go` is correct, and the claim it supports holds —
+`app.go:678` `polling.NewNotificationsPoller(notificationsPollerClient(p), ...)`
+(which returns `notificationMarker(p)`, `app.go:342`) and `app.go:709`
+`notifications.NewModelWithStyles(appStyles, notificationMarker(p), cfg)` both
+receive the same `p`. Lock claims re-verified: `notifThrottleMu` appears in
+production code only inside `list`; `MarkRead`/`MarkDone` reach only
+`notifStore.mu` via `ApplyIfChanged`; `State()` takes only `mu`.
+
+R3 itself, reproduced against `b0c6d9e` with a channel-parked fixture and a
+request counter (a full real query against this fixture = **7** HTTP requests):
+
+| loser enters | `min_poll_interval` | winner round trip | loser's requests |
+|---|---|---|---|
+| +50ms | 100ms | 400ms | **0** (throttled) |
+| +250ms | 100ms | 400ms | **7** (second real query) |
+| +250ms | 5m | 400ms | **0** (throttled) |
+
+Row 2 is the comment's own counterexample at its own stated parameters, and it
+now predicts what is observed: the blocked caller does take the real-query
+branch. The `now`-direction claim is correct — the blocked caller's `now` is its
+entry time, strictly later than the winner's `notifLastPollAt`.
+
+*Non-blocking imprecision, recorded not blocked on.* Row 1 shows the per-caller
+condition is the **entry-time delta** (`loserNow - winnerNow < interval`), not
+the round trip: a caller entering 50ms behind the winner is throttled even though
+the winner's round trip (400ms) is four times the interval. The comment's "the
+blocked caller is only throttled if the winner's entire round trip finishes
+before `notifMinPollInterval` has elapsed" is true read as the *universal*
+guarantee ("**every** blocked caller is throttled only if …", which is exactly
+what the round-2 finding settled and is exactly right: round trip ≤ interval ⟹
+no blocked caller escapes), and false read per-caller. The block never states the
+per-caller rule, so a reader could over-read a slow network as "every concurrent
+caller re-queries". Cosmetic wording, not a false behavioural claim, and it
+matches the settled text verbatim — worth a sentence if this block is edited
+again, not a re-open.
+
+*Correction to the round-2 record.* That pass reported the counterexample as
+"the winner issued 4 requests, and after release the blocked caller issued 3
+more". A full real query against `composerFixture` is 7 requests (the mention
+source's WIQL → work-items → comments chain is sequential), so 4 + 3 = one
+query: those 3 were almost certainly the winner finishing, not the loser. The
+*conclusion* was right — row 2 above proves the double query — but the numbers
+attributed to it were not, which is why this pass re-derived them with per-caller
+accounting rather than reusing them.
+
+**On the declined test for the double-query case.** The implementer's call is
+defensible and is not held against it, but only half its justification survives.
+The scope half is sound: 🟡 3 settled "leave the behaviour, document it", round 2
+asked only for the doc correction, and pinning an accepted trade with a test
+ossifies a behaviour the same comment explicitly invites revisiting
+(singleflight). The "a deterministic two-`List` race test would be
+disproportionate" half is wrong: `list(opts, now)` already takes an injected
+`now`, and this very file's `TestAdapter_MarkRead_NotBlockedByInFlightList`
+already has the `serverEntered`/`releaseServer` handshake that pins ordering
+without a sleep or a wall-clock threshold. Composing the two gives a ~40-line
+deterministic test — winner parked mid-handler, loser called with
+`T0+2*interval` vs `T0+interval/2`, assert the request counter — which is what
+the table above is, minus the sleeps. Given that this block has now carried a
+false claim through two commits precisely because nothing executable checked it,
+that test is cheap insurance rather than a disproportionate one; the reason not
+to write it is scope, not cost.
+
+**Regression — the round-1 closures survive `b0c6d9e`.**
+- 🔴 1's re-reconcile: mutating the throttled branch's `state :=
+  a.notifStore.State()` to an empty `TriageState{}` still kills
+  `TestAdapter_List_Throttled_Reflects{MarkRead,MarkDone}MadeDuringWindow`.
+- 🟢 5's reflect guard survived its rename: adding `Labels []string` to
+  `provider.Notification` fails `TestNotification_NoMutableFieldAliasing` naming
+  the field.
+- 🟢 7's ordering test is untouched by this commit (both hunks in that file land
+  well above it) and still gates on channels, not on a 100ms threshold.
+- 🔴 2's defaults-drift test and the mapstructure pin live in files this commit
+  does not touch (`config.go`, `config_test.go`); the suite is green.
+- Half A wiring: `TestRunTUI_UsesAzureAdapterWithNotifications` and
+  `TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter` both pass.
+- A throttled call makes **zero** HTTP requests (counter unchanged across it)
+  and **zero** store writes — asserted on `TriageStore.gen` under `mu` *and* on
+  `State()` being `reflect.DeepEqual` before and after, not on a timing proxy.
+- `MarkRead`/`MarkDone` never acquire `notifThrottleMu` (grep above).
+- Convention 29: `b0c6d9e` adds no production string literal at all — the only
+  changed strings are test failure messages; the task/finding numbers it
+  introduces are all in comments, which the convention exempts.
 
 ## Review feedback: task 14
 
