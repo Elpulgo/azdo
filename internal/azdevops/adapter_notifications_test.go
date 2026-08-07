@@ -964,26 +964,29 @@ func TestSortNotificationsDeterministically_TieBreaksOnScopeThenID(t *testing.T)
 }
 
 // ---------------------------------------------------------------------------
-// copyNotifications — reflect-based guard on the claim its doc comment makes
-// (task 14 review, 🟢 finding 5): no field of provider.Notification, at any
-// depth, is something a caller holding a copied slice could mutate through
-// to reach state copyNotifications' caller did not hand them, since a
-// per-element slice copy only copies one level of value — it does not
-// deep-copy a slice, map or pointer field.
+// provider.Notification — reflect-based guard that no field, at any depth,
+// is something a caller holding a returned slice could mutate through to
+// reach state it was not handed ownership of (task 14 review, 🟢 finding 5).
+// This is load-bearing, not defensive prose: both list's real-query and
+// throttled branches return Reconcile's own freshly allocated result slice
+// (notifications_reconcile.go) rather than a dedicated copy step — there is
+// no copyNotifications helper — so the by-copy guarantee the throttle tests
+// rely on holds only because (a) Reconcile never returns a slice aliasing
+// its input (TestReconcile_ReturnedRowsDoNotAliasInputSlice) and (b) this
+// test proves there is nothing left for a caller to mutate through even if
+// it did.
 // ---------------------------------------------------------------------------
 
-// TestCopyNotifications_NoMutableFieldAliasing walks provider.Notification's
+// TestNotification_NoMutableFieldAliasing walks provider.Notification's
 // fields recursively and fails on any slice, map, pointer, chan, func or
-// interface field found at any depth — the field kinds a shallow per-element
+// interface field found at any depth — the field kinds a per-element value
 // copy does not protect against — with one explicit, documented exception:
 // time.Time itself, whose only fields are unexported and whose exported
 // method set gives no caller a way to reach through a copied value and
 // mutate the *time.Location the original pointed at. A field added to
 // Notification (or to a struct it embeds) of any of the failing kinds makes
-// this test fail without anyone having to remember to update it by hand,
-// which is the point: copyNotifications' doc comment's claim should not be
-// able to go stale the way the comment it replaced did.
-func TestCopyNotifications_NoMutableFieldAliasing(t *testing.T) {
+// this test fail without anyone having to remember to update it by hand.
+func TestNotification_NoMutableFieldAliasing(t *testing.T) {
 	assertNoMutableFieldAliasing(t, reflect.TypeOf(provider.Notification{}), "provider.Notification")
 }
 
@@ -999,7 +1002,7 @@ func assertNoMutableFieldAliasing(t *testing.T, typ reflect.Type, path string) {
 
 	switch typ.Kind() {
 	case reflect.Slice, reflect.Map, reflect.Ptr, reflect.Chan, reflect.Func, reflect.Interface, reflect.UnsafePointer:
-		t.Errorf("%s is a %s — copyNotifications' per-element slice copy does not deep-copy this field, so a caller holding its result could mutate through it and corrupt state the caller was not handed ownership of; either replace it with a value type or teach copyNotifications to deep-copy it explicitly and update its doc comment", path, typ.Kind())
+		t.Errorf("%s is a %s — a caller holding a returned []provider.Notification could mutate through this field and corrupt state it was not handed ownership of; either replace it with a value type or give the returning code an explicit deep copy for this field", path, typ.Kind())
 	case reflect.Struct:
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)

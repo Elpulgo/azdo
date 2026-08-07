@@ -192,13 +192,20 @@ func TestAdapter_List_Throttled_ReturnsCachedResultWithoutRealQuery(t *testing.T
 	}
 }
 
-// TestAdapter_List_Throttled_ReturnsCopyNotAlias is the mutate-and-recheck
+// TestAdapter_List_Throttled_ReturnsFreshSliceNotAlias is the mutate-and-recheck
 // test the self-throttle constraint explicitly calls for: comparing two
 // aliases of one backing array is a tautology, so this mutates the first
 // call's result in place and asserts the throttled second call is
-// unaffected — the only way that can hold is if the throttled path returns a
-// genuine copy (copyNotifications), not the cached slice itself.
-func TestAdapter_List_Throttled_ReturnsCopyNotAlias(t *testing.T) {
+// unaffected. There is no dedicated copy step on this path (the former
+// copyNotifications helper was dead code and was deleted, task 14 review
+// round 2 finding R1): both the real-query and throttled branches of list
+// return Reconcile's own freshly allocated result slice, which
+// TestReconcile_ReturnedRowsDoNotAliasInputSlice
+// (notifications_reconcile_test.go) pins never aliases its input, and
+// provider.Notification carries no field a caller could mutate through
+// even if it did (TestNotification_NoMutableFieldAliasing). Together those
+// two are what this test is really exercising.
+func TestAdapter_List_Throttled_ReturnsFreshSliceNotAlias(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	f := newComposerFixture(now)
 	server := newComposerServer(t, f)
@@ -227,7 +234,7 @@ func TestAdapter_List_Throttled_ReturnsCopyNotAlias(t *testing.T) {
 		t.Fatal("throttled list() returned no rows")
 	}
 	if rows2[0].Title == "MUTATED BY CALLER" {
-		t.Fatal("throttled list()'s result aliases the first call's backing array — mutating rows1[0] leaked into rows2[0]; the cached slice must be returned by copy (see copyNotifications' doc comment)")
+		t.Fatal("throttled list()'s result aliases the first call's backing array — mutating rows1[0] leaked into rows2[0]; the throttled path must return Reconcile's own freshly allocated slice, not one derived from the cached backing array (see TestReconcile_ReturnedRowsDoNotAliasInputSlice)")
 	}
 	if rows2[0].Title != original {
 		t.Errorf("rows2[0].Title = %q, want the original %q — this cache must not change content within the throttle window, independent of the aliasing bug above", rows2[0].Title, original)
@@ -369,7 +376,7 @@ func TestAdapter_List_Throttled_ReflectsMarkReadMadeDuringWindow(t *testing.T) {
 		if row.Identity.ID == "review/pr/42" {
 			found = true
 			if !row.Read {
-				t.Errorf("review/pr/42.Read = false on a throttled call made after MarkRead, want true — a throttled List must re-reconcile against the store's current state, not just replay notifLastResult verbatim")
+				t.Errorf("review/pr/42.Read = false on a throttled call made after MarkRead, want true — a throttled List must re-reconcile against the store's current state, not just replay the last cached result verbatim")
 			}
 		}
 	}

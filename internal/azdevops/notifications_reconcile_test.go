@@ -301,3 +301,36 @@ func TestReconcile_DoesNotMutateInputRowsSlice(t *testing.T) {
 		t.Errorf("gotRows = %+v, want empty (done row should be dropped)", gotRows)
 	}
 }
+
+// TestReconcile_ReturnedRowsDoNotAliasInputSlice pins a guarantee that is
+// load-bearing well outside this file, and would not obviously look that way
+// to someone editing Reconcile in isolation: Adapter.list's throttled path
+// (adapter_notifications.go) calls Reconcile on every throttled List call
+// against the same a.notifLastRawRows backing array, discards the returned
+// state, and hands the returned rows straight back to its caller with no
+// copy step of its own (task 14 review round 2, finding R1 — the former
+// copyNotifications helper was dead code and was deleted). That is only safe
+// because Reconcile always allocates its result with make(...) rather than
+// ever returning rows itself — if that changed to something like
+// `return rows, newState`, a caller mutating a throttled List's result would
+// corrupt a.notifLastRawRows and, through it, every later throttled call's
+// output for the rest of the throttle window.
+func TestReconcile_ReturnedRowsDoNotAliasInputSlice(t *testing.T) {
+	base := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	rows := []provider.Notification{row("review/pr/1", base)}
+	state := TriageState{}
+
+	gotRows, _ := Reconcile(rows, state, base)
+
+	if len(gotRows) != 1 {
+		t.Fatalf("gotRows = %+v, want exactly one row (unread subject, no stored state to drop it)", gotRows)
+	}
+	if &gotRows[0] == &rows[0] {
+		t.Fatal("Reconcile's returned rows slice aliases its input rows slice — a caller mutating the returned rows would corrupt what a later call against the same input rows returns")
+	}
+
+	rows[0].Title = "MUTATED BY CALLER"
+	if gotRows[0].Title == "MUTATED BY CALLER" {
+		t.Fatal("Reconcile's returned row aliases the input row's backing array — mutating rows[0] after the call leaked into gotRows[0]")
+	}
+}

@@ -457,15 +457,24 @@ notifications:
 // threshold triggered it. 29 is far enough inside the true window that any
 // threshold lower than 30 clamps it down and gets caught, while any correct
 // or higher threshold leaves it alone.
+//
+// Each row also asserts the resulting Warnings count, not just the value:
+// the clamp branch's only observable effect is not the value alone (clamping
+// 30 to 30 is a value no-op) but also appending to cfg.Warnings, so a
+// mutation that widens the clamp's comparison to fire one entry early (`>=`
+// instead of `>`) still produces the right value at exactly 30 but a
+// spurious, self-contradicting warning alongside it. Asserting only the
+// value at that row would let such a mutant survive.
 func TestLoad_AzureLookbackDays_ClampedToOrphanTTL(t *testing.T) {
 	tests := []struct {
-		name string
-		days int
-		want int
+		name         string
+		days         int
+		want         int
+		wantWarnings int
 	}{
-		{name: "one below the clamp is unaffected", days: 29, want: 29},
-		{name: "exactly at the clamp is unchanged", days: 30, want: 30},
-		{name: "one past the clamp is pulled down to it", days: 31, want: 30},
+		{name: "one below the clamp is unaffected", days: 29, want: 29, wantWarnings: 0},
+		{name: "exactly at the clamp is unchanged", days: 30, want: 30, wantWarnings: 0},
+		{name: "one past the clamp is pulled down to it", days: 31, want: 30, wantWarnings: 1},
 	}
 
 	for _, tt := range tests {
@@ -492,6 +501,9 @@ notifications:
 
 			if cfg.Notifications.Azure.LookbackDays != tt.want {
 				t.Errorf("Azure.LookbackDays = %d, want %d", cfg.Notifications.Azure.LookbackDays, tt.want)
+			}
+			if len(cfg.Warnings) != tt.wantWarnings {
+				t.Errorf("Warnings = %v, want %d entries", cfg.Warnings, tt.wantWarnings)
 			}
 		})
 	}
@@ -611,15 +623,25 @@ notifications:
 // exceeds roughly 9.2e9 -- an unbounded value here would eventually mean the
 // adapter throttles for a wildly wrong, possibly negative, duration instead
 // of the huge-but-sane one the user wrote.
+//
+// Each row also asserts the resulting Warnings count: the clamp branch's
+// only observable effect at exactly AzureMinPollIntervalMax is not the value
+// (clamping the max to itself is a value no-op) but the warning it appends,
+// so a mutant that widens the comparison to fire one entry early (`>=`
+// instead of `>`) still computes the right value there but emits a spurious,
+// self-contradicting "exceeds the maximum" warning at the exact maximum —
+// asserting only the value on that row would let it survive (task 14 review
+// round 2, finding R2).
 func TestLoad_AzureMinPollInterval_ClampedToMax(t *testing.T) {
 	tests := []struct {
-		name    string
-		seconds int
-		want    int
+		name         string
+		seconds      int
+		want         int
+		wantWarnings int
 	}{
-		{name: "one below the clamp is unaffected", seconds: AzureMinPollIntervalMax - 1, want: AzureMinPollIntervalMax - 1},
-		{name: "exactly at the clamp is unchanged", seconds: AzureMinPollIntervalMax, want: AzureMinPollIntervalMax},
-		{name: "one past the clamp is pulled down to it", seconds: AzureMinPollIntervalMax + 1, want: AzureMinPollIntervalMax},
+		{name: "one below the clamp is unaffected", seconds: AzureMinPollIntervalMax - 1, want: AzureMinPollIntervalMax - 1, wantWarnings: 0},
+		{name: "exactly at the clamp is unchanged", seconds: AzureMinPollIntervalMax, want: AzureMinPollIntervalMax, wantWarnings: 0},
+		{name: "one past the clamp is pulled down to it", seconds: AzureMinPollIntervalMax + 1, want: AzureMinPollIntervalMax, wantWarnings: 1},
 	}
 
 	for _, tt := range tests {
@@ -646,6 +668,9 @@ notifications:
 
 			if cfg.Notifications.Azure.MinPollInterval != tt.want {
 				t.Errorf("Azure.MinPollInterval = %d, want %d", cfg.Notifications.Azure.MinPollInterval, tt.want)
+			}
+			if len(cfg.Warnings) != tt.wantWarnings {
+				t.Errorf("Warnings = %v, want %d entries", cfg.Warnings, tt.wantWarnings)
 			}
 		})
 	}

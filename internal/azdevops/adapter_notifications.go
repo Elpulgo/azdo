@@ -201,13 +201,17 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 // recomputed state means it still writes nothing to the store: both halves
 // of the "throttled call" contract hold. Only a real query that lands in
 // this method's absorb branch (at least one source succeeded) advances
-// notifLastPollAt/notifLastRawRows/notifLastResult and so opens the next
-// window; a real query that fails outright (the error-propagating branch
-// below) leaves them exactly as they were, so a total outage is retried on
-// the very next call rather than being remembered as a throttle anchor —
-// see notifThrottled's own doc comment for the first-call case and
-// copyNotifications' for why the cached slice itself cannot be corrupted by
-// a caller mutating what they were handed.
+// notifLastPollAt/notifLastRawRows and so opens the next window; a real
+// query that fails outright (the error-propagating branch below) leaves
+// them exactly as they were, so a total outage is retried on the very next
+// call rather than being remembered as a throttle anchor — see
+// notifThrottled's own doc comment for the first-call case. Both branches
+// below return Reconcile's own freshly allocated result slice (never rows
+// or a.notifLastRawRows themselves — see Reconcile's doc comment and
+// TestReconcile_ReturnedRowsDoNotAliasInputSlice), and provider.Notification
+// has no field a caller can mutate through (TestNotification_NoMutableFieldAliasing),
+// so a caller mutating what either branch hands back cannot corrupt
+// a.notifLastRawRows or a later throttled call's own Reconcile output.
 func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notification, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("azdevops: notifications: no client configured")
@@ -241,7 +245,7 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 		state := a.notifStore.State()
 		reconciled, _ := Reconcile(a.notifLastRawRows, state, now)
 		sortNotificationsDeterministically(reconciled)
-		return copyNotifications(reconciled), nil
+		return reconciled, nil
 	}
 
 	rows, errs, jobCount := a.runSourcesConcurrently(now)
@@ -262,12 +266,11 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 		// is keyed on source count, not on len(reconciled). This is also
 		// the only branch that advances the throttle: a real query that
 		// fails outright (the branch below) leaves notifLastPollAt and
-		// notifLastResult untouched, so it never starts a throttle window
+		// notifLastRawRows untouched, so it never starts a throttle window
 		// and never gets cached — see notifThrottled's doc comment.
 		a.notifLastPollAt = now
 		a.notifLastRawRows = rows
-		a.notifLastResult = reconciled
-		return copyNotifications(a.notifLastResult), nil
+		return reconciled, nil
 	}
 	return nil, fmt.Errorf("azdevops: notifications: all %d sources failed: %w", len(errs), errors.Join(errs...))
 }
@@ -293,31 +296,6 @@ func (a *Adapter) notifThrottled(now time.Time) bool {
 		return false
 	}
 	return now.Before(a.notifLastPollAt.Add(a.notifMinPollInterval))
-}
-
-// copyNotifications returns a fresh slice holding the same elements as rows,
-// so a caller that mutates the result cannot corrupt notifLastResult — the
-// slice a real query's absorb branch caches and every subsequent call reads
-// from until the next real query replaces it — by mutating what list handed
-// back on some earlier call. Phase 1 lost a defect to exactly this aliasing
-// in its conditional-request cache.
-//
-// A per-element copy into a new backing array is already a true value copy
-// here: every field of provider.Notification (Identity's strings, Title,
-// Reason, Read, Done, UpdatedAt, WebURL) is a value type with no field a
-// caller can mutate through — even time.Time, whose only field is an
-// unexported *time.Location, exposes no way to reach through a
-// Notification and mutate the Location a cached row's UpdatedAt points at.
-// TestCopyNotifications_NoMutableFieldAliasing guards this claim with
-// reflection over provider.Notification's fields, so a future field added
-// to Notification without updating this comment still gets checked.
-func copyNotifications(rows []provider.Notification) []provider.Notification {
-	if rows == nil {
-		return nil
-	}
-	out := make([]provider.Notification, len(rows))
-	copy(out, rows)
-	return out
 }
 
 // sourceResult is one source's raw outcome, kept together so
