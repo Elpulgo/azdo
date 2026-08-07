@@ -164,7 +164,7 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name: "empty Identity.ID rows are passed through unread and untracked, and do not disturb an unrelated real row",
+			name: "empty Identity.ID rows are dropped entirely, and do not disturb an unrelated real row",
 			rows: []provider.Notification{
 				row("", base),
 				row("review/pr/1", base),
@@ -173,11 +173,12 @@ func TestReconcile(t *testing.T) {
 				"review/pr/1": {Read: true, Done: true, LastActivity: base, LastSeen: base.Add(-time.Hour)},
 			},
 			now: base,
-			// The malformed row surfaces unread (never dropped, never
-			// tracked); the real row's stored Done applies and drops it
-			// from the result -- proving the two rows did not collapse
-			// into a shared "" entry.
-			wantKeys: []string{""},
+			// The malformed row is dropped from the result and never
+			// tracked in state; the real row's stored Done applies and
+			// also drops it from the result (for the unrelated reason that
+			// it's done) -- proving the two rows did not collapse into a
+			// shared "" entry along the way.
+			wantKeys: nil,
 			wantState: map[string]TriageEntry{
 				"review/pr/1": {Read: true, Done: true, LastActivity: base, LastSeen: base},
 			},
@@ -249,9 +250,10 @@ func TestReconcile(t *testing.T) {
 
 // TestReconcile_DoesNotMutateInputStateMap proves Reconcile is pure on the
 // state side: the caller's map must be untouched after the call, since a
-// previous defect in this store aliased a caller's map into live state
-// (see TestTriageStore_Replace_DoesNotAliasCallerMap) and Reconcile's
-// returned map is exactly what callers hand to Replace.
+// previous defect in this store aliased a caller's map into live state (a
+// since-removed Replace method — task 9 review's 🟡 finding 4 deleted it
+// once Swap made it redundant everywhere) and Reconcile's returned map is
+// exactly what Adapter.list hands to Swap.
 func TestReconcile_DoesNotMutateInputStateMap(t *testing.T) {
 	base := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	input := map[string]TriageEntry{

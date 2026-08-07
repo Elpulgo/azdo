@@ -487,6 +487,58 @@ func TestTriageStore_ApplyIfChanged_FalseDoesNotDirty(t *testing.T) {
 	}
 }
 
+// TestTriageStore_ApplyIfChanged_ContractViolation_WriteSurvivesInMemoryButNotOnDisk
+// pins ApplyIfChanged's documented contract ("mutate must not write into the
+// map it is handed when it returns false") by pinning what actually happens
+// when a mutate violates it — the review's finding 3 found this unpinned in
+// both directions: nothing previously proved a compliant mutate leaves no
+// trace, and nothing proved a non-compliant one produces exactly the
+// in-memory/on-disk divergence the doc comment now warns about, rather than
+// either being silently dropped or silently persisted.
+//
+// mutate here deliberately breaks the contract: it writes into the live map
+// and then reports "no change" anyway. The write must be visible immediately
+// through State() (it is live in memory — mutate received s.state itself,
+// not a copy), dirty must stay false (returning false never scheduled a
+// write), and a Flush performed afterwards must not persist it, because
+// Flush only ever writes what dirty says is pending.
+func TestTriageStore_ApplyIfChanged_ContractViolation_WriteSurvivesInMemoryButNotOnDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notifications.yaml")
+	store, err := NewTriageStore(path)
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	store.SetDebounce(time.Hour)
+
+	store.ApplyIfChanged(func(s TriageState) bool {
+		// Contract-violating on purpose: writes, then claims no change.
+		s["review/pr/1"] = TriageEntry{Read: true}
+		return false
+	})
+
+	if got := store.State()["review/pr/1"]; !got.Read {
+		t.Fatalf("State()[review/pr/1] = %+v, want Read=true — a contract-violating write is live in memory regardless of mutate's return value", got)
+	}
+
+	store.mu.Lock()
+	dirty := store.dirty
+	store.mu.Unlock()
+	if dirty {
+		t.Fatal("dirty = true after a mutate returning false, want false — a false return never schedules a write no matter what mutate did to the map")
+	}
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	reloaded, err := LoadTriageState(path)
+	if err != nil {
+		t.Fatalf("LoadTriageState() error = %v", err)
+	}
+	if _, ok := reloaded["review/pr/1"]; ok {
+		t.Errorf("reloaded = %+v, want the contract-violating write absent on disk (dirty was false, so Flush had nothing to write)", reloaded)
+	}
+}
+
 // TestTriageStore_ApplyIfChanged_TrueDirtiesAndPersists is the mirror case:
 // a mutate reporting a real change behaves exactly like Apply — dirty is
 // set, and the write survives a Flush.
@@ -496,7 +548,13 @@ func TestTriageStore_ApplyIfChanged_TrueDirtiesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageStore() error = %v", err)
 	}
-	store.SetDebounce(10 * time.Millisecond)
+	// A long debounce, matching newTestTriageStore's own reasoning: the
+	// dirty-flag read below happens before any explicit Flush call, so a
+	// short debounce leaves a window where a scheduler stall lets the timer
+	// fire and clear dirty out from under this assertion, failing the test
+	// spuriously even though nothing is wrong. Flush() is called explicitly
+	// further down, so the short debounce this used to arm bought nothing.
+	store.SetDebounce(time.Hour)
 
 	store.ApplyIfChanged(func(s TriageState) bool {
 		s["review/pr/1"] = TriageEntry{Read: true}
@@ -628,11 +686,6 @@ func TestTriageStore_Flush_RearmsTimerOnWriteFailure(t *testing.T) {
 	}
 }
 
-// TestTriageStore_Replace_SwapsMapAndPersists exercises the Replace API
-// added for task 3's pure Reconcile(rows, state) -> (rows, state) shape:
-// a caller computing a fresh map (e.g. after TTL pruning deletes keys) can
-// hand it to the store directly rather than clearing and re-copying a live
-// map through Apply.
 // TestTriageStore_Swap_HoldsLockAcrossComputeAndWrite pins task 8 review's
 // 🟡 finding 5: Swap must hold mu across the whole
 // clone-then-compute-then-store sequence, not release it between steps the
@@ -699,79 +752,5 @@ func TestTriageStore_Swap_HoldsLockAcrossComputeAndWrite(t *testing.T) {
 	}
 	if _, ok := got["apply/written"]; !ok {
 		t.Errorf("state = %+v, want the entry the concurrent Apply wrote (it should land after Swap releases the lock, not be lost underneath Swap's write)", got)
-	}
-}
-
-func TestTriageStore_Replace_SwapsMapAndPersists(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "notifications.yaml")
-	store, err := NewTriageStore(path)
-	if err != nil {
-		t.Fatalf("NewTriageStore() error = %v", err)
-	}
-	store.SetDebounce(10 * time.Millisecond)
-
-	store.Apply(func(s TriageState) {
-		s["review/pr/1"] = TriageEntry{Read: true}
-		s["review/pr/2"] = TriageEntry{Read: true}
-	})
-
-	// Simulate a Reconcile pass that pruned "review/pr/2".
-	store.Replace(TriageState{
-		"review/pr/1": {Read: true, Done: true},
-	})
-
-	got := store.State()
-	if len(got) != 1 {
-		t.Fatalf("State() after Replace = %+v, want exactly one entry", got)
-	}
-	if _, ok := got["review/pr/2"]; ok {
-		t.Errorf("State() still has pruned key review/pr/2: %+v", got)
-	}
-	if !got["review/pr/1"].Done {
-		t.Errorf("State()[review/pr/1] = %+v, want Done=true", got["review/pr/1"])
-	}
-
-	if err := store.Flush(); err != nil {
-		t.Fatalf("Flush() error = %v", err)
-	}
-	reloaded, err := LoadTriageState(path)
-	if err != nil {
-		t.Fatalf("LoadTriageState() error = %v", err)
-	}
-	if len(reloaded) != 1 {
-		t.Errorf("reloaded = %+v, want exactly one entry", reloaded)
-	}
-}
-
-// TestTriageStore_Replace_DoesNotAliasCallerMap mirrors
-// TestTriageStore_State_ReturnsCopyNotLiveMap for the write side: Replace
-// used to store the caller's map by reference, so a caller mutating the map
-// it just handed to Replace corrupted the store's live state without going
-// through any lock — the exact hole that previously caused a "concurrent
-// map iteration and map write" fatal error when Reconcile's returned map
-// was mutated by its caller after being passed to Replace.
-func TestTriageStore_Replace_DoesNotAliasCallerMap(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "notifications.yaml")
-	store, err := NewTriageStore(path)
-	if err != nil {
-		t.Fatalf("NewTriageStore() error = %v", err)
-	}
-
-	callerMap := TriageState{
-		"review/pr/1": {Read: true},
-	}
-	store.Replace(callerMap)
-
-	// Mutate the caller's map after handing it to Replace.
-	callerMap["review/pr/1"] = TriageEntry{Read: false, Done: true}
-	callerMap["review/pr/2"] = TriageEntry{Read: true}
-
-	got := store.State()
-	entry, ok := got["review/pr/1"]
-	if !ok || !entry.Read || entry.Done {
-		t.Errorf("store state mutated via caller's map after Replace(): got[review/pr/1] = %+v, ok = %v", entry, ok)
-	}
-	if _, ok := got["review/pr/2"]; ok {
-		t.Errorf("store state gained a key injected into the caller's map after Replace(): %+v", got)
 	}
 }

@@ -38,7 +38,12 @@ const orphanTTL = 30 * 24 * time.Hour
 // Read/Done/LastActivity. Every caller of NotifKey — tasks 4-7's sources —
 // shares this one contract; Reconcile enforces it on the read side by
 // guarding key == "" itself, so a malformed row can never reach the state
-// map regardless of which source produced it.
+// map regardless of which source produced it. Reconcile goes further than
+// just guarding the map: it drops such a row from its returned slice
+// entirely, rather than passing it through into the feed. A row with no
+// usable key can never be marked read or done (MarkRead/MarkDone reject an
+// empty Identity.ID outright), so rendering it would create a permanently
+// un-triageable row and an error banner on every attempt to clear it.
 func NotifKey(source, entity string, id int) string {
 	if id <= 0 {
 		return ""
@@ -53,10 +58,19 @@ func NotifKey(source, entity string, id int) string {
 // be table-tested exhaustively rather than only end-to-end).
 //
 // For each row:
-//   - a row whose Identity.ID is "" is passed through as unread and never
-//     enters the state map at all — an empty id is not a valid NotifKey
-//     result and must never be used as a shared key that collapses
-//     unrelated subjects into one entry (see NotifKey's doc comment).
+//   - a row whose Identity.ID is "" is dropped from the returned slice and
+//     never enters the state map at all — an empty id is not a valid
+//     NotifKey result and must never be used as a shared key that collapses
+//     unrelated subjects into one entry (see NotifKey's doc comment). A
+//     non-positive entity id is a malformed API response with no usable
+//     identity, not something the four sources are expected to filter
+//     themselves — Reconcile is the one choke point every source's rows
+//     funnel through, so dropping the row here, once, is what keeps four
+//     parallel per-source guards from drifting apart. The alternative —
+//     rendering the row anyway — makes it permanently un-triageable: the
+//     pane shows it, the user presses u or d, and MarkRead/MarkDone reject
+//     the empty id outright, so the row and the resulting error both persist
+//     forever.
 //   - a subject with no existing entry is unread; a fresh entry is created
 //     stamped with the row's UpdatedAt and LastSeen set to now.
 //   - a subject whose row UpdatedAt is the zero value carries no activity
@@ -110,13 +124,20 @@ func Reconcile(rows []provider.Notification, stored TriageState, now time.Time) 
 	for _, row := range rows {
 		key := row.Identity.ID
 		if key == "" {
-			// Malformed subject: never used as a state-map key (see
-			// NotifKey's and this function's doc comments). Pass it
-			// through unread and untracked rather than letting it
-			// collapse into — or be collapsed by — an unrelated subject.
-			row.Read = false
-			row.Done = false
-			result = append(result, row)
+			// Malformed subject: a non-positive entity id (NotifKey's own
+			// convention-11 guard) means the source that produced this row
+			// got a malformed API response with no usable identity — this
+			// is not a case that "cannot happen" in production, all four
+			// sources emit whatever id the API gave them without
+			// pre-filtering. Drop the row entirely rather than passing it
+			// through: an earlier version of this function rendered it as
+			// unread-and-untracked, which left it visible in the pane but
+			// permanently un-markable (MarkRead/MarkDone reject an empty
+			// Identity.ID), so the user could press u or d on it forever
+			// and only ever get an error back. Never used as a state-map
+			// key either way (see NotifKey's and this function's doc
+			// comments) — distinct malformed rows must never collapse into
+			// one shared "" entry.
 			continue
 		}
 

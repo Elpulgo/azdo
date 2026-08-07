@@ -175,6 +175,15 @@ func TestAdapter_MarkDone_UpdatesLocalTriageState(t *testing.T) {
 	if !entry.Done {
 		t.Error("entry.Done = false, want true after MarkDone")
 	}
+	// Mirrors TestAdapter_MarkRead_UpdatesLocalTriageState's stamp
+	// assertions: review's finding 2 found MarkDone's LastActivity/LastSeen
+	// backfill (adapter_notifications.go) unpinned — deleting either
+	// `if entry.LastActivity.IsZero() { entry.LastActivity = now }` or the
+	// LastSeen equivalent left the whole suite green, because this test
+	// previously asserted only entry.Done.
+	if entry.LastActivity.IsZero() || entry.LastSeen.IsZero() {
+		t.Errorf("entry = %+v, want a non-zero LastActivity and LastSeen", entry)
+	}
 }
 
 // TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry pins the
@@ -262,6 +271,15 @@ func TestAdapter_MarkRead_AlreadyRead_IsNoOp(t *testing.T) {
 
 // TestAdapter_MarkDone_AlreadyDone_IsNoOp mirrors
 // TestAdapter_MarkRead_AlreadyRead_IsNoOp for MarkDone.
+//
+// The first.LastActivity/LastSeen.IsZero() checks below are not redundant
+// with TestAdapter_MarkDone_UpdatesLocalTriageState's own backfill
+// assertions: review's finding 2 found that without them, this test alone is
+// a tautology against the "delete MarkDone's LastActivity/LastSeen backfill"
+// mutant — with the backfill gone, first and second are both the zero time,
+// and Equal(zero, zero) still passes, so the no-op assertions below would
+// keep passing even though the mutated code no longer stamps a fresh entry
+// at all.
 func TestAdapter_MarkDone_AlreadyDone_IsNoOp(t *testing.T) {
 	store := newTestTriageStore(t)
 	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
@@ -274,6 +292,9 @@ func TestAdapter_MarkDone_AlreadyDone_IsNoOp(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 	first := store.State()["review/pr/42"]
+	if first.LastActivity.IsZero() || first.LastSeen.IsZero() {
+		t.Fatalf("first = %+v, want a non-zero LastActivity and LastSeen after the first MarkDone (otherwise the no-op checks below would tautologically compare two zero times)", first)
+	}
 
 	store.mu.Lock()
 	store.dirty = false
@@ -296,6 +317,47 @@ func TestAdapter_MarkDone_AlreadyDone_IsNoOp(t *testing.T) {
 	}
 	if !second.LastSeen.Equal(first.LastSeen) {
 		t.Errorf("LastSeen changed on a no-op MarkDone: first = %v, second = %v", first.LastSeen, second.LastSeen)
+	}
+}
+
+// TestAdapter_MarkDone_UnseenID_CreatesEntryWithSaneLastActivity mirrors
+// TestAdapter_MarkRead_UnseenID_CreatesEntryWithSaneLastActivity for
+// MarkDone: an entry created by a mark on a subject Reconcile has never seen
+// must carry a LastActivity at least as new as any real row's UpdatedAt for
+// the same subject, or the very next poll's Reconcile would read the mark as
+// stale activity and clear Done — resurrecting a row the user just
+// dismissed. Because Reconcile drops done rows from its returned slice
+// entirely (rather than returning them with Done=true), the assertion here
+// is the row's absence from the next poll's result, not a field on it the
+// way MarkRead's twin asserts Read=true.
+func TestAdapter_MarkDone_UnseenID_CreatesEntryWithSaneLastActivity(t *testing.T) {
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/99"}
+
+	before := time.Now()
+	if err := a.MarkDone(id); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	after := time.Now()
+
+	entry, ok := store.State()["review/pr/99"]
+	if !ok {
+		t.Fatal("MarkDone did not create a triage entry for an unseen id")
+	}
+	if entry.LastActivity.Before(before) || entry.LastActivity.After(after) {
+		t.Fatalf("entry.LastActivity = %v, want it within [%v, %v]", entry.LastActivity, before, after)
+	}
+
+	// A poll landing after the mark, whose row for the same subject is
+	// stamped from well before the mark, must not resurrect the row.
+	row := provider.Notification{
+		Identity:  id,
+		UpdatedAt: before.Add(-time.Hour),
+	}
+	rows, _ := Reconcile([]provider.Notification{row}, store.State(), after)
+	if len(rows) != 0 {
+		t.Fatalf("Reconcile returned %d rows, want 0 — a done mark must survive the very next poll, not be resurrected by it: %+v", len(rows), rows)
 	}
 }
 

@@ -163,8 +163,8 @@ func (s *TriageStore) SetDebounce(d time.Duration) {
 
 // State returns a snapshot of the current in-memory state. The returned map
 // is a copy: mutating it does not affect the store, and does not mark it
-// dirty. Callers that want to persist a change must go through Apply or
-// Replace.
+// dirty. Callers that want to persist a change must go through Apply,
+// ApplyIfChanged or Swap.
 func (s *TriageStore) State() TriageState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -174,14 +174,18 @@ func (s *TriageStore) State() TriageState {
 // Apply mutates the in-memory state under the lock and schedules a
 // debounced write. Multiple Apply calls within the debounce window coalesce
 // into a single write.
+//
+// It is a one-line wrapper over ApplyIfChanged so both share the single
+// locking path ApplyIfChanged implements: mutate always reports "changed"
+// here, since Apply has no concept of a no-op mutation the way MarkRead/
+// MarkDone's ApplyIfChanged callers do. See ApplyIfChanged's doc comment for
+// the mechanics and the "mutate must not write when it returns false"
+// contract, which does not constrain Apply's mutate — it may always write.
 func (s *TriageStore) Apply(mutate func(TriageState)) {
-	s.mu.Lock()
-	if s.state == nil {
-		s.state = TriageState{}
-	}
-	mutate(s.state)
-	s.markDirtyLocked()
-	s.mu.Unlock()
+	s.ApplyIfChanged(func(state TriageState) bool {
+		mutate(state)
+		return true
+	})
 }
 
 // ApplyIfChanged mutates the in-memory state under the lock like Apply, but
@@ -191,9 +195,22 @@ func (s *TriageStore) Apply(mutate func(TriageState)) {
 // MarkDone called on an id that is already read/done — where Apply's
 // unconditional dirty-and-rearm would churn the debounce timer and
 // eventually issue a write that changes nothing on disk, on every repeated
-// call. mutate still runs, and may still write into the live map (e.g. to
-// create a zero-value entry it then decides not to touch further), but its
-// bool return is authoritative for whether that write is persisted.
+// call.
+//
+// Contract: mutate must not write into the map it is handed when it returns
+// false. mutate receives s.state itself, not a copy, so any write it makes
+// is live in memory immediately — visible to a concurrent State() call and
+// to Swap — regardless of what mutate returns. Returning false only skips
+// *scheduling a persisted write*; it does not undo or hide anything mutate
+// already wrote. A mutate that writes and then returns false therefore
+// leaves the store's in-memory state permanently diverged from what will
+// ever reach disk: the write sits there until either this store is dropped
+// (never flushed) or an unrelated, later call to Apply/ApplyIfChanged
+// happens to mark the store dirty for some other reason and flushes this
+// write along with it as an unintended side effect. MarkRead and MarkDone
+// satisfy this contract by construction — both return before touching the
+// map on the no-op path — but nothing in this function enforces it for a
+// future caller.
 func (s *TriageStore) ApplyIfChanged(mutate func(TriageState) bool) {
 	s.mu.Lock()
 	if s.state == nil {
@@ -205,41 +222,22 @@ func (s *TriageStore) ApplyIfChanged(mutate func(TriageState) bool) {
 	s.mu.Unlock()
 }
 
-// Replace atomically swaps the entire in-memory state with newState and
-// schedules a debounced write. Intended for callers — like the identity-key
-// reconcile function — that compute a fresh map (e.g. dropping pruned or
-// done entries) rather than mutating one in place: writing that back through
-// Apply would force a hand-rolled clear-then-copy over the live map, which
-// is exactly the mutation-in-place shape a pure reconcile function exists to
-// avoid.
-func (s *TriageStore) Replace(newState TriageState) {
-	if newState == nil {
-		newState = TriageState{}
-	}
-	s.mu.Lock()
-	// Store a deep copy, not the caller's live map. Reconcile hands back a
-	// freshly built map, but aliasing it here would let the caller's later
-	// mutation of that map race the store's own reads/writes of s.state —
-	// exactly the "concurrent map iteration and map write" fatal error a
-	// previous pass of this store already fixed for Flush's snapshot.
-	s.state = newState.clone()
-	s.markDirtyLocked()
-	s.mu.Unlock()
-}
-
 // Swap holds the lock across a full read-compute-write sequence: fn receives
 // a deep-copy snapshot of the current state and returns the state to store in
 // its place, all inside one critical section. It exists for callers whose new
 // state is computed *from* the current state, rather than mutated into it in
 // place — Adapter.list's Reconcile call, chiefly.
 //
-// State() -> compute -> Replace() looks equivalent but is three separate
-// lock acquisitions, so a concurrent Apply (e.g. a user's MarkRead) landing
-// between the State() snapshot and the Replace() write is silently discarded
-// the moment Replace overwrites the whole map with a newState computed from
-// an already-stale snapshot (task 8 review, 🟡 finding 5). Swap closes that
-// window: fn runs, and the result is stored, without ever releasing mu in
-// between, so no Apply can interleave.
+// A naive State() -> compute -> store-the-whole-map-back sequence looks
+// equivalent but is three separate lock acquisitions, so a concurrent Apply
+// (e.g. a user's MarkRead) landing between the State() snapshot and the
+// final write is silently discarded the moment that final write overwrites
+// the whole map with a newState computed from an already-stale snapshot
+// (task 8 review, 🟡 finding 5 — this package briefly had exactly that shape
+// as a since-removed Replace method; task 9 review's 🟡 finding 4 deleted it
+// once Swap made it redundant everywhere). Swap closes that window: fn runs,
+// and the result is stored, without ever releasing mu in between, so no
+// Apply can interleave.
 func (s *TriageStore) Swap(fn func(TriageState) TriageState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,10 +249,9 @@ func (s *TriageStore) Swap(fn func(TriageState) TriageState) {
 	if newState == nil {
 		newState = TriageState{}
 	}
-	// Store a deep copy, not fn's live return value — same reasoning as
-	// Replace's own doc comment: aliasing it here would let a caller that
-	// kept a reference to the map it returned race the store's own
-	// subsequent reads/writes of s.state.
+	// Store a deep copy, not fn's live return value — aliasing it here would
+	// let a caller that kept a reference to the map it returned race the
+	// store's own subsequent reads/writes of s.state.
 	s.state = newState.clone()
 	s.markDirtyLocked()
 }
@@ -286,10 +283,10 @@ func (s *TriageStore) flushAsync() {
 // the live map and only then releasing the lock would let a concurrent
 // Apply mutate the map mid-iteration (a fatal "concurrent map iteration and
 // map write", not merely a data race). gen records how many changes the
-// in-memory state has seen as of the snapshot; if an Apply/Replace lands
+// in-memory state has seen as of the snapshot; if an Apply/Swap lands
 // while the write is in flight, gen has moved on by the time Flush
 // re-acquires the lock, so dirty is deliberately left set (that Apply/
-// Replace call has already re-armed the timer to retry) rather than being
+// Swap call has already re-armed the timer to retry) rather than being
 // cleared out from under the update it raced.
 func (s *TriageStore) Flush() error {
 	s.mu.Lock()

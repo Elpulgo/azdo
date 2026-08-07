@@ -332,27 +332,42 @@ func sortNotificationsDeterministically(rows []provider.Notification) {
 //
 // id.ID is the key the store writes through (decision 2). An empty id is
 // rejected outright rather than written: a "" key would be shared by every
-// malformed subject Reconcile already refuses to track (see NotifKey's and
-// Reconcile's own doc comments), so accepting it here would create a single
-// entry every such row collapses into rather than failing visibly.
+// malformed subject Reconcile drops from the feed before it ever reaches
+// local state (see NotifKey's and Reconcile's own doc comments), so
+// accepting it here would create a single entry every such row collapses
+// into rather than failing visibly.
 //
 // id the store has never seen creates the entry rather than erroring — the
 // composite routes MarkRead/MarkDone by Identity.Kind alone
 // (CompositeProvider), so it cannot know ahead of time which ids a given
 // backend's store already has, and a create-on-mark is what keeps that
-// routing correct without a round trip through List first. For such an id,
-// this writes LastActivity as time.Now() — an approximation of the row's own
+// routing correct without a round trip through List first. The backfill
+// below (LastActivity/LastSeen set to now when zero) is not actually scoped
+// to "an id the store has never seen": it fires on any entry whose
+// LastActivity is still zero, which also covers an entry Reconcile itself
+// created earlier from a row that carried no usable activity stamp
+// (Reconcile's "zero UpdatedAt" branch leaves LastActivity at zero). Either
+// way, the value written here is an approximation of the row's own
 // UpdatedAt, since MarkRead's fixed provider.Identity-only signature carries
-// no such timestamp. This approximation is safe, not merely provisional:
-// every source clamps its own activity stamp to the now it was given (see
+// no such timestamp.
+//
+// That approximation holds against the row that triggered the mark: every
+// source clamps its own activity stamp to the now it was given (see
 // prActivityStamp, mentionActivityStamp, assignedActivityStamp,
 // ciFailedActivityStamp), and MarkRead can only ever be called by a UI that
 // is reacting to a row rendered from some earlier List(now) call — so
 // MarkRead's own time.Now() is always later than the now that bounded that
-// row's stamp. That means the LastActivity written here is always >= the
-// row's own UpdatedAt, which is exactly the invariant Reconcile's "strictly
-// newer" branch needs to not immediately re-clear the mark it just set on
-// the very next poll.
+// particular row's stamp, and the LastActivity written here is >= the
+// UpdatedAt of the row the mark was issued from. That is a narrower claim
+// than ">= whatever row Reconcile compares against on the next poll": each
+// *ActivityStamp helper's forward clamp caps at *that poll's own* now, so a
+// subject whose raw stamp runs ahead of the client clock can yield a clamped
+// stamp that keeps advancing every poll with nothing having happened to the
+// subject — which Reconcile then reads as new activity and clears the very
+// mark this just wrote. Whether and how to change that behaviour is an open
+// question this code does not handle; see the phase-2 notifications spec's
+// `## Unknowns`, "What should happen when an activity stamp is
+// forward-clamped?".
 //
 // Marking an id that is already read is a no-op: it does not touch
 // LastActivity or LastSeen, and — via TriageStore.ApplyIfChanged — does not
