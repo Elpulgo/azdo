@@ -449,6 +449,79 @@ func TestTriageStore_ConcurrentApplyAndFlushIsSafe(t *testing.T) {
 	}
 }
 
+// TestTriageStore_ApplyIfChanged_FalseDoesNotDirty pins ApplyIfChanged's
+// whole reason for existing: a mutate that reports no change must not mark
+// the store dirty or re-arm the debounce timer, even though it still ran
+// under the lock and could have written into the live map.
+func TestTriageStore_ApplyIfChanged_FalseDoesNotDirty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notifications.yaml")
+	store, err := NewTriageStore(path)
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	store.SetDebounce(time.Hour)
+
+	called := false
+	store.ApplyIfChanged(func(s TriageState) bool {
+		called = true
+		return false
+	})
+	if !called {
+		t.Fatal("mutate was never invoked")
+	}
+
+	store.mu.Lock()
+	dirty := store.dirty
+	gen := store.gen
+	timerArmed := store.timer != nil
+	store.mu.Unlock()
+
+	if dirty {
+		t.Error("dirty = true after a mutate reporting no change, want false")
+	}
+	if gen != 0 {
+		t.Errorf("gen = %d after a mutate reporting no change, want 0", gen)
+	}
+	if timerArmed {
+		t.Error("debounce timer armed after a mutate reporting no change, want none")
+	}
+}
+
+// TestTriageStore_ApplyIfChanged_TrueDirtiesAndPersists is the mirror case:
+// a mutate reporting a real change behaves exactly like Apply — dirty is
+// set, and the write survives a Flush.
+func TestTriageStore_ApplyIfChanged_TrueDirtiesAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notifications.yaml")
+	store, err := NewTriageStore(path)
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	store.SetDebounce(10 * time.Millisecond)
+
+	store.ApplyIfChanged(func(s TriageState) bool {
+		s["review/pr/1"] = TriageEntry{Read: true}
+		return true
+	})
+
+	store.mu.Lock()
+	dirty := store.dirty
+	store.mu.Unlock()
+	if !dirty {
+		t.Fatal("dirty = false after a mutate reporting a change, want true")
+	}
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	reloaded, err := LoadTriageState(path)
+	if err != nil {
+		t.Fatalf("LoadTriageState() error = %v", err)
+	}
+	if !reloaded["review/pr/1"].Read {
+		t.Errorf("reloaded entry = %+v, want Read=true", reloaded["review/pr/1"])
+	}
+}
+
 // TestTriageStore_SetDebounce_RejectsNonPositive pins convention 11's `<=
 // 0` guard shape with convention 13's boundary rows.
 func TestTriageStore_SetDebounce_RejectsNonPositive(t *testing.T) {

@@ -330,11 +330,21 @@ func sortNotificationsDeterministically(rows []provider.Notification) {
 // Notification.Read/Done at the List boundary, so marking read here means
 // writing the local TriageStore, not issuing an HTTP call.
 //
-// For an id Reconcile has never seen (no existing entry), this writes
-// LastActivity as time.Now() — an approximation of the row's own UpdatedAt,
-// since MarkRead's fixed provider.Identity-only signature carries no such
-// timestamp. This approximation is safe, not merely provisional: every
-// source clamps its own activity stamp to the now it was given (see
+// id.ID is the key the store writes through (decision 2). An empty id is
+// rejected outright rather than written: a "" key would be shared by every
+// malformed subject Reconcile already refuses to track (see NotifKey's and
+// Reconcile's own doc comments), so accepting it here would create a single
+// entry every such row collapses into rather than failing visibly.
+//
+// id the store has never seen creates the entry rather than erroring — the
+// composite routes MarkRead/MarkDone by Identity.Kind alone
+// (CompositeProvider), so it cannot know ahead of time which ids a given
+// backend's store already has, and a create-on-mark is what keeps that
+// routing correct without a round trip through List first. For such an id,
+// this writes LastActivity as time.Now() — an approximation of the row's own
+// UpdatedAt, since MarkRead's fixed provider.Identity-only signature carries
+// no such timestamp. This approximation is safe, not merely provisional:
+// every source clamps its own activity stamp to the now it was given (see
 // prActivityStamp, mentionActivityStamp, assignedActivityStamp,
 // ciFailedActivityStamp), and MarkRead can only ever be called by a UI that
 // is reacting to a row rendered from some earlier List(now) call — so
@@ -342,10 +352,14 @@ func sortNotificationsDeterministically(rows []provider.Notification) {
 // row's stamp. That means the LastActivity written here is always >= the
 // row's own UpdatedAt, which is exactly the invariant Reconcile's "strictly
 // newer" branch needs to not immediately re-clear the mark it just set on
-// the very next poll. Task 9 still owns hardening the store's schema more
-// generally (e.g. an opaque resurrection token, for cases beyond this
-// method's reach); this comment records why the current approximation does
-// not itself need that hardening to be correct.
+// the very next poll.
+//
+// Marking an id that is already read is a no-op: it does not touch
+// LastActivity or LastSeen, and — via TriageStore.ApplyIfChanged — does not
+// mark the store dirty or re-arm its debounce timer. Without this check,
+// every repeated MarkRead on an already-read row (e.g. re-selecting it while
+// browsing) would churn the debounced write for a value that is not
+// changing.
 func (a *Adapter) MarkRead(id provider.Identity) error {
 	if a.notifStore == nil {
 		return fmt.Errorf("azdevops: mark read: notifications not configured")
@@ -357,8 +371,11 @@ func (a *Adapter) MarkRead(id provider.Identity) error {
 		return fmt.Errorf("azdevops: mark read: empty identity id")
 	}
 	now := time.Now()
-	a.notifStore.Apply(func(state TriageState) {
+	a.notifStore.ApplyIfChanged(func(state TriageState) bool {
 		entry := state[id.ID]
+		if entry.Read {
+			return false
+		}
 		entry.Read = true
 		if entry.LastActivity.IsZero() {
 			entry.LastActivity = now
@@ -367,16 +384,22 @@ func (a *Adapter) MarkRead(id provider.Identity) error {
 			entry.LastSeen = now
 		}
 		state[id.ID] = entry
+		return true
 	})
 	return nil
 }
 
 // MarkDone marks id as done in local triage state. See MarkRead's doc
-// comment: the nil-store guard, the Kind check and the LastActivity
-// approximation (and why it is safe) are all shared and not repeated here. A
-// done entry is dropped from the very next List call by Reconcile
-// (notifications_reconcile.go) — there is no server-side delete to issue for
-// an Azure-sourced row.
+// comment: the nil-store guard, the Kind check, the empty-id guard, the
+// create-on-mark behaviour for an id the store has never seen, and the
+// LastActivity approximation (and why it is safe) are all shared and not
+// repeated here. A done entry is dropped from the very next List call by
+// Reconcile (notifications_reconcile.go) — there is no server-side delete to
+// issue for an Azure-sourced row.
+//
+// Marking an id that is already done is a no-op, the same way and for the
+// same reason MarkRead's is: it does not re-touch LastActivity/LastSeen and
+// does not re-dirty the debounced store (TriageStore.ApplyIfChanged).
 func (a *Adapter) MarkDone(id provider.Identity) error {
 	if a.notifStore == nil {
 		return fmt.Errorf("azdevops: mark done: notifications not configured")
@@ -388,8 +411,11 @@ func (a *Adapter) MarkDone(id provider.Identity) error {
 		return fmt.Errorf("azdevops: mark done: empty identity id")
 	}
 	now := time.Now()
-	a.notifStore.Apply(func(state TriageState) {
+	a.notifStore.ApplyIfChanged(func(state TriageState) bool {
 		entry := state[id.ID]
+		if entry.Done {
+			return false
+		}
 		entry.Done = true
 		if entry.LastActivity.IsZero() {
 			entry.LastActivity = now
@@ -398,6 +424,7 @@ func (a *Adapter) MarkDone(id provider.Identity) error {
 			entry.LastSeen = now
 		}
 		state[id.ID] = entry
+		return true
 	})
 	return nil
 }

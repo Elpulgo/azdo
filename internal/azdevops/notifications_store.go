@@ -184,6 +184,27 @@ func (s *TriageStore) Apply(mutate func(TriageState)) {
 	s.mu.Unlock()
 }
 
+// ApplyIfChanged mutates the in-memory state under the lock like Apply, but
+// only marks the state dirty and (re-)arms the debounce timer when mutate
+// reports (via its bool return) that it actually changed something. It
+// exists for callers whose mutation may be a legitimate no-op — MarkRead or
+// MarkDone called on an id that is already read/done — where Apply's
+// unconditional dirty-and-rearm would churn the debounce timer and
+// eventually issue a write that changes nothing on disk, on every repeated
+// call. mutate still runs, and may still write into the live map (e.g. to
+// create a zero-value entry it then decides not to touch further), but its
+// bool return is authoritative for whether that write is persisted.
+func (s *TriageStore) ApplyIfChanged(mutate func(TriageState) bool) {
+	s.mu.Lock()
+	if s.state == nil {
+		s.state = TriageState{}
+	}
+	if mutate(s.state) {
+		s.markDirtyLocked()
+	}
+	s.mu.Unlock()
+}
+
 // Replace atomically swaps the entire in-memory state with newState and
 // schedules a debounced write. Intended for callers — like the identity-key
 // reconcile function — that compute a fresh map (e.g. dropping pruned or

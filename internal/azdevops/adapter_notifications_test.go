@@ -177,6 +177,171 @@ func TestAdapter_MarkDone_UpdatesLocalTriageState(t *testing.T) {
 	}
 }
 
+// TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry pins the
+// empty-key guard: an empty Identity.ID must never reach the store as a map
+// key, since it would be shared by every malformed row Reconcile already
+// refuses to track (NotifKey's and Reconcile's own doc comments) — a
+// permanently un-addressable entry that would otherwise sit in
+// notifications.yaml until orphanTTL happened to prune it.
+func TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry(t *testing.T) {
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+
+	err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: ""})
+	if err == nil {
+		t.Fatal("MarkRead() error = nil, want a descriptive error for an empty identity id")
+	}
+	if want := "azdevops: mark read: empty identity id"; err.Error() != want {
+		t.Errorf("MarkRead() error = %q, want %q", err.Error(), want)
+	}
+	if got := store.State(); len(got) != 0 {
+		t.Errorf("store.State() = %+v, want no entry written for an empty id", got)
+	}
+}
+
+// TestAdapter_MarkDone_EmptyID_ReturnsErrorAndCreatesNoEntry mirrors
+// TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry for MarkDone.
+func TestAdapter_MarkDone_EmptyID_ReturnsErrorAndCreatesNoEntry(t *testing.T) {
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+
+	err := a.MarkDone(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: ""})
+	if err == nil {
+		t.Fatal("MarkDone() error = nil, want a descriptive error for an empty identity id")
+	}
+	if want := "azdevops: mark done: empty identity id"; err.Error() != want {
+		t.Errorf("MarkDone() error = %q, want %q", err.Error(), want)
+	}
+	if got := store.State(); len(got) != 0 {
+		t.Errorf("store.State() = %+v, want no entry written for an empty id", got)
+	}
+}
+
+// TestAdapter_MarkRead_AlreadyRead_IsNoOp pins that marking an already-read
+// id does not churn LastActivity/LastSeen and does not re-dirty the
+// debounced store (TriageStore.ApplyIfChanged). The debounce is set far
+// longer than the test's own runtime, so a second write scheduling a new
+// timer would be observable as store.dirty flipping back to true after a
+// Flush already cleared it.
+func TestAdapter_MarkRead_AlreadyRead_IsNoOp(t *testing.T) {
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}
+
+	if err := a.MarkRead(id); err != nil {
+		t.Fatalf("first MarkRead: %v", err)
+	}
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	first := store.State()["review/pr/42"]
+
+	store.mu.Lock()
+	store.dirty = false
+	store.mu.Unlock()
+
+	if err := a.MarkRead(id); err != nil {
+		t.Fatalf("second MarkRead: %v", err)
+	}
+
+	store.mu.Lock()
+	dirty := store.dirty
+	store.mu.Unlock()
+	if dirty {
+		t.Error("store.dirty = true after re-marking an already-read id, want false (no-op)")
+	}
+
+	second := store.State()["review/pr/42"]
+	if !second.LastActivity.Equal(first.LastActivity) {
+		t.Errorf("LastActivity changed on a no-op MarkRead: first = %v, second = %v", first.LastActivity, second.LastActivity)
+	}
+	if !second.LastSeen.Equal(first.LastSeen) {
+		t.Errorf("LastSeen changed on a no-op MarkRead: first = %v, second = %v", first.LastSeen, second.LastSeen)
+	}
+}
+
+// TestAdapter_MarkDone_AlreadyDone_IsNoOp mirrors
+// TestAdapter_MarkRead_AlreadyRead_IsNoOp for MarkDone.
+func TestAdapter_MarkDone_AlreadyDone_IsNoOp(t *testing.T) {
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}
+
+	if err := a.MarkDone(id); err != nil {
+		t.Fatalf("first MarkDone: %v", err)
+	}
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	first := store.State()["review/pr/42"]
+
+	store.mu.Lock()
+	store.dirty = false
+	store.mu.Unlock()
+
+	if err := a.MarkDone(id); err != nil {
+		t.Fatalf("second MarkDone: %v", err)
+	}
+
+	store.mu.Lock()
+	dirty := store.dirty
+	store.mu.Unlock()
+	if dirty {
+		t.Error("store.dirty = true after re-marking an already-done id, want false (no-op)")
+	}
+
+	second := store.State()["review/pr/42"]
+	if !second.LastActivity.Equal(first.LastActivity) {
+		t.Errorf("LastActivity changed on a no-op MarkDone: first = %v, second = %v", first.LastActivity, second.LastActivity)
+	}
+	if !second.LastSeen.Equal(first.LastSeen) {
+		t.Errorf("LastSeen changed on a no-op MarkDone: first = %v, second = %v", first.LastSeen, second.LastSeen)
+	}
+}
+
+// TestAdapter_MarkRead_UnseenID_CreatesEntryWithSaneLastActivity pins the
+// task-9 invariant Reconcile's own doc comment records: an entry written by
+// a mark rather than by Reconcile must carry a LastActivity at least as new
+// as any real row's UpdatedAt for the same subject, or the very next poll's
+// Reconcile would read the mark as stale activity and immediately clear it
+// (Reconcile's "strictly newer" branch). Feeding the freshly created entry
+// straight back through Reconcile with a row stamped well in the past proves
+// the mark survives that poll rather than being resurrected by it.
+func TestAdapter_MarkRead_UnseenID_CreatesEntryWithSaneLastActivity(t *testing.T) {
+	store := newTestTriageStore(t)
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/99"}
+
+	before := time.Now()
+	if err := a.MarkRead(id); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+	after := time.Now()
+
+	entry, ok := store.State()["review/pr/99"]
+	if !ok {
+		t.Fatal("MarkRead did not create a triage entry for an unseen id")
+	}
+	if entry.LastActivity.Before(before) || entry.LastActivity.After(after) {
+		t.Fatalf("entry.LastActivity = %v, want it within [%v, %v]", entry.LastActivity, before, after)
+	}
+
+	// A poll landing after the mark, whose row for the same subject is
+	// stamped from well before the mark, must not resurrect the row as
+	// unread.
+	row := provider.Notification{
+		Identity:  id,
+		UpdatedAt: before.Add(-time.Hour),
+	}
+	rows, _ := Reconcile([]provider.Notification{row}, store.State(), after)
+	if len(rows) != 1 {
+		t.Fatalf("Reconcile returned %d rows, want 1", len(rows))
+	}
+	if !rows[0].Read {
+		t.Errorf("rows[0].Read = false after Reconcile, want true — the mark must survive the very next poll")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Combined-fixture composition tests: a single project's httptest server
 // backs all four sources at once, routed by real HTTP path/method the same
