@@ -152,10 +152,11 @@ type NotificationsConfig struct {
 	// GitHub holds GitHub-only notifications knobs — the phase-1 keys that
 	// have no Azure equivalent.
 	GitHub NotificationsGitHubConfig `mapstructure:"github"`
-	// Azure holds Azure-only notifications knobs — populated in full by the
-	// phase-2 spec's task 11. This struct exists here only to give that task
-	// somewhere to land its fields; task 10 invents neither their defaults
-	// nor their validation.
+	// Azure holds Azure-only notifications knobs. Its fields are declared
+	// already and match decision 13's YAML; what the phase-2 spec's task 11
+	// adds is their defaults and validation, which task 10 deliberately does
+	// not invent. The declared fields are the landing site, not a stub to be
+	// replaced.
 	Azure NotificationsAzureConfig `mapstructure:"azure"`
 }
 

@@ -16,8 +16,10 @@ import (
 // Selection is an override, not an intersection:
 //   - If cfg.Notifications.GitHub.OnlyConfiguredRepos is true, keep only
 //     GitHub rows (Identity.Kind == provider.KindGitHub) whose scope is one
-//     of cfg.GitHub.Repos, and include_repos is ignored entirely for those
-//     rows (a load-time warning already told the user this). This knob is a
+//     of cfg.GitHub.Repos. include_repos is then ignored for every row, not
+//     just the GitHub ones — this is a switch, so taking this branch skips
+//     the include_repos branch altogether (a load-time warning already told
+//     the user this). This knob is a
 //     GitHub-only concept (decision 13 of the phase-2 spec) — it never has
 //     an opinion about a row from any other backend, so a row whose Kind is
 //     not GitHub always survives this branch regardless of its Scope.
