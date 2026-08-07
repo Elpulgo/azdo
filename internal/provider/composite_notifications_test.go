@@ -726,6 +726,147 @@ func TestCompositeProvider_Notifications_MaxAppliedOnPartialPath(t *testing.T) {
 	}
 }
 
+// TestCompositeProvider_Notifications_TwoBackendsEachExceedCap_KeepsGlobalNewest
+// is task 12's load-bearing regression test (decision 15): two capable
+// backends, each individually returning more rows than Max, in arrival order
+// that is deliberately NOT sorted newest-first (mimicking each backend's own
+// raw wire/query order, which is exactly what phase 1's per-adapter
+// truncation — since removed — would have sliced against). A naive fix that
+// truncates each backend's contribution to Max independently, in that
+// backend's own order, before merging (i.e. leaves the old per-adapter
+// truncation in place) drops "gh-i9" — the single newest row overall, sitting
+// last in the GitHub backend's arrival order — and keeps a stale row in its
+// place, while still returning a slice of exactly the right length. Only
+// asserting len(got) == Max would pass against that bug; the exact expected
+// IDs, spanning both backends interleaved, are what catches it.
+func TestCompositeProvider_Notifications_TwoBackendsEachExceedCap_KeepsGlobalNewest(t *testing.T) {
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	at := func(i int) time.Time { return base.Add(time.Duration(i) * time.Hour) }
+
+	gh := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	gh.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "gh-i1", at(1)),
+		mkNotif(provider.KindGitHub, "o/r", "gh-i2", at(2)),
+		mkNotif(provider.KindGitHub, "o/r", "gh-i4", at(4)),
+		mkNotif(provider.KindGitHub, "o/r", "gh-i3", at(3)),
+		mkNotif(provider.KindGitHub, "o/r", "gh-i9", at(9)), // newest overall, last in arrival order
+	}
+	az := newFakeNotifyBackend(provider.KindAzure, []string{"P"})
+	az.notifs = []provider.Notification{
+		mkNotif(provider.KindAzure, "P", "az-i8", at(8)),
+		mkNotif(provider.KindAzure, "P", "az-i7", at(7)),
+		mkNotif(provider.KindAzure, "P", "az-i6", at(6)),
+		mkNotif(provider.KindAzure, "P", "az-i5", at(5)),
+		mkNotif(provider.KindAzure, "P", "az-i0", at(0)), // oldest overall
+	}
+
+	cp := provider.NewCompositeProvider(gh, az)
+
+	got, err := cp.List(provider.NotifOpts{Max: 4})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("len(got) = %d, want 4", len(got))
+	}
+	want := "gh-i9,az-i8,az-i7,az-i6"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want the 4 globally newest rows across both backends (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_MaxBoundary_ExactlyCapAcrossTwoBackends
+// pins convention 13's boundary: the merged total across two backends lands
+// exactly on Max, so the cap's len(all) > maxItems guard must not fire and
+// drop the last row by an off-by-one.
+func TestCompositeProvider_Notifications_MaxBoundary_ExactlyCapAcrossTwoBackends(t *testing.T) {
+	gh := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	gh.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "gh-new", t3),
+		mkNotif(provider.KindGitHub, "o/r", "gh-old", t1),
+	}
+	az := newFakeNotifyBackend(provider.KindAzure, []string{"P"})
+	az.notifs = []provider.Notification{
+		mkNotif(provider.KindAzure, "P", "az-mid", t2),
+		mkNotif(provider.KindAzure, "P", "az-oldest", t1.Add(-time.Hour)),
+	}
+
+	cp := provider.NewCompositeProvider(gh, az)
+
+	got, err := cp.List(provider.NotifOpts{Max: 4})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "gh-new,az-mid,gh-old,az-oldest"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want all 4 rows, unchanged (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_MaxBoundary_SingleBackendSuppliesExactlyCap
+// pins the other half of convention 13's boundary: one backend alone already
+// supplies exactly Max rows (and they are the true newest), the other
+// supplies additional older rows pushing the merged total over Max. The
+// single backend's full contribution must survive intact and the other
+// backend's rows must be dropped entirely — not an off-by-one that drops one
+// of the single backend's own rows instead.
+func TestCompositeProvider_Notifications_MaxBoundary_SingleBackendSuppliesExactlyCap(t *testing.T) {
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	at := func(i int) time.Time { return base.Add(time.Duration(i) * time.Hour) }
+
+	gh := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	gh.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "gh-i5", at(5)),
+		mkNotif(provider.KindGitHub, "o/r", "gh-i4", at(4)),
+		mkNotif(provider.KindGitHub, "o/r", "gh-i3", at(3)),
+	}
+	az := newFakeNotifyBackend(provider.KindAzure, []string{"P"})
+	az.notifs = []provider.Notification{
+		mkNotif(provider.KindAzure, "P", "az-i2", at(2)),
+		mkNotif(provider.KindAzure, "P", "az-i1", at(1)),
+	}
+
+	cp := provider.NewCompositeProvider(gh, az)
+
+	got, err := cp.List(provider.NotifOpts{Max: 3})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "gh-i5,gh-i4,gh-i3"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want exactly the single backend's 3 rows (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_MaxNegativeIsUncapped pins convention
+// 11 across two backends: a negative Max must mean "no cap", the same as
+// zero, and must not be misread as a cap of zero (which would empty the
+// feed). TestCompositeProvider_Notifications_MaxZeroIsUncapped already pins
+// the zero case with a single backend; this pins the negative case
+// separately, across two backends.
+func TestCompositeProvider_Notifications_MaxNegativeIsUncapped(t *testing.T) {
+	gh := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	gh.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "gh-new", t3),
+		mkNotif(provider.KindGitHub, "o/r", "gh-old", t1),
+	}
+	az := newFakeNotifyBackend(provider.KindAzure, []string{"P"})
+	az.notifs = []provider.Notification{
+		mkNotif(provider.KindAzure, "P", "az-mid", t2),
+	}
+
+	cp := provider.NewCompositeProvider(gh, az)
+
+	got, err := cp.List(provider.NotifOpts{Max: -1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "gh-new,az-mid,gh-old"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want Max: -1 to leave the feed uncapped (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Error chain preservation
 // ---------------------------------------------------------------------------

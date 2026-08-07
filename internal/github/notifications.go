@@ -24,7 +24,10 @@ const notifPerPageCap = 100
 // user-configured item cap: this constant stops a misbehaving server (a
 // self-referential "next" produced 501 requests and 500 rows with err == nil
 // before this existed), while NotifOpts.Max honours the user's configured item
-// cap at the adapter boundary. Both are needed; neither subsumes the other.
+// cap at the provider.CompositeProvider boundary, after every capable
+// backend's rows have been merged and sorted (decision 15 / task 12) — never
+// here, and never per-adapter. Both this constant and that cap are needed;
+// neither subsumes the other.
 const maxNotificationPages = 50
 
 // defaultPollInterval is the fallback cadence used when GitHub's

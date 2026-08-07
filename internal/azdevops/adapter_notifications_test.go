@@ -831,24 +831,40 @@ func TestAdapter_List_FoldsLocalReadStateAcrossPolls(t *testing.T) {
 	}
 }
 
-// TestAdapter_List_HonoursMax pins opts.Max truncation, mirroring
-// github.Adapter.List's own behaviour (see List's doc comment on task 12).
-func TestAdapter_List_HonoursMax(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	f := newComposerFixture(now)
-	a, server := newComposerAdapter(t, f)
-	defer server.Close()
+// TestAdapter_List_MaxDoesNotTruncateAtThisLayer pins the new contract: since
+// decision 15 / task 12, NotifOpts.Max is honoured exclusively by
+// provider.CompositeProvider.List, after it merges every capable backend's
+// rows and sorts them newest-first — never by an individual adapter. Every
+// Max value here, including one smaller than the fixture's row count, must
+// come back with all 4 rows unchanged (mirrors github.Adapter's own
+// TestAdapter_List_MaxDoesNotTruncateAtThisLayer).
+func TestAdapter_List_MaxDoesNotTruncateAtThisLayer(t *testing.T) {
+	tests := []struct {
+		name string
+		max  int
+	}{
+		{name: "Max smaller than result", max: 2},
+		{name: "negative Max", max: -1},
+		{name: "zero Max", max: 0},
+		{name: "Max equal to result length", max: 4},
+		{name: "Max larger than result length", max: 99},
+	}
 
-	rows, err := a.list(provider.NotifOpts{Max: 2}, now)
-	if err != nil {
-		t.Fatalf("list() error = %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("len(rows) = %d, want 2", len(rows))
-	}
-	wantIDs := []string{"mention/wi/100", "review/pr/42"}
-	if got := identityIDs(rows); !equalStrings(got, wantIDs) {
-		t.Errorf("rows = %v, want the 2 newest %v", got, wantIDs)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now().UTC().Truncate(time.Second)
+			f := newComposerFixture(now)
+			a, server := newComposerAdapter(t, f)
+			defer server.Close()
+
+			rows, err := a.list(provider.NotifOpts{Max: tt.max}, now)
+			if err != nil {
+				t.Fatalf("list() error = %v", err)
+			}
+			if len(rows) != 4 {
+				t.Fatalf("len(rows) = %d, want 4 — Adapter.list must not truncate on Max", len(rows))
+			}
+		})
 	}
 }
 

@@ -107,15 +107,19 @@ func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDa
 // doc comment for why that is safe), since neither is ever called from
 // List's call path.
 //
-// opts.ParticipatingOnly and opts.Since are accepted for interface
-// compliance but not used: all four sources already narrow server-side by
-// their own means (reviewerId, WIQL, requestedFor) rather than a generic
-// "participating" or "since" hint Azure's REST surface has no equivalent
-// for. opts.Max truncates the returned slice after Reconcile and sorting,
-// mirroring github.Adapter.List's own per-adapter truncation (task 12 will
-// later move this to the composite for both adapters at once; doing it here
-// today, the same way github already does, keeps that a one-place removal
-// rather than a bespoke azdevops carve-out).
+// opts.ParticipatingOnly, opts.Since and opts.Max are all accepted for
+// interface compliance but not used here: all four sources already narrow
+// server-side by their own means (reviewerId, WIQL, requestedFor) rather than
+// a generic "participating" or "since" hint Azure's REST surface has no
+// equivalent for, and opts.Max — since decision 15 / task 12 — is honoured
+// exclusively by provider.CompositeProvider.List, after it merges every
+// capable backend's rows and sorts them newest-first. Truncating here too
+// (phase 1's original per-adapter behaviour, mirroring github.Adapter.List's
+// own prior truncation) would double-apply the cap once a second backend
+// exists: each adapter would independently keep its own top-Max, in this
+// adapter's own sort order, before the composite ever sees the full picture —
+// which can silently drop a row that belongs in the true global top-Max
+// while still returning a plausible, correctly-sized slice.
 func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error) {
 	return a.list(opts, time.Now())
 }
@@ -171,14 +175,6 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 	})
 
 	sortNotificationsDeterministically(reconciled)
-
-	if opts.Max > 0 && len(reconciled) > opts.Max {
-		// Full slice expression caps capacity as well as length, so the
-		// truncated rows cannot be recovered or overwritten by a later
-		// append into this slice — matching github.Adapter.List's own
-		// truncation.
-		reconciled = reconciled[:opts.Max:opts.Max]
-	}
 
 	if jobCount == 0 || len(errs) < jobCount {
 		// Absorb: every enabled source succeeded (possibly zero of them, a

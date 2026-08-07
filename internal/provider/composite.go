@@ -690,13 +690,23 @@ func (cp *CompositeProvider) List(opts NotifOpts) ([]Notification, error) {
 // additionally keeps rows identical in all four keys — a duplicate from an
 // overlapping page — in their input order.
 //
-// The maxItems cap re-applies NotifOpts.Max after the merge: List forwards
-// opts verbatim to every capable backend, so N capable backends would
-// otherwise return up to N×Max. It is applied *after* the sort — truncating
-// before it would keep an arbitrary N rather than the newest N — and on both
-// the clean and the partial-error return. The full slice expression makes the
-// truncation irreversible: what Max removed is gone, rather than recoverable
-// via all[:cap(all)] or overwritable by a caller's append.
+// The maxItems cap is applied here and only here (decision 15 / task 12):
+// List forwards opts verbatim to every capable backend, but no backend
+// implementation truncates on opts.Max itself — each backend's List returns
+// its rows uncapped, so without this cap the merged length would be whatever
+// each backend's own natural fetch returns, unbounded by maxItems, and with N
+// capable backends that easily exceeds a single-backend-sized maxItems. A
+// backend that truncated to Max on its own (phase 1's original, since-removed
+// behaviour) would double-apply the cap the moment a second capable backend
+// exists — each backend keeping only its own top-Max in its own order before
+// this function ever sees the full picture, which can silently drop a row
+// that belongs in the true global top-Max while still returning a
+// plausible-looking, correctly-sized slice. The cap is applied *after* the
+// sort — truncating before it would keep an arbitrary maxItems rather than
+// the newest maxItems — and on both the clean and the partial-error return.
+// The full slice expression makes the truncation irreversible: what Max
+// removed is gone, rather than recoverable via all[:cap(all)] or overwritable
+// by a caller's append.
 //
 // Unlike mergePRs/mergeWorkItems/mergePipelineRuns, the all-failed path
 // preserves the error chain with errors.Join rather than flattening it through

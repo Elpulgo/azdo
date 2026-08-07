@@ -63,7 +63,16 @@ type NotifOpts struct {
 	// parameter.
 	Since time.Time
 
-	// Max caps the number of notifications returned across all fetched
-	// pages. Zero means no cap.
+	// Max caps the number of notifications returned across all backends.
+	// Zero or negative means no cap. This struct is forwarded verbatim to
+	// every capable backend's List, but Max is honoured exclusively by
+	// CompositeProvider.List, applied once after it merges every backend's
+	// rows and sorts them newest-first (decision 15 / task 12 of the phase-2
+	// notifications spec) — never by an individual backend. A backend that
+	// truncated on Max itself (phase 1's original per-adapter behaviour)
+	// would double-apply the cap the moment a second capable backend exists,
+	// each backend keeping only its own top-Max in its own order before the
+	// composite ever sees the full picture. Backend implementations must
+	// therefore ignore this field.
 	Max int
 }
