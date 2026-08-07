@@ -39,11 +39,16 @@ type Config struct {
 	Metrics         MetricsConfig       `mapstructure:"metrics"`
 	GitHub          GitHubConfig        `mapstructure:"github"`
 	Notifications   NotificationsConfig `mapstructure:"notifications"`
-	// Warnings collects non-fatal load-time diagnostics — currently
-	// unrecognised exclude_reasons and malformed repo globs. Populated by
-	// LoadFrom, never persisted (mapstructure:"-"), and never printed by this
-	// package: a TUI has no safe place to write a line before or after Bubble
-	// Tea's alt-screen switch, so the notifications pane renders these instead.
+	// Warnings collects non-fatal load-time diagnostics — currently an
+	// unrecognised notifications.exclude_reasons entry, a malformed
+	// notifications.exclude_repos/include_repos glob,
+	// notifications.github.only_configured_repos silently overriding a
+	// non-empty notifications.include_repos, and
+	// notifications.azure.lookback_days being clamped down to
+	// AzureLookbackDaysMax. Populated by LoadFrom, never persisted
+	// (mapstructure:"-"), and never printed by this package: a TUI has no
+	// safe place to write a line before or after Bubble Tea's alt-screen
+	// switch, so the notifications pane renders these instead.
 	Warnings   []string `mapstructure:"-"`
 	configPath string   // internal field to store config path for saving
 }

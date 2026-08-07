@@ -49,7 +49,8 @@ func TestNewAdapterWithNotifications_LookbackDays_ClampedToMax(t *testing.T) {
 		lookbackDays int
 		want         int
 	}{
-		{name: "non-positive falls back to the default", lookbackDays: 0, want: DefaultNotificationLookbackDays},
+		{name: "zero falls back to the default", lookbackDays: 0, want: DefaultNotificationLookbackDays},
+		{name: "negative falls back to the default", lookbackDays: -1, want: DefaultNotificationLookbackDays},
 		{name: "at the max is unaffected", lookbackDays: MaxNotificationLookbackDays, want: MaxNotificationLookbackDays},
 		{name: "above the max is clamped down to it", lookbackDays: MaxNotificationLookbackDays + 1, want: MaxNotificationLookbackDays},
 		{name: "far above the max is clamped down to it", lookbackDays: 90, want: MaxNotificationLookbackDays},

@@ -13,24 +13,27 @@ import (
 // so a subject that has genuinely stopped matching any source's query will
 // not reappear; orphanTTL only exists so the state file does not grow
 // without bound (decision 7). It is generous relative to the default
-// lookback only while the lookbackDays passed to NewAdapterWithNotifications
-// stays <= MaxNotificationLookbackDays: beyond that, "inside the query
-// window" and "returned by a given poll" are different sets (a source like
+// lookback only while the lookbackDays a caller is using stays
+// <= MaxNotificationLookbackDays: beyond that, "inside the query window" and
+// "returned by a given poll" are different sets (a source like
 // SourceAssigned caps each query at assignedQueryTop, so an
 // old-but-still-in-window subject can be crowded out of every poll's
 // results, its LastSeen frozen, and pruned before the window says it
-// should be). NewAdapterWithNotifications itself clamps any lookbackDays it
-// is given to MaxNotificationLookbackDays, so that gap cannot open through
-// any caller of this package, not only through config's own
-// AzureLookbackDaysMax clamp in LoadFrom (internal/config.AzureLookbackDaysMax
-// duplicates this same number in days, since config deliberately does not
-// import this package for one constant, and clamps
-// notifications.azure.lookback_days before Validate() ever runs — but that
-// is a second, independent belt-and-braces clamp on top of this package's
-// own, not the only place the gap is closed). If this constant's value ever
-// changes, both MaxNotificationLookbackDays and
-// internal/config.AzureLookbackDaysMax must change with it — each points
-// back at the other for a human reading either file in isolation.
+// should be). NewAdapterWithNotifications clamps any lookbackDays it is
+// given to MaxNotificationLookbackDays, which closes that gap for the
+// Adapter.List call path — internal/config.AzureLookbackDaysMax adds a
+// second, earlier clamp of its own in LoadFrom (duplicating this same
+// number in days, since config deliberately does not import this package
+// for one constant), before Validate() ever runs. Neither clamp reaches
+// SourceAssigned, SourceCIFailed or Reconcile directly: all three are
+// exported, take lookbackDays (the two sources) or a TriageState (Reconcile)
+// as plain parameters with no bound enforced inside them, so a caller
+// composing this package's pieces without going through
+// NewAdapterWithNotifications can still reopen the gap. If this constant's
+// value ever changes, MaxNotificationLookbackDays (below) updates itself —
+// it is derived from orphanTTL, not restated — but
+// internal/config.AzureLookbackDaysMax does not and must be changed by hand;
+// that constant's own comment points back here for the same reason.
 const orphanTTL = 30 * 24 * time.Hour
 
 // MaxNotificationLookbackDays is orphanTTL expressed in days rather than a

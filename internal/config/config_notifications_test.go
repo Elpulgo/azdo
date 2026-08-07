@@ -640,6 +640,44 @@ notifications:
 	}
 }
 
+// TestLoad_AzureMinPollIntervalNegative_RejectedByLoadFrom is the
+// LoadFrom-level twin of TestLoad_AzureLookbackDaysNegative_RejectedByLoadFrom,
+// for the same reason: TestConfig_Validate_NotificationsRejectsNegative
+// constructs a *Config struct literal directly, so it never exercises
+// LoadFrom's own `min_poll_interval == 0` normalization branch that runs
+// immediately before Validate() is called. Written as `<= 0` instead of
+// `== 0`, that branch would silently rewrite a file's explicit
+// `min_poll_interval: -1` to the 300-second default before Validate() ever
+// sees a negative to reject — the user's malformed key would be accepted
+// and normalized rather than reported (task-11 re-validation, surviving
+// mutant 1). This test writes the negative straight to a YAML fixture and
+// drives the full LoadFrom path, which is the only way to catch that
+// regression.
+func TestLoad_AzureMinPollIntervalNegative_RejectedByLoadFrom(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    min_poll_interval: -1
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("LoadFrom() = nil error, want an error naming notifications.azure.min_poll_interval")
+	}
+	if !strings.Contains(err.Error(), "notifications.azure.min_poll_interval") {
+		t.Errorf("LoadFrom() error = %q, want substring %q", err.Error(), "notifications.azure.min_poll_interval")
+	}
+}
+
 func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 	base := func() *Config {
 		return &Config{
