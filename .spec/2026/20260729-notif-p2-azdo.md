@@ -2682,3 +2682,96 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   open. What *does* change if Oscar adopts the token is `Reconcile`'s contract and all four
   sources' population of it — none of which task 9 touches. Decide before task 14, or after the
   loop; either is fine.
+
+## Validation: task 16
+
+Verified against `0f89440` (docs-only: `README.md`, `Architecture.md`, `FAQ.md`,
+`config.yaml.example`) and the current state of `internal/config/config.go`,
+`internal/ui/notifications/filter.go`, `internal/azdevops/notifications_*.go`,
+`cmd/azdo-tui/main.go`.
+
+**Clauses checked against the code, not the implementer's report:**
+
+1. ✅ **Full nested config block, derived from the struct.** `NotificationsConfig`
+   (top-level: `exclude_reasons`, `unread_only`, `exclude_repos`, `include_repos`,
+   `max_items`, `poll_interval` — six keys), `NotificationsGitHubConfig`
+   (`participating_only`, `only_configured_repos`, `since_days`) and
+   `NotificationsAzureConfig` (`lookback_days`, `min_poll_interval`,
+   `sources.{review_requested,mentioned,assigned,ci_failed}`) match README's tables,
+   Architecture.md's summary and `config.yaml.example`'s block key-for-key via their
+   `mapstructure` tags. Defaults and clamps checked directly against
+   `DefaultAzureLookbackDays`=14/`AzureLookbackDaysMax`=30 and
+   `DefaultAzureMinPollInterval`=300/`AzureMinPollIntervalMax`=86400 — all four numbers
+   match what's documented in all four files. `acceptedNotificationReasons()`'s eleven
+   values match the reason list documented in README verbatim, in enum order.
+2. ✅ **`config.yaml.example` parses as YAML and matches the struct.** Verified by
+   stripping the leading `#`/one space from the commented `notifications:` block and
+   parsing it with `yaml.safe_load` — it produces the exact nested shape
+   `NotificationsConfig` expects, with every key present. No typo'd key.
+3. ✅ **`exclude_repos`/`include_repos` per-backend meaning.** README states GitHub
+   scope is `owner/repo`, Azure scope is a project name; confirmed against
+   `filter.go` (matches `Identity.Scope`) and `notifications_source_review.go`
+   (`scope := pr.ProjectName`, the project **API name**, not a display name or
+   `org/project` compound) — the claim holds.
+4. ✅ **`sources.ci_failed` vs. `ci_activity` reason.** Documented distinctly and
+   correctly in README (dedicated callout), Architecture.md and `config.yaml.example`;
+   matches `NotificationsAzureSourcesConfig.CIFailed` `mapstructure:"ci_failed"` and
+   `NotificationReasonCIActivity` in the source.
+5. ✅ **Local triage state file path.** README/Architecture.md state
+   `$XDG_STATE_HOME/azdo-tui/notifications.yaml` falling back to
+   `~/.local/state/azdo-tui/notifications.yaml`, resolved the same way `state.yaml`
+   is — matches `NotifStorePath()`/`notifFileName = "notifications.yaml"` in
+   `internal/azdevops/notifications_store.go`.
+6. ✅ **PAT-scope claim.** README ("No additional scope is needed…") and FAQ state the
+   Azure share needs no scope beyond the existing Build/Code/Work Items set, matching
+   the probe results' conclusion exactly — not overstated into "no PAT needed".
+7. ❌ **Convention 26 sweep — incomplete.** README, FAQ and Architecture.md are clean
+   (grepped for `GitHub only`/`GitHub-only`/`requires GitHub`; every remaining hit is a
+   legitimately-scoped GitHub-only *knob*, not a claim that the whole tab needs GitHub).
+   `RELEASES.md`, `CONTRIBUTING.md`, `Skill.md` are clean (no "notification" hits at
+   all). **`cmd/azdo-tui/main.go` was not touched by this diff (`git show --stat
+   0f89440` lists only the four docs files) and still carries the stale phase-1 claim
+   in two places:**
+   - `runHelp()`, line 100: `Note: the Notifications tab requires a CLASSIC token.`
+   - `runAuthGitHub()`, line 237: `Note: the Notifications tab requires a CLASSIC
+     token — GitHub's notifications API supports no fine-grained permission.`
+
+   Both assert unqualified that "the Notifications tab" needs a classic GitHub token —
+   the exact overstatement the README's own equivalent text had before this diff
+   corrected it to "**The GitHub share of** the Notifications tab requires a classic
+   PAT" (README.md:663). On an Azure-only config the tab needs no GitHub token at all,
+   classic or otherwise, so the bare claim is false for that setup. The task line
+   explicitly names "`cmd/azdo-tui`'s help blocks and the auth wizard" as places that
+   "must be found and corrected, not just the first one" — neither was.
+8. ✅ **Convention 29.** No phase/task/decision vocabulary in README.md, FAQ.md or
+   `config.yaml.example` (grepped, zero hits). Architecture.md's "Decision N" references
+   (including the new "Decision 13 of the phase-2 notifications spec" at line 593) are
+   not a new violation — the file numbered architectural decisions this way before this
+   diff (`Decision 5`, `Decision 20`, `Decision 3` all pre-exist at `0f90acf`), and
+   Architecture.md is a contributor-facing doc, not the user-facing error/help strings
+   convention 29's own example (Decision 91) was written about.
+9. ✅ **Classic-PAT warning preserved and correctly rescoped.** README.md:663 still
+   states GitHub's notifications API is classic-only, sourced to GitHub's docs, and now
+   additionally clarifies an Azure-only or Azure+fine-grained-GitHub setup still gets a
+   working tab minus the GitHub half — rescoped, not weakened or deleted.
+10. ✅ **Anchors.** The renamed heading (`### Notifications (GitHub only)` →
+    `### Notifications`, dropping the `#notifications-github-only` anchor) has no
+    remaining referrers anywhere in the repo (grepped `notifications-github-only`,
+    zero hits). Every link into `#notifications` / `#notifications-configuration` /
+    `#local-triage-state-azure-devops` / `#azure-devops--personal-access-token-pat` /
+    `#github--personal-access-token` resolves to a heading that exists, including
+    FAQ.md's cross-file link into `README.md#notifications-configuration`.
+
+**Build/test:** `CGO_ENABLED=0 go build ./...` clean (docs-only diff, as expected).
+`git status --porcelain` empty throughout — no temporary edits were made; all checks
+were read-only (grep, YAML parse in a throwaway Python snippet, `git show`).
+
+**Verdict: INCOMPLETE.** Finding 7 is the blocker — task 16's own acceptance line names
+`cmd/azdo-tui`'s help blocks and the auth wizard as required corrections, and both still
+carry the pre-phase-2 "the Notifications tab requires a CLASSIC token" overstatement.
+Fix: reword both notes in `cmd/azdo-tui/main.go` (lines 100 and 237) to scope the
+classic-PAT requirement to the GitHub share of the tab, matching README.md:663's
+"**The GitHub share of** the Notifications tab requires a classic PAT." Everything
+else in task 16 — the config tables, the per-backend `exclude_repos`/`include_repos`
+semantics, the `ci_failed`/`ci_activity` split, the triage-state-file section, the PAT
+scope confirmation, and the anchor renames — is done and verified against the code.
