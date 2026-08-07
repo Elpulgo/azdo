@@ -54,8 +54,10 @@ theme: dark
 # (disabled_panes: notifications) to turn it off instead. Azure's share of
 # the feed is synthesized from four polled sources (Azure DevOps has no
 # notifications inbox API to read from); GitHub's share comes from its
-# actual inbox. Every key is optional and defaults to the widest possible
-# behaviour (nothing filtered). Takes effect on next restart.
+# actual inbox. Every key is optional. The filter keys default to the widest
+# possible behaviour (nothing filtered); the azure block is the exception --
+# lookback_days and min_poll_interval default to real bounds. Takes effect on
+# next restart.
 #
 # notifications:
 #   # Shared keys — apply to the merged feed across every backend.
@@ -77,10 +79,11 @@ theme: dark
 #                                # produced the row; "*" does not cross "/" -- write
 #                                # "*/*" to mean "everything"
 #   include_repos: []           # same glob syntax as exclude_repos, narrowing
-#                                # instead of hiding; ignored for GitHub rows when
-#                                # notifications.github.only_configured_repos is
-#                                # true (with a startup warning) -- Azure rows are
-#                                # unaffected by that toggle either way
+#                                # instead of hiding; ignored for the WHOLE feed
+#                                # when notifications.github.only_configured_repos
+#                                # is true (with a startup warning), not just for
+#                                # the GitHub rows -- non-GitHub rows then pass
+#                                # through unnarrowed
 #   max_items: 0                 # cap the number of notifications in the merged
 #                                # feed across every backend, applied once after
 #                                # the newest-first sort; 0 = no cap
@@ -94,11 +97,11 @@ theme: dark
 #   # GitHub-only keys.
 #   github:
 #     only_configured_repos: false # narrow the GitHub share of the feed to
-#                                    # github.repos; wins over include_repos for
-#                                    # GitHub rows when both are set (include_repos
-#                                    # is then ignored for those rows, with a
-#                                    # startup warning); other backends' rows are
-#                                    # unaffected
+#                                    # github.repos; wins over include_repos when
+#                                    # both are set -- include_repos is then
+#                                    # ignored for every row, with a startup
+#                                    # warning, and non-GitHub rows pass through
+#                                    # unnarrowed
 #     participating_only: false    # narrow the server-side fetch to GitHub's
 #                                    # "participating" bundle (roughly everything
 #                                    # except subscribed); composes with

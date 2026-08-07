@@ -96,7 +96,7 @@ If the tab still isn't showing, check `disabled_panes` in your config file for
 has the required scope (see the next question). A GitHub auth failure currently empties the
 whole tab and shows the scope error, even when Azure is also configured and healthy — the
 Azure rows are fetched but not rendered. Grant the scope, or remove `github.repos` if you
-only want the Azure feed.
+only want the Azure feed — that drops GitHub from the other tabs as well.
 
 ## The Notifications tab says my token is missing a scope
 

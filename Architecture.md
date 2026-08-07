@@ -597,7 +597,11 @@ ignored) for the other. `exclude_repos`/`include_repos` glob a scope, but
 "scope" means something different per backend — GitHub's is `"owner/repo"`,
 Azure's is a project name — so the same glob list is matched against two
 different string shapes depending on which backend produced the row. Every
-key defaults to the widest possible behaviour. There is deliberately **no
+filter key defaults to the widest possible behaviour — nothing hidden, nothing
+narrowed. The Azure block is the exception: `lookback_days` (14) and
+`min_poll_interval` (300s) default to real bounds, because an unbounded synthetic
+feed and an unthrottled poller are both costs paid against someone's org rather
+than defaults anyone would choose. There is deliberately **no
 `notifications.enabled` key** — every other default-on pane disables via
 `disabled_panes`, and the Notifications tab follows the same single
 mechanism rather than adding a second knob that could disagree with it. An

@@ -439,11 +439,11 @@ do nothing for the other one.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `notifications.exclude_repos` | []string | `[]` | Glob list of scopes to hide from the feed. Empty excludes nothing. |
-| `notifications.include_repos` | []string | `[]` | Glob list narrowing the feed to matching scopes. Empty means no narrowing. |
+| `notifications.include_repos` | []string | `[]` | Glob list narrowing the feed to matching scopes. Empty means no narrowing. **Ignored entirely** when `notifications.github.only_configured_repos` is `true` — see that key below. |
 | `notifications.exclude_reasons` | []string | `[]` | Reasons to drop from the feed — see "Reason values" below. |
 | `notifications.unread_only` | bool | `false` | Show only unread rows. The fetch itself always requests the whole feed regardless of this setting; filtering happens client-side. |
 | `notifications.max_items` | int | `0` (no cap) | Caps the number of notifications in the **merged, sorted** feed across every backend, applied after the newest-first sort — not per-backend, so `max_items: 50` means at most 50 rows total even with both backends live. |
-| `notifications.poll_interval` | int | `0` | Overrides the global `polling_interval` for the notifications poller only, in seconds. `0` falls back to GitHub's `X-Poll-Interval` response hint when present, else the global `polling_interval`. This is the single poller's cadence — it is unrelated to `notifications.azure.min_poll_interval` below, which the Azure adapter applies to itself independently of this poller's tick rate. |
+| `notifications.poll_interval` | int | `0` | Overrides the global `polling_interval` for the notifications poller only, in seconds. `0` falls back to the global `polling_interval`. Either way, a backend's own cadence hint (GitHub's `X-Poll-Interval` response header) can **raise** the interval above what you configured but never lower it — the poller runs at `max(configured, hint)`, so `polling_interval: 300` with a 60-second hint still polls every 300 seconds. This is the single poller's cadence — it is unrelated to `notifications.azure.min_poll_interval` below, which the Azure adapter applies to itself independently of this poller's tick rate. |
 
 **`exclude_repos` / `include_repos` mean different things per backend.** Both are glob
 lists matched against `Identity.Scope`, but what that scope *is* differs: on GitHub it's
@@ -674,7 +674,8 @@ repository permissions:
 > **both** backends and your GitHub token can't reach the inbox, the tab currently shows the
 > GitHub scope error instead of your Azure rows — the failing backend takes the whole pane
 > with it rather than degrading to the half that works. Either grant the GitHub token the
-> `notifications` scope or remove `github.repos` from your config. If you'd rather not switch your GitHub
+> `notifications` scope, or remove `github.repos` from your config — note that this drops
+> GitHub from the other tabs too, not just from notifications. If you'd rather not switch your GitHub
 > token, see [Disabling the Notifications tab](#notifications-configuration) — add
 > `notifications` to `disabled_panes` and the tab goes away entirely.
 
