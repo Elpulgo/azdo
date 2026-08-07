@@ -82,39 +82,16 @@ func SourceCIFailed(mc *MultiClient, lookbackDays, top int, now time.Time) ([]pr
 	return mapFailedRuns(mc, runs, userID, now), nil
 }
 
-// resolveCIFailedUserID fetches the authenticated user's id from any one
-// project client (all share the same PAT/org), matching
-// resolveMentionUserID's pattern in notifications_source_mentioned.go. The
-// id is needed for two purposes here, not one: it is passed as
+// resolveCIFailedUserID fetches the authenticated user's id. This source
+// needs it for two purposes, not one: it is passed as
 // ListMyFailedPipelineRuns' requestedFor query parameter (the server-side
-// narrowing), and it is re-checked in Go by isMyFailedRun as this source's
+// narrowing), and it is re-checked in Go by isMyFailedRun as the
 // belt-and-braces guard against that server parameter being ignored or
-// mis-typed.
-//
-// An empty id must never reach either use: PipelineRun.RequestedFor.ID is
-// absent from some payloads (a system-triggered or scheduled run has no
-// requesting user), and "" == "" would make isMyFailedRun attribute every
-// such run to the caller. Client.GetCurrentUserID() already rejects an
-// empty AuthenticatedUser.ID (client.go:234), so this path is unreachable
-// today, but the guard stays here anyway because SetUserID (client.go:40)
-// writes the cache unchecked and this is the identity-comparison call site
-// that matters if that ever changes.
+// mis-typed. See resolveAuthenticatedUserID
+// (notifications_source_identity.go), which SourceMentioned shares, for why
+// an empty id is rejected rather than passed through.
 func resolveCIFailedUserID(mc *MultiClient) (string, error) {
-	for _, p := range mc.Projects() {
-		c := mc.ClientFor(p)
-		if c == nil {
-			continue
-		}
-		id, err := c.GetCurrentUserID()
-		if err != nil {
-			return "", fmt.Errorf("failed to get current user ID: %w", err)
-		}
-		if id == "" {
-			return "", fmt.Errorf("resolved an empty user ID")
-		}
-		return id, nil
-	}
-	return "", fmt.Errorf("no client configured")
+	return resolveAuthenticatedUserID(mc)
 }
 
 // mapFailedRuns filters runs down to isMyFailedRun matches and maps each
@@ -206,10 +183,13 @@ func mapCIFailed(mc *MultiClient, run PipelineRun, now time.Time) provider.Notif
 // typographically identical; decision 8 collapsed the *reason*, it did not
 // say the failure itself should become invisible in the row.
 //
-// Falls back to "Run <id>" when both Definition.Name and BuildNumber are
-// empty (malformed or partially-populated data), rather than rendering the
-// bare " #123 failed" / "CI # failed" a naive format string would produce
-// for a missing definition name or build number respectively.
+// Falls back to "Run <id> failed" only when Definition.Name and BuildNumber
+// are *both* empty, which is the one case where the format string would
+// render nothing identifying at all (" # failed"). One of the two being empty
+// is deliberately left alone — " #20260101.1 failed" and "Nightly # failed"
+// still name the run well enough to act on, and substituting the id there
+// would replace the identifier the user recognises with one they do not. Both
+// partial cases are pinned in TestCIFailedTitle.
 func ciFailedTitle(run PipelineRun) string {
 	if run.Definition.Name == "" && run.BuildNumber == "" {
 		return fmt.Sprintf("Run %d failed", run.ID)

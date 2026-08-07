@@ -155,36 +155,14 @@ func SourceMentioned(mc *MultiClient, now time.Time) (SourceMentionedResult, err
 	return result, &PartialError{Failed: len(stage1Errs), Total: projectCount, Errors: errs}
 }
 
-// resolveMentionUserID fetches the authenticated user's id from any one
-// project client (all share the same PAT/org), matching the pattern
-// MultiClient.ListPullRequestsAsReviewer already uses. Stage 2 cannot
-// confirm a single mention without it, so a failure here aborts before
-// stage 1 does any work.
-//
-// An empty id must never reach stage 2's targetId comparison: "" == "" would
-// match a mention payload carrying no resolved target the same way it would
-// match the caller. Client.GetCurrentUserID() already rejects an empty
-// AuthenticatedUser.ID (client.go:234), so this path is unreachable today,
-// but the guard stays here anyway because SetUserID (client.go:40) writes
-// the cache unchecked and this is the identity-comparison call site that
-// matters if that ever changes (matching resolveCIFailedUserID's own guard
-// in notifications_source_cifailed.go).
+// resolveMentionUserID fetches the authenticated user's id for stage 2's
+// targetId comparison. Stage 2 cannot confirm a single mention without it, so
+// a failure here aborts before stage 1 does any work — see
+// resolveAuthenticatedUserID (notifications_source_identity.go), which
+// SourceCIFailed shares, for why an empty id is rejected rather than passed
+// through.
 func resolveMentionUserID(mc *MultiClient) (string, error) {
-	for _, p := range mc.Projects() {
-		c := mc.ClientFor(p)
-		if c == nil {
-			continue
-		}
-		id, err := c.GetCurrentUserID()
-		if err != nil {
-			return "", fmt.Errorf("failed to get current user ID: %w", err)
-		}
-		if id == "" {
-			return "", fmt.Errorf("resolved an empty user ID")
-		}
-		return id, nil
-	}
-	return "", fmt.Errorf("no client configured")
+	return resolveAuthenticatedUserID(mc)
 }
 
 // queryMentionCandidates fans stage 1 out to every project concurrently,

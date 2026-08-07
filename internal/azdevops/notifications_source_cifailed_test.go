@@ -3,6 +3,7 @@ package azdevops
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -161,6 +162,47 @@ func TestSourceCIFailed_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 	}
 	if rows[0].Identity.ID != "" {
 		t.Errorf("Identity.ID = %q, want empty for a non-positive run id", rows[0].Identity.ID)
+	}
+}
+
+// TestSourceCIFailed_ThreadsLookbackDaysToTheQuery pins the pass-through
+// itself, not just the client method's use of it. TestListMyFailedPipelineRuns_QueryParameters
+// (pipelines_test.go) proves the client turns lookbackDays into minTime; it
+// says nothing about whether SourceCIFailed hands its own parameter down or
+// quietly substitutes a constant. Without this test, replacing
+// lookbackDays with a literal at the call site changes no test result — and
+// decision 6's guarantee that every source is age-bounded would be silently
+// false for this one, with task 11's notifications.azure.lookback_days
+// governing three sources of four.
+func TestSourceCIFailed_ThreadsLookbackDaysToTheQuery(t *testing.T) {
+	var gotMinTime string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMinTime = r.URL.Query().Get("minTime")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PipelineRunsResponse{Value: []PipelineRun{}})
+	}))
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, "user-1")
+
+	if _, err := SourceCIFailed(mc, 3, 50, time.Now().UTC()); err != nil {
+		t.Fatalf("SourceCIFailed failed: %v", err)
+	}
+
+	if gotMinTime == "" {
+		t.Fatal("minTime was not sent; SourceCIFailed is not bounding the query by lookbackDays at all")
+	}
+	parsed, err := time.Parse(time.RFC3339, gotMinTime)
+	if err != nil {
+		t.Fatalf("minTime = %q is not RFC3339: %v", gotMinTime, err)
+	}
+	// 3 days, not the 14 every other test in this file passes: a hard-coded
+	// default at the call site would land three orders of magnitude outside
+	// this window rather than accidentally inside it.
+	want := time.Now().Add(-3 * 24 * time.Hour)
+	if diff := parsed.Sub(want); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("minTime = %v, want within a minute of now-3d (%v) — SourceCIFailed's lookbackDays did not reach the query", parsed, want)
 	}
 }
 
@@ -615,10 +657,13 @@ func TestMapCIFailed_WebURLIsLegalEmptyString(t *testing.T) {
 // TestCIFailedTitle pins finding 5 of task 7's review: the row's Title must
 // say the build failed, not just name it, since GitHub's ci_activity reason
 // is shared with successful runs and would otherwise render identically to
-// a genuine Azure failure in the merged feed. It also pins finding 6's
-// fallback: a definition name or build number that arrives empty must not
-// leave a bare " #123 failed" / "CI # failed" — both empty falls back to a
-// run-id-based title instead.
+// a genuine Azure failure in the merged feed. It also pins the shape of the
+// fallback: only a run with *both* fields empty falls back to a run-id-based
+// title, because that is the only case with nothing identifying left to
+// render. A single empty field still names the run — " #20260101.1 failed",
+// "CI # failed" — and is deliberately left as-is rather than being replaced
+// by an id the user does not recognise. Both partial cases are rows below so
+// that widening the fallback is a visible test change, not a silent one.
 func TestCIFailedTitle(t *testing.T) {
 	tests := []struct {
 		name string
@@ -632,11 +677,16 @@ func TestCIFailedTitle(t *testing.T) {
 		},
 		{
 			// Only the fully-empty case (both fields blank) gets the run-id
-			// fallback (finding 6); a single blank field still renders with
-			// a bare leading/trailing marker rather than triggering it.
+			// fallback; a single blank field still renders with a bare
+			// leading/trailing marker rather than triggering it.
 			name: "empty definition name only: renders with a bare leading marker, not the fallback",
 			run:  PipelineRun{ID: 99, Definition: PipelineDefinition{Name: ""}, BuildNumber: "20260101.1"},
 			want: " #20260101.1 failed",
+		},
+		{
+			name: "empty build number only: renders with a bare trailing marker, not the fallback",
+			run:  PipelineRun{ID: 99, Definition: PipelineDefinition{Name: "CI"}, BuildNumber: ""},
+			want: "CI # failed",
 		},
 		{
 			name: "empty build number and empty definition name: falls back to run id",
