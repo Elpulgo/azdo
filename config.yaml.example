@@ -17,9 +17,9 @@ organization: your-org-name
 projects:
   - your-project-name
 
-# GitHub (optional; required only if you use GitHub, including the
-# Notifications tab below). One or more "owner/repo" slugs enables the
-# GitHub backend.
+# GitHub (optional). One or more "owner/repo" slugs enables the GitHub
+# backend. Not required for the Notifications tab below -- Azure DevOps
+# alone is enough to show it.
 # github:
 #   repos:
 #     - your-org/your-repo
@@ -48,21 +48,18 @@ theme: dark
 #   pipelines: Builds
 #   metrics: Dashboard
 
-# Notifications tab (GitHub only). On by default whenever github.repos is
-# set — there is deliberately no notifications.enabled key; use
-# disabled_panes above (disabled_panes: notifications) to turn it off
-# instead. Every key is optional and defaults to the widest possible
-# behaviour (whole inbox, nothing filtered). Takes effect on next restart.
+# Notifications tab. On by default whenever at least one backend is
+# configured (Azure DevOps, GitHub, or both) — there is deliberately no
+# notifications.enabled key; use disabled_panes above
+# (disabled_panes: notifications) to turn it off instead. Azure's share of
+# the feed is synthesized from four polled sources (Azure DevOps has no
+# notifications inbox API to read from); GitHub's share comes from its
+# actual inbox. Every key is optional and defaults to the widest possible
+# behaviour (nothing filtered). Takes effect on next restart.
 #
 # notifications:
-#   only_configured_repos: false # narrow the feed to github.repos; wins over
-#                                # include_repos when both are set (include_repos
-#                                # is then ignored, with a startup warning)
-#   include_repos: []           # glob list (path.Match syntax, e.g. "your-org/*")
-#                                # narrowing the feed to matching repos; "*" does
-#                                # not cross "/" -- write "*/*" to mean "everything"
-#   exclude_repos: []           # glob list of repos to hide from the feed
-#   exclude_reasons: []         # drop rows by *why* they're in your inbox; accepts:
+#   # Shared keys — apply to the merged feed across every backend.
+#   exclude_reasons: []         # drop rows by *why* they're in the feed; accepts:
 #                                #   review_requested, mentioned, assigned, authored,
 #                                #   commented, state_changed, ci_activity,
 #                                #   security_alert, approval_requested, subscribed,
@@ -72,20 +69,66 @@ theme: dark
 #                                # not accepted. exclude_repos, exclude_reasons and
 #                                # unread_only are an order-independent AND -- each
 #                                # only ever removes rows.
-#   unread_only: false          # show only unread rows (client-side; the fetch
-#                                # itself always requests the whole inbox)
-#   participating_only: false   # narrow the server-side fetch to GitHub's
-#                                # "participating" bundle (roughly everything
-#                                # except subscribed); composes with exclude_reasons
-#   since_days: 0                # only show notifications updated in the last N
-#                                # days; 0 = no bound. The knob to reach for on a
-#                                # very large inbox -- it's the one filter that
-#                                # actually reduces what's fetched from GitHub.
-#   max_items: 0                 # cap the number of notifications returned,
-#                                # applied after the newest-first sort; 0 = no cap
-#   poll_interval: 0             # override polling_interval for notifications only,
-#                                # in seconds; 0 = fall back to GitHub's
-#                                # X-Poll-Interval hint, else polling_interval
+#   unread_only: false          # show only unread rows (client-side; GitHub's fetch
+#                                # always requests the whole inbox regardless)
+#   exclude_repos: []           # glob list (path.Match syntax) of scopes to hide
+#                                # from the feed -- a GitHub "owner/repo" slug or an
+#                                # Azure project name, depending which backend
+#                                # produced the row; "*" does not cross "/" -- write
+#                                # "*/*" to mean "everything"
+#   include_repos: []           # same glob syntax as exclude_repos, narrowing
+#                                # instead of hiding; ignored for GitHub rows when
+#                                # notifications.github.only_configured_repos is
+#                                # true (with a startup warning) -- Azure rows are
+#                                # unaffected by that toggle either way
+#   max_items: 0                 # cap the number of notifications in the merged
+#                                # feed across every backend, applied once after
+#                                # the newest-first sort; 0 = no cap
+#   poll_interval: 0             # override polling_interval for notifications
+#                                # only, in seconds; 0 = fall back to
+#                                # polling_interval. A capable backend's own
+#                                # cadence hint (GitHub's X-Poll-Interval response)
+#                                # can still raise this above what's configured,
+#                                # never lower it
+#
+#   # GitHub-only keys.
+#   github:
+#     only_configured_repos: false # narrow the GitHub share of the feed to
+#                                    # github.repos; wins over include_repos for
+#                                    # GitHub rows when both are set (include_repos
+#                                    # is then ignored for those rows, with a
+#                                    # startup warning); other backends' rows are
+#                                    # unaffected
+#     participating_only: false    # narrow the server-side fetch to GitHub's
+#                                    # "participating" bundle (roughly everything
+#                                    # except subscribed); composes with
+#                                    # exclude_reasons
+#     since_days: 0                 # only show GitHub notifications updated in
+#                                    # the last N days; 0 = no bound. The knob to
+#                                    # reach for on a very large GitHub inbox --
+#                                    # it's the one filter that actually reduces
+#                                    # what's fetched from GitHub
+#
+#   # Azure DevOps-only keys.
+#   azure:
+#     lookback_days: 14            # bounds the assigned and ci_failed sources to
+#                                    # activity within the last N days (default 14,
+#                                    # max 30; 0 falls back to the default rather
+#                                    # than meaning "unbounded")
+#     min_poll_interval: 300       # minimum seconds between real Azure
+#                                    # notification queries; calls within the
+#                                    # window reuse the previous result instead of
+#                                    # querying Azure again (default 300, max
+#                                    # 86400; 0 falls back to the default rather
+#                                    # than disabling the throttle)
+#     sources:                      # per-source enable toggles, all true by default
+#       review_requested: true      # open PRs where you're a reviewer
+#       mentioned: true              # work-item @mentions
+#       assigned: true               # work items assigned to you
+#       ci_failed: true              # failed/partially-succeeded pipeline runs
+#                                    # requested by you -- emits the ci_activity
+#                                    # reason above, a deliberately different name
+#                                    # from this key
 
 # Metrics tab (opt-in, management dashboard). Disabled unless enabled: true.
 # When enabled a fourth tab surfaces per-user WIP, stuck-item flags, and

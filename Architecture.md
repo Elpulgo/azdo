@@ -36,6 +36,15 @@ azdo/
 │   │   ├── client.go                    # Single-project HTTP client (auth, GET/POST/PATCH/PUT)
 │   │   ├── multiclient.go              # Multi-project wrapper with concurrent fetching
 │   │   ├── adapter.go                  # Wraps MultiClient as a provider.Provider
+│   │   ├── adapter_notifications.go    # Wraps Adapter as a provider.NotificationSource: source fan-out, absorb/propagate, self-throttle
+│   │   ├── notifications_source_review.go     # review_requested source
+│   │   ├── notifications_source_mentioned.go  # mentioned source (WIQL + Comments API)
+│   │   ├── notifications_source_assigned.go   # assigned source
+│   │   ├── notifications_source_cifailed.go   # ci_failed source (emits the ci_activity reason)
+│   │   ├── notifications_source_identity.go   # Shared per-source identity helpers
+│   │   ├── notifications_reconcile.go  # NotifKey, Reconcile (activity-stamp resurrection, TTL pruning)
+│   │   ├── notifications_store.go      # Local triage state (TriageStore, notifications.yaml)
+│   │   ├── comments.go                  # Work item comments API (used by the mentioned source)
 │   │   ├── mapping.go                  # Wire types → neutral domain types
 │   │   ├── mapper_enums.go             # Wire strings → neutral enums (MapStateCategory, etc.)
 │   │   ├── types.go                     # API response types + convenience methods
@@ -386,19 +395,24 @@ A backend implements it or it doesn't; nothing asserts it into existence. The
 cadence hint (GitHub's `X-Poll-Interval` header) is a *second*, independent
 optional interface, `PollIntervalHinter` — deliberately not a fourth method on
 `NotificationSource`, because widening that interface later would force every
-implementer (including a future Azure one) to also implement a hint it has no
-equivalent for.
+implementer — including Azure, which has no `X-Poll-Interval` equivalent and
+does not implement `PollIntervalHinter` at all, relying instead on its own
+`min_poll_interval` self-throttle (see below) — to also implement a hint it
+has no equivalent for.
 
 **`CompositeProvider` discovers support by type-asserting each backend it
 wraps**, never by asserting itself — `*CompositeProvider` satisfies
 `NotificationSource` unconditionally (it has `List`/`MarkRead`/`MarkDone`
 methods of its own that fan out), so asserting the composite would always
-report "capable" even when every backend inside it is Azure-only. The
+report "capable" regardless of which backends it actually wraps, including a
+hypothetical future backend that doesn't implement the interface at all. The
 correct capability check is `HasNotifications()`, which loops over
 `cp.backends` and asserts each one individually. This is what lets the app
 decide whether to show the tab at all (Decision 11): hidden on *capability*,
-never on the feed being empty, and it flips back on by itself the moment a
-future backend implements the interface — no app-layer change required.
+never on the feed being empty. Both Azure and GitHub implement the
+interface today, so the tab appears whenever either backend is configured,
+and the same mechanism extends to a third backend with no app-layer change
+required.
 
 `List` fans out concurrently to every capable backend, merges the results,
 sorts newest-first, and — per Decision 20 — never lets one backend's failure
@@ -411,11 +425,12 @@ configured a client for.
 
 **The neutral `Notification` type** (`internal/provider/types.go`) carries a
 provider-qualified `Identity` (kind + scope + native id — never a bare id,
-since a future Azure identity scheme could otherwise collide with a GitHub
-thread id) plus `Read`/`Done` fields. GitHub populates `Read`/`Done` from the
-server; a future Azure implementation would populate them from local state
-instead — the same fields, filled by a different source, so adding Azure
-support later changes *who* fills them, not the shape the UI consumes.
+since Azure's own `<source>/<entity>/<entity_id>` identity scheme, described
+below, could otherwise collide with a GitHub thread id) plus `Read`/`Done`
+fields. GitHub populates `Read`/`Done` from the server; Azure populates them
+from local triage state instead (see "Azure DevOps: a synthesized feed"
+below) — the same fields, filled by a different source, so Azure support
+changed *who* fills them, not the shape the UI consumes.
 
 **Single entrypoint, same rule as every other list.** The `internal/ui/notifications`
 pane consumes `[]provider.Notification` and nothing else — it never imports
@@ -425,6 +440,71 @@ normalization happens once, at the adapter mapping boundary (`mapping_notificati
 maps a GitHub notification thread to the neutral type); the pane, the filter
 (`internal/ui/notifications/filter.go`), and the footer's unread badge all
 operate purely on the merged, neutral feed.
+
+#### Azure DevOps: a synthesized feed
+
+Azure DevOps has no readable notifications inbox, so `azdevops.Adapter`
+implements `provider.NotificationSource` by fanning out to four independently
+toggleable sources (`internal/azdevops/notifications_source_*.go`,
+orchestrated by `runSourcesConcurrently` in `adapter_notifications.go`) and
+merging their rows. `docs/adr/0002-azure-synthetic-notification-feed.md`
+covers the full design rationale; this section is the map for a contributor
+touching the code.
+
+| Source (`notifications.azure.sources.*`) | What it queries | Reason emitted | Identity key |
+|---|---|---|---|
+| `review_requested` | open PRs where the authenticated user is a reviewer | `NotificationReasonReviewRequested` | `review/pr/<id>` |
+| `mentioned` | WIQL narrows candidate work items, then the Comments API confirms and timestamps each `@mention` (WIQL alone can't tell *when* the mention happened) | `NotificationReasonMentioned` | `mention/wi/<id>` |
+| `assigned` | WIQL `@Me` macro, bounded by `lookback_days` | `NotificationReasonAssigned` | `assigned/wi/<id>` |
+| `ci_failed` | pipeline runs `RequestedFor` the user that failed or partially succeeded, bounded by `lookback_days` | `NotificationReasonCIActivity` | `cifail/run/<id>` |
+
+The `ci_failed` row is deliberate, not a typo: the config toggle names what
+the source *queries* (a failed run), while the reason it emits,
+`ci_activity`, is a pre-existing member of `provider.NotificationReason`
+shared with other CI-related activity. Do not read the two spellings as one
+vocabulary (`internal/config/config.go`'s `NotificationsAzureSourcesConfig`
+doc comment spells this out at the config layer).
+
+**Identity keys** follow `<source>/<entity>/<entity_id>` (`NotifKey`,
+`internal/azdevops/notifications_reconcile.go`) — stable across polls since
+none of the four sources are stateful or keep a seen-ids snapshot; a subject
+either still matches its source's query on the next poll or it doesn't, and
+the feed is simply recomputed from scratch every time.
+
+**Local triage state.** Azure DevOps has no server-side read/done state to
+call, so `MarkRead`/`MarkDone` write to a local `TriageStore`
+(`internal/azdevops/notifications_store.go`) instead of issuing an HTTP
+request. Read/Done are folded into each row at the `List` boundary via
+`Reconcile` (`notifications_reconcile.go`): a subject whose current activity
+timestamp is newer than the stored one has its `Read`/`Done` cleared and the
+stamp advanced, and rows for a subject a source stops returning are pruned
+from local state once they age past `orphanTTL` (30 days). The store
+persists to `notifications.yaml`, resolved by `NotifStorePath()` the same way
+`internal/state`'s `state.yaml` is resolved — `$XDG_STATE_HOME/azdo-tui/` or
+its `~/.local/state/azdo-tui/` fallback — so the two files sit side by side.
+Writes are debounced (500ms) and atomic, mirroring `state.Store`. Like
+`state.yaml`, this file is local machine state, **not synced across
+machines**: triage progress made on one install is invisible to another.
+
+**Absorb vs. propagate, one layer down from the composite.** `Adapter.list`
+applies the same rule `CompositeProvider.List` applies to backends (Decision
+20), one layer lower, to sources: it returns rows whenever at least one of
+the four sources succeeded (all-disabled trivially counts as success), and
+propagates an error only when every source that ran failed outright. A
+successful poll that legitimately returns zero rows — every subject already
+triaged away — is a feed, not an outage.
+
+**Self-throttling, independent of `NotificationsPoller`.** `List` also
+self-throttles to `notifications.azure.min_poll_interval`
+(`notifThrottled`/`notifMinPollInterval` in `adapter_notifications.go`): a
+call inside the throttle window skips the network fan-out and the store
+write entirely, re-running `Reconcile` in memory against the last real
+query's raw rows and a fresh read of triage state so a mark made after that
+last query is still visible on the very next throttled call. This is a
+second, independent cadence from `NotificationsPoller`'s own tick interval —
+the poller can tick faster than Azure's minimum poll interval without
+generating extra Azure API calls, the same way GitHub's `X-Poll-Interval`
+hint bounds the poller from the other direction.
 
 #### Provider-aware rendering
 
@@ -458,10 +538,15 @@ The polling system has these components:
   convenience). Its cadence is `max(configured X-Poll-Interval-derived hint,
   notifications.poll_interval or the global polling_interval)`, re-derived on
   every fetch so a live `X-Poll-Interval` response can only ever raise the
-  interval, never lower it below what the user configured. Gated on the same
-  predicate that decides whether the tab exists at all (capability **and**
-  the pane being enabled) — an ungated timer would keep polling GitHub every
-  cycle for the life of the process even with the tab disabled or hidden.
+  interval, never lower it below what the user configured — GitHub is the
+  only backend that contributes this hint (`PollIntervalHinter`); Azure has
+  no equivalent and instead self-throttles its own `List` calls to
+  `notifications.azure.min_poll_interval`, independently of this poller's
+  tick rate (see "Azure DevOps: a synthesized feed" above). Gated on the
+  same predicate that decides whether the tab exists at all (capability
+  **and** the pane being enabled) — an ungated timer would keep polling
+  every capable backend every cycle for the life of the process even with
+  the tab disabled or hidden.
 
 ### 6. Styles and Theming
 
@@ -498,28 +583,45 @@ labels that don't match (or match but carry an unrecognised value) are surfaced
 as tags. Empty/absent prefixes fall back to `DefaultLabelConvention()`.
 
 **Notifications config** (`NotificationsConfig`, `internal/config/config.go`)
-holds nine filter/cadence keys (`only_configured_repos`, `include_repos`,
-`exclude_repos`, `exclude_reasons`, `unread_only`, `participating_only`,
-`since_days`, `max_items`, `poll_interval`), every one defaulting to the
-widest possible behaviour. There is deliberately **no `notifications.enabled`
-key** — every other default-on pane disables via `disabled_panes`, and the
-Notifications tab follows the same single mechanism rather than adding a
-second knob that could disagree with it. An unrecognised `exclude_reasons`
-value or a malformed `exclude_repos`/`include_repos` glob is dropped at load
-with a warning (`Config.Warnings`, rendered in the pane) rather than treated
-as a hard config error — the same "warn and degrade, never crash the app"
-posture the rest of `internal/config` already has for optional features. See
-`README.md`'s Notifications Configuration section for the full key reference.
+is nested, not flat: six shared keys live at `notifications.*`
+(`exclude_reasons`, `unread_only`, `exclude_repos`, `include_repos`,
+`max_items`, `poll_interval`) and apply to the merged feed across every
+backend; backend-specific keys that don't generalise live in two nested
+structs instead — `notifications.github.*` (`participating_only`,
+`only_configured_repos`, `since_days`) and `notifications.azure.*`
+(`lookback_days`, `min_poll_interval`, `sources.*`, one bool per source).
+Decision 13 of the phase-2 notifications spec made this split explicit:
+`GitHub` and `Azure` are separate structs, not one bag of optional fields,
+so a key that only makes sense for one backend can't be set (or silently
+ignored) for the other. `exclude_repos`/`include_repos` glob a scope, but
+"scope" means something different per backend — GitHub's is `"owner/repo"`,
+Azure's is a project name — so the same glob list is matched against two
+different string shapes depending on which backend produced the row. Every
+key defaults to the widest possible behaviour. There is deliberately **no
+`notifications.enabled` key** — every other default-on pane disables via
+`disabled_panes`, and the Notifications tab follows the same single
+mechanism rather than adding a second knob that could disagree with it. An
+unrecognised `exclude_reasons` value or a malformed `exclude_repos`/
+`include_repos` glob is dropped at load with a warning (`Config.Warnings`,
+rendered in the pane) rather than treated as a hard config error — the same
+"warn and degrade, never crash the app" posture the rest of `internal/config`
+already has for optional features. See `README.md`'s Notifications
+Configuration section for the full key reference.
 
 **Auth** is per-backend, each with a keyring-first priority chain:
-- Azure PAT: system keyring → `AZDO_PAT` env fallback.
-- GitHub token: system keyring → `GITHUB_TOKEN` env fallback. The Notifications
-  tab additionally requires the `notifications` scope on top of whatever the
-  rest of the GitHub backend already needs — and specifically a **classic**
-  PAT, since GitHub's notifications endpoints support no other token flavor.
-  That asymmetry is why the pane's 403 handling treats *absent*
-  `X-Accepted-OAuth-Scopes` headers as a positive signal ("this is a
-  fine-grained token") rather than as missing information.
+- Azure PAT: system keyring → `AZDO_PAT` env fallback. The Azure share of the
+  Notifications tab needs no scope beyond what the rest of the Azure backend
+  already requires — all four sources reuse existing PR/work-item read
+  endpoints and the Comments API (`GetWorkItemComments`, `internal/azdevops/comments.go`),
+  already covered by the "Work Items" and "Code" scopes the non-notifications
+  surfaces need.
+- GitHub token: system keyring → `GITHUB_TOKEN` env fallback. The GitHub
+  share of the Notifications tab additionally requires the `notifications`
+  scope on top of whatever the rest of the GitHub backend already needs — and
+  specifically a **classic** PAT, since GitHub's notifications endpoints
+  support no other token flavor. That asymmetry is why the pane's 403
+  handling treats *absent* `X-Accepted-OAuth-Scopes` headers as a positive
+  signal ("this is a fine-grained token") rather than as missing information.
 
 System keyring is Windows Credential Manager / macOS Keychain / Linux
 SecretService. If a required credential is missing, `azdo auth` (which uses the

@@ -22,6 +22,12 @@ If no config file exists, the setup wizard will guide you through creating one o
 
 Create a PAT at: Azure DevOps → User Settings → Personal Access Tokens.
 
+The table above already covers the Azure share of the Notifications tab — it
+needs no additional scope. Its four sources reuse the same PR, work-item, and
+comment endpoints the rest of the app already calls with these scopes. (If
+you also have a GitHub backend configured, the GitHub share of the same tab
+needs its own extra scope on the GitHub side — see the next question.)
+
 ## Can I use an environment variable instead of the keyring?
 
 Yes. Set the `AZDO_PAT` environment variable with your token. This is used as a fallback when the system keyring is not available or not desired.
@@ -70,19 +76,31 @@ It is created lazily on first save — a missing file is normal and not an error
 
 ## I don't see a Notifications tab
 
-The Notifications tab renders your GitHub inbox, so it only appears when at least one
-configured backend supports it — in the current release that means **GitHub only**. If
-your config is Azure-only (no `github.repos`), there is nothing to show the tab for and it
-is hidden entirely; that's expected, not a bug, and Azure DevOps support is planned for a
-later release. Once it lands, the tab reappears on its own — no config change needed.
+The Notifications tab shows a merged feed from every backend that supports notifications.
+Both Azure DevOps and GitHub support it, so the tab appears as soon as at least one backend
+is configured — an Azure-only config (`organization` + `projects`, no `github.repos`) shows
+it just as much as a GitHub-only or both-backends config does. There's no separate
+`notifications.enabled` switch; the tab follows the same enable/disable mechanism as every
+other pane.
 
-If you do have `github.repos` configured and still don't see it, check `disabled_panes` in
-your config file for `notifications`, and check that your GitHub token has the required
-scope (see the next question).
+Azure's share of the feed is synthesized from four sources — PRs awaiting your review,
+work-item `@mentions`, work items assigned to you, and failed pipeline runs — rather than
+fetched from an inbox, since Azure DevOps has no notifications inbox API. GitHub's share
+comes from its actual `GET /notifications` inbox. See [Notifications
+Configuration](README.md#notifications-configuration) in the README for the full set of
+keys, including the four `notifications.azure.sources.*` toggles that can turn off
+individual Azure sources.
+
+If the tab still isn't showing, check `disabled_panes` in your config file for
+`notifications`. If you have `github.repos` configured, also check that your GitHub token
+has the required scope (see the next question) — a GitHub auth failure only hides the
+GitHub share of the feed if Azure is also configured and healthy, but empties the whole tab
+on a GitHub-only config.
 
 ## The Notifications tab says my token is missing a scope
 
-The GitHub token needs an extra scope beyond what the rest of the app uses:
+This applies to the GitHub share of the feed only — Azure needs no extra scope (see "What
+PAT scopes do I need?" above). The GitHub token needs an extra scope beyond what the rest of the app uses:
 `notifications` on a **classic** PAT. There is no fine-grained equivalent — GitHub's
 notifications API [only supports classic
 tokens](https://docs.github.com/en/rest/activity/notifications), so if you go looking for a
