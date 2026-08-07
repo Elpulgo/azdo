@@ -7,11 +7,19 @@ import "fmt"
 // so connectionData returns the same identity regardless of which one asks,
 // and the first usable client wins.
 //
-// Two sources need it, for the same reason and with the same failure mode:
-// SourceMentioned compares it against CommentMention.targetId, and
-// SourceCIFailed passes it as ListMyFailedPipelineRuns' requestedFor
-// parameter and re-checks it in Go via isMyFailedRun. Both comparisons are
-// plain string equality, so both abort rather than proceed without an id.
+// Called exactly once per poll, by runSourcesConcurrently
+// (adapter_notifications.go), which threads the result into all three
+// sources that need it: SourceReviewRequested passes it to
+// ListPullRequestsAsReviewerForUser, SourceMentioned compares it against
+// CommentMention.targetId, and SourceCIFailed passes it as
+// ListMyFailedPipelineRuns' requestedFor parameter and re-checks it in Go via
+// isMyFailedRun. Resolving it once and sharing it, rather than letting each
+// source call this independently, is what keeps three concurrent goroutines
+// from racing Client.userID's unsynchronized cache field when they land on
+// the same *Client in the common single-project case (task 8 review, 🔴
+// finding 2) — see runSourcesConcurrently's doc comment for the full
+// rationale. All three comparisons are plain string equality, so all three
+// abort rather than proceed without an id.
 func resolveAuthenticatedUserID(mc *MultiClient) (string, error) {
 	for _, p := range mc.Projects() {
 		c := mc.ClientFor(p)

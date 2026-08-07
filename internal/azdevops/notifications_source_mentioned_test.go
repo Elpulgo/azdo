@@ -146,7 +146,7 @@ func TestSourceMentioned_MatchesAndStampsFromComment(t *testing.T) {
 	setUserIDs(mc, "user-1")
 
 	now := changedDate.Add(time.Hour)
-	result, err := SourceMentioned(mc, now)
+	result, err := SourceMentioned(mc, "user-1", now)
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestSourceMentioned_UnrelatedEditAfterMention_DoesNotResurrectDismissedRow(
 	setUserIDs(mc, "user-1")
 
 	now := initialChanged.Add(time.Hour)
-	firstResult, err := SourceMentioned(mc, now)
+	firstResult, err := SourceMentioned(mc, "user-1", now)
 	if err != nil {
 		t.Fatalf("SourceMentioned (first poll) failed: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestSourceMentioned_UnrelatedEditAfterMention_DoesNotResurrectDismissedRow(
 	setUserIDs(mc2, "user-1")
 
 	now2 := laterChanged.Add(time.Minute)
-	secondResult, err := SourceMentioned(mc2, now2)
+	secondResult, err := SourceMentioned(mc2, "user-1", now2)
 	if err != nil {
 		t.Fatalf("SourceMentioned (second poll) failed: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestSourceMentioned_NonMatchingTargetID_Excluded(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestSourceMentioned_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestSourceMentioned_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 }
 
 func TestSourceMentioned_NilMultiClient_ReturnsError(t *testing.T) {
-	_, err := SourceMentioned(nil, time.Now())
+	_, err := SourceMentioned(nil, "", time.Now())
 	if err == nil {
 		t.Fatal("expected error for nil MultiClient")
 	}
@@ -316,7 +316,7 @@ func TestSourceMentioned_AllProjectsFailStage1_ReturnsPlainError(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": errServer})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err == nil {
 		t.Fatal("expected error when every project fails stage 1")
 	}
@@ -349,7 +349,7 @@ func TestSourceMentioned_PartialStage1Failure_ReturnsSurvivingRows(t *testing.T)
 	})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err == nil {
 		t.Fatal("expected a *PartialError when one project fails stage 1")
 	}
@@ -389,7 +389,7 @@ func TestSourceMentioned_PartialStage2Failure_ReturnsSurvivingRows(t *testing.T)
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err == nil {
 		t.Fatal("expected a *PartialError when one candidate's comments fetch fails")
 	}
@@ -437,7 +437,7 @@ func TestSourceMentioned_Stage2Failure_PartialErrorStaysProjectScoped(t *testing
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err == nil {
 		t.Fatal("expected a *PartialError when two candidates' comment fetches fail")
 	}
@@ -547,7 +547,7 @@ func TestConfirmAndMapMentions_RowsSortedByUpdatedAtDescending(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, newest.Add(time.Hour))
+	result, err := SourceMentioned(mc, "user-1", newest.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestSourceMentioned_CandidateFanOutBounded_InterleavesAcrossProjects(t *tes
 	})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
@@ -633,7 +633,7 @@ func TestSourceMentioned_BelowCandidateLimit_NoCandidatesDropped(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestSourceMentioned_LowIDRecentMentionSurvivesHighIDStaleTruncation(t *test
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	result, err := SourceMentioned(mc, time.Now())
+	result, err := SourceMentioned(mc, "user-1", time.Now())
 	if err != nil {
 		t.Fatalf("SourceMentioned failed: %v", err)
 	}

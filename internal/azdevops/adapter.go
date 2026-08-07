@@ -28,6 +28,22 @@ type Adapter struct {
 // NewAdapter creates a new Adapter wrapping the given MultiClient.
 // A nil MultiClient is allowed (adapter still satisfies the interface; all
 // methods that require a live client will return an error or zero value).
+//
+// The *Adapter this returns also satisfies provider.NotificationSource by
+// method set alone — Go's structural typing does not care that notifStore is
+// left at its zero value (nil) here. A caller that hands this result to
+// something that type-asserts for provider.NotificationSource (e.g. the
+// composite provider's Notifications tab capability check) gets a source
+// that is present but permanently broken: List's nil-notifStore guard
+// (adapter_notifications.go) makes every call return an error rather than
+// panic, so the tab shows up and every poll immediately renders
+// internal/ui/notifications' error state ("Notifications unavailable:
+// azdevops: notifications: not configured") instead of ever showing a row —
+// present, but useless, for the life of the session (task 8 review, 🔴
+// finding 1). Use NewAdapterWithNotifications instead of this constructor
+// whenever the caller wants Azure DevOps notifications to actually work;
+// cmd/azdo-tui's runTUI does, and TestRunTUI_UsesAzureAdapterWithNotifications
+// (cmd/azdo-tui/main_test.go) pins that it keeps doing so.
 func NewAdapter(mc *MultiClient) *Adapter {
 	return &Adapter{mc: mc}
 }

@@ -323,7 +323,9 @@ func (mc *MultiClient) ListMyPullRequests(top int) ([]PullRequest, error) {
 
 // ListPullRequestsAsReviewer fetches PRs where the authenticated user is a
 // reviewer from all projects concurrently, tags each with ProjectName, merges
-// and sorts by CreationDate descending.
+// and sorts by CreationDate descending. It resolves the authenticated user id
+// itself via Client.GetCurrentUserID; see ListPullRequestsAsReviewerForUser
+// for a variant that accepts an already-resolved id instead.
 func (mc *MultiClient) ListPullRequestsAsReviewer(top int) ([]PullRequest, error) {
 	var userID string
 	for _, client := range mc.clients {
@@ -335,6 +337,26 @@ func (mc *MultiClient) ListPullRequestsAsReviewer(top int) ([]PullRequest, error
 		break
 	}
 
+	return mc.listPullRequestsAsReviewer(userID, top)
+}
+
+// ListPullRequestsAsReviewerForUser is ListPullRequestsAsReviewer's variant
+// for a caller that has already resolved the authenticated user id itself.
+// SourceReviewRequested (notifications_source_review.go) uses this so that
+// runSourcesConcurrently's single upfront resolveAuthenticatedUserID call is
+// what every concurrently running source shares, rather than each source
+// (this one included) independently racing Client.userID's unsynchronized
+// cache via its own GetCurrentUserID call — see runSourcesConcurrently's doc
+// comment for the race this closes.
+func (mc *MultiClient) ListPullRequestsAsReviewerForUser(userID string, top int) ([]PullRequest, error) {
+	return mc.listPullRequestsAsReviewer(userID, top)
+}
+
+// listPullRequestsAsReviewer is the shared fan-out body for both
+// ListPullRequestsAsReviewer and ListPullRequestsAsReviewerForUser: fetch
+// each project's reviewer-scoped PRs concurrently, tag with ProjectName,
+// merge and sort by CreationDate descending.
+func (mc *MultiClient) listPullRequestsAsReviewer(userID string, top int) ([]PullRequest, error) {
 	type result struct {
 		project string
 		prs     []PullRequest

@@ -58,14 +58,18 @@ import (
 // get, matching every other source's degrade-not-blank contract: the runs
 // from surviving projects are filtered, mapped and returned alongside the
 // error.
-func SourceCIFailed(mc *MultiClient, lookbackDays, top int, now time.Time) ([]provider.Notification, error) {
+//
+// userID is resolved once by the caller (runSourcesConcurrently, via
+// resolveAuthenticatedUserID) rather than by this function: SourceReviewRequested
+// and SourceMentioned need the very same id at the very same time, and each
+// independently calling resolveAuthenticatedUserID would race
+// Client.userID's unsynchronized cache field when they land on the same
+// *Client in the common single-project case (task 8 review, 🔴 finding 2).
+// userID is used both as ListMyFailedPipelineRuns' requestedFor parameter
+// and, unchanged from before, re-checked in Go by isMyFailedRun below.
+func SourceCIFailed(mc *MultiClient, userID string, lookbackDays, top int, now time.Time) ([]provider.Notification, error) {
 	if mc == nil {
 		return nil, fmt.Errorf("no client configured")
-	}
-
-	userID, err := resolveCIFailedUserID(mc)
-	if err != nil {
-		return nil, err
 	}
 
 	runs, err := mc.ListMyFailedPipelineRuns(userID, lookbackDays, top)
@@ -80,18 +84,6 @@ func SourceCIFailed(mc *MultiClient, lookbackDays, top int, now time.Time) ([]pr
 	}
 
 	return mapFailedRuns(mc, runs, userID, now), nil
-}
-
-// resolveCIFailedUserID fetches the authenticated user's id. This source
-// needs it for two purposes, not one: it is passed as
-// ListMyFailedPipelineRuns' requestedFor query parameter (the server-side
-// narrowing), and it is re-checked in Go by isMyFailedRun as the
-// belt-and-braces guard against that server parameter being ignored or
-// mis-typed. See resolveAuthenticatedUserID
-// (notifications_source_identity.go), which SourceMentioned shares, for why
-// an empty id is rejected rather than passed through.
-func resolveCIFailedUserID(mc *MultiClient) (string, error) {
-	return resolveAuthenticatedUserID(mc)
 }
 
 // mapFailedRuns filters runs down to isMyFailedRun matches and maps each

@@ -37,7 +37,7 @@ func TestSourceReviewRequested_MapsPRToNotification(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceReviewRequested(mc, 50, now)
+	rows, err := SourceReviewRequested(mc, "user-1", 50, now)
 	if err != nil {
 		t.Fatalf("SourceReviewRequested failed: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSourceReviewRequested_NegativeID_ProducesEmptyIdentityID(t *testing.T) 
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceReviewRequested(mc, 50, time.Now())
+	rows, err := SourceReviewRequested(mc, "user-1", 50, time.Now())
 	if err != nil {
 		t.Fatalf("SourceReviewRequested failed: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestSourceReviewRequested_NegativeID_ProducesEmptyIdentityID(t *testing.T) 
 }
 
 func TestSourceReviewRequested_NilMultiClient_ReturnsError(t *testing.T) {
-	_, err := SourceReviewRequested(nil, 50, time.Now())
+	_, err := SourceReviewRequested(nil, "", 50, time.Now())
 	if err == nil {
 		t.Fatal("expected error for nil MultiClient")
 	}
@@ -118,7 +118,7 @@ func TestSourceReviewRequested_PropagatesListError(t *testing.T) {
 	})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceReviewRequested(mc, 50, time.Now())
+	rows, err := SourceReviewRequested(mc, "user-1", 50, time.Now())
 	if err == nil {
 		t.Fatal("expected error to propagate from ListPullRequestsAsReviewer")
 	}
@@ -302,7 +302,7 @@ func TestSourceReviewRequested_NewPushResurrectsDismissedRow(t *testing.T) {
 	setUserIDs(mc, "user-1")
 
 	now := firstPush.Add(time.Hour)
-	rows, err := SourceReviewRequested(mc, 50, now)
+	rows, err := SourceReviewRequested(mc, "user-1", 50, now)
 	if err != nil {
 		t.Fatalf("SourceReviewRequested failed: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestSourceReviewRequested_NewPushResurrectsDismissedRow(t *testing.T) {
 	setUserIDs(pushedMC, "user-1")
 
 	pushedNow := newPush.Add(time.Minute)
-	pushedRows, err := SourceReviewRequested(pushedMC, 50, pushedNow)
+	pushedRows, err := SourceReviewRequested(pushedMC, "user-1", 50, pushedNow)
 	if err != nil {
 		t.Fatalf("SourceReviewRequested (second poll) failed: %v", err)
 	}

@@ -560,6 +560,75 @@ func TestTriageStore_Flush_RearmsTimerOnWriteFailure(t *testing.T) {
 // a caller computing a fresh map (e.g. after TTL pruning deletes keys) can
 // hand it to the store directly rather than clearing and re-copying a live
 // map through Apply.
+// TestTriageStore_Swap_HoldsLockAcrossComputeAndWrite pins task 8 review's
+// 🟡 finding 5: Swap must hold mu across the whole
+// clone-then-compute-then-store sequence, not release it between steps the
+// way a naive State() -> compute -> Replace() call chain would (three
+// separate lock acquisitions, with an unlocked gap between each). A
+// concurrent Apply landing in that gap would be silently discarded the
+// moment Replace's full-map overwrite runs, computed from an
+// already-stale snapshot that never saw the Apply's write.
+//
+// This is deliberately not a -race-detector-only reproduction (this repo's
+// sandbox cannot build with -race — see this package's other concurrency
+// tests): the assertion is on the *result*, not a race report. fn blocks on
+// proceed until the test has had a bounded window to attempt the concurrent
+// Apply; if that Apply completes inside that window, Swap did not hold the
+// lock across fn's execution, and the test fails outright rather than
+// relying on timing to merely make corruption more likely.
+func TestTriageStore_Swap_HoldsLockAcrossComputeAndWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notifications.yaml")
+	store, err := NewTriageStore(path)
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	store.SetDebounce(time.Hour)
+
+	fnStarted := make(chan struct{})
+	proceed := make(chan struct{})
+	swapDone := make(chan struct{})
+
+	go func() {
+		store.Swap(func(current TriageState) TriageState {
+			close(fnStarted)
+			<-proceed
+			next := current.clone()
+			next["swap/written"] = TriageEntry{Read: true}
+			return next
+		})
+		close(swapDone)
+	}()
+
+	<-fnStarted
+
+	applyDone := make(chan struct{})
+	go func() {
+		store.Apply(func(s TriageState) {
+			s["apply/written"] = TriageEntry{Read: true}
+		})
+		close(applyDone)
+	}()
+
+	select {
+	case <-applyDone:
+		t.Fatal("concurrent Apply completed while Swap's fn was still in flight — Swap is not holding the lock across the whole compute-and-write sequence")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: Apply is blocked behind Swap's held lock.
+	}
+
+	close(proceed)
+	<-swapDone
+	<-applyDone
+
+	got := store.State()
+	if _, ok := got["swap/written"]; !ok {
+		t.Errorf("state = %+v, want the entry Swap's fn computed and stored", got)
+	}
+	if _, ok := got["apply/written"]; !ok {
+		t.Errorf("state = %+v, want the entry the concurrent Apply wrote (it should land after Swap releases the lock, not be lost underneath Swap's write)", got)
+	}
+}
+
 func TestTriageStore_Replace_SwapsMapAndPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "notifications.yaml")
 	store, err := NewTriageStore(path)

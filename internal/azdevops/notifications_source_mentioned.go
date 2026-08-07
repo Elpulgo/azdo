@@ -85,6 +85,13 @@ type SourceMentionedResult struct {
 // subject, the shape Reconcile expects as input. Folding local triage state
 // in is composition-layer work (task 8), not this source's job.
 //
+// userID is resolved once by the caller (runSourcesConcurrently, via
+// resolveAuthenticatedUserID) rather than by this function: SourceReviewRequested
+// and SourceCIFailed need the very same id at the very same time, and each
+// independently calling Client.GetCurrentUserID would race Client.userID's
+// unsynchronized cache field when they land on the same *Client in the common
+// single-project case (task 8 review, 🔴 finding 2).
+//
 // now is threaded through to the stamp clamp so a stamp can never land in
 // the future, mirroring prActivityStamp; it is never read from time.Now()
 // internally.
@@ -111,14 +118,9 @@ type SourceMentionedResult struct {
 // (see boundMentionCandidates). Truncation, when it happens, is reported on
 // the returned SourceMentionedResult rather than logged — this repo has no
 // logging facility.
-func SourceMentioned(mc *MultiClient, now time.Time) (SourceMentionedResult, error) {
+func SourceMentioned(mc *MultiClient, userID string, now time.Time) (SourceMentionedResult, error) {
 	if mc == nil {
 		return SourceMentionedResult{}, fmt.Errorf("no client configured")
-	}
-
-	userID, err := resolveMentionUserID(mc)
-	if err != nil {
-		return SourceMentionedResult{}, err
 	}
 
 	byProject, stage1Errs := queryMentionCandidates(mc)
@@ -153,16 +155,6 @@ func SourceMentioned(mc *MultiClient, now time.Time) (SourceMentionedResult, err
 	errs = append(errs, stage1Errs...)
 	errs = append(errs, stage2Errs...)
 	return result, &PartialError{Failed: len(stage1Errs), Total: projectCount, Errors: errs}
-}
-
-// resolveMentionUserID fetches the authenticated user's id for stage 2's
-// targetId comparison. Stage 2 cannot confirm a single mention without it, so
-// a failure here aborts before stage 1 does any work — see
-// resolveAuthenticatedUserID (notifications_source_identity.go), which
-// SourceCIFailed shares, for why an empty id is rejected rather than passed
-// through.
-func resolveMentionUserID(mc *MultiClient) (string, error) {
-	return resolveAuthenticatedUserID(mc)
 }
 
 // queryMentionCandidates fans stage 1 out to every project concurrently,

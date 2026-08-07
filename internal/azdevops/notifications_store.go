@@ -206,6 +206,38 @@ func (s *TriageStore) Replace(newState TriageState) {
 	s.mu.Unlock()
 }
 
+// Swap holds the lock across a full read-compute-write sequence: fn receives
+// a deep-copy snapshot of the current state and returns the state to store in
+// its place, all inside one critical section. It exists for callers whose new
+// state is computed *from* the current state, rather than mutated into it in
+// place — Adapter.list's Reconcile call, chiefly.
+//
+// State() -> compute -> Replace() looks equivalent but is three separate
+// lock acquisitions, so a concurrent Apply (e.g. a user's MarkRead) landing
+// between the State() snapshot and the Replace() write is silently discarded
+// the moment Replace overwrites the whole map with a newState computed from
+// an already-stale snapshot (task 8 review, 🟡 finding 5). Swap closes that
+// window: fn runs, and the result is stored, without ever releasing mu in
+// between, so no Apply can interleave.
+func (s *TriageStore) Swap(fn func(TriageState) TriageState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = TriageState{}
+	}
+	current := s.state.clone()
+	newState := fn(current)
+	if newState == nil {
+		newState = TriageState{}
+	}
+	// Store a deep copy, not fn's live return value — same reasoning as
+	// Replace's own doc comment: aliasing it here would let a caller that
+	// kept a reference to the map it returned race the store's own
+	// subsequent reads/writes of s.state.
+	s.state = newState.clone()
+	s.markDirtyLocked()
+}
+
 // markDirtyLocked marks the state dirty, bumps the generation counter and
 // (re-)arms the debounce timer. Must be called with s.mu held.
 func (s *TriageStore) markDirtyLocked() {

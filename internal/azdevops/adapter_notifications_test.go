@@ -53,13 +53,42 @@ func TestAdapter_List_NilClient_ReturnsDescriptiveError(t *testing.T) {
 	}
 }
 
+// TestAdapter_List_NilStore_ReturnsDescriptiveError pins task 8 review's 🔴
+// finding 1: the zero-value *Adapter from a bare NewAdapter(mc) still
+// satisfies provider.NotificationSource by method set alone (Go's
+// structural typing does not care that notifStore was never wired up), so
+// list's own nil-notifStore guard — not a panic, not a silently-forever-
+// empty feed with no error — is what a caller relying on that structural
+// typing (the composite provider's Notifications tab capability check)
+// actually gets back. mc is deliberately non-nil here (a real, reachable
+// client) so this exercises the notifStore guard specifically, distinct
+// from TestAdapter_List_NilClient_ReturnsDescriptiveError above.
+func TestAdapter_List_NilStore_ReturnsDescriptiveError(t *testing.T) {
+	server := newComposerServer(t, newComposerFixture(time.Now().UTC().Truncate(time.Second)))
+	defer server.Close()
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, composerTestUserID)
+
+	a := NewAdapterWithNotifications(mc, nil, 0, DefaultNotificationSourceToggles())
+	got, err := a.List(provider.NotifOpts{})
+	if err == nil {
+		t.Fatal("List() error = nil, want a descriptive error for a nil store")
+	}
+	if got != nil {
+		t.Fatalf("List() result = %+v, want nil alongside the error", got)
+	}
+	if want := "azdevops: notifications: not configured"; err.Error() != want {
+		t.Errorf("List() error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestAdapter_MarkRead_NilStore_ReturnsDescriptiveError(t *testing.T) {
 	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles())
 	err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/1"})
 	if err == nil {
 		t.Fatal("MarkRead() error = nil, want a descriptive error for a nil store")
 	}
-	if want := "azdevops: mark read: no notifications store configured"; err.Error() != want {
+	if want := "azdevops: mark read: notifications not configured"; err.Error() != want {
 		t.Errorf("MarkRead() error = %q, want %q", err.Error(), want)
 	}
 }
@@ -70,7 +99,7 @@ func TestAdapter_MarkDone_NilStore_ReturnsDescriptiveError(t *testing.T) {
 	if err == nil {
 		t.Fatal("MarkDone() error = nil, want a descriptive error for a nil store")
 	}
-	if want := "azdevops: mark done: no notifications store configured"; err.Error() != want {
+	if want := "azdevops: mark done: notifications not configured"; err.Error() != want {
 		t.Errorf("MarkDone() error = %q, want %q", err.Error(), want)
 	}
 }
@@ -173,13 +202,18 @@ func TestAdapter_MarkDone_UpdatesLocalTriageState(t *testing.T) {
 //
 // failBuilds, when true, makes the /build/builds route return a 500 instead
 // of runs, modelling a genuine transport-level failure of exactly one
-// source without touching any of the others' routes.
+// source without touching any of the others' routes. failPRs is the same
+// idea for /git/pullrequests, used to model one project of a multi-project
+// MultiClient failing SourceReviewRequested's query while every other
+// route on that same project still answers normally (task 8 review, 🟡
+// finding 3's two-project fixture).
 type composerFixture struct {
 	prs             []PullRequest
 	workItem        WorkItem
 	mentionComments []WorkItemComment
 	runs            []PipelineRun
 	failBuilds      bool
+	failPRs         bool
 }
 
 func newComposerServer(t *testing.T, f *composerFixture) *httptest.Server {
@@ -217,6 +251,11 @@ func newComposerServer(t *testing.T, f *composerFixture) *httptest.Server {
 		}
 
 		if strings.Contains(path, "/git/pullrequests") {
+			if f.failPRs {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"message":"boom"}`))
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			resp := struct {
 				Value []PullRequest `json:"value"`
@@ -386,6 +425,53 @@ func TestAdapter_List_OneSourceFails_Degrades(t *testing.T) {
 	}
 }
 
+// TestAdapter_List_PartialProjectFailure_KeepsSurvivingProjectRows pins task
+// 8 review's 🟡 finding 3: runSourcesConcurrently's
+// `rows = append(rows, r.rows...)` must run unconditionally, even for a
+// source whose result carries a non-nil error alongside real rows (Azure's
+// own rows-plus-*PartialError contract — see
+// SourceReviewRequested/MultiClient.ListPullRequestsAsReviewerForUser's doc
+// comments). newComposerAdapter's single-project fixture can never exercise
+// this: with one project, a query either fully succeeds or fully fails,
+// there is no "some projects gave rows, one didn't" case to absorb. This
+// test is the two-project fixture that closes that gap: "alpha" is healthy,
+// "beta" 500s specifically on /git/pullrequests (SourceReviewRequested)
+// while answering every other route (wiql, workitems, comments, builds)
+// with valid empty results, so only SourceReviewRequested's beta half
+// fails — the other three sources see beta as a legitimate zero-row
+// project, not an error.
+func TestAdapter_List_PartialProjectFailure_KeepsSurvivingProjectRows(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	alphaServer := newComposerServer(t, newComposerFixture(now))
+	defer alphaServer.Close()
+
+	betaServer := newComposerServer(t, &composerFixture{failPRs: true})
+	defer betaServer.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{
+		"alpha": alphaServer,
+		"beta":  betaServer,
+	})
+	setUserIDs(mc, composerTestUserID)
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, DefaultNotificationSourceToggles())
+
+	rows, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("list() error = %v, want nil (beta's SourceReviewRequested failure alone must not propagate — alpha and the other three sources are healthy)", err)
+	}
+
+	found := false
+	for _, row := range rows {
+		if row.Identity.ID == "review/pr/42" && row.Identity.Scope == "alpha" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("rows = %v, want alpha's review/pr/42 present despite beta's ListPullRequestsAsReviewerForUser 500 (a rows-plus-error result must still contribute its rows)", identityIDs(rows))
+	}
+}
+
 // TestAdapter_List_AllSourcesFail_ReturnsError pins the other half of the
 // absorb-or-propagate contract: when every source fails, the caller must see
 // an error, never an empty slice masquerading as "you're all caught up".
@@ -407,6 +493,45 @@ func TestAdapter_List_AllSourcesFail_ReturnsError(t *testing.T) {
 	}
 	if rows != nil {
 		t.Fatalf("list() rows = %+v, want nil alongside the error", rows)
+	}
+	if want := "azdevops: notifications: all 4 sources failed:"; !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("list() error = %q, want it to start with %q (provider-attributed, matching every other error in this package)", err.Error(), want)
+	}
+}
+
+// TestAdapter_List_AllRowsTriagedAway_ReturnsEmptyFeedNotError pins task 8
+// review's 🟡 finding 4: the absorb-or-propagate decision must be keyed on
+// how many *sources* succeeded, not on how many rows the poll happened to
+// return. Here every one of the four sources answers successfully, but
+// every subject they surface has already been marked done in a prior poll
+// — a legitimate "you're all caught up" empty feed, not an outage, and
+// list must return (empty, nil), never an error, purely because
+// len(reconciled) == 0.
+func TestAdapter_List_AllRowsTriagedAway_ReturnsEmptyFeedNotError(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f := newComposerFixture(now)
+	a, server := newComposerAdapter(t, f)
+	defer server.Close()
+
+	rows, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("first list() error = %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("first list() returned no rows to triage away — fixture is not producing the expected subjects")
+	}
+	for _, row := range rows {
+		if err := a.MarkDone(row.Identity); err != nil {
+			t.Fatalf("MarkDone(%+v): %v", row.Identity, err)
+		}
+	}
+
+	rows2, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("second list() error = %v, want nil (every source succeeded; zero rows is a legitimate empty feed, not a failure)", err)
+	}
+	if len(rows2) != 0 {
+		t.Fatalf("second list() rows = %+v, want none — every subject was marked done", rows2)
 	}
 }
 
@@ -466,5 +591,99 @@ func TestAdapter_List_HonoursMax(t *testing.T) {
 	wantIDs := []string{"mention/wi/100", "review/pr/42"}
 	if got := identityIDs(rows); !equalStrings(got, wantIDs) {
 		t.Errorf("rows = %v, want the 2 newest %v", got, wantIDs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NotificationSourceToggles field-false coverage. Every test above this
+// point uses DefaultNotificationSourceToggles() (all four true); nothing in
+// this package otherwise exercises a single toggle set to false, let alone
+// all four, leaving runSourcesConcurrently's per-toggle `if` branches (and
+// its userID-resolve skip when none of the three id-dependent sources are
+// enabled) unpinned.
+// ---------------------------------------------------------------------------
+
+// TestAdapter_List_CIFailedToggleOff_ExcludesSourceFromFeed pins that a
+// single disabled source is excluded from the merged feed even though its
+// fixture data would otherwise produce a row, and that the other three
+// sources are unaffected.
+func TestAdapter_List_CIFailedToggleOff_ExcludesSourceFromFeed(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f := newComposerFixture(now)
+	server := newComposerServer(t, f)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, composerTestUserID)
+	toggles := DefaultNotificationSourceToggles()
+	toggles.CIFailed = false
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, toggles)
+
+	rows, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("list() error = %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("len(rows) = %d, want 3 (cifail excluded by its toggle): %+v", len(rows), identityIDs(rows))
+	}
+	for _, row := range rows {
+		if row.Identity.ID == "cifail/run/7" {
+			t.Errorf("cifail/run/7 present with CIFailed toggled off: %+v", identityIDs(rows))
+		}
+	}
+}
+
+// TestAdapter_List_AllTogglesOff_ReturnsEmptyFeedNotError pins list's
+// jobCount == 0 absorb branch (task 8 review, 🟡 finding 4): with every
+// source disabled, runSourcesConcurrently runs zero jobs and skips the
+// userID resolve entirely, and list must treat that as "every enabled
+// source succeeded" (there were none to fail) rather than propagating an
+// error.
+func TestAdapter_List_AllTogglesOff_ReturnsEmptyFeedNotError(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	f := newComposerFixture(now)
+	server := newComposerServer(t, f)
+	defer server.Close()
+
+	// No userID stamped on the client at all: if runSourcesConcurrently's
+	// toggle-off resolve skip regressed, this would fail closed with a
+	// resolveAuthenticatedUserID error over the network instead of quietly
+	// producing an empty feed, catching the regression outright.
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, NotificationSourceToggles{})
+
+	rows, err := a.list(provider.NotifOpts{}, now)
+	if err != nil {
+		t.Fatalf("list() error = %v, want nil (zero enabled sources is a legal empty feed, not a failure)", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("list() rows = %+v, want none — every source is disabled", rows)
+	}
+}
+
+// TestSortNotificationsDeterministically_TieBreaksOnScopeThenID pins the
+// two tie-break branches sortNotificationsDeterministically's own doc
+// comment claims but nothing previously exercised: every other test's
+// fixture rows carry distinct UpdatedAt stamps, so ties never reach the
+// Scope/ID comparisons at all.
+func TestSortNotificationsDeterministically_TieBreaksOnScopeThenID(t *testing.T) {
+	same := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "beta", ID: "review/pr/1"}, UpdatedAt: same},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/2"}, UpdatedAt: same},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/1"}, UpdatedAt: same},
+	}
+
+	sortNotificationsDeterministically(rows)
+
+	want := []string{"review/pr/1", "review/pr/2", "review/pr/1"}
+	wantScopes := []string{"alpha", "alpha", "beta"}
+	for i, row := range rows {
+		if row.Identity.Scope != wantScopes[i] {
+			t.Fatalf("rows[%d].Identity.Scope = %q, want %q (order: %v)", i, row.Identity.Scope, wantScopes[i], identityIDs(rows))
+		}
+		if row.Identity.ID != want[i] {
+			t.Fatalf("rows[%d].Identity.ID = %q, want %q (order: %v)", i, row.Identity.ID, want[i], identityIDs(rows))
+		}
 	}
 }

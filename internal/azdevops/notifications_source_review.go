@@ -10,12 +10,21 @@ import (
 
 // SourceReviewRequested implements the "PRs awaiting my review" notification
 // source (task 4 of the phase-2 notifications spec) → provider.
-// NotificationReasonReviewRequested. It reuses MultiClient.
-// ListPullRequestsAsReviewer verbatim — no new client method — and maps every
-// returned PR to a provider.Notification.
+// NotificationReasonReviewRequested. It calls MultiClient.
+// ListPullRequestsAsReviewerForUser with an already-resolved userID — no new
+// client method beyond that — and maps every returned PR to a
+// provider.Notification.
 //
-// top bounds ListPullRequestsAsReviewer's own per-project page size, the same
-// contract every other MultiClient caller uses.
+// userID is resolved once by the caller (runSourcesConcurrently, via
+// resolveAuthenticatedUserID) rather than by this function: SourceMentioned
+// and SourceCIFailed need the very same id at the very same time, and each
+// independently calling the plain, self-resolving
+// MultiClient.ListPullRequestsAsReviewer / Client.GetCurrentUserID would race
+// Client.userID's unsynchronized cache field when they land on the same
+// *Client in the common single-project case (task 8 review, 🔴 finding 2).
+//
+// top bounds ListPullRequestsAsReviewerForUser's own per-project page size,
+// the same contract every other MultiClient caller uses.
 //
 // The row's Read/Done fields are left at their zero value here: this function
 // only computes the freshly-queried subject, the same shape Reconcile (see
@@ -26,19 +35,19 @@ import (
 // future (see prActivityStamp's doc comment) while staying testable — it is
 // never read from time.Now() internally, matching Reconcile's own style.
 //
-// A partial multi-project failure (MultiClient.ListPullRequestsAsReviewer
+// A partial multi-project failure (MultiClient.ListPullRequestsAsReviewerForUser
 // returning rows alongside a *PartialError) must not discard the rows it did
 // get: the rest of the codebase honours that rows-plus-PartialError contract
 // explicitly (internal/ui/pullrequests/list.go:154 and :193), and dropping
 // the rows here would also starve Reconcile of LastSeen updates for every
 // subject a healthy project still returned, TTL-pruning and resurrecting
 // dismissed rows on sustained partial failure.
-func SourceReviewRequested(mc *MultiClient, top int, now time.Time) ([]provider.Notification, error) {
+func SourceReviewRequested(mc *MultiClient, userID string, top int, now time.Time) ([]provider.Notification, error) {
 	if mc == nil {
 		return nil, fmt.Errorf("no client configured")
 	}
 
-	prs, err := mc.ListPullRequestsAsReviewer(top)
+	prs, err := mc.ListPullRequestsAsReviewerForUser(userID, top)
 	if err != nil {
 		var partialErr *PartialError
 		if !errors.As(err, &partialErr) {

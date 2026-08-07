@@ -89,10 +89,12 @@ func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDa
 
 // List implements provider.NotificationSource. It is a thin wrapper around
 // list: time.Now() is read exactly once, here, and threaded through as a
-// parameter to every source, to Reconcile and to MarkRead/MarkDone's callers
-// indirectly via the state list writes back. Nothing below this method reads
-// the wall clock directly, which is what keeps list fully testable against
-// an injected now.
+// parameter to every source and to Reconcile. Nothing below this method
+// reads the wall clock directly, which is what keeps list fully testable
+// against an injected now. MarkRead and MarkDone are a separate boundary,
+// not fed by this now: each reads time.Now() directly (see MarkRead's own
+// doc comment for why that is safe), since neither is ever called from
+// List's call path.
 //
 // opts.ParticipatingOnly and opts.Since are accepted for interface
 // compliance but not used: all four sources already narrow server-side by
@@ -109,39 +111,55 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 
 // list is List's internal, fully-testable implementation.
 //
-// Absorb-or-propagate contract (task 8 of the phase-2 notifications spec,
-// resolved 2026-08-07): the four sources run concurrently via
-// runSourcesConcurrently; if at least one row survives across however many
-// sources failed outright, this method returns (rows, nil) rather than
-// discarding those rows — exactly the rule internal/provider/composite.go
-// already enforces one layer up for backends (decision 20), restated here
-// because a source is to this adapter what a backend is to the composite,
-// and phase 1 lost a defect to exactly this gap. Only when every source
-// fails — or when every enabled source legitimately returns nothing — does
-// this method return either an error or an honestly empty slice.
+// Absorb-or-propagate contract (task 8 of the phase-2 notifications spec;
+// corrected 2026-08-07, same day, from this method's own first review): the
+// four sources run concurrently via runSourcesConcurrently, which reports
+// how many of them ran (jobCount) alongside their rows and errors. This
+// method returns (rows, nil) whenever at least one source *succeeded* —
+// jobCount == 0 (every source disabled) trivially counts as every enabled
+// source succeeding — and propagates an error only when every source that
+// ran failed outright (len(errs) == jobCount, jobCount > 0). This is
+// deliberately keyed on how many sources answered, not on how many rows came
+// back: a poll where every source succeeds but the user has already triaged
+// every subject away legitimately returns zero rows, and that is a feed, not
+// an outage — collapsing that case to an error would be wrong exactly the
+// way returning an error whenever len(rows) happens to be zero would be.
+// This mirrors the rule internal/provider/composite.go already enforces one
+// layer up for backends (decision 20): a source is to this adapter what a
+// backend is to the composite.
 //
 // Local triage state (read/done) is folded into the returned rows' Read/Done
 // fields here, at this boundary, via Reconcile — nothing above this method
 // may learn that Azure's read state is tracked locally rather than on the
-// server (phase 1's unread-semantics constraint).
+// server (phase 1's unread-semantics constraint). The read (State), compute
+// (Reconcile) and write (the new state) are done inside one TriageStore.Swap
+// call, not as three separate lock acquisitions, so a concurrent MarkRead or
+// MarkDone landing mid-poll is never silently lost underneath this method's
+// own write (task 8 review, 🟡 finding 5).
 func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notification, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("azdevops: notifications: no client configured")
 	}
-
-	rows, errs := a.runSourcesConcurrently(now)
-
-	stored := TriageState{}
-	if a.notifStore != nil {
-		stored = a.notifStore.State()
+	if a.notifStore == nil {
+		// Mirrors github.Adapter.List's nil-nc guard (internal/github/adapter.go),
+		// which returns "github: notifications: no notifications client
+		// configured" — worded here without the word "store" so that, per
+		// MarkRead/MarkDone's own guard below, nothing above this boundary
+		// can infer from an error string that Azure's read state happens to
+		// be tracked locally rather than on the server.
+		return nil, fmt.Errorf("azdevops: notifications: not configured")
 	}
-	reconciled, newState := Reconcile(rows, stored, now)
+
+	rows, errs, jobCount := a.runSourcesConcurrently(now)
+
+	var reconciled []provider.Notification
+	a.notifStore.Swap(func(stored TriageState) TriageState {
+		var newState TriageState
+		reconciled, newState = Reconcile(rows, stored, now)
+		return newState
+	})
 
 	sortNotificationsDeterministically(reconciled)
-
-	if a.notifStore != nil {
-		a.notifStore.Replace(newState)
-	}
 
 	if opts.Max > 0 && len(reconciled) > opts.Max {
 		// Full slice expression caps capacity as well as length, so the
@@ -151,16 +169,14 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 		reconciled = reconciled[:opts.Max:opts.Max]
 	}
 
-	if len(errs) == 0 {
+	if jobCount == 0 || len(errs) < jobCount {
+		// Absorb: every enabled source succeeded (possibly zero of them, a
+		// legal all-toggles-off empty feed), or enough of them did that at
+		// least one contributed. See this method's doc comment for why this
+		// is keyed on source count, not on len(reconciled).
 		return reconciled, nil
 	}
-	if len(reconciled) > 0 {
-		// Absorb: at least one row survived the sources that did succeed.
-		// Degrading to a shorter feed beats emptying it — see this method's
-		// doc comment.
-		return reconciled, nil
-	}
-	return nil, errors.Join(errs...)
+	return nil, fmt.Errorf("azdevops: notifications: all %d sources failed: %w", len(errs), errors.Join(errs...))
 }
 
 // sourceResult is one source's raw outcome, kept together so
@@ -178,21 +194,60 @@ type sourceResult struct {
 // below is determined solely by job index (review, mentioned, assigned,
 // ci_failed, skipping any disabled source), never by goroutine completion
 // order. sortNotificationsDeterministically imposes the actual returned
-// ordering guarantee on top of this; this function only guarantees the
-// fan-out itself is race-free and index-deterministic.
+// ordering guarantee on top of this. jobCount (== len(jobs)) is returned
+// alongside rows and errs so list can key its absorb-or-propagate decision on
+// how many sources actually ran, not on how many rows survived — see list's
+// doc comment.
 //
 // now is threaded straight through to every source; this method never calls
 // time.Now() itself.
-func (a *Adapter) runSourcesConcurrently(now time.Time) ([]provider.Notification, []error) {
+//
+// The authenticated user id is resolved exactly once, here, before any
+// source's goroutine starts, and threaded into the three sources that need
+// it (ReviewRequested, Mentioned, CIFailed — Assigned narrows server-side via
+// a WIQL @Me macro instead and needs no id at all). This method is not
+// race-free by construction alone; it is race-free because it removes the
+// only shared mutable state the three concurrent sources would otherwise
+// touch. Before this fix, all three called Client.GetCurrentUserID
+// independently, and in the common single-project case that meant three
+// goroutines racing the same *Client's unsynchronized userID cache field —
+// one goroutine's unsynchronized write landing between another's
+// unsynchronized read-check and its own write is a real data race, not a
+// theoretical one (task 8 review, 🔴 finding 2). Resolving once here also
+// drops two of the three redundant connectionData HTTP round-trips per poll
+// this used to cost, and removes the resulting nondeterminism of which
+// project's client happened to win the race to populate the cache first. A
+// resolution failure here — mc has no reachable client, or the resolved id is
+// empty — is reported once, tagged onto each of the three id-dependent jobs
+// rather than aborting the whole poll, so a healthy Assigned source (which
+// needs no id) still runs and contributes its rows.
+//
+// The resolve call itself is skipped entirely when none of the three
+// id-dependent sources are enabled (e.g. a config running only Assigned, or
+// every toggle off) — there is no point spending an HTTP round trip on an id
+// nothing in this poll will use.
+func (a *Adapter) runSourcesConcurrently(now time.Time) ([]provider.Notification, []error, int) {
+	var userID string
+	var userIDErr error
+	if a.notifSources.ReviewRequested || a.notifSources.Mentioned || a.notifSources.CIFailed {
+		userID, userIDErr = resolveAuthenticatedUserID(a.mc)
+	}
+
 	var jobs []func() ([]provider.Notification, error)
 
 	if a.notifSources.ReviewRequested {
 		jobs = append(jobs, func() ([]provider.Notification, error) {
-			return SourceReviewRequested(a.mc, reviewRequestedQueryTop, now)
+			if userIDErr != nil {
+				return nil, userIDErr
+			}
+			return SourceReviewRequested(a.mc, userID, reviewRequestedQueryTop, now)
 		})
 	}
 	if a.notifSources.Mentioned {
 		jobs = append(jobs, func() ([]provider.Notification, error) {
+			if userIDErr != nil {
+				return nil, userIDErr
+			}
 			// SourceMentionedResult also carries CandidatesDropped,
 			// CandidateLimit and CommentFetchFailures — structured
 			// diagnostics about how much of stage 1's candidate fan-out was
@@ -205,7 +260,7 @@ func (a *Adapter) runSourcesConcurrently(now time.Time) ([]provider.Notification
 			// deliberate, not an oversight — widening NotificationSource
 			// with a warnings channel is recorded under the phase-2 spec's
 			// "Unknowns" section for Oscar to decide, not invented here.
-			res, err := SourceMentioned(a.mc, now)
+			res, err := SourceMentioned(a.mc, userID, now)
 			return res.Rows, err
 		})
 	}
@@ -216,7 +271,10 @@ func (a *Adapter) runSourcesConcurrently(now time.Time) ([]provider.Notification
 	}
 	if a.notifSources.CIFailed {
 		jobs = append(jobs, func() ([]provider.Notification, error) {
-			return SourceCIFailed(a.mc, a.notifLookbackDays, ciFailedQueryTop, now)
+			if userIDErr != nil {
+				return nil, userIDErr
+			}
+			return SourceCIFailed(a.mc, userID, a.notifLookbackDays, ciFailedQueryTop, now)
 		})
 	}
 
@@ -240,7 +298,7 @@ func (a *Adapter) runSourcesConcurrently(now time.Time) ([]provider.Notification
 			errs = append(errs, r.err)
 		}
 	}
-	return rows, errs
+	return rows, errs, len(jobs)
 }
 
 // sortNotificationsDeterministically sorts merged rows by UpdatedAt
@@ -272,19 +330,25 @@ func sortNotificationsDeterministically(rows []provider.Notification) {
 // Notification.Read/Done at the List boundary, so marking read here means
 // writing the local TriageStore, not issuing an HTTP call.
 //
-// Provisional (task 8): for an id Reconcile has never seen (no existing
-// entry), this writes LastActivity as time.Now() — only an approximation of
-// the row's own UpdatedAt, since MarkRead's fixed provider.Identity-only
-// signature carries no such timestamp. Reconcile's own doc comment records
-// the invariant this must eventually satisfy in full (an entry written
-// outside Reconcile must carry a LastActivity at least as new as the row it
-// was marked from, or the very next poll's "strictly newer" branch clears
-// the mark within one interval) as "task 9's problem" — hardening this,
-// which may require widening this method's signature, is explicitly out of
-// scope for task 8.
+// For an id Reconcile has never seen (no existing entry), this writes
+// LastActivity as time.Now() — an approximation of the row's own UpdatedAt,
+// since MarkRead's fixed provider.Identity-only signature carries no such
+// timestamp. This approximation is safe, not merely provisional: every
+// source clamps its own activity stamp to the now it was given (see
+// prActivityStamp, mentionActivityStamp, assignedActivityStamp,
+// ciFailedActivityStamp), and MarkRead can only ever be called by a UI that
+// is reacting to a row rendered from some earlier List(now) call — so
+// MarkRead's own time.Now() is always later than the now that bounded that
+// row's stamp. That means the LastActivity written here is always >= the
+// row's own UpdatedAt, which is exactly the invariant Reconcile's "strictly
+// newer" branch needs to not immediately re-clear the mark it just set on
+// the very next poll. Task 9 still owns hardening the store's schema more
+// generally (e.g. an opaque resurrection token, for cases beyond this
+// method's reach); this comment records why the current approximation does
+// not itself need that hardening to be correct.
 func (a *Adapter) MarkRead(id provider.Identity) error {
 	if a.notifStore == nil {
-		return fmt.Errorf("azdevops: mark read: no notifications store configured")
+		return fmt.Errorf("azdevops: mark read: notifications not configured")
 	}
 	if id.Kind != provider.KindAzure {
 		return fmt.Errorf("azdevops: mark read: identity kind %q is not %q", id.Kind, provider.KindAzure)
@@ -308,14 +372,14 @@ func (a *Adapter) MarkRead(id provider.Identity) error {
 }
 
 // MarkDone marks id as done in local triage state. See MarkRead's doc
-// comment: the nil-store guard, the Kind check and the provisional
-// LastActivity approximation are all shared and not repeated here. A done
-// entry is dropped from the very next List call by Reconcile
+// comment: the nil-store guard, the Kind check and the LastActivity
+// approximation (and why it is safe) are all shared and not repeated here. A
+// done entry is dropped from the very next List call by Reconcile
 // (notifications_reconcile.go) — there is no server-side delete to issue for
 // an Azure-sourced row.
 func (a *Adapter) MarkDone(id provider.Identity) error {
 	if a.notifStore == nil {
-		return fmt.Errorf("azdevops: mark done: no notifications store configured")
+		return fmt.Errorf("azdevops: mark done: notifications not configured")
 	}
 	if id.Kind != provider.KindAzure {
 		return fmt.Errorf("azdevops: mark done: identity kind %q is not %q", id.Kind, provider.KindAzure)

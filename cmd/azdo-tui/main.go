@@ -287,6 +287,7 @@ func runTUI() error {
 
 	var backends []provider.Provider
 	var azureMC *azdevops.MultiClient
+	var azureNotifStore *azdevops.TriageStore
 
 	// --- Azure backend (only when fully configured) ---
 	if cfg.HasAzure() {
@@ -307,7 +308,27 @@ func runTUI() error {
 			return fmt.Errorf("failed to create Azure DevOps client: %w", err)
 		}
 		azureMC = client
-		backends = append(backends, azdevops.NewAdapter(client))
+
+		// NewAdapter alone (bare, no notifications store) still satisfies
+		// provider.NotificationSource by method set — Go's structural typing
+		// does not care that its notifStore field is left at its zero value.
+		// That would make the Notifications tab appear for an Azure-only
+		// config while List's nil-store guard makes every poll fail
+		// (azdevops.Adapter.list's own doc comment, task 8 review, 🔴
+		// finding 1). NewAdapterWithNotifications is what actually wires the
+		// local read/done triage store notifications need.
+		notifPath, err := azdevops.NotifStorePath()
+		if err != nil {
+			return fmt.Errorf("resolve notifications state path: %w", err)
+		}
+		notifStore, err := azdevops.NewTriageStore(notifPath)
+		if err != nil {
+			return fmt.Errorf("load notifications state: %w", err)
+		}
+		azureNotifStore = notifStore
+
+		backends = append(backends, azdevops.NewAdapterWithNotifications(
+			client, notifStore, 0, azdevops.DefaultNotificationSourceToggles()))
 	}
 
 	// --- GitHub backend (only when at least one repo is configured) ---
@@ -375,6 +396,11 @@ func runTUI() error {
 		signal.Stop(sigCh)
 		if flushErr := stateStore.Flush(); flushErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to persist state: %v\n", flushErr)
+		}
+		if azureNotifStore != nil {
+			if flushErr := azureNotifStore.Flush(); flushErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to persist notifications state: %v\n", flushErr)
+			}
 		}
 	}()
 

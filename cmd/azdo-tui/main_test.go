@@ -101,3 +101,85 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 		t.Error("expected runTUI to construct the user-scoped client via github.NewNotificationsClient, found no such call")
 	}
 }
+
+// TestRunTUI_UsesAzureAdapterWithNotifications mirrors
+// TestRunTUI_UsesGitHubAdapterWithNotifications above for the Azure DevOps
+// backend: runTUI must construct the adapter via
+// azdevops.NewAdapterWithNotifications (which also wires an
+// azdevops.TriageStore) rather than the notifications-less
+// azdevops.NewAdapter. Without this, the zero-value *Adapter still
+// satisfies provider.NotificationSource by method set alone — Go's
+// structural typing does not care that notifStore was never wired up — so
+// the Notifications tab shows up for an Azure-only config while every List
+// call fails closed with "azdevops: notifications: not configured" (task 8
+// review, 🔴 finding 1). As with the GitHub test, parsing the AST rather
+// than grepping source text keeps this immune to reformatting/reordering of
+// runTUI while still failing the moment the wrong constructor is called.
+func TestRunTUI_UsesAzureAdapterWithNotifications(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve test file path via runtime.Caller")
+	}
+	mainFile := filepath.Join(filepath.Dir(thisFile), "main.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, mainFile, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", mainFile, err)
+	}
+
+	var (
+		sawNewAdapterWithNotifications bool
+		sawBareNewAdapter              bool
+		sawNewTriageStore              bool
+		notifAdapterArgCount           int
+		notifAdapterSecondArgIsNil     bool
+	)
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkgIdent, ok := sel.X.(*ast.Ident)
+		if !ok || pkgIdent.Name != "azdevops" {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "NewAdapterWithNotifications":
+			sawNewAdapterWithNotifications = true
+			notifAdapterArgCount = len(call.Args)
+			if len(call.Args) >= 2 {
+				if id, ok := call.Args[1].(*ast.Ident); ok && id.Name == "nil" {
+					notifAdapterSecondArgIsNil = true
+				}
+			}
+		case "NewAdapter":
+			sawBareNewAdapter = true
+		case "NewTriageStore":
+			sawNewTriageStore = true
+		}
+		return true
+	})
+
+	if !sawNewAdapterWithNotifications {
+		t.Fatal("expected runTUI to call azdevops.NewAdapterWithNotifications to construct the Azure DevOps backend, found no such call")
+	}
+	if sawBareNewAdapter {
+		t.Error("runTUI must not call azdevops.NewAdapter (leaves the notifications store nil, and the zero-value *Adapter still satisfies provider.NotificationSource by method set alone); use azdevops.NewAdapterWithNotifications instead")
+	}
+
+	if notifAdapterArgCount != 4 {
+		t.Errorf("azdevops.NewAdapterWithNotifications called with %d args, want 4 (MultiClient, *TriageStore, lookbackDays, NotificationSourceToggles)", notifAdapterArgCount)
+	}
+	if notifAdapterSecondArgIsNil {
+		t.Error("azdevops.NewAdapterWithNotifications's second argument must not be nil — a nil TriageStore makes every notifications List call fail with \"azdevops: notifications: not configured\" while the tab still shows up under the capability check")
+	}
+	if !sawNewTriageStore {
+		t.Error("expected runTUI to construct the local triage store via azdevops.NewTriageStore, found no such call")
+	}
+}

@@ -72,7 +72,7 @@ func TestSourceCIFailed_MapsFailedRunToNotification(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 14, 50, now)
+	rows, err := SourceCIFailed(mc, "user-1", 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSourceCIFailed_ReasonIsCIActivity_AssertedByName(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 14, 50, now)
+	rows, err := SourceCIFailed(mc, "user-1", 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestSourceCIFailed_NegativeID_ProducesEmptyIdentityID(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 14, 50, now)
+	rows, err := SourceCIFailed(mc, "user-1", 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestSourceCIFailed_ThreadsLookbackDaysToTheQuery(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, "user-1")
 
-	if _, err := SourceCIFailed(mc, 3, 50, time.Now().UTC()); err != nil {
+	if _, err := SourceCIFailed(mc, "user-1", 3, 50, time.Now().UTC()); err != nil {
 		t.Fatalf("SourceCIFailed failed: %v", err)
 	}
 
@@ -207,7 +207,7 @@ func TestSourceCIFailed_ThreadsLookbackDaysToTheQuery(t *testing.T) {
 }
 
 func TestSourceCIFailed_NilMultiClient_ReturnsError(t *testing.T) {
-	_, err := SourceCIFailed(nil, 14, 50, time.Now())
+	_, err := SourceCIFailed(nil, "", 14, 50, time.Now())
 	if err == nil {
 		t.Fatal("expected error for nil MultiClient")
 	}
@@ -241,7 +241,7 @@ func TestSourceCIFailed_PropagatesListError(t *testing.T) {
 	})
 	setUserIDs(mc, "user-1")
 
-	rows, err := SourceCIFailed(mc, 14, 50, now)
+	rows, err := SourceCIFailed(mc, "user-1", 14, 50, now)
 	if err == nil {
 		t.Fatal("expected error to propagate from ListPipelineRuns")
 	}
@@ -317,9 +317,11 @@ func TestIsMyFailedRun(t *testing.T) {
 		{
 			// Finding 6 of task 7's review: an empty userID must not match
 			// every run with an absent RequestedFor.ID (both would compare
-			// "" == ""). resolveCIFailedUserID rejects an empty id before
-			// this function's callers ever run it, but the guard belongs
-			// here too, on the identity-comparison call site itself.
+			// "" == ""). guardNonEmptyUserID (notifications_source_identity.go)
+			// rejects an empty id before SourceCIFailed's caller
+			// (runSourcesConcurrently, which resolves it once for every
+			// source) ever hands one down, but the guard belongs here too,
+			// on the identity-comparison call site itself.
 			name:   "empty userID: excluded even against a run with no RequestedFor.ID",
 			run:    PipelineRun{Status: "completed", Result: "failed", RequestedFor: Identity{ID: ""}},
 			userID: "",
@@ -469,7 +471,7 @@ func TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow(t *testing.T)
 	setUserIDs(mc, "user-1")
 
 	now := finish.Add(time.Hour)
-	rows, err := SourceCIFailed(mc, 14, 50, now)
+	rows, err := SourceCIFailed(mc, "user-1", 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed (poll 1) failed: %v", err)
 	}
@@ -493,7 +495,7 @@ func TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow(t *testing.T)
 	setUserIDs(mc2, "user-1")
 
 	pollNow := now.Add(time.Minute)
-	rows2, err := SourceCIFailed(mc2, 14, 50, pollNow)
+	rows2, err := SourceCIFailed(mc2, "user-1", 14, 50, pollNow)
 	if err != nil {
 		t.Fatalf("SourceCIFailed (poll 2) failed: %v", err)
 	}
@@ -535,7 +537,7 @@ func TestSourceCIFailed_RerunFailsAgain_ResurfacesDismissedRow(t *testing.T) {
 	setUserIDs(mc, "user-1")
 
 	now := firstFinish.Add(time.Hour)
-	rows, err := SourceCIFailed(mc, 14, 50, now)
+	rows, err := SourceCIFailed(mc, "user-1", 14, 50, now)
 	if err != nil {
 		t.Fatalf("SourceCIFailed (poll 1) failed: %v", err)
 	}
@@ -562,7 +564,7 @@ func TestSourceCIFailed_RerunFailsAgain_ResurfacesDismissedRow(t *testing.T) {
 	setUserIDs(mc2, "user-1")
 
 	pollNow := rerunFinish.Add(time.Minute)
-	rows2, err := SourceCIFailed(mc2, 14, 50, pollNow)
+	rows2, err := SourceCIFailed(mc2, "user-1", 14, 50, pollNow)
 	if err != nil {
 		t.Fatalf("SourceCIFailed (poll 2, rerun) failed: %v", err)
 	}
