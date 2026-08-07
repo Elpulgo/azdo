@@ -2317,7 +2317,22 @@ other suggestion; rejected, because the wizard holds credentials in memory that
 was told not to judge. The reviewer's judgment, which I accept: **a latency trade,
 not a defect.** `List` reads `time.Now()` before locking, so a blocked caller's
 `now` is always ≤ the winner's `notifLastPollAt` and `notifThrottled` is always
-true when it finally acquires the lock — no ordering produces a double fetch. The
+true when it finally acquires the lock — no ordering produces a double fetch.
+
+**Corrected 2026-08-07 by the re-validation of `2b979ba`, which falsified that
+last sentence.** `notifLastPollAt` stores the winner's *entry-time* `now`, and
+the loser entered later, so the loser's `now` is strictly **larger**, not ≤. The
+real precondition is that the winner's whole round trip completes inside
+`min_poll_interval`. Falsified concretely at `min_poll_interval: 100ms` with the
+handler parked ~300ms: the winner issued 4 requests and the blocked caller then
+issued 3 more. At shipped defaults (300s against sub-second round trips) the
+precondition holds by a wide margin, so the trade stands and nothing about the
+behaviour changes — but it is a precondition, not a guarantee, and the doc must
+say which. The rest of the reasoning below survives unchanged. Recorded rather
+than quietly patched because the wrong version was *settled text in this
+section*, and an implementer copied it verbatim into `adapter.go`.
+
+The
 blocked caller gets the cache the winner *just wrote*, i.e. fresher data than an
 immediate cached return would give, so there is no staleness either (the one
 exception is cosmetic: if the winner takes the total-failure branch, the loser
@@ -2387,6 +2402,54 @@ releasing. That turns the property into the ordering claim it actually is — th
 mark completed while a request was parked inside the handler — needs no
 threshold, and pins the handshake the sleep currently only hopes for. Keep a
 generous `select` timeout so a real deadlock fails fast.
+
+### Round 2 — from the re-validation of `2b979ba` (2026-08-07)
+
+The fix commit closed 🔴 1, 🔴 2, 🟡 4, 🟢 5 and 🟢 7, each falsified by mutation
+rather than read. Three defects remain; see the dated subsection of
+`## Validation: task 14` for the reproductions.
+
+**R1 — `copyNotifications` is now dead in production (the task-13 class again).**
+`notifLastResult` has exactly one write (`adapter_notifications.go:269`) and one
+read (:270) and is referenced nowhere else. Replacing **both** `list()` returns
+with the bare slice and deleting `copyNotifications` outright still passes the
+whole `internal/azdevops` package — including
+`TestAdapter_List_Throttled_ReturnsCopyNotAlias`, whose comment claims "the only
+way that can hold is if the throttled path returns a genuine copy". The by-copy
+behaviour does still hold, but 🔴 1's fix moved *what delivers it*: both paths
+now return `Reconcile`'s freshly allocated slice of value copies, and 🟢 5's
+reflect guard is what keeps `provider.Notification` free of fields a caller could
+mutate through. Together those two are a stronger guarantee than the old copy
+was — but nothing says so, and a dead helper plus a test that passes for a reason
+other than the one it states is exactly what task 13 shipped past a clean
+validation.
+
+**Settled: delete `notifLastResult` and `copyNotifications`, and name the real
+mechanism.** Rewrite `TestAdapter_List_Throttled_ReturnsCopyNotAlias`'s comment to
+say the contract is delivered by `Reconcile` allocating fresh output over a
+`Notification` with no mutable-through fields, and add a test pinning `Reconcile`
+itself — that it never returns a slice aliasing its input — since that is now
+load-bearing and lives in another file where nobody editing it would know. Do not
+keep the helper "for safety": an uncalled copy defends nothing and the next
+reader has to re-derive that it is inert.
+
+**R2 — a surviving, non-equivalent mutant.** `>` → `>=` on the new
+`AzureMinPollIntervalMax` clamp survives `./internal/config` and `./cmd/...`. The
+implementer reported this as an equivalent mutant; it is not. The branch also
+appends to `cfg.Warnings`, so at exactly `86400` the mutant emits a user-visible
+`min_poll_interval: 86400 exceeds the 86400-second maximum — using 86400`. The
+"exactly at the clamp" row asserts only the resulting value; asserting
+`len(cfg.Warnings) == 0` on that row kills it. Worth carrying into the reflection
+step: **a claimed equivalent mutant deserves the same scepticism as a passing
+test** — this one was wrong because the analysis looked only at the value the
+branch computes and not at the side effect it also performs.
+
+**R3/R4/R5 — three false claims in the new `adapter.go` block.** R3 is the
+correction recorded above under 🟡 3, copied verbatim from this section into
+`adapter.go:57-66`; restate it as the round-trip precondition it actually is. R4:
+the same block still opens with `List` "returns its previous result unchanged",
+which is precisely what 🔴 1's fix stopped doing — it now re-reconciles. R5:
+"internal/app.go" should be `internal/app/app.go`.
 
 ### Confirmed correct, no action
 
