@@ -456,7 +456,7 @@ touching the code.
 | `review_requested` | open PRs where the authenticated user is a reviewer | `NotificationReasonReviewRequested` | `review/pr/<id>` |
 | `mentioned` | WIQL narrows candidate work items, then the Comments API confirms and timestamps each `@mention` (WIQL alone can't tell *when* the mention happened) | `NotificationReasonMentioned` | `mention/wi/<id>` |
 | `assigned` | WIQL `@Me` macro, bounded by `lookback_days` | `NotificationReasonAssigned` | `assigned/wi/<id>` |
-| `ci_failed` | pipeline runs `RequestedFor` the user that failed or partially succeeded, bounded by `lookback_days` | `NotificationReasonCIActivity` | `cifail/run/<id>` |
+| `ci_failed` | completed pipeline runs `RequestedFor` the user whose result is `failed`, bounded by `lookback_days`. A `canceled` or `partiallySucceeded` run is deliberately not a failure and never appears | `NotificationReasonCIActivity` | `cifail/run/<id>` |
 
 The `ci_failed` row is deliberate, not a typo: the config toggle names what
 the source *queries* (a failed run), while the reason it emits,
