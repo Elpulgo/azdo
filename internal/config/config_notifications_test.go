@@ -846,43 +846,39 @@ func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 	}
 }
 
-// --- Notifications counts as a remaining pane only when HasGitHub() is true.
-// This coupling will need revisiting when a second notification-capable
-// backend arrives. ---
+// --- Notifications counts as a remaining pane only when a
+// notification-capable backend is configured — Azure, GitHub, or both. ---
 
-// TestConfig_Validate_PaneGuard_NotificationsRequiresGitHub walks the three
-// fixtures that together pin both conjuncts of `IsPaneEnabled("notifications")
-// && HasGitHub()`:
-//
-//   - GitHub configured, other three panes disabled → valid (notifications is
-//     the remaining pane);
-//   - Azure-only, other three panes disabled → still rejected, because the
-//     notifications tab hides on capability, and the message must explain the
-//     GitHub coupling rather than repeat the old three-pane text verbatim;
-//   - GitHub configured, ALL FOUR panes disabled → rejected.
-//
-// The third row is the one that distinguishes the conjunction from a bare
-// HasGitHub(): the first two vary HasGitHub() while notifications stays
-// enabled, so dropping the IsPaneEnabled("notifications") conjunct leaves
-// them both green. Without it a GitHub config that explicitly turns off every
-// pane would validate and the app would start with zero navigable tabs.
-func TestConfig_Validate_PaneGuard_NotificationsRequiresGitHub(t *testing.T) {
-	// oldThreePaneText is the message from before the GitHub coupling. Row 2
-	// must not be it: repeating it verbatim explains nothing about why
-	// notifications does not rescue an Azure-only config.
-	const oldThreePaneText = "cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled"
-
+// TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend covers
+// the all-panes-disabled guard across every backend combination: Azure-only,
+// GitHub-only, both, and neither, each with the other three panes disabled,
+// plus the guard's negative — it must not fire when a pane besides
+// notifications stays enabled, regardless of which backend is configured.
+func TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
 		wantErr bool
 		// wantErrContains are substrings every rejection message must carry.
 		wantErrContains []string
-		// forbidExactErr, when non-empty, must not be the whole message.
-		forbidExactErr string
+		// forbidErrContains, when non-empty, must not appear anywhere in the
+		// message — used to pin that the error no longer names GitHub
+		// specifically.
+		forbidErrContains []string
 	}{
 		{
-			name: "GitHub configured, other three panes disabled",
+			name: "Azure-only, other three panes disabled",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+disabled_panes: pullrequests,workitems,pipelines
+`,
+			wantErr: false,
+		},
+		{
+			name: "GitHub-only, other three panes disabled",
 			content: `polling_interval: 60
 theme: dark
 github:
@@ -893,20 +889,34 @@ disabled_panes: pullrequests,workitems,pipelines
 			wantErr: false,
 		},
 		{
-			name: "Azure-only, other three panes disabled",
+			name: "both Azure and GitHub configured, other three panes disabled",
 			content: `organization: test-org
 projects:
   - alpha
 polling_interval: 60
 theme: dark
+github:
+  repos:
+    - owner/repo
 disabled_panes: pullrequests,workitems,pipelines
 `,
-			wantErr:         true,
-			wantErrContains: []string{"notifications", "GitHub"},
-			forbidExactErr:  oldThreePaneText,
+			wantErr: false,
 		},
 		{
-			name: "GitHub configured, all four panes disabled",
+			name: "Azure-only, all four panes disabled",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+disabled_panes: pullrequests,workitems,pipelines,notifications
+`,
+			wantErr:           true,
+			wantErrContains:   []string{"cannot disable all panes"},
+			forbidErrContains: []string{"GitHub"},
+		},
+		{
+			name: "GitHub-only, all four panes disabled",
 			content: `polling_interval: 60
 theme: dark
 github:
@@ -917,6 +927,55 @@ disabled_panes: pullrequests,workitems,pipelines,notifications
 			wantErr:         true,
 			wantErrContains: []string{"cannot disable all panes"},
 		},
+		{
+			name: "both configured, all four panes disabled",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+disabled_panes: pullrequests,workitems,pipelines,notifications
+`,
+			wantErr:         true,
+			wantErrContains: []string{"cannot disable all panes"},
+		},
+		{
+			name: "neither Azure nor GitHub configured, other three panes disabled",
+			content: `polling_interval: 60
+theme: dark
+disabled_panes: pullrequests,workitems,pipelines
+`,
+			// Rejected earlier by the "require at least one backend" check,
+			// not by the pane guard this task widens — but it must still be
+			// an error, not silently accepted as "notifications rescues it".
+			wantErr:         true,
+			wantErrContains: []string{"no backend configured"},
+		},
+		{
+			name: "Azure-only, pullrequests pane left enabled — guard must not fire",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+disabled_panes: workitems,pipelines
+`,
+			wantErr: false,
+		},
+		{
+			name: "GitHub-only, pullrequests pane left enabled — guard must not fire",
+			content: `polling_interval: 60
+theme: dark
+github:
+  repos:
+    - owner/repo
+disabled_panes: workitems,pipelines
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -926,20 +985,17 @@ disabled_panes: pullrequests,workitems,pipelines,notifications
 				t.Fatalf("write config: %v", err)
 			}
 
-			cfg, err := LoadFrom(configPath)
+			_, err := LoadFrom(configPath)
 
 			if !tt.wantErr {
 				if err != nil {
-					t.Fatalf("LoadFrom() = %v, want nil — notifications is the only remaining pane and GitHub is configured", err)
-				}
-				if !cfg.HasGitHub() {
-					t.Fatal("HasGitHub() = false, want true (test fixture invalid)")
+					t.Fatalf("LoadFrom() = %v, want nil", err)
 				}
 				return
 			}
 
 			if err == nil {
-				t.Fatal("LoadFrom() = nil, want an error — this config leaves zero navigable tabs")
+				t.Fatal("LoadFrom() = nil, want an error")
 			}
 			errMsg := err.Error()
 			for _, want := range tt.wantErrContains {
@@ -947,8 +1003,10 @@ disabled_panes: pullrequests,workitems,pipelines,notifications
 					t.Errorf("error should mention %q, got: %s", want, errMsg)
 				}
 			}
-			if tt.forbidExactErr != "" && errMsg == tt.forbidExactErr {
-				t.Errorf("error message is just the old three-pane text; must explain the GitHub/notifications coupling")
+			for _, forbid := range tt.forbidErrContains {
+				if strings.Contains(errMsg, forbid) {
+					t.Errorf("error must not mention %q (backend-neutral message), got: %s", forbid, errMsg)
+				}
 			}
 		})
 	}

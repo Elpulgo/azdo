@@ -853,21 +853,20 @@ func (c *Config) Validate() error {
 	// with no navigable tabs.
 	//
 	// Notifications counts as a remaining pane only when a
-	// notification-capable backend will exist — today that means HasGitHub().
-	// The notifications tab hides on *capability*, not on config, so a naive
-	// four-way guard would let an Azure-only config with the other three panes
-	// disabled pass here and then start with zero navigable tabs, since no
-	// backend implements NotificationSource to show the notifications tab
-	// either. Metrics cannot rescue this: it is separately gated on
-	// metrics.enabled.
-	//
-	// This HasGitHub() coupling will need revisiting when a second
-	// notification-capable backend arrives: the condition must then widen to
-	// "any configured backend" and the special case disappears.
-	notificationsCounts := c.IsPaneEnabled("notifications") && c.HasGitHub()
+	// notification-capable backend is configured. The notifications tab
+	// hides on *capability*, not on config, so a naive four-way guard would
+	// let a config with the other three panes disabled pass here and then
+	// start with zero navigable tabs if no configured backend implements
+	// NotificationSource. Both Azure and GitHub satisfy
+	// provider.NotificationSource unconditionally once configured (Azure
+	// regardless of its per-source toggles), so testing configuration here
+	// is equivalent to testing capability without this package depending on
+	// the provider layer. Metrics cannot rescue this: it is separately
+	// gated on metrics.enabled.
+	notificationsCounts := c.IsPaneEnabled("notifications") && (c.HasAzure() || c.HasGitHub())
 	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") && !notificationsCounts {
 		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled " +
-			"(or leave 'notifications' enabled with at least one repo under github.repos — the Notifications tab needs a GitHub backend)")
+			"(or leave 'notifications' enabled with a notification-capable backend configured)")
 	}
 
 	// Notifications validation. There is no `notifications.enabled` guard —
