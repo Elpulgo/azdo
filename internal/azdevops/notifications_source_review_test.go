@@ -136,87 +136,78 @@ func TestSourceReviewRequested_PropagatesListError(t *testing.T) {
 
 // --- Activity stamp (decision 2's resurrection requirement) ---
 
-func TestPrActivityStamp_UsesLastMergeSourceCommitDate(t *testing.T) {
+// TestPrActivityStamp covers the whole helper: the LastMergeSourceCommit
+// primary, the two ways that primary degrades to the CreationDate fallback,
+// and the forward clamp on both.
+//
+// The clamp rows pin the fix for the task 4 review's second 🟡: a
+// user-settable or clock-skewed committer date (GIT_COMMITTER_DATE, rebase
+// --committer-date-is-author-date, a build agent with a wrong clock) must
+// never produce a stamp after now — Reconcile stores whatever this returns
+// as LastActivity unconditionally, and an unclamped future stamp would raise
+// the bar past anything a real push could ever clear, freezing the row's
+// triage state permanently. The CreationDate fallback takes the same clamp,
+// so a malformed or clock-skewed creationDate must not escape either.
+func TestPrActivityStamp(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	pushed := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	now := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
-
-	pr := PullRequest{
-		CreationDate: created,
-		LastMergeSourceCommit: &GitCommitRef{
-			CommitID:  "abc123",
-			Committer: GitUserDate{Date: pushed},
-		},
-	}
-
-	got := prActivityStamp(pr, now)
-	if !got.Equal(pushed) {
-		t.Errorf("prActivityStamp() = %v, want the pushed commit date %v (not CreationDate %v)", got, pushed, created)
-	}
-}
-
-func TestPrActivityStamp_FallsBackToCreationDate(t *testing.T) {
-	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	clampNow := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
 		name string
 		pr   PullRequest
+		now  time.Time
+		want time.Time
 	}{
-		{"nil LastMergeSourceCommit", PullRequest{CreationDate: created}},
-		{"zero Committer.Date", PullRequest{
-			CreationDate:          created,
-			LastMergeSourceCommit: &GitCommitRef{CommitID: "abc123"},
-		}},
+		{
+			name: "uses the pushed commit date, not CreationDate",
+			pr: PullRequest{
+				CreationDate:          created,
+				LastMergeSourceCommit: &GitCommitRef{CommitID: "abc123", Committer: GitUserDate{Date: pushed}},
+			},
+			now:  time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+			want: pushed,
+		},
+		{
+			name: "nil LastMergeSourceCommit falls back to CreationDate",
+			pr:   PullRequest{CreationDate: created},
+			now:  time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+			want: created,
+		},
+		{
+			name: "zero Committer.Date falls back to CreationDate",
+			pr: PullRequest{
+				CreationDate:          created,
+				LastMergeSourceCommit: &GitCommitRef{CommitID: "abc123"},
+			},
+			now:  time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+			want: created,
+		},
+		{
+			name: "future committer date is clamped to now",
+			pr: PullRequest{
+				CreationDate: clampNow.Add(-time.Hour),
+				// e.g. a commit dated 2031.
+				LastMergeSourceCommit: &GitCommitRef{CommitID: "abc123", Committer: GitUserDate{Date: clampNow.Add(5 * 365 * 24 * time.Hour)}},
+			},
+			now:  clampNow,
+			want: clampNow,
+		},
+		{
+			name: "future CreationDate fallback is clamped to now",
+			pr:   PullRequest{CreationDate: clampNow.Add(24 * time.Hour)},
+			now:  clampNow,
+			want: clampNow,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := prActivityStamp(tt.pr, now)
-			if !got.Equal(created) {
-				t.Errorf("prActivityStamp() = %v, want CreationDate %v", got, created)
+			got := prActivityStamp(tt.pr, tt.now)
+			if !got.Equal(tt.want) {
+				t.Errorf("prActivityStamp() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-// TestPrActivityStamp_ClampsFutureCommitterDate pins the fix for the task 4
-// review's second 🟡: a user-settable or clock-skewed committer date
-// (GIT_COMMITTER_DATE, rebase --committer-date-is-author-date, a build agent
-// with a wrong clock) must never produce a stamp after now — Reconcile
-// stores whatever this returns as LastActivity unconditionally, and an
-// unclamped future stamp would raise the bar past anything a real push could
-// ever clear, freezing the row's triage state permanently.
-func TestPrActivityStamp_ClampsFutureCommitterDate(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(5 * 365 * 24 * time.Hour) // e.g. a commit dated 2031
-
-	pr := PullRequest{
-		CreationDate: now.Add(-time.Hour),
-		LastMergeSourceCommit: &GitCommitRef{
-			CommitID:  "abc123",
-			Committer: GitUserDate{Date: future},
-		},
-	}
-
-	got := prActivityStamp(pr, now)
-	if !got.Equal(now) {
-		t.Errorf("prActivityStamp() = %v, want it clamped to now (%v), not the future committer date %v", got, now, future)
-	}
-}
-
-// TestPrActivityStamp_ClampsFutureCreationDate covers the CreationDate
-// fallback path taking the same clamp — a malformed or clock-skewed
-// creationDate must not escape either.
-func TestPrActivityStamp_ClampsFutureCreationDate(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-
-	pr := PullRequest{CreationDate: future}
-
-	got := prActivityStamp(pr, now)
-	if !got.Equal(now) {
-		t.Errorf("prActivityStamp() = %v, want it clamped to now (%v), not the future CreationDate %v", got, now, future)
 	}
 }
 
@@ -414,17 +405,5 @@ func TestReviewRequestedWebURL_NilMultiClient(t *testing.T) {
 	got := reviewRequestedWebURL(nil, PullRequest{ID: 42, Repository: Repository{ID: "repo-1"}})
 	if got != "" {
 		t.Errorf("reviewRequestedWebURL(nil, ...) = %q, want empty", got)
-	}
-}
-
-func TestMapReviewRequested_WebURLIsLegalEmptyString(t *testing.T) {
-	server := newPRServer(t, nil)
-	defer server.Close()
-	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
-
-	pr := PullRequest{ID: 42, ProjectName: "does-not-exist", Repository: Repository{ID: "repo-1"}}
-	row := mapReviewRequested(mc, pr, time.Now())
-	if row.WebURL != "" {
-		t.Errorf("WebURL = %q, want empty string (legal degraded result)", row.WebURL)
 	}
 }

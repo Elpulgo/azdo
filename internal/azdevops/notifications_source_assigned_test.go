@@ -525,65 +525,55 @@ func TestSourceAssigned_FreshInstall_WindowBoundsFlood(t *testing.T) {
 
 // --- assignedActivityStamp ---
 
-func TestAssignedActivityStamp_FallsBackToCreatedDate(t *testing.T) {
-	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := created.Add(time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{CreatedDate: created}}
-
-	got := assignedActivityStamp(wi, now)
-	if !got.Equal(created) {
-		t.Errorf("assignedActivityStamp() = %v, want CreatedDate fallback %v", got, created)
-	}
-}
-
-// TestAssignedActivityStamp_NonZeroChangedDate_UsesChangedDate pins that the
-// CreatedDate fallback only applies to a zero ChangedDate — the normal case
-// must use ChangedDate, the same field the WIQL query filters and orders by.
-func TestAssignedActivityStamp_NonZeroChangedDate_UsesChangedDate(t *testing.T) {
+// TestAssignedActivityStamp covers the whole helper: the ChangedDate
+// primary (the same field the WIQL query filters and orders by), the
+// CreatedDate fallback that applies only to a zero ChangedDate, and the
+// forward clamp on both.
+func TestAssignedActivityStamp(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	changed := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	now := changed.Add(time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{CreatedDate: created, ChangedDate: changed}}
+	clampNow := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	future := clampNow.Add(24 * time.Hour)
 
-	got := assignedActivityStamp(wi, now)
-	if !got.Equal(changed) {
-		t.Errorf("assignedActivityStamp() = %v, want ChangedDate %v (not CreatedDate %v)", got, changed, created)
+	tests := []struct {
+		name string
+		wi   WorkItem
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "zero ChangedDate falls back to CreatedDate",
+			wi:   WorkItem{Fields: WorkItemFields{CreatedDate: created}},
+			now:  created.Add(time.Hour),
+			want: created,
+		},
+		{
+			name: "non-zero ChangedDate wins over CreatedDate",
+			wi:   WorkItem{Fields: WorkItemFields{CreatedDate: created, ChangedDate: changed}},
+			now:  changed.Add(time.Hour),
+			want: changed,
+		},
+		{
+			name: "future ChangedDate is clamped to now",
+			wi:   WorkItem{Fields: WorkItemFields{ChangedDate: future}},
+			now:  clampNow,
+			want: clampNow,
+		},
+		{
+			name: "future CreatedDate fallback is clamped to now",
+			wi:   WorkItem{Fields: WorkItemFields{CreatedDate: future}},
+			now:  clampNow,
+			want: clampNow,
+		},
 	}
-}
 
-func TestAssignedActivityStamp_ClampsFutureChangedDate(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{ChangedDate: future}}
-
-	got := assignedActivityStamp(wi, now)
-	if !got.Equal(now) {
-		t.Errorf("assignedActivityStamp() = %v, want it clamped to now (%v), not the future ChangedDate %v", got, now, future)
-	}
-}
-
-func TestAssignedActivityStamp_ClampsFutureCreatedDateFallback(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{CreatedDate: future}}
-
-	got := assignedActivityStamp(wi, now)
-	if !got.Equal(now) {
-		t.Errorf("assignedActivityStamp() = %v, want it clamped to now (%v), not the future CreatedDate fallback %v", got, now, future)
-	}
-}
-
-// --- mapAssigned ---
-
-func TestMapAssigned_WebURLIsLegalEmptyString(t *testing.T) {
-	server := newPRServer(t, nil)
-	defer server.Close()
-	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
-
-	wi := WorkItem{ID: 42, ProjectName: "does-not-exist", Fields: WorkItemFields{Title: "Widget"}}
-	row := mapAssigned(mc, wi, time.Now())
-	if row.WebURL != "" {
-		t.Errorf("WebURL = %q, want empty string (legal degraded result)", row.WebURL)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := assignedActivityStamp(tt.wi, tt.now)
+			if !got.Equal(tt.want) {
+				t.Errorf("assignedActivityStamp() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

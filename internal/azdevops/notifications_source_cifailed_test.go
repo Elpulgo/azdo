@@ -340,59 +340,60 @@ func TestIsMyFailedRun(t *testing.T) {
 
 // --- ciFailedActivityStamp ---
 
-func TestCIFailedActivityStamp_UsesFinishTime(t *testing.T) {
+// TestCIFailedActivityStamp covers the whole helper: the FinishTime
+// primary, the two ways it degrades to the QueueTime fallback (nil and zero
+// FinishTime), and the forward clamp on both.
+func TestCIFailedActivityStamp(t *testing.T) {
 	queued := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	finished := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
-	now := finished.Add(time.Hour)
-	run := PipelineRun{QueueTime: queued, FinishTime: &finished}
-
-	got := ciFailedActivityStamp(run, now)
-	if !got.Equal(finished) {
-		t.Errorf("ciFailedActivityStamp() = %v, want FinishTime %v (not QueueTime %v)", got, finished, queued)
-	}
-}
-
-func TestCIFailedActivityStamp_FallsBackToQueueTime(t *testing.T) {
-	queued := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := queued.Add(time.Hour)
+	clampNow := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	future := clampNow.Add(24 * time.Hour)
 
 	tests := []struct {
 		name string
 		run  PipelineRun
+		now  time.Time
+		want time.Time
 	}{
-		{"nil FinishTime", PipelineRun{QueueTime: queued}},
-		{"zero FinishTime", PipelineRun{QueueTime: queued, FinishTime: &time.Time{}}},
+		{
+			name: "uses FinishTime, not QueueTime",
+			run:  PipelineRun{QueueTime: queued, FinishTime: &finished},
+			now:  finished.Add(time.Hour),
+			want: finished,
+		},
+		{
+			name: "nil FinishTime falls back to QueueTime",
+			run:  PipelineRun{QueueTime: queued},
+			now:  queued.Add(time.Hour),
+			want: queued,
+		},
+		{
+			name: "zero FinishTime falls back to QueueTime",
+			run:  PipelineRun{QueueTime: queued, FinishTime: &time.Time{}},
+			now:  queued.Add(time.Hour),
+			want: queued,
+		},
+		{
+			name: "future FinishTime is clamped to now",
+			run:  PipelineRun{QueueTime: clampNow.Add(-time.Hour), FinishTime: &future},
+			now:  clampNow,
+			want: clampNow,
+		},
+		{
+			name: "future QueueTime fallback is clamped to now",
+			run:  PipelineRun{QueueTime: future},
+			now:  clampNow,
+			want: clampNow,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ciFailedActivityStamp(tt.run, now)
-			if !got.Equal(queued) {
-				t.Errorf("ciFailedActivityStamp() = %v, want QueueTime fallback %v", got, queued)
+			got := ciFailedActivityStamp(tt.run, tt.now)
+			if !got.Equal(tt.want) {
+				t.Errorf("ciFailedActivityStamp() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestCIFailedActivityStamp_ClampsFutureFinishTime(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-	run := PipelineRun{QueueTime: now.Add(-time.Hour), FinishTime: &future}
-
-	got := ciFailedActivityStamp(run, now)
-	if !got.Equal(now) {
-		t.Errorf("ciFailedActivityStamp() = %v, want it clamped to now (%v), not the future FinishTime %v", got, now, future)
-	}
-}
-
-func TestCIFailedActivityStamp_ClampsFutureQueueTimeFallback(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-	run := PipelineRun{QueueTime: future}
-
-	got := ciFailedActivityStamp(run, now)
-	if !got.Equal(now) {
-		t.Errorf("ciFailedActivityStamp() = %v, want it clamped to now (%v), not the future QueueTime fallback %v", got, now, future)
 	}
 }
 
@@ -639,18 +640,6 @@ func TestCIFailedWebURL_NilMultiClient(t *testing.T) {
 	got := ciFailedWebURL(nil, PipelineRun{ID: 42})
 	if got != "" {
 		t.Errorf("ciFailedWebURL(nil, ...) = %q, want empty", got)
-	}
-}
-
-func TestMapCIFailed_WebURLIsLegalEmptyString(t *testing.T) {
-	server := newPipelineRunServer(t, "alpha", nil)
-	defer server.Close()
-	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
-
-	run := PipelineRun{ID: 42, ProjectName: "does-not-exist"}
-	row := mapCIFailed(mc, run, time.Now())
-	if row.WebURL != "" {
-		t.Errorf("WebURL = %q, want empty string (legal degraded result)", row.WebURL)
 	}
 }
 

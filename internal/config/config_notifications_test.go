@@ -409,39 +409,6 @@ notifications:
 	}
 }
 
-// TestLoad_AzureLookbackDays_Zero_FallsBackToDefault pins decision 13's
-// closing note: zero is NOT "unbounded" for lookback_days the way it is for
-// the shared/GitHub numeric keys. An explicit `lookback_days: 0` must land
-// on DefaultAzureLookbackDays, the same value an absent key gets, rather
-// than surviving as a literal 0 that Azure's sources could read as "every
-// work item ever assigned".
-func TestLoad_AzureLookbackDays_Zero_FallsBackToDefault(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	content := `organization: test-org
-projects:
-  - alpha
-polling_interval: 60
-theme: dark
-notifications:
-  azure:
-    lookback_days: 0
-`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := LoadFrom(configPath)
-	if err != nil {
-		t.Fatalf("LoadFrom: %v", err)
-	}
-
-	if cfg.Notifications.Azure.LookbackDays != DefaultAzureLookbackDays {
-		t.Errorf("Azure.LookbackDays = %d, want %d (explicit zero must fall back to the default, not be treated as unbounded)",
-			cfg.Notifications.Azure.LookbackDays, DefaultAzureLookbackDays)
-	}
-}
-
 // TestLoad_AzureLookbackDays_ClampedToOrphanTTL pins the boundary shape
 // convention 13 asks for: exactly at the clamp (30) is left unchanged, one
 // past it (31) is silently clamped down. Beyond AzureLookbackDaysMax an item
@@ -548,7 +515,13 @@ notifications:
 	}
 }
 
-// TestLoad_AzureLookbackDays_ZeroFallback_NoWarning is
+// TestLoad_AzureLookbackDays_ZeroFallback_NoWarning pins both halves of the
+// zero case. The value half is decision 13's closing note: zero is NOT
+// "unbounded" for lookback_days the way it is for the shared/GitHub numeric
+// keys, so an explicit `lookback_days: 0` must land on
+// DefaultAzureLookbackDays — the same value an absent key gets — rather than
+// surviving as a literal 0 that Azure's sources could read as "every work
+// item ever assigned". The warning half is
 // TestLoad_AzureLookbackDays_ClampWarns's negative counterpart: decision A
 // says the clamp warns but the separate zero-means-unset fallback must stay
 // silent, since zero reads as "unset" rather than as an expressed intent
@@ -579,38 +552,6 @@ notifications:
 	}
 	if len(cfg.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want empty (an explicit lookback_days: 0 falling back to the default must stay silent)", cfg.Warnings)
-	}
-}
-
-// TestLoad_AzureMinPollInterval_Zero_FallsBackToDefault pins task-11 review
-// decision B: min_poll_interval: 0 must fall back to
-// DefaultAzureMinPollInterval, symmetric with lookback_days above, rather
-// than surviving as a literal 0 that would mean "the adapter never
-// self-throttles" under decision 10.
-func TestLoad_AzureMinPollInterval_Zero_FallsBackToDefault(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	content := `organization: test-org
-projects:
-  - alpha
-polling_interval: 60
-theme: dark
-notifications:
-  azure:
-    min_poll_interval: 0
-`
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := LoadFrom(configPath)
-	if err != nil {
-		t.Fatalf("LoadFrom: %v", err)
-	}
-
-	if cfg.Notifications.Azure.MinPollInterval != DefaultAzureMinPollInterval {
-		t.Errorf("Azure.MinPollInterval = %d, want %d (explicit zero must fall back to the default, not be treated as \"no self-throttle\")",
-			cfg.Notifications.Azure.MinPollInterval, DefaultAzureMinPollInterval)
 	}
 }
 
@@ -715,8 +656,13 @@ notifications:
 
 // TestLoad_AzureMinPollInterval_ZeroFallback_NoWarning is
 // TestLoad_AzureLookbackDays_ZeroFallback_NoWarning's min_poll_interval
-// counterpart: the zero-means-unset fallback must stay silent, since zero
-// reads as "unset" rather than an expressed intent the clamp above overrides.
+// counterpart, and pins both halves of the zero case the same way. The value
+// half is task-11 review decision B: min_poll_interval: 0 must fall back to
+// DefaultAzureMinPollInterval, symmetric with lookback_days above, rather
+// than surviving as a literal 0 that would mean "the adapter never
+// self-throttles" under decision 10. The warning half: the zero-means-unset
+// fallback must stay silent, since zero reads as "unset" rather than an
+// expressed intent the clamp above overrides.
 func TestLoad_AzureMinPollInterval_ZeroFallback_NoWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")

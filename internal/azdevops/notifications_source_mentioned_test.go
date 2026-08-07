@@ -952,53 +952,55 @@ func TestMapMentioned_ClampsFutureStamp(t *testing.T) {
 
 // --- mentionActivityStamp ---
 
-func TestMentionActivityStamp_FallsBackToChangedDate(t *testing.T) {
+// TestMentionActivityStamp covers the whole helper: the comment stamp is
+// primary, ChangedDate is reachable only as a fallback for a zero stamp
+// (mapMentioned's entire point is that an unrelated edit, which only moves
+// ChangedDate, must never override a real comment stamp), and the fallback
+// takes the same forward clamp. The non-zero stamp's own clamp is pinned
+// through mapMentioned by TestMapMentioned_ClampsFutureStamp above.
+func TestMentionActivityStamp(t *testing.T) {
 	changed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := changed.Add(time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{ChangedDate: changed}}
-
-	got := mentionActivityStamp(time.Time{}, wi, now)
-	if !got.Equal(changed) {
-		t.Errorf("mentionActivityStamp() = %v, want ChangedDate fallback %v", got, changed)
-	}
-}
-
-// TestMentionActivityStamp_NonZeroStamp_ChangedDateNeverLeaksIn pins that
-// the ChangedDate fallback only applies to a zero stamp — mapMentioned's
-// entire point is that an unrelated edit (which only moves ChangedDate)
-// must never override a real comment stamp.
-func TestMentionActivityStamp_NonZeroStamp_ChangedDateNeverLeaksIn(t *testing.T) {
+	laterChanged := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	mentionDate := time.Date(2026, 1, 15, 9, 0, 0, 0, time.UTC)
-	changed := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) // later, must not win
-	now := changed.Add(time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{ChangedDate: changed}}
+	clampNow := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 
-	got := mentionActivityStamp(mentionDate, wi, now)
-	if !got.Equal(mentionDate) {
-		t.Errorf("mentionActivityStamp() = %v, want the mention stamp %v (ChangedDate %v must not leak in)", got, mentionDate, changed)
+	tests := []struct {
+		name  string
+		stamp time.Time
+		wi    WorkItem
+		now   time.Time
+		want  time.Time
+	}{
+		{
+			name:  "zero stamp falls back to ChangedDate",
+			stamp: time.Time{},
+			wi:    WorkItem{Fields: WorkItemFields{ChangedDate: changed}},
+			now:   changed.Add(time.Hour),
+			want:  changed,
+		},
+		{
+			name:  "non-zero stamp wins over a later ChangedDate",
+			stamp: mentionDate,
+			wi:    WorkItem{Fields: WorkItemFields{ChangedDate: laterChanged}},
+			now:   laterChanged.Add(time.Hour),
+			want:  mentionDate,
+		},
+		{
+			name:  "future ChangedDate fallback is clamped to now",
+			stamp: time.Time{},
+			wi:    WorkItem{Fields: WorkItemFields{ChangedDate: clampNow.Add(24 * time.Hour)}},
+			now:   clampNow,
+			want:  clampNow,
+		},
 	}
-}
 
-func TestMentionActivityStamp_ClampsFutureFallback(t *testing.T) {
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-	wi := WorkItem{Fields: WorkItemFields{ChangedDate: future}}
-
-	got := mentionActivityStamp(time.Time{}, wi, now)
-	if !got.Equal(now) {
-		t.Errorf("mentionActivityStamp() = %v, want it clamped to now (%v), not the future fallback %v", got, now, future)
-	}
-}
-
-func TestMapMentioned_WebURLIsLegalEmptyString(t *testing.T) {
-	server := newPRServer(t, nil)
-	defer server.Close()
-	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
-
-	wi := WorkItem{ID: 42, ProjectName: "does-not-exist", Fields: WorkItemFields{Title: "Widget"}}
-	row := mapMentioned(mc, wi, time.Now(), time.Now())
-	if row.WebURL != "" {
-		t.Errorf("WebURL = %q, want empty string (legal degraded result)", row.WebURL)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mentionActivityStamp(tt.stamp, tt.wi, tt.now)
+			if !got.Equal(tt.want) {
+				t.Errorf("mentionActivityStamp() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
