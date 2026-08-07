@@ -692,8 +692,13 @@ func TestTriageStore_Flush_RearmsTimerOnWriteFailure(t *testing.T) {
 // way a naive State() -> compute -> Replace() call chain would (three
 // separate lock acquisitions, with an unlocked gap between each). A
 // concurrent Apply landing in that gap would be silently discarded the
-// moment Replace's full-map overwrite runs, computed from an
-// already-stale snapshot that never saw the Apply's write.
+// moment Replace's full-map overwrite ran, computed from an already-stale
+// snapshot that never saw the Apply's write.
+//
+// Replace no longer exists — task 9's review removed it once Swap had taken
+// its last caller. The call chain above is kept as the historical account of
+// why Swap holds one lock instead of three; it is not a description of an
+// API this package still offers.
 //
 // This is deliberately not a -race-detector-only reproduction (this repo's
 // sandbox cannot build with -race — see this package's other concurrency
