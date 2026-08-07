@@ -877,6 +877,19 @@ func TestNewestMatchingCommentStamp(t *testing.T) {
 			wantFound: false,
 		},
 		{
+			// The fail-open case: an unresolved mention carries no TargetID,
+			// so without the guard "" == "" confirms it as the caller's and
+			// this source starts inventing mentions. isMyFailedRun carries
+			// the same check; the two must not be asymmetric on it.
+			name: "empty userID matches nothing, not every unresolved mention",
+			comments: []WorkItemComment{
+				{CreatedDate: middle, Mentions: []CommentMention{{TargetID: ""}}},
+				{CreatedDate: newest, Mentions: []CommentMention{{TargetID: "user-1"}}},
+			},
+			userID:    "",
+			wantFound: false,
+		},
+		{
 			name: "single match",
 			comments: []WorkItemComment{
 				{CreatedDate: middle, Mentions: []CommentMention{{TargetID: "user-1"}}},

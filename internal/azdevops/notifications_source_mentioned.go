@@ -363,6 +363,17 @@ func confirmAndMapMentions(mc *MultiClient, candidates []WorkItem, userID string
 // row silently stops appearing in the feed, and its local triage entry
 // TTL-prunes as if the mention had never existed.
 func newestMatchingCommentStamp(comments []WorkItemComment, userID string) (stamp time.Time, found bool) {
+	// An empty userID fails *open* here, not closed: TargetID is absent from
+	// any mention the server could not resolve to an identity, so "" == ""
+	// would confirm every such mention as the caller's. Unreachable in
+	// production — runSourcesConcurrently resolves the id through
+	// guardNonEmptyUserID and aborts the job before calling this — but
+	// isMyFailedRun carries the same belt-and-braces check for the same
+	// reason, and the two sources should not be asymmetric on the one
+	// property the codebase documents as dangerous.
+	if userID == "" {
+		return time.Time{}, false
+	}
 	for _, comment := range comments {
 		for _, m := range comment.Mentions {
 			if m.TargetID == userID {
