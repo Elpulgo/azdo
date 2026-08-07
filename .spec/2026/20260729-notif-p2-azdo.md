@@ -343,7 +343,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). *(Re-validated 2026-08-07 against `f478f74` + `d72f98b` + `4274a3e`, which drop the dead `HasAzure()||HasGitHub()` conjunct the review found, correct both the comment and the error message, and add three rows closing the same widening gap on the other three conjuncts; re-ticked. See the re-validation record at the end of `## Validation: task 13`.)* → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
 - [x] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). *(Re-validated 2026-08-07 against `b0c6d9e`, which closes R1-R5 from round 2; re-ticked. The "returned **by copy**" mechanism in the `→ done:` line below was superseded by round 2's settled decision — `copyNotifications` is deleted and the same guarantee is now delivered by `Reconcile`'s fresh allocation plus `provider.Notification` having no mutable-through field, both pinned by tests. See the third re-validation record at the end of `## Validation: task 14`.)* **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [x] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). *(Landed as `docs/adr/0002-azure-synthetic-notification-feed.md` in `d694235`, corrected in `1cb1a5a`. See `## Validation: task 15`.)* → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
-- [ ] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). *(Re-validated a fourth time 2026-08-07 against `4ce7ae5`: findings 17 and 18 are both closed — 17's new wording matches a behaviour traced end to end (composite → poller → `HandleFetchResult` → `View` → `errorBody`), both its stated remedies genuinely work, and the deferred `## Unknowns` entry is accurate down to its sketched fix; 18's README row, Precedence paragraph and new worked example are literally correct against `filter.go`'s switch. No regression in anything the three earlier passes verified, and every markdown anchor still resolves. Still **INCOMPLETE** on one new finding: (19) `config.yaml.example:79-83` and `:96-101` still carry the *identical* finding-18 falsehood the README fix removed — `include_repos` described as ignored "for GitHub rows" with Azure rows "unaffected either way", while `filter.go:66-104` ignores it for every row. Two non-blocking findings of the same class, to fix in the same pass: (20) `README.md:446`'s `poll_interval` fallback contradicts `app.go:390-400`'s `max(configured, hint)`; (21) "every key defaults to the widest possible behaviour" (`config.yaml.example:57-58`, `Architecture.md:601`) is false for `lookback_days`=14 and `min_poll_interval`=300. See the fourth re-validation subsection at the end of `## Validation: task 16`.)* → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
+- [x] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). *(Validated 2026-08-07, fifth pass, against `2cd4f5e`: findings 19, 20 and 21 and both nits from the fourth pass are closed, each checked against the code — `config.yaml.example`'s two `include_repos`/`only_configured_repos` sites now match `filter.go`'s switch; `README.md:446`'s `max(configured, hint)` wording and its worked example match `app.go:377-400`, hint-of-zero included; the "widest possible behaviour" sentence now excepts the azure block with the real constants; the "drops GitHub from the other tabs" remedy is true of `config.HasGitHub()` gating the whole GitHub backend in `main.go`. Markup survived the hand edits — every table row in all three markdown files has its header's cell count, `**` spans balance, and the strong-emphasis run crossing a line break in `Architecture.md` renders. A final sweep over every behavioural claim in the phase-2 doc additions produced no further findings, and nothing the four earlier passes verified regressed; `config.yaml.example` still parses with all eighteen notification keys resolving to real struct fields. Build, vet and unit tests clean. See the fifth re-validation subsection at the end of `## Validation: task 16`.)* → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
 
 ## Validation: task 9
 
@@ -3234,3 +3234,117 @@ regressed, and no anchor broke. Finding 19 is the blocker — the identical
 at two sites, in a file task 16 names explicitly and this task's own diff wrote. Findings 20
 and 21 are not blockers on their own but are the same error class in the same two files and
 should be fixed in the same pass. Task 16 stays unticked.
+
+### Re-validation 2026-08-07 (fifth pass) — against `2cd4f5e`
+
+Verified against the docs-only diff `2cd4f5e` (`README.md`, `FAQ.md`, `Architecture.md`,
+`config.yaml.example`) and the current code. `go build`, `go vet` and
+`go test ./internal/... ./cmd/...` are all clean (28 packages, no failures); `-race`
+still can't build in this sandbox (`cc1` blocked), unchanged from the previous passes and
+irrelevant to a docs-only diff.
+
+**Findings 19, 20, 21 and the two nits — all closed:**
+
+22. ✅ **Finding 19 closed.** `config.yaml.example:81-86` (`include_repos`) and `:99-104`
+    (`only_configured_repos`) now both say `include_repos` is ignored "for the WHOLE feed"
+    / "for every row" and that non-GitHub rows "pass through unnarrowed". That is exactly
+    `filter.go:66-107`: the `switch` takes the `OnlyConfiguredRepos` branch, which never
+    consults `includeRepos` at all, and `filter.go:91-94` passes every non-`KindGitHub` row
+    through unconditionally. The two sites now agree with each other and with README's
+    row and Precedence paragraph — no remaining site states the old "GitHub rows only"
+    scoping.
+23. ✅ **Finding 20 closed, and the worked example is arithmetically right.**
+    `README.md:446` now reads "`0` falls back to the global `polling_interval`. … the
+    poller runs at `max(configured, hint)`, so `polling_interval: 300` with a 60-second
+    hint still polls every 300 seconds." `app.go:377-400` is literally that:
+    `notificationsConfiguredInterval` = `Notifications.PollInterval` if > 0, else
+    `PollingInterval` if > 0, else `polling.DefaultInterval`; `notificationsPollInterval`
+    returns `hint` only when `hint > configured`. max(300s, 60s) = 300s ✓. The
+    hint-of-zero case is covered correctly by the "can **raise** … but never lower it"
+    phrasing — a 0 hint (no `PollIntervalHinter` backend, or none has fetched yet;
+    `app.go:361-367`) is never greater than a configured interval, so it changes nothing.
+    `config.yaml.example:90-95` and `config.go:140-155` already said the same thing; all
+    three now agree. Non-blocking nit, **not** a new finding and not worth a further
+    iteration: neither doc mentions that `NewNotificationsPoller`/`SetInterval` additionally
+    floor the result at `polling.MinInterval` (5s, `polling/poller.go:16`), so the stated
+    formula is exact only for a configured interval ≥ 5s. Reachable only via
+    `notifications.poll_interval: 1..4` (config validation allows ≥ 0); the docs are not
+    wrong for any interval a user would plausibly set, and this simplification predates
+    phase 2.
+24. ✅ **Finding 21 closed.** `config.yaml.example:57-60` and `Architecture.md:598-605` now
+    scope the claim to *filter* keys and name the azure block as the exception with the two
+    real numbers — `lookback_days` 14 (`config.DefaultAzureLookbackDays`) and
+    `min_poll_interval` 300s (`config.DefaultAzureMinPollInterval`), both re-checked against
+    the constants this pass. The azure block's other keys (`sources.*`, all `true`) are
+    indeed widest-behaviour, so "the azure block is the exception … lookback_days and
+    min_poll_interval" is precise rather than over-broad.
+25. ✅ **Nit 1 closed.** `README.md:443`'s `include_repos` row now carries
+    "**Ignored entirely** when `notifications.github.only_configured_repos` is `true`",
+    so the table row no longer reads as complete on its own.
+26. ✅ **Nit 2 closed, and the "other tabs" claim is true.** `README.md:677-679` and
+    `FAQ.md:99` now note that removing `github.repos` "drops GitHub from the other tabs as
+    well". Confirmed: `github.repos` is the *only* gate on the whole GitHub backend —
+    `config.HasGitHub()` (`config.go:65-67`) is `len(c.GitHub.Repos) > 0`, and
+    `cmd/azdo-tui/main.go:339-356` builds and appends the GitHub backend to `backends` only
+    inside `if cfg.HasGitHub()`. With it removed the composite has no GitHub backend at all,
+    so GitHub PRs, issues and Actions runs disappear from the Pull Requests, Work Items and
+    Pipelines tabs too. The remedy is correctly qualified in both files.
+
+**Markup, checked because the edits were hand-made:**
+
+27. ✅ **No broken markup in any of the four files.** Every markdown table in `README.md`,
+    `Architecture.md` and `FAQ.md` was re-parsed programmatically (split on unescaped `|`,
+    per-table cell-count comparison against the header): every row in every table has the
+    header's cell count — including the four edited `README.md` rows. `**` markers are
+    balanced in all four files. The hand-edited `**no \n`notifications.enabled` key**` span
+    in `Architecture.md:604-605` is a strong-emphasis run crossing a soft line break inside
+    a single paragraph, which CommonMark renders as intended; the surrounding paragraph is
+    unbroken.
+
+**Final sweep over every behavioural claim in the phase-2 doc additions — no further
+findings.** Re-derived from code this pass, beyond what earlier passes covered:
+
+- Azure identity keys `review/pr/<id>`, `mention/wi/<id>`, `assigned/wi/<id>`,
+  `cifail/run/<id>` (Architecture.md's source table) match the four `NotifKey(...)` call
+  sites verbatim. `orphanTTL` really is 30 days, the triage store's debounce really is
+  500 ms and its writes are atomic (`notifications_store.go:96-97`, `os.Rename`).
+- "Azure … does not implement `PollIntervalHinter` at all" — pinned by
+  `TestAdapter_DoesNotImplementPollIntervalHinter`; only `github.Adapter` and the composite
+  expose the hint.
+- "`u` … on Azure the local read flag only clears again once new activity is detected on
+  that subject" (README feature bullet and key table) matches `Reconcile`'s
+  `row.UpdatedAt.After(entry.LastActivity)` branch — and only that branch — clearing
+  `Read`/`Done`.
+- "the adapter self-throttles … and returns its previous result on calls made sooner"
+  matches `Adapter.list`'s throttled path: no network, no store write, re-`Reconcile` of
+  `notifLastRawRows` against fresh triage state.
+- "`max_items` … not per-backend, so `max_items: 50` means at most 50 rows total" matches
+  `CompositeProvider.List` zeroing `backendOpts.Max` and `mergeNotifications` applying the
+  cap once, after the sort.
+- `lookback_days` "bounds the assigned and ci_failed sources (the other two aren't
+  time-bounded the same way)" matches `runSourcesConcurrently`: only `SourceAssigned` and
+  `SourceCIFailed` take `notifLookbackDays`.
+- `since_days`/`participating_only` are correctly documented as GitHub-only: Azure's
+  `List` ignores `NotifOpts` entirely.
+- FAQ's "the tab appears as soon as at least one backend is configured" holds —
+  `hasNotificationCapability` → `HasNotifications()` over backends, and `main.go` always
+  wires Azure via `NewAdapterWithNotifications` (never bare `NewAdapter`).
+
+**No regression in anything the four earlier passes verified.** Re-checked directly: the two
+`cmd/azdo-tui/main.go` help blocks (`:100`, `:238`) still scope the classic-token note to
+"the GitHub share"; the `ci_failed`/`ci_activity` distinction and the "canceled or
+partiallySucceeded never appears" wording are intact in all four files; findings 17 and 18's
+corrected wording is unchanged; every documented default, maximum and key path
+(`state.yaml` / `notifications.yaml` resolution, `XDG_STATE_HOME`, the Windows path) still
+matches the constants; the Azure "no additional PAT scope" claim still holds. No leftover
+"Notifications is GitHub only" statement anywhere outside `docs/adr/0001-*` (a dated
+phase-1 decision record, correctly left alone). `config.yaml.example` still parses: the
+commented `notifications:` block (lines 62-134) was extracted by stripping exactly one
+leading `#` plus one space per line and parsed with `yaml.safe_load` — it yields the exact
+nested shape, and all eighteen keys resolve to real `mapstructure` tags on
+`NotificationsConfig` / `NotificationsGitHubConfig` / `NotificationsAzureConfig` /
+`NotificationsAzureSourcesConfig`.
+
+**Verdict: COMPLETE.** Findings 19, 20 and 21 and both nits are closed, each verified
+against the code rather than the summary; the markup survived the hand edits; the full
+behavioural sweep produced no further findings. Task 16 is ticked.
