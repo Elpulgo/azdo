@@ -35,6 +35,36 @@ func TestAdapter_DoesNotImplementPollIntervalHinter(t *testing.T) {
 	}
 }
 
+// TestNewAdapterWithNotifications_LookbackDays_ClampedToMax pins task-11
+// review finding 3(a): NewAdapterWithNotifications clamps lookbackDays to
+// MaxNotificationLookbackDays itself, regardless of caller. This closes the
+// gap internal/config.LoadFrom's own AzureLookbackDaysMax clamp leaves open
+// for any other caller — a direct construction bypassing LoadFrom entirely
+// (a test, a future caller, a bug) could otherwise still reach Azure with a
+// window wide enough to outlive orphanTTL, reintroducing the
+// resurfaces-as-unread gap the clamp exists to close.
+func TestNewAdapterWithNotifications_LookbackDays_ClampedToMax(t *testing.T) {
+	tests := []struct {
+		name         string
+		lookbackDays int
+		want         int
+	}{
+		{name: "non-positive falls back to the default", lookbackDays: 0, want: DefaultNotificationLookbackDays},
+		{name: "at the max is unaffected", lookbackDays: MaxNotificationLookbackDays, want: MaxNotificationLookbackDays},
+		{name: "above the max is clamped down to it", lookbackDays: MaxNotificationLookbackDays + 1, want: MaxNotificationLookbackDays},
+		{name: "far above the max is clamped down to it", lookbackDays: 90, want: MaxNotificationLookbackDays},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewAdapterWithNotifications(nil, nil, tt.lookbackDays, DefaultNotificationSourceToggles())
+			if a.notifLookbackDays != tt.want {
+				t.Errorf("notifLookbackDays = %d, want %d", a.notifLookbackDays, tt.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // nil-configuration guards — List/MarkRead/MarkDone must error, never panic.
 // ---------------------------------------------------------------------------

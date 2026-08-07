@@ -13,18 +13,35 @@ import (
 // so a subject that has genuinely stopped matching any source's query will
 // not reappear; orphanTTL only exists so the state file does not grow
 // without bound (decision 7). It is generous relative to the default
-// lookback only while notifications.azure.lookback_days stays <= 30: beyond
-// that, "inside the query window" and "returned by a given poll" are
-// different sets (a source like SourceAssigned caps each query at
-// assignedQueryTop, so an old-but-still-in-window subject can be crowded
-// out of every poll's results, its LastSeen frozen, and pruned before the
-// window says it should be). internal/config.azureLookbackDaysMax duplicates
-// this value in days (config deliberately does not import this package for
-// one constant) and clamps notifications.azure.lookback_days to it before
-// Validate() ever runs, so that gap cannot open through ordinary config
-// loading. If this constant's value ever changes, azureLookbackDaysMax must
-// change with it — that comment points back here for the same reason.
+// lookback only while the lookbackDays passed to NewAdapterWithNotifications
+// stays <= MaxNotificationLookbackDays: beyond that, "inside the query
+// window" and "returned by a given poll" are different sets (a source like
+// SourceAssigned caps each query at assignedQueryTop, so an
+// old-but-still-in-window subject can be crowded out of every poll's
+// results, its LastSeen frozen, and pruned before the window says it
+// should be). NewAdapterWithNotifications itself clamps any lookbackDays it
+// is given to MaxNotificationLookbackDays, so that gap cannot open through
+// any caller of this package, not only through config's own
+// AzureLookbackDaysMax clamp in LoadFrom (internal/config.AzureLookbackDaysMax
+// duplicates this same number in days, since config deliberately does not
+// import this package for one constant, and clamps
+// notifications.azure.lookback_days before Validate() ever runs — but that
+// is a second, independent belt-and-braces clamp on top of this package's
+// own, not the only place the gap is closed). If this constant's value ever
+// changes, both MaxNotificationLookbackDays and
+// internal/config.AzureLookbackDaysMax must change with it — each points
+// back at the other for a human reading either file in isolation.
 const orphanTTL = 30 * 24 * time.Hour
+
+// MaxNotificationLookbackDays is orphanTTL expressed in days rather than a
+// time.Duration: the upper bound NewAdapterWithNotifications clamps
+// lookbackDays to. Derived from orphanTTL, not restated, so the two cannot
+// disagree within this package. internal/config.AzureLookbackDaysMax mirrors
+// this exact number for its own, earlier clamp in LoadFrom; a one-line
+// equality test in cmd/azdo-tui (which already imports both packages) pins
+// the two staying equal — see
+// TestAzureLookbackDaysMax_ConfigAndAdapterAgree.
+const MaxNotificationLookbackDays = int(orphanTTL / (24 * time.Hour))
 
 // NotifKey builds the stable identity key for a locally-tracked synthetic
 // notification subject (decision 2): "<source>/<entity>/<entity_id>". This

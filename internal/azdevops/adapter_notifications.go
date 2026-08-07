@@ -58,10 +58,18 @@ func DefaultNotificationSourceToggles() NotificationSourceToggles {
 // provider.NotificationSource, wrapping mc for the existing provider.Provider
 // surface and store for local triage-state persistence
 // (notifications_store.go, notifications_reconcile.go). lookbackDays bounds
-// SourceAssigned's and SourceCIFailed's query windows; a non-positive value
-// falls back to DefaultNotificationLookbackDays rather than reaching Azure
-// with an unbounded or negative window. toggles controls which of the four
-// sources List fans out to.
+// SourceAssigned's and SourceCIFailed's query windows (the other two
+// sources, SourceReviewRequested and SourceMentioned, do not take a
+// lookback at all); a non-positive value falls back to
+// DefaultNotificationLookbackDays rather than reaching Azure with an
+// unbounded or negative window, and a value above
+// MaxNotificationLookbackDays is clamped down to it — orphanTTL's own doc
+// comment explains why exceeding that bound reopens the resurfaces-as-unread
+// gap the clamp exists to close. This clamp runs here regardless of caller:
+// internal/config.LoadFrom applies the same bound before this constructor is
+// ever reached, but that is a second, earlier clamp on top of this one, not
+// a substitute for it — any other caller passing e.g. 90 directly is caught
+// here too. toggles controls which of the four sources List fans out to.
 //
 // This is a separate constructor from NewAdapter, not a new parameter on it,
 // mirroring github.NewAdapterWithNotifications's precedent
@@ -74,6 +82,9 @@ func DefaultNotificationSourceToggles() NotificationSourceToggles {
 func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDays int, toggles NotificationSourceToggles) *Adapter {
 	if lookbackDays <= 0 {
 		lookbackDays = DefaultNotificationLookbackDays
+	}
+	if lookbackDays > MaxNotificationLookbackDays {
+		lookbackDays = MaxNotificationLookbackDays
 	}
 	return &Adapter{
 		mc:                mc,

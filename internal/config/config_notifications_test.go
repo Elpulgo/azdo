@@ -282,9 +282,9 @@ notifications:
     Lookback_Days: 21
     MIN_POLL_INTERVAL: 600
     sources:
-      Review_Requested: true
+      Review_Requested: false
       MENTIONED: false
-      Assigned: true
+      Assigned: false
       Ci_Failed: false
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -303,21 +303,24 @@ notifications:
 	if a.MinPollInterval != 600 {
 		t.Errorf("Azure.MinPollInterval = %d, want 600 (mixed-case key MIN_POLL_INTERVAL should still resolve)", a.MinPollInterval)
 	}
-	// Two of the four sources are explicitly false here, on purpose: task 11
-	// defaults every source to true, so a fixture that sets all four to true
-	// would pass even if the mixed-case keys below never resolved at all
-	// (the default would produce the same "true" by coincidence). Setting
-	// MENTIONED/Ci_Failed to false is the only way this test can tell "the
-	// mixed-case key resolved to an explicit false" apart from "the key
-	// never resolved and the field fell back to its default".
-	if !a.Sources.ReviewRequested {
-		t.Error("Azure.Sources.ReviewRequested = false, want true (mixed-case key Review_Requested should still resolve)")
+	// All four sources are explicitly false here, on purpose: task 11
+	// defaults every source to true, so any row that asserted an explicit
+	// "true" would pass even if that row's mixed-case key never resolved at
+	// all -- the true default would produce the same "true" by coincidence,
+	// which is exactly what an earlier version of this test did for
+	// Review_Requested and Assigned while its failure message claimed to pin
+	// case resolution (task-11 review finding 5). Explicit false on all four
+	// is the only way every row can tell "the mixed-case key resolved to an
+	// explicit false" apart from "the key never resolved and the field fell
+	// back to its true default".
+	if a.Sources.ReviewRequested {
+		t.Error("Azure.Sources.ReviewRequested = true, want false (mixed-case key Review_Requested should resolve to its explicit false, not the true default)")
 	}
 	if a.Sources.Mentioned {
 		t.Error("Azure.Sources.Mentioned = true, want false (mixed-case key MENTIONED should resolve to its explicit false, not the true default)")
 	}
-	if !a.Sources.Assigned {
-		t.Error("Azure.Sources.Assigned = false, want true (mixed-case key Assigned should still resolve)")
+	if a.Sources.Assigned {
+		t.Error("Azure.Sources.Assigned = true, want false (mixed-case key Assigned should resolve to its explicit false, not the true default)")
 	}
 	if a.Sources.CIFailed {
 		t.Error("Azure.Sources.CIFailed = true, want false (mixed-case key Ci_Failed should resolve to its explicit false, not the true default)")
@@ -441,7 +444,7 @@ notifications:
 
 // TestLoad_AzureLookbackDays_ClampedToOrphanTTL pins the boundary shape
 // convention 13 asks for: exactly at the clamp (30) is left unchanged, one
-// past it (31) is silently clamped down. Beyond azureLookbackDaysMax an item
+// past it (31) is silently clamped down. Beyond AzureLookbackDaysMax an item
 // can be pruned from the local triage store (azdevops.orphanTTL) while
 // still inside the query window and resurface as unread with nothing having
 // actually happened to it.
@@ -491,6 +494,149 @@ notifications:
 				t.Errorf("Azure.LookbackDays = %d, want %d", cfg.Notifications.Azure.LookbackDays, tt.want)
 			}
 		})
+	}
+}
+
+// TestLoad_AzureLookbackDays_ClampWarns pins task-11 review decision A: the
+// clamp above AzureLookbackDaysMax is a silent-in-value, warned-in-Warnings
+// normalization -- the user expressed an intent (90) that this overrides,
+// which is exactly the class of thing Config.Warnings exists for elsewhere
+// in this file (unrecognised exclude_reasons, a malformed repo glob,
+// only_configured_repos swallowing include_repos).
+func TestLoad_AzureLookbackDays_ClampWarns(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    lookback_days: 90
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.Azure.LookbackDays != AzureLookbackDaysMax {
+		t.Fatalf("Azure.LookbackDays = %d, want %d", cfg.Notifications.Azure.LookbackDays, AzureLookbackDaysMax)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	msg := cfg.Warnings[0]
+	if !strings.Contains(msg, "notifications.azure.lookback_days") || !strings.Contains(msg, "90") || !strings.Contains(msg, "30") {
+		t.Errorf("warning should name the key, the supplied value and the maximum, got: %s", msg)
+	}
+}
+
+// TestLoad_AzureLookbackDays_ZeroFallback_NoWarning is
+// TestLoad_AzureLookbackDays_ClampWarns's negative counterpart: decision A
+// says the clamp warns but the separate zero-means-unset fallback must stay
+// silent, since zero reads as "unset" rather than as an expressed intent
+// the normalization overrides.
+func TestLoad_AzureLookbackDays_ZeroFallback_NoWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    lookback_days: 0
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.Azure.LookbackDays != DefaultAzureLookbackDays {
+		t.Fatalf("Azure.LookbackDays = %d, want %d", cfg.Notifications.Azure.LookbackDays, DefaultAzureLookbackDays)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want empty (an explicit lookback_days: 0 falling back to the default must stay silent)", cfg.Warnings)
+	}
+}
+
+// TestLoad_AzureMinPollInterval_Zero_FallsBackToDefault pins task-11 review
+// decision B: min_poll_interval: 0 must fall back to
+// DefaultAzureMinPollInterval, symmetric with lookback_days above, rather
+// than surviving as a literal 0 that would mean "the adapter never
+// self-throttles" under decision 10.
+func TestLoad_AzureMinPollInterval_Zero_FallsBackToDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    min_poll_interval: 0
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.Azure.MinPollInterval != DefaultAzureMinPollInterval {
+		t.Errorf("Azure.MinPollInterval = %d, want %d (explicit zero must fall back to the default, not be treated as \"no self-throttle\")",
+			cfg.Notifications.Azure.MinPollInterval, DefaultAzureMinPollInterval)
+	}
+}
+
+// TestLoad_AzureLookbackDaysNegative_RejectedByLoadFrom is the LoadFrom-level
+// counterpart TestConfig_Validate_NotificationsRejectsNegative's
+// "azure lookback_days negative" row cannot substitute for:
+// TestConfig_Validate_NotificationsRejectsNegative constructs a *Config
+// struct literal directly, so it never exercises LoadFrom's own
+// `lookback_days == 0` normalization branch that runs immediately before
+// Validate() is called. Written as `<= 0` instead of `== 0`, that branch
+// would silently rewrite a file's explicit `lookback_days: -1` to the
+// 14-day default before Validate() ever sees a negative to reject -- the
+// user's malformed key would be accepted and normalized rather than
+// reported (task-11 review finding 4). This test writes the negative
+// straight to a YAML fixture and drives the full LoadFrom path, which is
+// the only way to catch that regression.
+func TestLoad_AzureLookbackDaysNegative_RejectedByLoadFrom(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    lookback_days: -1
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadFrom(configPath)
+	if err == nil {
+		t.Fatal("LoadFrom() = nil error, want an error naming notifications.azure.lookback_days")
+	}
+	if !strings.Contains(err.Error(), "notifications.azure.lookback_days") {
+		t.Errorf("LoadFrom() error = %q, want substring %q", err.Error(), "notifications.azure.lookback_days")
 	}
 }
 
