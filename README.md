@@ -486,13 +486,20 @@ produce an unrecognised-value warning.
 without an error, and it does not hide the tab. If you want the tab gone, use
 `disabled_panes`.
 
-**Each Azure source fetches at most 50 items per project per poll**, newest first. This is
-a fixed internal bound, not something `max_items` controls — `max_items: 0` means "don't cap
-the merged feed", not "fetch everything". In a busy org with more than 50 recently assigned
-work items or more than 50 recent mention candidates in a single project, the older ones
-are simply not fetched, and nothing in the pane tells you so. Narrowing `lookback_days` is
-the knob that helps here: a shorter window means the 50 you do get are the ones you care
-about.
+**Each Azure source fetches at most 50 items per project per poll.** This is a fixed
+internal bound, not something `max_items` controls — `max_items: 0` means "don't cap the
+merged feed", not "fetch everything". `@mentions` is capped twice: 50 candidate work items
+per project, then 50 again across all projects merged, so in a three-project org mentions
+truncate at roughly 17 per project.
+
+Three of the four sources ask the server for the newest items first — work items by last
+changed, pipeline runs by finish time — so what survives their cap is the most recent. "PRs
+awaiting my review" sends no ordering at all, so which 50 you get is whatever the server
+returns first. Either way, in a busy org with more than 50 recently assigned work items or
+more than 50 mention candidates, the rest are simply not fetched, and nothing in the pane
+tells you so. Narrowing `lookback_days` helps for assigned work items and failed runs — a
+shorter window means the 50 you do get are the ones you care about. For mentions and review
+requests there is no such knob: `lookback_days` does not reach either source.
 
 **Repo glob syntax.** `exclude_repos` / `include_repos` patterns are `path.Match` globs,
 matched case-insensitively (both the pattern and the scope are lower-cased first). `*`

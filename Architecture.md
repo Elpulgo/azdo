@@ -458,14 +458,20 @@ touching the code.
 | `assigned` | WIQL `@Me` macro, bounded by `lookback_days` | `NotificationReasonAssigned` | `assigned/wi/<id>` |
 | `ci_failed` | completed pipeline runs `RequestedFor` the user whose result is `failed`, bounded by `lookback_days`. A `canceled` or `partiallySucceeded` run is deliberately not a failure and never appears | `NotificationReasonCIActivity` | `cifail/run/<id>` |
 
-Every source is additionally capped at **50 items per project per poll**
-(`reviewRequestedQueryTop`, `ciFailedQueryTop`, `assignedQueryTop`,
-`mentionCandidateQueryTop` in `internal/azdevops/adapter_notifications.go`). The cap is
-fixed, not configurable, and unrelated to `max_items` — which bounds the merged feed after
-the sort, not what each source fetches. The mention source is the only one that even
-*measures* its truncation, and it discards the count because `NotificationSource` has no
-non-error channel to report it on, which is why an over-50 org loses rows silently. That
-gap is tracked alongside the warnings-channel question.
+Every source is additionally capped at **50 items per project per poll** —
+`reviewRequestedQueryTop` and `ciFailedQueryTop` in `adapter_notifications.go`,
+`assignedQueryTop` in `notifications_source_assigned.go`, `mentionCandidateQueryTop` in
+`notifications_source_mentioned.go`. The cap is fixed, not configurable, and unrelated to
+`max_items` — which bounds the merged feed after the sort, not what each source fetches.
+
+Mentions carry a second, tighter cap: `mentionCandidateLimit` (also 50) trims the candidate
+list *after* the per-project results are interleaved, because stage 2 costs one HTTP call
+per candidate. That merged cut is the only truncation in the four sources that is measured
+— `SourceMentionedResult.CandidatesDropped` counts it, and `adapter_notifications.go:382`
+discards the count because `NotificationSource` has no non-error channel to report it on.
+The per-project `$top` cuts aren't measured at all: the server returns 50 rows and nothing
+distinguishes that from an org that has exactly 50. Either way an over-50 org loses rows
+silently. That gap is tracked alongside the warnings-channel question.
 
 The `ci_failed` row is deliberate, not a typo: the config toggle names what
 the source *queries* (a failed run), while the reason it emits,
