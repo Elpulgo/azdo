@@ -340,7 +340,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). *(Re-validated 2026-08-07 against `6047aa3`, which fixes all six review findings; the original `→ done:` clauses were re-checked against the current code and still hold. See the re-validation record at the end of `## Validation: task 10`.)* → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the **six** shared keys stay at top level (corrected 2026-08-07 — this said "five", propagated from decision 13's rationale; the YAML lists six and nine minus three is six); keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
 - [x] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). *(Re-validated 2026-08-07 against `0eeb10a`, which fixes all seven review findings and implements both settled decisions, plus `6556b25`, which kills the two mutants that re-validation found surviving and corrects three stale comments; the original `→ done:` clauses were re-checked against the current code and still hold. See the two re-validation records at the end of `## Validation: task 11`.)* → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
 - [x] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). *(Re-validated 2026-08-07 against `7040c11` + `8a03257`, which fixes both review findings and implements Decision C; re-ticked. See the re-validation record at the end of `## Validation: task 12`.)* → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
-- [x] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
+- [ ] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). *(Un-ticked 2026-08-07 after review — the behaviour is correct and the acceptance clauses hold against `f478f74`, but the widened conjunct turned out to be provably dead and both the replaced comment and the new error message describe an unreachable condition. Re-tick once `## Review feedback: task 13` is addressed.)* → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
 - [ ] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [ ] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
 - [ ] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
@@ -1645,10 +1645,150 @@ touched files is clean.
 Out of scope, correctly left untouched: task 14's `main.go:330-331`
 hardcoded lookback/toggles, task 15's ADR, task 16's docs.
 
+## Review feedback: task 13
+
+Reviewed at opus against `f478f74`. Verdict REQUEST_CHANGES. The behaviour is
+right and decision 9's letter is satisfied — but the widening made the new
+conjunct **provably dead**, and both the replaced comment and the reworded
+error message describe a condition `Validate()` can no longer reach.
+
+**The fact everything hangs off.** `config.go:805` already returns before the
+pane guard:
+
+```go
+if !c.HasAzure() && !c.HasGitHub() {
+    return fmt.Errorf("no backend configured in config.yaml\n\n...")
+}
+```
+
+`Validate()` is straight-line between 805 and 866, and the only other early
+return (the `azurePartial` branch at 787) also returns. So at line 866,
+`c.HasAzure() || c.HasGitHub()` is a tautology. The reviewer **measured** this
+rather than arguing it: replacing the whole conjunct with the literal `true`
+leaves `./internal/... ./cmd/...` fully green, including both tables `f478f74`
+widened. The validator's mutations (`→ c.HasGitHub()`, `→ HasAzure() && HasGitHub()`)
+could not have caught it — both *narrow* the predicate, so of course they go
+red. Nothing mutated it *wider*, which is the direction that exposes inert code.
+Worth carrying into the reflection step: narrowing-only mutation sets
+systematically miss dead conjuncts.
+
+**1. 🟡 `config.go:855-865` — the comment justifies the conjunct with a hazard
+that cannot occur.** It says a naive four-way guard "would let a config with
+the other three panes disabled pass here and then start with zero navigable
+tabs if no configured backend implements NotificationSource". True when the
+conjunct was `HasGitHub()`; false now, because the only config with no capable
+backend is the config with no backend, rejected 60 lines earlier. The comment's
+second half — that both Azure and GitHub satisfy `provider.NotificationSource`
+unconditionally once configured, Azure regardless of its per-source toggles —
+**is accurate** and was verified against `main.go:293/330/335/351` and the
+compile-time assertions. It just does not rescue the paragraph: being equivalent
+to capability is not the same as being load-bearing.
+
+*Failure scenario:* a maintainer later adds an offline/demo mode and relaxes the
+line-805 backend requirement. The comment tells them the pane guard catches the
+resulting zero-tab config. It does not, and no test can produce that case, so
+they ship the relaxation trusting a conjunct that has never been exercised in
+the role the comment assigns it.
+
+**Settled 2026-08-07: option (a) — drop the conjunct.** `notificationsCounts :=
+c.IsPaneEnabled("notifications")`, with a comment stating only what is true: the
+backend requirement above already guarantees a capable backend, both backends
+satisfy `NotificationSource` once configured, and the `HasGitHub()` special case
+existed only while GitHub was the sole capable backend. The reviewer offered
+(b) — keep it as defence-in-depth against the 805 check moving, labelled as
+redundant-on-purpose. Rejected: decision 9 says the special case *disappears*,
+and (b) preserves a line no test can cover while a third backend would force
+rewriting 805 and the conjunct together anyway, so it does not buy the
+future-proofing it claims.
+
+**2. 🟡 `config.go:868-869` — the error message names a cause that can never be
+the cause.** Verbatim: `...must remain enabled (or leave 'notifications'
+enabled with a notification-capable backend configured)`. Since the guard can
+only fire when all four panes are in `disabled_panes`, the backend half is
+never the missing piece. The old message named a concrete key (`at least one
+repo under github.repos`); the new one names none — it lost the actionable half
+and kept the unactionable one. Note `backend` *is* established user-facing
+vocabulary (`README.md:330`, `README.md:103`), so the term is defensible; the
+problem is that the clause restates the code's conjunct instead of naming an
+edit.
+
+*Failure scenario:* a user with a working Azure org writes
+`disabled_panes: pullrequests,workitems,pipelines,notifications`. Startup aborts
+telling them to leave notifications enabled "with a notification-capable backend
+configured" — which they have. They go audit PAT scopes and their
+`organization`/`projects` block, all fine, because the message pointed at the
+backend. The one edit that fixes it (drop any name from `disabled_panes`) is
+only implied, and `notifications` is not even among the panes named at the front
+of the sentence.
+
+**Settled: say the only reachable cause, matching line 848's shape** —
+`cannot disable all panes: at least one of 'pullrequests', 'workitems',
+'pipelines' or 'notifications' must remain enabled`.
+
+**3. 🟢 `config_notifications_test.go:857` — the test name overclaims.**
+`TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend` asserts
+the one property that is now vacuous, and the table proves it: the row at 946
+expects `"no backend configured"` and its own comment concedes it is rejected
+by the earlier check, "not by the pane guard this task widens". No row in the
+table lets the backend conjunct decide the outcome, because none is
+constructible. Rename to what the table walks — e.g.
+`TestConfig_Validate_PaneGuard_AcrossBackendCombinations`. The row coverage is
+good and stays.
+
+**4. 🟢 `config_test.go:659-664` — the flipped row's name describes a dimension
+its table does not vary.** `"valid - three code panes disabled, Azure
+configured rescues notifications"`, but every row shares one struct literal with
+`Organization`/`Projects` set, so "Azure configured" is a constant of the
+harness. It *does* earn its place — narrowing the predicate back to
+`c.HasGitHub()` turns it red, so it pins the GitHub-only coupling out of a
+second file — but shorten the name to
+`"valid - three code panes disabled, notifications remains"`.
+
+**5. 🟢 Pre-existing and NOT introduced here, but re-asserted by the rewrite:
+"Metrics cannot rescue this" is false when metrics is on.** `buildEnabledTabs`
+(`app.go:411`) does `if cfg.Metrics.Enabled && azurePresent { tabs = append(tabs,
+TabMetrics) }`, and the pane guard never consults `Metrics.Enabled`. So
+`organization` + `projects` set, `metrics.enabled: true`, all four panes
+disabled yields exactly one navigable tab at runtime and works fine — but
+`Validate()` rejects it at startup. **A user who wants a metrics-only dashboard
+cannot have one.** Fixing the guard is out of task 13's scope and is recorded
+under `## Unknowns` for Oscar; what *is* in scope is that this rewrite
+re-asserted the false claim instead of re-deriving it, so the sentence must be
+corrected to what is true: metrics is not counted here because it is separately
+gated on `metrics.enabled` **and** a live Azure client, neither of which this
+method can confirm.
+
+**Clean negatives — checked and not found, recorded so they are not
+re-litigated:** `HasAzure()` is an honest capability proxy given the current
+wiring (every failure inside `main.go:293`'s block aborts `runTUI` rather than
+degrading to a non-notifying adapter; same for GitHub at 335). No PAT scope or
+auth mode can make a configured Azure org non-capable. There is no
+`notifications.enabled` key. All four Azure source toggles off is legal per task
+11 and yields a navigable-but-empty tab — a design consequence already ratified
+there, and not even reachable until task 14 wires the toggles. The widening
+exposes no newly-untested runtime path: the guard was never what kept Azure-only
+users off the tab (`hasNotificationCapability` was, and task 8 made Azure
+capable), so the only new shape is notifications-as-sole-tab, which was already
+reachable for GitHub-only. The only surviving "notifications needs GitHub" text
+in *code* is `main.go:99` and `main.go:236`, both correctly about classic vs
+fine-grained tokens for GitHub's inbox API, and owned by task 16.
+
 ## Unknowns
 
 Resolved by the decisions above: poll cadence (10), first-run flood (6), multi-project
 grouping (11), Releases-arc mirroring (12). Still genuinely open:
+
+- **A metrics-only dashboard is rejected at startup, and shouldn't be.** Found by task
+  13's review, 2026-08-07; **pre-existing, not introduced by phase 2**, and out of task
+  13's scope, so it is recorded here rather than fixed in passing. `buildEnabledTabs`
+  (`app.go:411`) appends `TabMetrics` when `cfg.Metrics.Enabled && azurePresent`, but the
+  all-panes-disabled guard in `Validate()` never consults `Metrics.Enabled`. So a config
+  with `organization` + `projects` set, `metrics.enabled: true`, and all four panes in
+  `disabled_panes` would start fine with exactly one navigable tab — but `Validate()`
+  aborts it. The fix is a one-line widening (`|| (c.Metrics.Enabled && c.HasAzure())`),
+  but it is a behaviour change to a shipped guard and it is Oscar's call whether a
+  metrics-only TUI is a configuration worth supporting at all. Task 13 only corrects the
+  comment that asserted the opposite.
 
 - **What should happen when an activity stamp is forward-clamped?** Raised by task 9's
   review, 2026-08-07, and it is the mirror of the regression question below — same root,
