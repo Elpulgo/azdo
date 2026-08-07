@@ -336,12 +336,12 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 6. **`azdevops`: source — recently assigned work items** → `assigned` (blocked by: 3). → done: WIQL over `[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-N AND [System.State] <> 'Closed' AND [System.State] <> 'Removed'` (decision 6 — no snapshot, no delta state); **the state clause is not optional** — closing a work item is a revision, so it advances `ChangedDate`, and without the clause the one action that completes your work is also the one that guarantees the row returns as unread, inverting decision 7's auto-expiry (amended 2026-08-06 after review; `ListMyWorkItems` at `workitems.go:261-266` already excludes both states); key is `assigned/wi/<id>`; a test proves the same poll run twice yields identical rows and identical state (idempotence is the property that replaces the snapshot); a fresh install with an empty state file surfaces at most the window's worth of items, asserted with a fixture spanning items inside and outside the window
 - [x] 7. **`azdevops`: source — my failed pipeline runs** → `ci_activity` (blocked by: 3). → done: queries runs triggered by me with a failed result; key is `cifail/run/<id>`; reason is `NotificationReasonCIActivity` per decision 8, asserted by name so a future `ci_failed` member cannot be silently swapped in. **The query must narrow server-side, not in Go over `ListPipelineRuns`'s output** (amended 2026-08-06 after review): `ListPipelineRuns` (`pipelines.go:12`) fetches the N most recent builds in the project across all pipelines, all users and all results, so a client-side filter spends `$top` on other people's builds — this is the only one of the four sources whose narrowing is not server-side (review uses `reviewerId`, assigned and mentioned use WIQL), and on a busy project your failure ages out of the window and **disappears from the feed while still unread**, with the failure mode worsening exactly as team activity rises. Add a dedicated client method passing `statusFilter=completed&resultFilter=failed&requestedFor=<id>&minTime=<now-lookbackDays>&queryOrder=finishTimeDescending`; leave `ListPipelineRuns` untouched for the pipelines pane, and **keep the Go-side `requestedFor`/result check as a belt-and-braces re-check** so an ignored or mis-typed server parameter degrades to over-fetching rather than to attributing someone else's build to you. `minTime` also makes this source honour decision 6's lookback — it is the only source that currently does not, which would leave task 11's `lookback_days` silently governing three of four sources. **The subject is not permanently stable:** Azure's *rerun failed jobs* / *rerun stage* re-executes inside the **same run id** on YAML pipelines (classic queues a new id), recomputing `result` and `finishTime` — so `FinishTime` is load-bearing, a re-failure correctly resurfaces the row as unread, and a green rerun expires it per decision 7; that behaviour is wanted, but it must be documented as what it is and pinned by a test that advances `FinishTime` on the same id, not only by the equal-stamp repoll case `Reconcile` already covers
 - [x] 8. **`azdevops`: compose sources concurrently and implement `NotificationSource`** (blocked by: 4,5,6,7). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)` plus a conformance test following `adapter_conformance_test.go`; sources run concurrently and **one failing source degrades to the others rather than emptying the feed** — the same rule phase 1's decision 20 enforces at the composite layer, restated here because a source is to the Azure adapter what a backend is to the composite, and phase 1 lost a defect to exactly this; `Adapter` does **not** implement `PollIntervalHinter` (decision 10), asserted by a negative compile-time check; local state is folded into `Notification.Read` **at this boundary**, per phase 1's unread-semantics constraint — nothing above the adapter may learn that Azure read state is local; **and the composite will discard your rows if you hand it an error** — `composite.go:669-672` does `if r.err != nil { errs = append(errs, r.err); continue }`, and `composite.go:637-641` documents that as deliberate (a backend reporting failure cannot vouch for the completeness *or ordering* of what it returned). So propagating task 4's `*PartialError` upward from `Adapter.List` re-blanks the Azure half of the feed one layer up, re-introducing the exact defect task 4 was reopened to fix. Decide it deliberately: either `Adapter.List` absorbs partial failures and returns `(rows, nil)`, or phase 1's composite rule is revisited — do not leave it to fall out of the code (added 2026-08-06 from task 4's re-validation). **Resolved 2026-08-07: `Adapter.List` absorbs, and the composite rule stands.** The composite's rationale is right *at its own boundary* — it cannot know whether a backend's partial result is sorted or complete — but the Azure adapter is the layer that merged and sorted these rows, so it can vouch for them, and revisiting the composite rule would reopen a phase-1 defect for every backend to fix a problem local to this one. Concretely: `Adapter.List` returns `(rows, nil)` whenever **at least one source succeeded**, and propagates the error only when **every** source failed. (**Corrected 2026-08-07, same day, from task 8's review:** this first read "at least one *row*", which is not the same test and gets a live case wrong — three sources fail, the fourth succeeds, and the user has already triaged its rows away, so `Reconcile` legitimately returns zero. Keying on the row count turns that into `errors.Join` → the composite's `len(errs) == total` → a permanent `errorBody` in the pane, every poll, from a partial outage in which one source demonstrably worked. Keying on the source count says what was actually meant: an empty feed is a feed, an outage is when nothing answered.) — so a total outage still surfaces as an error while a single expired project PAT degrades to a shorter feed. The cost is real and is accepted knowingly: a partial Azure failure becomes **invisible**, since the composite renders `"%d of %d backends failed to load"` from errors alone and the adapter has no non-error channel to report on. That is the lesser harm for an attention feed — missing rows is degradation the user can recover from, an empty pane is an outage that teaches them to stop trusting the tab — but it is a gap, and widening `NotificationSource` with a warnings channel is recorded under `## Unknowns` for Oscar rather than invented here
-- [x] 9. **`azdevops`: `MarkRead`/`MarkDone` write to the local store** (blocked by: 2,8). → done: both take a `provider.Identity` and write through `Identity.ID` as the key; marking an id the store has never seen creates the entry rather than erroring — the composite routes by `Identity.Kind` and cannot know what the store has; `MarkDone` on an already-done id is a no-op, not a double-write; writes go through the debounced store and a `Flush()` on shutdown guarantees durability
+- [ ] 9. **`azdevops`: `MarkRead`/`MarkDone` write to the local store** (blocked by: 2,8). *(Un-ticked 2026-08-07 — review found one must-fix and four should-fixes; see `## Review feedback: task 9`. The loop only ever picks the first unblocked **open** task, so a ticked task with outstanding findings is never revisited.)* → done: both take a `provider.Identity` and write through `Identity.ID` as the key; marking an id the store has never seen creates the entry rather than erroring — the composite routes by `Identity.Kind` and cannot know what the store has; `MarkDone` on an already-done id is a no-op, not a double-write; writes go through the debounced store and a `Flush()` on shutdown guarantees durability
 - [ ] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the five shared keys stay at top level; keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
 - [ ] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
 - [ ] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
 - [ ] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
-- [ ] 14. **`azdevops`: adapter self-throttling** (decision 10) (blocked by: 8,11). → done: `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and take no lock shared with `List`
+- [ ] 14. **`azdevops`: adapter self-throttling** (decision 10) (blocked by: 8,11). → done: `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [ ] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
 - [ ] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
 
@@ -396,6 +396,12 @@ task-8 lineage it builds on, not just the isolated diff):
   claim found unpinned by a test — the "`LastActivity` written here is
   always >= the row's own `UpdatedAt`" claim is the one load-bearing
   instance and is exactly what the invariant test above pins.
+  **Superseded 2026-08-07 by the review below: that claim is false and the
+  test does not pin it.** Both this validation and the implementer reasoned
+  about the row that *triggered* the mark; `Reconcile` compares against the
+  row as re-fetched on the **next** poll, and the forward clamp can advance
+  that row's stamp with nothing having happened to the subject. See
+  `## Review feedback: task 9`, finding 1.
 
 Mutation testing: 6 targeted mutants (already-read no-op, already-done
 no-op, unseen-id creation gated on pre-existing entry, empty-id guard on
@@ -410,10 +416,123 @@ only (`adapter_list_test.go`, `adapter_url_test.go`, `logs_test.go`,
 `mapping_test.go`, `timeline_test.go`, `workitems.go`) — neither file this
 task touched is on that list.
 
+## Review feedback: task 9
+
+Opus review of `ba88a24` plus its task-8 lineage, 2026-08-07. Verdict
+REQUEST_CHANGES. Task 9 un-ticked.
+
+**1. 🔴 The load-bearing "always >=" comment is false.**
+`adapter_notifications.go:344-355` claims the `LastActivity` a mark writes is
+always `>=` the row's own `UpdatedAt`, "which is exactly the invariant
+`Reconcile`'s strictly-newer branch needs". The premise holds for the row that
+*triggered* the mark. `Reconcile` compares against the row as re-fetched on the
+**next** poll, and the clamp in all four `*ActivityStamp` helpers is
+`if stamp.After(now) { return now }` — it caps at *each poll's own* `now`. A
+subject whose raw stamp is ahead of the client clock therefore yields a clamped
+stamp that advances by one poll interval every poll, with nothing having
+happened to the subject, and `Reconcile` reads that as new activity and clears
+the mark. Reproduced end-to-end against the real helpers. Fix the comment to
+claim only what holds (`>=` the `UpdatedAt` of the row the mark was issued
+from); the behaviour itself is decision A below.
+
+**2. 🟡 `MarkDone`'s `LastActivity`/`LastSeen` backfills are unpinned — two
+mutants survive the whole suite.** Deleting either
+`if entry.LastActivity.IsZero()` or `if entry.LastSeen.IsZero()` from
+`MarkDone` (`adapter_notifications.go:420-425`) leaves the suite green; the
+same deletions in `MarkRead` are both killed. The `LastActivity` one is the
+live defect `Reconcile`'s own task-9 invariant paragraph
+(`notifications_reconcile.go:97-102`) warns about: a zero `LastActivity` loses
+to any real `UpdatedAt`, `Done` is cleared, and the row the user dismissed is
+back one poll later. `TestAdapter_MarkDone_UpdatesLocalTriageState` asserts only
+`entry.Done` where its `MarkRead` twin asserts the stamps, and
+`TestAdapter_MarkDone_AlreadyDone_IsNoOp` compares two zero times, which is a
+tautology against this mutant.
+
+**3. 🟡 `ApplyIfChanged`'s doc sanctions an in-memory/on-disk divergence.**
+`notifications_store.go:194-196` says `mutate` "may still write into the live
+map" while returning `false`, and calls the result "not persisted". `mutate`
+receives `s.state` itself, so such a write is immediately visible to `State()`
+and to `Swap`, and is either lost on exit or written later by an unrelated
+`Apply`. What `false` skips is *scheduling*, not persistence. Tighten the
+contract to "must not write when returning `false`" and pin it — it is
+currently unpinned in both directions. `MarkRead`/`MarkDone` are safe only
+because they return before touching the map, and nothing enforces that.
+
+**4. 🟡 Four mutation APIs, two with no production callers.** Every
+`TriageStore.Apply` and `TriageStore.Replace` call site is now in
+`notifications_store_test.go` — marks moved to `ApplyIfChanged`, `Replace` lost
+its caller to `Swap` in task 8. Locking is correct in all four; the problem is
+surface area, and `Apply(f)` is exactly
+`ApplyIfChanged(func(s) bool { f(s); return true })`. Collapse or delete before
+task 14 has to choose between them.
+
+**5. 🟡 An empty-key row is rendered but permanently un-markable.** `NotifKey`
+returns `""` for `id <= 0`; all four sources emit the row anyway and
+`Reconcile` (`notifications_reconcile.go:112-121`) deliberately passes it
+through as unread-and-untracked. The pane renders it, the user presses `u` or
+`d`, and the mark returns `azdevops: mark read: empty identity id` — unread
+forever, an error banner on every attempt. The guard is right at its own
+boundary; the gap is that no layer drops the row. Drop it at `Reconcile` (the
+one choke point all four sources funnel through) and correct the three doc
+comments that each describe this as handled.
+
+**6. 🟢** `MarkRead`'s doc scopes the `LastActivity` backfill to "an id the
+store has never seen"; the code applies it to any entry with a zero
+`LastActivity`, including one `Reconcile` created from a row that had no usable
+stamp. Behaviourally benign, but the comment says something narrower than the
+code does.
+
+**7. 🟢** `TestTriageStore_ApplyIfChanged_TrueDirtiesAndPersists` arms a 10 ms
+debounce and then reads `store.dirty`; a scheduler stall between the two
+statements fails the test spuriously. It calls `Flush()` explicitly anyway, so
+the short debounce buys nothing — use `time.Hour`, as `newTestTriageStore`
+already does for this reason.
+
+**Design decision A — deferred to Oscar. The forward clamp is a resurrection
+engine, and it is not a task-9 defect.** Finding 1's *behaviour* cannot be
+fixed inside `MarkRead`. The four stamp helpers clamp a future raw stamp to the
+current poll's `now` (tasks 4-7) and `Reconcile` reads any advance as new
+activity (task 3); marks are merely where it becomes visible. It bites without
+any mark at all — `Reconcile`'s `!seen` branch stores the clamped value too, so
+such a row resurfaces as unread every poll regardless. Severity scales with how
+far ahead the raw stamp is: a few seconds of NTP skew costs **one** spurious
+resurrection and then settles, because the next poll's `now` has overtaken the
+raw stamp; a genuinely far-future date (`GIT_COMMITTER_DATE`, a
+badly-configured build agent) churns every poll until wall-clock catches up.
+The clamp cannot simply be removed — `prActivityStamp`'s doc explains that an
+unclamped future stamp "would raise the bar past anything a real push could
+ever clear, permanently freezing the row". So the choice is between
+permanent-freeze and permanent-churn, and the code picked churn silently.
+Options: (1) have the stamp helpers report *that* they clamped and have
+`Reconcile` treat a clamped stamp like a zero stamp — no usable activity
+information, stored state applies unchanged; cheap, local, **no change to
+`TriageEntry`'s persisted shape**, so it does not collide with the deferred
+`LastCommitID` decision; (2) store the raw stamp and compare raw-to-raw, which
+changes what `LastActivity` means; (3) the opaque-token design already in
+`## Unknowns`, which solves this *and* the mirror regression case but changes
+the persisted shape and all four sources. Option 1 looks right, but this is the
+same family as the deferred unknown and the loop should not pick.
+
+**Design decision B — resolved, task 14's wording clarified.** The reviewer
+noted that task 14's "`MarkRead`/`MarkDone` … take no lock shared with `List`"
+is already violated as written: marks take `TriageStore.mu`, which `list`
+holds across its whole `Swap`. Reviewed and found **not** a defect — that
+critical section runs only in-memory `Reconcile`, with no I/O and no callback
+into the store, and lock order (`writeMu` → `mu`) is consistent everywhere.
+Task 14's line is clarified below to say what was meant.
+
 ## Unknowns
 
 Resolved by the decisions above: poll cadence (10), first-run flood (6), multi-project
 grouping (11), Releases-arc mirroring (12). Still genuinely open:
+
+- **What should happen when an activity stamp is forward-clamped?** Raised by task 9's
+  review, 2026-08-07, and it is the mirror of the regression question below — same root,
+  opposite direction, and it applies to all four sources. Full analysis and the three
+  candidate fixes are under `## Review feedback: task 9`, decision A. **Deferred to Oscar
+  deliberately:** the cheapest fix still changes `Reconcile`'s contract and all four stamp
+  helpers' signatures, and it should be decided together with the token question below
+  rather than separately, since option 3 answers both at once.
 
 - **Should `provider.NotificationSource` gain a non-error warnings channel?** Task 8 resolves
   the partial-failure question by having `Adapter.List` absorb a `*PartialError` and return
