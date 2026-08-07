@@ -3,6 +3,7 @@ package azdevops
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -513,5 +514,119 @@ func TestAdapter_MarkRead_NotBlockedByInFlightList(t *testing.T) {
 	case <-listDone:
 	case <-time.After(testTimeout):
 		t.Fatal("timed out waiting for the in-flight List call to finish after releasing the server")
+	}
+}
+
+// TestAdapter_List_ConcurrentCalls_RunExactlyOneRealQuery pins the
+// serialisation the Adapter struct's lock-order comment describes: list holds
+// notifThrottleMu across its network work, so two callers arriving together
+// cannot both query Azure. The second acquires the lock only after the first
+// has stored notifLastPollAt, and then takes the throttled branch — same rows,
+// no second round trip.
+//
+// The precondition is worth stating, because the guarantee is not absolute:
+// notifLastPollAt records the winner's *entry* time, not its completion time.
+// A caller entering list after the window has already elapsed, while a slow
+// query is still in flight, is not throttled when it finally gets the lock and
+// does run a second query. What this pins is the case the single shared poller
+// actually produces — callers arriving inside the window.
+//
+// Request counts are compared against a measured baseline rather than a
+// literal, so the test keeps meaning if a source changes its request pattern.
+func TestAdapter_List_ConcurrentCalls_RunExactlyOneRealQuery(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	const testTimeout = 5 * time.Second
+
+	var baseline int64
+	baseServer := newComposerServer(t, newComposerFixture(now))
+	defer baseServer.Close()
+	baseHandler := baseServer.Config.Handler
+	baseServer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&baseline, 1)
+		baseHandler.ServeHTTP(w, r)
+	})
+	baseMC := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": baseServer})
+	setUserIDs(baseMC, composerTestUserID)
+	baseAdapter := NewAdapterWithNotifications(baseMC, newTestTriageStore(t), 14, DefaultNotificationSourceToggles(), 5*time.Minute)
+	if _, err := baseAdapter.list(provider.NotifOpts{}, now); err != nil {
+		t.Fatalf("baseline list() error = %v", err)
+	}
+	if atomic.LoadInt64(&baseline) == 0 {
+		t.Fatal("baseline list() made no HTTP requests — the fixture cannot distinguish one real query from two")
+	}
+
+	var requests int64
+	server := newComposerServer(t, newComposerFixture(now))
+	defer server.Close()
+	serverEntered := make(chan struct{}, 1)
+	releaseServer := make(chan struct{})
+	orig := server.Config.Handler
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&requests, 1)
+		select {
+		case serverEntered <- struct{}{}:
+		default:
+			// Only the first request signals; one is enough to prove the
+			// winner is inside list's critical section.
+		}
+		select {
+		case <-releaseServer:
+		case <-time.After(testTimeout):
+			return
+		}
+		orig.ServeHTTP(w, r)
+	})
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+	setUserIDs(mc, composerTestUserID)
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, DefaultNotificationSourceToggles(), 5*time.Minute)
+
+	var rows1, rows2 []provider.Notification
+	var err1, err2 error
+
+	done1 := make(chan struct{})
+	go func() {
+		defer close(done1)
+		rows1, err1 = a.list(provider.NotifOpts{}, now)
+	}()
+
+	select {
+	case <-serverEntered:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for the first list() call to reach the server — cannot exercise the concurrent case")
+	}
+
+	// The first caller holds notifThrottleMu here, so the second cannot start
+	// its own query no matter how the two goroutines interleave from now on.
+	done2 := make(chan struct{})
+	go func() {
+		defer close(done2)
+		rows2, err2 = a.list(provider.NotifOpts{}, now)
+	}()
+
+	close(releaseServer)
+
+	for _, c := range []struct {
+		name string
+		done chan struct{}
+	}{{"first", done1}, {"second", done2}} {
+		select {
+		case <-c.done:
+		case <-time.After(testTimeout):
+			t.Fatalf("timed out waiting for the %s concurrent list() call to return", c.name)
+		}
+	}
+
+	if err1 != nil {
+		t.Fatalf("first concurrent list() error = %v", err1)
+	}
+	if err2 != nil {
+		t.Fatalf("second concurrent list() error = %v, want nil — a throttled return must never be mistaken for a failure", err2)
+	}
+	if got, want := identityIDs(rows2), identityIDs(rows1); !equalStrings(got, want) {
+		t.Errorf("second concurrent list() rows = %v, want the same rows as the first call %v", got, want)
+	}
+	if got, want := atomic.LoadInt64(&requests), atomic.LoadInt64(&baseline); got != want {
+		t.Errorf("concurrent list() calls made %d HTTP requests, want %d (exactly one real query) — the second caller must throttle behind the first, not run its own", got, want)
 	}
 }
