@@ -458,6 +458,15 @@ touching the code.
 | `assigned` | WIQL `@Me` macro, bounded by `lookback_days` | `NotificationReasonAssigned` | `assigned/wi/<id>` |
 | `ci_failed` | completed pipeline runs `RequestedFor` the user whose result is `failed`, bounded by `lookback_days`. A `canceled` or `partiallySucceeded` run is deliberately not a failure and never appears | `NotificationReasonCIActivity` | `cifail/run/<id>` |
 
+Every source is additionally capped at **50 items per project per poll**
+(`reviewRequestedQueryTop`, `ciFailedQueryTop`, `assignedQueryTop`,
+`mentionCandidateQueryTop` in `internal/azdevops/adapter_notifications.go`). The cap is
+fixed, not configurable, and unrelated to `max_items` — which bounds the merged feed after
+the sort, not what each source fetches. The mention source is the only one that even
+*measures* its truncation, and it discards the count because `NotificationSource` has no
+non-error channel to report it on, which is why an over-50 org loses rows silently. That
+gap is tracked alongside the warnings-channel question.
+
 The `ci_failed` row is deliberate, not a typo: the config toggle names what
 the source *queries* (a failed run), while the reason it emits,
 `ci_activity`, is a pre-existing member of `provider.NotificationReason`

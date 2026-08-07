@@ -2653,6 +2653,17 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   source disable throttling entirely and price the feed at Azure's cost precisely when
   things are broken.
 
+  **A third instance of the same missing channel, found by task 16's review:** every Azure
+  source is capped at 50 items per project per poll (`reviewRequestedQueryTop`,
+  `ciFailedQueryTop`, `assignedQueryTop`, `mentionCandidateQueryTop`). The mention source
+  actually *measures* its truncation and then throws the count away —
+  `adapter_notifications.go:370-382` documents that `CandidatesDropped` is discarded
+  precisely because there is nowhere to report it. So a user in a busy org silently loses
+  rows, with no badge, no warning and nothing in the pane to suggest the feed is
+  incomplete. Now documented in the README and Architecture.md so it is at least
+  discoverable, but it is the third thing the warnings channel would fix, and the one with
+  a ready-made value to report.
+
 - **The pane discards a partial result and renders the error instead — one failing backend
   takes the whole tab.** Found 2026-08-07 by task 16's third validation, while checking a
   docs claim rather than by looking for it. The provider layer does the right thing at both

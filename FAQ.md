@@ -18,7 +18,7 @@ If no config file exists, the setup wizard will guide you through creating one o
 |-------|--------|----------|
 | **Build** | Read | Pipeline runs, build timelines, and logs |
 | **Code** | Read & Write | List PRs, view threads/iterations/diffs, vote on PRs, add comments, and update thread status |
-| **Work Items** | Read & Write | Query and view work items, fetch available states, and change work item state |
+| **Work Items** | Read & Write | Query and view work items, fetch available states, change work item state, and read work-item comments |
 
 Create a PAT at: Azure DevOps → User Settings → Personal Access Tokens.
 
@@ -26,7 +26,8 @@ The table above already covers the Azure share of the Notifications tab — it
 needs no additional scope. Its four sources reuse the same PR, work-item, and
 comment endpoints the rest of the app already calls with these scopes. (If
 you also have a GitHub backend configured, the GitHub share of the same tab
-needs its own extra scope on the GitHub side — see the next question.)
+needs its own extra scope on the GitHub side — see "The Notifications tab says my token
+is missing a scope" below.)
 
 ## Can I use an environment variable instead of the keyring?
 
@@ -74,6 +75,8 @@ The app persists a small amount of navigation state (last active tab, last opene
 
 It is created lazily on first save — a missing file is normal and not an error. Delete it to reset to the default view (Pull Requests tab, no detail open). Pipeline detail is intentionally not persisted.
 
+There is a **second** state file in the same directory, `notifications.yaml`, holding the read and dismissed markers for the Azure share of the Notifications feed (Azure DevOps has no server-side inbox, so that state has nowhere else to live — GitHub's read state stays on GitHub). Deleting `state.yaml` does not touch it. Delete `notifications.yaml` to clear your Azure triage history: every Azure row comes back unread, which on a busy org means a large feed on the next poll. Like `state.yaml`, a missing file loads as empty rather than erroring, and it is local to the machine — see [Local Triage State](README.md#local-triage-state-azure-devops) in the README.
+
 ## I don't see a Notifications tab
 
 The Notifications tab shows a merged feed from every backend that supports notifications.
@@ -93,10 +96,17 @@ individual Azure sources.
 
 If the tab still isn't showing, check `disabled_panes` in your config file for
 `notifications`. If you have `github.repos` configured, also check that your GitHub token
-has the required scope (see the next question). A GitHub auth failure currently empties the
-whole tab and shows the scope error, even when Azure is also configured and healthy — the
-Azure rows are fetched but not rendered. Grant the scope, or remove `github.repos` if you
-only want the Azure feed — that drops GitHub from the other tabs as well.
+has the required scope (see "The Notifications tab says my token is missing a scope"
+below).
+
+With both backends configured, a failure on **either** side currently takes the whole tab
+rather than degrading to the half that still works: the healthy backend's rows are fetched
+but not rendered, and you get the failing backend's error instead. So an expired Azure PAT
+blanks a healthy GitHub inbox exactly as a GitHub scope error blanks a healthy Azure feed —
+if the error names one backend, that is the one to fix, not the tab. Your options are to
+fix the failing backend's credentials, to drop that backend from your config
+(`github.repos` or `organization`/`projects` — note this also removes it from the other
+tabs), or to add `notifications` to `disabled_panes`.
 
 ## The Notifications tab says my token is missing a scope
 

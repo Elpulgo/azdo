@@ -432,7 +432,10 @@ regardless of backend** and stay at the top level, while every key that only mak
 for one backend is nested under `notifications.github` or `notifications.azure`. Getting
 this distinction backwards is the easiest way to misconfigure this pane — a key you expect
 to affect both backends but that only lives under `github` (or vice versa) will silently
-do nothing for the other one.
+do nothing for the other one. Note that an unrecognised key is **ignored silently** — it is
+not a startup error and not a warning — so a key left at the old top level, or nested under
+the wrong backend, looks live in your config file while doing nothing at all. If a knob
+seems to have stopped working, check its nesting first.
 
 #### Shared keys (top level — apply to both backends)
 
@@ -463,12 +466,12 @@ both, just with a different shape to match — `"your-org/*"` matches GitHub rep
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `notifications.azure.lookback_days` | int | `14` | Bounds the "recently assigned work items" and "failed pipeline runs" sources to activity within the last N days (the other two sources aren't time-bounded the same way — see [Features → Notifications](#notifications)). Clamped to a maximum of 30 days. Unlike `github.since_days`, **`0` is not "unbounded" here** — an explicit `lookback_days: 0` falls back to the default instead, because an unbounded assigned-work-item query means "every work item ever assigned to me". |
+| `notifications.azure.lookback_days` | int | `14` | Bounds the "recently assigned work items" and "failed pipeline runs" sources to activity within the last N days. The other two sources are bounded by their own nature rather than by a date: "PRs awaiting my review" is the set still open and still awaiting you, and "@mentions" is whatever Azure's own recent-mentions query returns. Clamped to a maximum of 30 days. Unlike `github.since_days`, **`0` is not "unbounded" here** — an explicit `lookback_days: 0` falls back to the default instead, because an unbounded assigned-work-item query means "every work item ever assigned to me". |
 | `notifications.azure.min_poll_interval` | int (seconds) | `300` | The shortest interval between two real Azure notification queries; the adapter self-throttles to this and returns its previous result on calls made sooner. Also falls back to the default on an explicit `0`, for the same reason as `lookback_days`. Clamped to a maximum of 86400 seconds. |
 | `notifications.azure.sources.review_requested` | bool | `true` | Include "PRs awaiting my review" (emits reason `review_requested`). |
 | `notifications.azure.sources.mentioned` | bool | `true` | Include "@mentions in work-item discussions" (emits reason `mentioned`). |
 | `notifications.azure.sources.assigned` | bool | `true` | Include "recently assigned work items" (emits reason `assigned`). |
-| `notifications.azure.sources.ci_failed` | bool | `true` | Include "my failed pipeline runs". **This key names the source, not the reason** — see the callout below. Disabling all four toggles is legal and simply yields an empty Azure share of the feed; it does not hide the tab. |
+| `notifications.azure.sources.ci_failed` | bool | `true` | Include "my failed pipeline runs" — completed runs you requested whose result is `failed`. A canceled or partially-succeeded run is deliberately not a failure. **This key names the source, not the reason** — see the callout below. |
 
 **`sources.ci_failed` names a source, not a reason — the two spellings are not the same
 vocabulary.** The toggle is called `ci_failed` because that's what the source *queries*
@@ -478,6 +481,18 @@ source off entirely (no rows, no query), while `exclude_reasons: [ci_activity]` 
 query running but drops its rows client-side afterwards. Don't write `ci_failed` in
 `exclude_reasons` expecting it to match anything — it isn't a reason name and will just
 produce an unrecognised-value warning.
+
+**Turning all four sources off is legal** — it yields an empty Azure share of the feed
+without an error, and it does not hide the tab. If you want the tab gone, use
+`disabled_panes`.
+
+**Each Azure source fetches at most 50 items per project per poll**, newest first. This is
+a fixed internal bound, not something `max_items` controls — `max_items: 0` means "don't cap
+the merged feed", not "fetch everything". In a busy org with more than 50 recently assigned
+work items or more than 50 recent mention candidates in a single project, the older ones
+are simply not fetched, and nothing in the pane tells you so. Narrowing `lookback_days` is
+the knob that helps here: a shorter window means the 50 you do get are the ones you care
+about.
 
 **Repo glob syntax.** `exclude_repos` / `include_repos` patterns are `path.Match` globs,
 matched case-insensitively (both the pattern and the scope are lower-cased first). `*`
@@ -603,7 +618,10 @@ should resurface. The file is written to:
 
 It lives next to `state.yaml` (same directory resolution) but as its own separate file — a
 missing file loads as empty, not an error, and writes are debounced and flushed on clean
-exit the same way `state.yaml`'s are.
+exit the same way `state.yaml`'s are. Deleting `state.yaml` does not touch it, and deleting
+`notifications.yaml` does not touch your navigation state. Delete `notifications.yaml` to
+clear your Azure triage history — every Azure row then returns unread, which on a busy org
+means a large feed on the next poll.
 
 **This state is local to the machine it runs on and is not synced across machines.**
 Marking an Azure notification read or done on one machine has no effect on any other — only
@@ -673,9 +691,11 @@ repository permissions:
 > above), so an **Azure-only** setup gets a fully working Notifications tab. If you configure
 > **both** backends and your GitHub token can't reach the inbox, the tab currently shows the
 > GitHub scope error instead of your Azure rows — the failing backend takes the whole pane
-> with it rather than degrading to the half that works. Either grant the GitHub token the
-> `notifications` scope, or remove `github.repos` from your config — note that this drops
-> GitHub from the other tabs too, not just from notifications. If you'd rather not switch your GitHub
+> with it rather than degrading to the half that works. This is symmetric: an expired Azure
+> PAT blanks a healthy GitHub inbox the same way, so whichever backend the error names is
+> the one to fix. Either grant the GitHub token the `notifications` scope, or remove
+> `github.repos` from your config — note that this drops GitHub from the other tabs too, not
+> just from notifications. If you'd rather not switch your GitHub
 > token, see [Disabling the Notifications tab](#notifications-configuration) — add
 > `notifications` to `disabled_panes` and the tab goes away entirely.
 
