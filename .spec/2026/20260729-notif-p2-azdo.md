@@ -383,4 +383,11 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   regardless of clock direction; `CommitID` is already decoded and unused. **Deferred to Oscar
   deliberately:** it changes `TriageEntry`'s persisted shape and `Reconcile`'s contract across
   all four sources, which is a design decision, not a fix an implementer should make mid-loop.
-  Decide before task 9 hardens the store's schema.
+  ~~Decide before task 9 hardens the store's schema.~~ **Revised 2026-08-07: the deadline was
+  wrong and task 9 does not need it.** `TriageState` is a `map[string]TriageEntry` serialised by
+  the store's YAML round-trip, so a later `LastCommitID string \`yaml:"last_commit_id,omitempty"\``
+  is purely additive: an existing file simply loads that field as `""`, which is the same value a
+  fresh entry would carry. Task 9 therefore adds **no** field to `TriageEntry` and leaves this
+  open. What *does* change if Oscar adopts the token is `Reconcile`'s contract and all four
+  sources' population of it — none of which task 9 touches. Decide before task 14, or after the
+  loop; either is fine.
