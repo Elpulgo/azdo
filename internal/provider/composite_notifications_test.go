@@ -36,6 +36,7 @@ type fakeNotifyBackend struct {
 	markDoneErr error
 
 	listCalls     int
+	lastOpts      provider.NotifOpts
 	markReadCalls []provider.Identity
 	markDoneCalls []provider.Identity
 }
@@ -44,8 +45,12 @@ func newFakeNotifyBackend(kind provider.Kind, scopes []string) *fakeNotifyBacken
 	return &fakeNotifyBackend{fakeBackend: &fakeBackend{kind: kind, scopes: scopes}}
 }
 
-func (f *fakeNotifyBackend) List(_ provider.NotifOpts) ([]provider.Notification, error) {
+// List records the opts it received in lastOpts, so fan-out tests can assert
+// on exactly what CompositeProvider.List forwarded — in particular, decision
+// C's "Max is zeroed, ParticipatingOnly/Since are not" contract.
+func (f *fakeNotifyBackend) List(opts provider.NotifOpts) ([]provider.Notification, error) {
 	f.listCalls++
+	f.lastOpts = opts
 	return f.notifs, f.listErr
 }
 
@@ -864,6 +869,102 @@ func TestCompositeProvider_Notifications_MaxNegativeIsUncapped(t *testing.T) {
 	want := "gh-new,az-mid,gh-old"
 	if joinIDs(gotIDs(got)) != want {
 		t.Fatalf("want Max: -1 to leave the feed uncapped (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decision C — List zeroes opts.Max before forwarding to each backend
+// ---------------------------------------------------------------------------
+
+// TestCompositeProvider_Notifications_ZeroesMaxOnFanOut pins decision C
+// (review of task 12): the composite forwards ParticipatingOnly and Since to
+// each backend unchanged, but zeroes Max before the backend ever sees it —
+// only List's own post-merge cap (mergeNotifications) applies Max. Before
+// this change opts was forwarded verbatim, so a backend that itself honoured
+// Max would double-apply the cap.
+func TestCompositeProvider_Notifications_ZeroesMaxOnFanOut(t *testing.T) {
+	since := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	b := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	b.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "1", t3),
+		mkNotif(provider.KindGitHub, "o/r", "2", t2),
+		mkNotif(provider.KindGitHub, "o/r", "3", t1),
+	}
+
+	cp := provider.NewCompositeProvider(b)
+
+	got, err := cp.List(provider.NotifOpts{Max: 2, ParticipatingOnly: true, Since: since})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if b.lastOpts.Max != 0 {
+		t.Errorf("backend received Max = %d, want 0 — the composite must zero Max before forwarding", b.lastOpts.Max)
+	}
+	if !b.lastOpts.ParticipatingOnly {
+		t.Error("backend received ParticipatingOnly = false, want true — only Max is zeroed, the other fields forward unchanged")
+	}
+	if !b.lastOpts.Since.Equal(since) {
+		t.Errorf("backend received Since = %v, want %v — only Max is zeroed, the other fields forward unchanged", b.lastOpts.Since, since)
+	}
+
+	// The composite's own cap must still apply to its merged output, proving
+	// zeroing Max on the fan-out did not also zero it for the composite's own
+	// post-merge truncation.
+	want := "1,2"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want the composite's own Max=2 cap still applied to the merged output (%q), got %q", want, joinIDs(gotIDs(got)))
+	}
+}
+
+// TestCompositeProvider_Notifications_NestedComposite_ZeroesMaxAtEveryLevel
+// pins the case decision C exists for. *CompositeProvider satisfies
+// NotificationSource unconditionally (composite.go's own var _ assertion), so
+// an inner CompositeProvider used as one of an outer CompositeProvider's
+// backends is itself a "capable backend" from the outer's point of view — and
+// it is the one implementation that actually honours Max. Without the outer
+// zeroing Max before calling the inner's List, the inner would truncate to
+// the outer's Max in the inner's own order before the outer ever sees the
+// full picture, reproducing exactly the double-apply task 12 removed at the
+// adapter layer.
+func TestCompositeProvider_Notifications_NestedComposite_ZeroesMaxAtEveryLevel(t *testing.T) {
+	since := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	inner := newFakeNotifyBackend(provider.KindGitHub, []string{"o/r"})
+	inner.notifs = []provider.Notification{
+		mkNotif(provider.KindGitHub, "o/r", "1", t3),
+		mkNotif(provider.KindGitHub, "o/r", "2", t2),
+		mkNotif(provider.KindGitHub, "o/r", "3", t1),
+	}
+	innerCP := provider.NewCompositeProvider(inner)
+
+	outerCP := provider.NewCompositeProvider(innerCP)
+
+	got, err := outerCP.List(provider.NotifOpts{Max: 2, ParticipatingOnly: true, Since: since})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The innermost fake backend must see Max: 0 — zeroed once by the outer
+	// composite forwarding into innerCP.List, and again by innerCP forwarding
+	// into inner.List, so nothing along the chain ever hands it a nonzero Max.
+	if inner.lastOpts.Max != 0 {
+		t.Errorf("innermost backend received Max = %d, want 0 — Max must be zeroed at every composite level", inner.lastOpts.Max)
+	}
+	if !inner.lastOpts.ParticipatingOnly {
+		t.Error("innermost backend received ParticipatingOnly = false, want true")
+	}
+	if !inner.lastOpts.Since.Equal(since) {
+		t.Errorf("innermost backend received Since = %v, want %v", inner.lastOpts.Since, since)
+	}
+
+	// Only the outermost composite's Max applies: innerCP was called with
+	// Max: 0 (uncapped), so it returns all 3 rows to the outer composite,
+	// which then caps the merged result at 2. If Max reached inner.List
+	// nonzero, innerCP would have already truncated to 2 rows in inner's own
+	// (not the canonical) order before the outer composite ever ran its sort.
+	want := "1,2"
+	if joinIDs(gotIDs(got)) != want {
+		t.Fatalf("want the outer composite's Max=2 to be the only cap applied (%q), got %q", want, joinIDs(gotIDs(got)))
 	}
 }
 

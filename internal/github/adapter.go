@@ -564,7 +564,12 @@ func (a *Adapter) PipelineURL(scope string, id int) string {
 // opts.Max is accepted for interface compliance but ignored here: since
 // decision 15 / task 12, NotifOpts.Max is honoured exclusively by
 // provider.CompositeProvider.List, after it has merged every capable
-// backend's rows and sorted them newest-first. Truncating per-backend here
+// backend's rows and sorted them newest-first. Since decision C (review of
+// task 12), CompositeProvider.List also zeroes opts.Max before calling this
+// method, so opts.Max arrives here as 0 on every call reaching this adapter
+// through the composite — but this method's own indifference to the field
+// does not depend on that, and holds the same for a direct caller bypassing
+// the composite with a nonzero Max. Truncating per-backend here
 // (phase 1's original behaviour) would double-apply the cap once a second
 // backend exists — each backend independently discarding rows outside its own
 // Max before the composite ever sees the full picture, based on this
@@ -576,7 +581,21 @@ func (a *Adapter) PipelineURL(scope string, id int) string {
 // feed then looks correct while being wrong. It is therefore never forwarded
 // into NotificationListOpts either. The returned slice is consequently no
 // longer bounded by opts.Max at all: what bounds it is nc.List's own walk,
-// maxNotificationPages × notifPerPageCap (internal/github/notifications.go).
+// capped at maxNotificationPages pages (internal/github/notifications.go).
+// That page count is an unconditional bound; the size of each page is not.
+// notifPerPageCap (100) sets per_page on the first request only (buildPath,
+// notifications.go); pages 2..N are fetched by following the server's own
+// Link rel="next" URL verbatim (nextPageURL, client.go), with no per-page
+// rewrite. So "at most maxNotificationPages × notifPerPageCap rows" holds
+// only conditionally — for as long as the server's own next-links keep
+// returning close to notifPerPageCap rows per page, which GitHub's real API
+// does but which nothing here enforces. A GHES instance or an intermediary
+// caching proxy that ignores per_page in its Link header can return
+// arbitrarily more rows per page; the walk still stops at maxNotificationPages
+// pages, just with more rows in each. maxNotificationPages exists precisely
+// to survive that kind of server misbehaviour (see its own doc comment,
+// notifications.go), so the bound stated next to it must not assume the
+// well-behaved case it was written to distrust.
 //
 // An unsolicited-304 error surfaced by nc.List (a 304 with no matching cache)
 // is returned unchanged, never translated into an empty slice: an emptied

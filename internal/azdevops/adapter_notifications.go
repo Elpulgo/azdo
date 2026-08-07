@@ -119,7 +119,14 @@ func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDa
 // exists: each adapter would independently keep its own top-Max, in this
 // adapter's own sort order, before the composite ever sees the full picture —
 // which can silently drop a row that belongs in the true global top-Max
-// while still returning a plausible, correctly-sized slice.
+// while still returning a plausible, correctly-sized slice. Since decision C
+// (review of task 12), provider.CompositeProvider.List no longer forwards
+// opts verbatim either: it zeroes Max before calling this method, so opts.Max
+// arrives here as 0 on every call that reaches this adapter through the
+// composite. This method's own indifference to the field does not depend on
+// that — it ignores whatever value opts.Max carries — but it means the
+// double-apply scenario above is now prevented at the call site too, not
+// only by this adapter declining to act on it.
 func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error) {
 	return a.list(opts, time.Now())
 }

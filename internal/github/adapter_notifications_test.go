@@ -307,6 +307,39 @@ func TestAdapter_List_MaxDoesNotTruncateAtThisLayer(t *testing.T) {
 	}
 }
 
+// TestAdapter_List_EmptyInboxReturnsNonNilEmptySlice restores the other half
+// of a deliberately-paired contract: TestAdapter_List_PropagatesUnsolicited304Error
+// below pins that an error path returns nil results, never an empty-but-non-nil
+// slice; this pins the success path's mirror image — a genuinely empty inbox
+// must come back as an empty-but-non-nil slice, never nil. The two are not
+// interchangeable to app.go's poll handler, which treats nil-items/nil-err as
+// "genuinely EMPTY" (app.go's own doc comment on that branch) and would
+// otherwise not notice `out := make([]provider.Notification, len(wire))`
+// silently becoming `var out []provider.Notification` + append, which returns
+// (nil, nil) on an empty inbox with no test failing.
+func TestAdapter_List_EmptyInboxReturnsNonNilEmptySlice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	nc := github.NewNotificationsClient("tok")
+	nc.SetBaseURL(srv.URL)
+	a := github.NewAdapterWithNotifications(nil, nc)
+
+	got, err := a.List(provider.NotifOpts{Max: 1})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("List() result = nil, want an empty-but-non-nil slice for an empty inbox — a nil result reads as an error/skipped-fetch shape downstream, not \"you're clear\"")
+	}
+	if len(got) != 0 {
+		t.Fatalf("List() len = %d, want 0", len(got))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // An unsolicited 304 (no matching cache) surfaces as an error from nc.List —
 // Adapter.List must propagate it, never translate it into an empty slice.
