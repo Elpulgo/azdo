@@ -2045,6 +2045,176 @@ mutation was restored via `cp` (never `git checkout --`); `git status
 clean; the repo-wide `gofmt -l .` count is 19, matching the pre-existing,
 task-unrelated figure noted in the validation instructions.
 
+### Re-validation 2026-08-07 against `2b979ba` — INCOMPLETE
+
+Re-checked after the REQUEST_CHANGES review. Five of the seven findings are
+genuinely closed and were falsified in both directions; three defects remain
+(one of them the task-13 dead-line class, one a surviving non-equivalent
+mutant, one a falsified doc claim). Task 14 stays un-ticked.
+
+`git show --stat 2b979ba`: `internal/azdevops/adapter.go`,
+`adapter_notifications.go`, `adapter_notifications_test.go`,
+`adapter_notifications_throttle_test.go`, `internal/config/config.go`,
+`config_notifications_test.go`, `config_test.go`. **No `polling` or `app`
+file touched.** Build/vet/`go test -count=1 ./internal/... ./cmd/...` clean;
+`gofmt -l` clean on all seven touched files; `git status --porcelain` empty at
+start and end. Every mutation below was `cp`-backed and restored by `cp`,
+each restore verified with `diff` (never `git checkout --`). `-race` still
+cannot build (`cc1` blocked at the OS level), so the concurrency argument
+remains inspection-plus-mutation only.
+
+**🔴 1 — closed, verified independently, not by rerunning the implementer's
+tests.** Wrote a throwaway test against the real four-source `composerFixture`
+with an HTTP request counter wrapped around the handler:
+
+- (a) `list` → `MarkDone(mention/wi/100)` → `list(now+1m)` (throttled) returns
+  `[review/pr/42 assigned/wi/100 cifail/run/7]` — the dismissed row is gone on
+  the very next throttled call. Same shape for `MarkRead` (`cifail/run/7`
+  comes back `Read=true`).
+- (b) The throttled call issued **0** HTTP requests (counter unchanged across
+  it) and did **0** store writes — asserted on `TriageStore.gen` (the
+  `markDirtyLocked` counter, read under `mu`) being unchanged *and* on
+  `store.State()` being `reflect.DeepEqual` before and after. Not a
+  "it was fast" proxy.
+- (c) `TriageStore.State()` is **pre-existing** (`notifications_store.go:168`,
+  used by ~15 existing tests), takes only `s.mu` — never `writeMu`, never
+  `notifThrottleMu` — so the `notifThrottleMu → mu` order the struct comment
+  claims is preserved and there is no inversion against `Flush`'s
+  `writeMu → mu` (Flush releases `mu` before taking `writeMu`). It returns
+  `s.state.clone()`, a fresh map of value-typed `TriageEntry`s — a real copy,
+  not the live map, so the throttled path cannot mutate triage state through
+  it.
+- (d) By-copy end-to-end after the re-reconcile: mutated `rows2[0]`'s
+  `Title`/`Read`/`Identity.ID` and confirmed `rows3` (the next throttled call)
+  is untouched, having first asserted `&rows2[0] != &rows3[0]` so the check is
+  not a tautology over one backing array. Also mutated the *real-query*
+  result and confirmed the following throttled return is clean.
+- Discrimination: reverting the throttled branch to
+  `return copyNotifications(a.notifLastResult), nil` fails both
+  `TestAdapter_List_Throttled_ReflectsMarkReadMadeDuringWindow` and
+  `...ReflectsMarkDoneMadeDuringWindow` with their intended messages.
+
+**🔴 2 — closed, both drift directions falsified.**
+- Added `v.SetDefault("notifications.max_items", 42)` after `LoadFrom`'s loop
+  (a key on one side only) → `TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults`
+  fails (`MaxItems:42` vs `0`).
+- Made `defaultNotificationsConfig` skip
+  `notifications.azure.sources.mentioned` (removing it from the other side) →
+  the same test fails (`Mentioned:false` vs `true`).
+- Extra probe: deleting the entry from the shared `notificationsDefaults`
+  list entirely (so both sides agree on the *wrong* value, which the drift
+  test cannot see) is caught by three pre-existing tests —
+  `TestLoad_NotificationsDefaults_WhenBlockAbsent`,
+  `TestLoad_AzureSourceToggle_ExplicitFalse_OverridesDefaultTrue`,
+  `TestConfigSave_PreservesMetricsAndNotifications`. No hole.
+- Original defect gone: built a `*Config` exactly as `setupwizard.go:546`
+  does (`config.NewWithPath(org, projects, 60, "nord", <tmp>)`) and pushed it
+  through `azureNotificationArgs` → `lookback=14`, `minPoll=5m0s`, toggles
+  `{true true true true}`. `internal/demo/demo.go:64` still behaves: the demo
+  builds its adapter with `NewAdapter` (no notifications), the only fields it
+  fills by hand are `Metrics`/`DisplayNames`, `metrics.go:44`'s "NewWithPath
+  bypasses viper defaults" comment is still true *for Metrics*, and
+  `./internal/demo` passes.
+
+**Self-reported mapstructure bug — closed and pinned.** Reverted
+`defaultNotificationsConfig` to unmarshal into a bare `NotificationsConfig`
+(the silent-all-zeros shape the implementer reported fixing) →
+`TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults` fails with
+`LookbackDays:0 MinPollInterval:0 Sources:{false false false false}`. The
+failure mode cannot regress silently.
+
+**🟢 5 — closed and genuinely recursive.** Added `Labels []string` to
+`provider.Notification` → `TestCopyNotifications_NoMutableFieldAliasing`
+fails naming `provider.Notification.Labels`. Added
+`Aliases map[string]string` to the *nested* `provider.Identity` → it fails
+naming `provider.Notification.Identity.Aliases`, so the walk really descends
+rather than only checking the top level.
+
+**🟢 7 — closed and discriminating.** Made `MarkRead` acquire
+`notifThrottleMu` → `TestAdapter_MarkRead_NotBlockedByInFlightList` fails in
+5.01s on the intended message. Constraint re-confirmed by inspection:
+`MarkRead`/`MarkDone` touch only `notifStore`'s `mu` via `ApplyIfChanged`.
+
+**🟡 4 — closed.** `adapter.go:21` now says "every notification-related field
+below", no arithmetic to go stale; `NewAdapter` is `&Adapter{mc: mc}`, so the
+claim is exact.
+
+#### Remaining — must be fixed before task 14 can be ticked
+
+**R1 (task-13 class — dead state, dead call sites, and a false doc claim).**
+`notifLastResult` is now **write-only**: `grep` finds exactly one write
+(`adapter_notifications.go:269`) and one read (line 270, the very next line).
+Nothing else in production or test code reads it — the throttled path reads
+`notifLastRawRows` instead. Consequence, verified by mutation: replacing
+*both* `list()` returns with `return reconciled, nil` and
+`return a.notifLastResult, nil` (i.e. deleting `copyNotifications` from the
+production path entirely) **passes the whole `internal/azdevops` package**,
+including `TestAdapter_List_Throttled_ReturnsCopyNotAlias`, whose own doc
+comment asserts "the only way that can hold is if the throttled path returns
+a genuine copy (`copyNotifications`)". That sentence is now false: the
+throttled path's `reconciled` is freshly allocated by `Reconcile`, so the
+copy is unobservable there, and `notifLastResult` is unobservable everywhere.
+The *behaviour* the task requires still holds (proved in (d) above) — but it
+holds by accident of `Reconcile`'s allocation, and the test the task
+mandates ("the test must prove it by mutating the first result and
+re-checking the second") no longer proves anything about the copy.
+Additionally, `copyNotifications`' doc comment — **rewritten in this
+commit** — now claims `notifLastResult` is "the slice a real query's absorb
+branch caches and *every subsequent call reads from until the next real query
+replaces it*". No subsequent call reads it. Fix by deciding one of: drop
+`notifLastResult` and the now-dead `copyNotifications` call sites, or keep
+them and give them an observable purpose — either way the doc comment must
+describe what the code does.
+
+**R2 (surviving mutant; the equivalence claim is wrong).** `>` → `>=` on
+`if cfg.Notifications.Azure.MinPollInterval > AzureMinPollIntervalMax`
+survives the whole of `./internal/config` and `./cmd/...`. It is **not**
+equivalent: the branch has a side effect beyond the clamp — it appends to
+`cfg.Warnings`. Under `>=`, a config with `min_poll_interval: 86400`
+(exactly the max) gains the user-visible, self-contradicting warning
+"`notifications.azure.min_poll_interval: 86400 exceeds the 86400-second
+maximum — using 86400`", which the notifications pane renders. The
+implementer's "clamping X=Max to Max is a no-op either way" reasoning covers
+the value and misses the warning. `TestLoad_AzureMinPollInterval_ClampedToMax`
+has the right "exactly at the clamp" row but asserts only the value; adding
+`len(cfg.Warnings) == 0` to that row kills the mutant. (The identical hole
+exists on `lookback_days`' older clamp — pre-existing, from task 11, worth
+closing in the same edit but not required here.)
+
+**R3 (falsified doc claim — the recurring class).** The new 🟡-3 paragraph at
+`adapter.go:57-66` states that "whenever throttling is enabled (a positive
+`notifMinPollInterval`) ... a blocked caller's `now` is always <= the winner's
+`notifLastPollAt` by the time it acquires the lock, meaning `notifThrottled`
+is always true for it — **no ordering produces a second real query**", and
+names throttling-disabled as the one exception. Both halves are wrong.
+`a.notifLastPollAt = now` stores the *winner's entry-time* `now`, and a loser
+that entered `List` after the winner has a strictly **larger** `now`, so the
+relation is `loserNow >= notifLastPollAt`, not `<=`. The conclusion only
+holds while the winner's lock-hold time is shorter than
+`notifMinPollInterval`. Falsified with a throwaway test: `minPollInterval =
+100ms`, fixture handler parked on a channel for ~300ms, two concurrent
+`List` calls — the winner issued 4 requests, and after release the blocked
+caller issued **3 more**, i.e. a full second real query, with throttling
+enabled. At the shipped 300s default this is unreachable in practice, which
+is fine — but the comment must state the precondition it actually depends on
+(round trip < `min_poll_interval`) instead of an absolute that a reader can
+disprove. This wording originated in the review's own settled text for
+finding 3, so correct it there too rather than only in the code.
+
+**R4 (minor, same class).** `adapter.go:29-31` still describes the mechanism
+as "List returns its previous result unchanged when called sooner than
+`notifMinPollInterval` after its last real query" — "unchanged" is precisely
+what 🔴 1's fix removed, and the same comment block contradicts it twelve
+lines later. **R5 (trivial):** the same block cites "internal/app.go"; the
+file is `internal/app/app.go` (the substantive claim it supports — line 678
+`polling.NewNotificationsPoller(...)` and line 709
+`notifications.NewModelWithStyles(..., notificationMarker(p), ...)` both
+receiving the same `p` — was verified and holds).
+
+Convention 29: clean — no added string literal contains a phase/task/decision
+number or a review glyph; the one new user-facing string is the
+`min_poll_interval` clamp warning.
+
 ## Review feedback: task 14
 
 Opus review of `9b127eb`, 2026-08-07. **REQUEST_CHANGES**, two 🔴, two 🟡, three 🟢.
