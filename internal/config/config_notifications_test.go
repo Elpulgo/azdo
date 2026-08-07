@@ -944,8 +944,16 @@ notifications:
 		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
 	}
 	msg := cfg.Warnings[0]
-	if !strings.Contains(msg, "only_configured_repos") || !strings.Contains(msg, "include_repos") {
-		t.Errorf("warning should name both only_configured_repos and include_repos, got: %s", msg)
+	// The qualified spelling is the point of the change: a message that only
+	// contained "only_configured_repos" would pass just as well against the
+	// pre-restructure flat key (notifications.only_configured_repos), which
+	// this test is meant to distinguish from the nested
+	// notifications.github.only_configured_repos. include_repos stays
+	// unqualified in the assertion because it genuinely is still top-level
+	// (decision 13's second note) -- it is not meant to gain a "github."
+	// prefix, so it is not asserted as qualified.
+	if !strings.Contains(msg, "notifications.github.only_configured_repos") || !strings.Contains(msg, "include_repos") {
+		t.Errorf("warning should name both the qualified notifications.github.only_configured_repos and include_repos, got: %s", msg)
 	}
 	// include_repos itself is not mutated by the warning -- only ignored at
 	// filter time, so it should still be present in the config.

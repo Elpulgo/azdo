@@ -183,6 +183,43 @@ func TestFilterNotifications_OnlyConfiguredRepos_TrimsConfiguredRepoWhitespace(t
 	assertIDs(t, got, "match")
 }
 
+// TestFilterNotifications_OnlyConfiguredRepos_NonGitHubRowsPassThrough pins
+// decision 13's premise as code: only_configured_repos is a GitHub-only
+// knob, so it must not delete rows from any other backend. This is
+// deliberately NOT a GitHub-rows-only fixture -- a GitHub-only test would
+// pass whether or not the Kind guard exists, since every row would already
+// be filtered by Scope membership in cfg.GitHub.Repos. Mixing an Azure row
+// in is what makes the assertion mean something: before the fix, the Azure
+// row's Scope (a project name) never appears in cfg.GitHub.Repos, so it was
+// silently dropped -- 100% of the Azure feed, every time this knob was on.
+// The unconfigured GitHub row proves the other half: the fix must not turn
+// the knob into a no-op that lets every row through regardless of Kind.
+func TestFilterNotifications_OnlyConfiguredRepos_NonGitHubRowsPassThrough(t *testing.T) {
+	githubConfigured := provider.Notification{
+		Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "acme/configured", ID: "gh-configured"},
+		Title:    "github configured",
+	}
+	githubUnconfigured := provider.Notification{
+		Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "acme/unconfigured", ID: "gh-unconfigured"},
+		Title:    "github unconfigured",
+	}
+	azureRow := provider.Notification{
+		Identity: provider.Identity{Kind: provider.KindAzure, Scope: "SomeAzureProject", ID: "az-1"},
+		Title:    "azure row",
+	}
+
+	rows := []provider.Notification{githubConfigured, githubUnconfigured, azureRow}
+	cfg := &config.Config{
+		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
+		Notifications: config.NotificationsConfig{
+			GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+		},
+	}
+
+	got := FilterNotifications(rows, cfg)
+	assertIDs(t, got, "gh-configured", "az-1")
+}
+
 func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
 	rows := []provider.Notification{
 		row("1", "acme/repo", provider.NotificationReasonOther, false),

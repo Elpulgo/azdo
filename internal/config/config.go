@@ -94,9 +94,16 @@ type MetricsStates struct {
 // nested GitHub and Azure blocks: `participating_only`, `only_configured_repos`
 // and `since_days` moved to notifications.github because none of the three
 // has a meaningful Azure equivalent — see NotificationsGitHubConfig's doc
-// comment. There is no migration for the old flat keys: a bare
-// `notifications.participating_only` (etc.) is simply an unrecognised key
-// and is silently ignored, not honoured and not warned about (decision 14).
+// comment. That does NOT mean the github block is invisible to non-GitHub
+// rows: FilterNotifications runs on the already-merged feed, so a knob under
+// notifications.github must itself check Identity.Kind to stay GitHub-only —
+// only_configured_repos does exactly that. There is no migration for the old
+// flat keys: a bare `notifications.participating_only` (etc.) is simply an
+// unrecognised key and is silently ignored, not honoured and not warned
+// about, on load (decision 14). That is only true of the read path — Save()
+// round-trips whatever the file already contains, so an orphaned flat key
+// survives in the file forever rather than disappearing on the next save
+// (pinned by TestConfigSave_PreservesKeysOutsideTheConfigStruct).
 type NotificationsConfig struct {
 	// ExcludeReasons lists the neutral NotificationReason string names (e.g.
 	// "subscribed", "ci_activity") to trim from the merged feed client-side.
@@ -126,8 +133,20 @@ type NotificationsConfig struct {
 	// (default) means no cap.
 	MaxItems int `mapstructure:"max_items"`
 	// PollInterval overrides the global polling_interval for the
-	// notifications poller only. Zero (default) falls back to the backend's
-	// polling-cadence hint when present, else the global polling_interval.
+	// notifications poller only. The effective cadence is not simply "this
+	// value, or a fallback if zero" — internal/app.notificationsPollInterval
+	// computes max(configured, backend hint) unconditionally, so a capable
+	// backend's cadence hint (e.g. GitHub's X-Poll-Interval response header)
+	// can still raise the interval above a positive PollInterval that is
+	// lower than the hint; the hint never gets overridden just because this
+	// field is set. "configured" itself falls back poll_interval (this
+	// field) -> polling_interval (the global PollingInterval) ->
+	// polling.DefaultInterval, whichever is the first positive value. The
+	// final result is additionally floored at polling.MinInterval by
+	// NewNotificationsPoller/SetInterval, so a misconfigured poll_interval: 1
+	// cannot produce sub-minimum polling. Zero (default) means "no override";
+	// see internal/app.notificationsConfiguredInterval and
+	// notificationsPollInterval for the exact arithmetic.
 	PollInterval int `mapstructure:"poll_interval"`
 
 	// GitHub holds GitHub-only notifications knobs — the phase-1 keys that
@@ -144,19 +163,26 @@ type NotificationsConfig struct {
 // GitHub backend only. Each was a top-level notifications.* key in phase 1;
 // decision 13 of the phase-2 spec moved them here because none generalises
 // to Azure: ParticipatingOnly names a GitHub inbox concept with no Azure
-// analogue, OnlyConfiguredRepos is vacuously true on Azure (the adapter only
-// ever queries configured projects), and SinceDays's zero value ("no bound")
-// would be catastrophic applied to Azure's assigned-work-item query, which is
-// why Azure gets its own lookback_days instead of sharing this field.
+// analogue; OnlyConfiguredRepos narrows only the GitHub rows of the merged
+// feed — FilterNotifications checks Identity.Kind before applying it, since
+// an Azure row's Scope is a project name, never an "owner/repo" the
+// github.repos list could match, so treating a Kind mismatch as "excluded"
+// would silently delete every Azure row; and SinceDays's zero value ("no
+// bound") would be catastrophic applied to Azure's assigned-work-item query,
+// which is why Azure gets its own lookback_days instead of sharing this
+// field.
 type NotificationsGitHubConfig struct {
 	// ParticipatingOnly narrows the server-side fetch to GitHub's
 	// "participating" bundle — roughly everything except `subscribed` — and
 	// composes with, rather than replaces, ExcludeReasons.
 	// False (default) fetches the whole inbox.
 	ParticipatingOnly bool `mapstructure:"participating_only"`
-	// OnlyConfiguredRepos restricts the merged feed to repos listed under
-	// github.repos. False (default) shows the whole inbox, including rows
-	// from repos this config never built a client for.
+	// OnlyConfiguredRepos restricts the GitHub share of the merged feed to
+	// repos listed under github.repos; rows from any other backend are
+	// unaffected regardless of their Scope (FilterNotifications gates this on
+	// Identity.Kind == provider.KindGitHub). False (default) shows the whole
+	// inbox, including GitHub rows from repos this config never built a
+	// client for.
 	OnlyConfiguredRepos bool `mapstructure:"only_configured_repos"`
 	// SinceDays bounds the feed to notifications updated within the last N
 	// days. Zero (default) means no bound.
@@ -164,8 +190,10 @@ type NotificationsGitHubConfig struct {
 }
 
 // NotificationsAzureConfig holds the notifications knobs that apply to the
-// Azure DevOps backend only. Left unpopulated by task 10 on purpose — its
-// fields, defaults and validation are the phase-2 spec's task 11.
+// Azure DevOps backend only. The three fields below are task 10's deliberate
+// landing site for task 11, shaped to match decision 13's YAML exactly — they
+// are not a stub to be replaced. What task 10 left out is their defaults and
+// validation, both of which are task 11's job (see each field's own comment).
 type NotificationsAzureConfig struct {
 	// LookbackDays bounds every Azure notification source to activity within
 	// the last N days. Populated by task 11.
@@ -687,8 +715,17 @@ func (c *Config) Validate() error {
 	// the block is always present, if only at its all-zero default, so these
 	// checks must hold even when the user never wrote a
 	// `notifications:` section at all. That default (0 for each of the
-	// three numeric fields, no entries in the two glob lists) already
-	// satisfies every check below, so an absent block is always valid.
+	// three numeric fields checked below -- MaxItems, PollInterval and
+	// GitHub.SinceDays; no entries in the two glob lists) already satisfies
+	// every check below, so an absent block is valid today. The nested Azure
+	// block also has two numeric fields (LookbackDays, MinPollInterval) that
+	// this task deliberately does not validate (task 11's job). The premise
+	// that an absent/all-zero block is always valid stops holding the moment
+	// task 11 gives LookbackDays a non-zero default (14, per decision 13's
+	// YAML) -- a loaded-but-unset Azure block would then need its own
+	// zero-means-"use the default" handling before this comment's "always
+	// valid" claim is true again, so task 11's implementer should revisit
+	// this whole comment rather than just append two more checks to it.
 	if c.Notifications.GitHub.SinceDays < 0 {
 		return fmt.Errorf("notifications.github.since_days must be >= 0, got %d", c.Notifications.GitHub.SinceDays)
 	}

@@ -14,9 +14,13 @@ import (
 // FilterNotifications applies the notifications config's filter knobs to rows.
 //
 // Selection is an override, not an intersection:
-//   - If cfg.Notifications.GitHub.OnlyConfiguredRepos is true, keep only rows whose
-//     scope is one of cfg.GitHub.Repos, and include_repos is ignored
-//     entirely (a load-time warning already told the user this).
+//   - If cfg.Notifications.GitHub.OnlyConfiguredRepos is true, keep only
+//     GitHub rows (Identity.Kind == provider.KindGitHub) whose scope is one
+//     of cfg.GitHub.Repos, and include_repos is ignored entirely for those
+//     rows (a load-time warning already told the user this). This knob is a
+//     GitHub-only concept (decision 13 of the phase-2 spec) — it never has
+//     an opinion about a row from any other backend, so a row whose Kind is
+//     not GitHub always survives this branch regardless of its Scope.
 //   - Otherwise, if include_repos holds at least one compilable glob, keep
 //     only rows matching at least one of those globs.
 //   - Otherwise keep everything. That includes an include_repos list whose
@@ -71,6 +75,21 @@ func FilterNotifications(rows []provider.Notification, cfg *config.Config) []pro
 			configured[strings.ToLower(strings.TrimSpace(r))] = true
 		}
 		for _, row := range rows {
+			// only_configured_repos is a GitHub-only knob (decision 13):
+			// it narrows the GitHub portion of the merged feed and has no
+			// opinion about any other backend's rows. A non-GitHub row
+			// never carries an "owner/repo"-shaped Scope the github.repos
+			// list could match, so testing Scope against it would always
+			// fail and silently delete that backend's entire share of the
+			// feed -- which is what this branch did before this fix, for
+			// every Kind other than GitHub. Passing every non-GitHub row
+			// through unconditionally is future-proof: a third backend
+			// added later is unaffected by this knob without this branch
+			// needing to learn its Kind by name.
+			if row.Identity.Kind != provider.KindGitHub {
+				out = append(out, row)
+				continue
+			}
 			if configured[strings.ToLower(row.Identity.Scope)] {
 				out = append(out, row)
 			}
