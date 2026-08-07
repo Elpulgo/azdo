@@ -846,15 +846,16 @@ func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 	}
 }
 
-// --- Notifications counts as a remaining pane only when a
-// notification-capable backend is configured — Azure, GitHub, or both. ---
+// --- The all-panes-disabled guard treats notifications the same as the
+// other three panes, regardless of which backend (Azure, GitHub, or both)
+// is configured. ---
 
-// TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend covers
-// the all-panes-disabled guard across every backend combination: Azure-only,
+// TestConfig_Validate_PaneGuard_AcrossBackendCombinations covers the
+// all-panes-disabled guard across every backend combination: Azure-only,
 // GitHub-only, both, and neither, each with the other three panes disabled,
 // plus the guard's negative — it must not fire when a pane besides
 // notifications stays enabled, regardless of which backend is configured.
-func TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend(t *testing.T) {
+func TestConfig_Validate_PaneGuard_AcrossBackendCombinations(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string

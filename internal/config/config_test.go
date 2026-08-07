@@ -659,9 +659,9 @@ func TestConfig_Validate_InvalidDisabledPane(t *testing.T) {
 		// The three code panes disabled here still leaves notifications
 		// enabled, and this fixture has Azure configured (Organization +
 		// Projects), so notifications is a valid remaining pane — not an
-		// error. See TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend
+		// error. See TestConfig_Validate_PaneGuard_AcrossBackendCombinations
 		// for the guard's Azure/GitHub/both/neither matrix.
-		{"valid - three code panes disabled, Azure configured rescues notifications", []string{"pullrequests", "workitems", "pipelines"}, false},
+		{"valid - three code panes disabled, notifications remains", []string{"pullrequests", "workitems", "pipelines"}, false},
 		{"invalid - all four panes including notifications disabled", []string{"pullrequests", "workitems", "pipelines", "notifications"}, true},
 	}
 

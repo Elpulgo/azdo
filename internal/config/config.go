@@ -852,21 +852,20 @@ func (c *Config) Validate() error {
 	// At least one pane must remain enabled — otherwise the app would start
 	// with no navigable tabs.
 	//
-	// Notifications counts as a remaining pane only when a
-	// notification-capable backend is configured. The notifications tab
-	// hides on *capability*, not on config, so a naive four-way guard would
-	// let a config with the other three panes disabled pass here and then
-	// start with zero navigable tabs if no configured backend implements
-	// NotificationSource. Both Azure and GitHub satisfy
-	// provider.NotificationSource unconditionally once configured (Azure
-	// regardless of its per-source toggles), so testing configuration here
-	// is equivalent to testing capability without this package depending on
-	// the provider layer. Metrics cannot rescue this: it is separately
-	// gated on metrics.enabled.
-	notificationsCounts := c.IsPaneEnabled("notifications") && (c.HasAzure() || c.HasGitHub())
-	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") && !notificationsCounts {
-		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems' or 'pipelines' must remain enabled " +
-			"(or leave 'notifications' enabled with a notification-capable backend configured)")
+	// Notifications counts the same as the other three panes here, with no
+	// extra backend check: the "require at least one backend" guard above
+	// already guarantees a configured backend by this point in Validate(),
+	// and both Azure and GitHub satisfy provider.NotificationSource
+	// unconditionally once configured (Azure regardless of its per-source
+	// toggles). An earlier version of this guard special-cased HasGitHub()
+	// because GitHub was, at the time, the only notification-capable
+	// backend; that special case is gone now that Azure is capable too.
+	//
+	// Metrics is not counted here: it is separately gated on
+	// metrics.enabled and on a live Azure client, neither of which this
+	// method can confirm.
+	if !c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") && !c.IsPaneEnabled("pipelines") && !c.IsPaneEnabled("notifications") {
+		return fmt.Errorf("cannot disable all panes: at least one of 'pullrequests', 'workitems', 'pipelines' or 'notifications' must remain enabled")
 	}
 
 	// Notifications validation. There is no `notifications.enabled` guard —
