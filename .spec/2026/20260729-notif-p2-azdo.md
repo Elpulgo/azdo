@@ -2653,6 +2653,36 @@ grouping (11), Releases-arc mirroring (12). Still genuinely open:
   source disable throttling entirely and price the feed at Azure's cost precisely when
   things are broken.
 
+- **The pane discards a partial result and renders the error instead — one failing backend
+  takes the whole tab.** Found 2026-08-07 by task 16's third validation, while checking a
+  docs claim rather than by looking for it. The provider layer does the right thing at both
+  levels: task 8 has `Adapter.List` absorb a partial Azure failure, and
+  `composite.go:686-696` returns the healthy backend's rows *alongside* a `*PartialError`.
+  The UI then throws the rows away — `internal/ui/notifications/list.go:810-817` calls
+  `HandleFetchResult(nil, err)` on any non-nil error, and `View()` (`:736-740`) returns
+  `errorBody(err)` before it ever reaches the table. Reproduced: one Azure row plus a
+  `*PartialError` wrapping GitHub's 403 renders "Notifications unavailable — GitHub token
+  scope required: notifications" with the Azure row absent. Because the 403 repeats every
+  poll, an Azure + fine-grained-GitHub user gets that screen permanently.
+
+  This is **pre-existing phase-1 UI code**, but phase 2 is what makes it bite: with one
+  backend there was nothing to degrade to, and now the phase's own stated principle —
+  decision 20's "one backend failing degrades to the others rather than emptying the feed",
+  which task 8 went to some trouble to honour one layer down — is undone at the last step.
+  Phase 2's docs promised the working behaviour; they have been corrected to describe what
+  the code actually does (README's classic-PAT note, FAQ's "I don't see a Notifications
+  tab"), so nothing ships a false claim, but the promise is the one worth keeping.
+
+  **Deferred to Oscar deliberately, not left undone by accident.** The fix is not mechanical:
+  it changes what a shipped pane renders, and it needs a design answer for what a degraded
+  pane *looks* like — rows plus a subdued banner, rows plus a count in the header, or
+  something else — which is the same question the `NotificationSource` warnings-channel entry
+  above is already asking. They should be decided together. The narrow version, if you want
+  the smallest change that stops the bleeding: have `HandleFetchResult` keep `items` when
+  `err` is a `*provider.PartialError` and `len(items) > 0`, and have `View` render the table
+  with a warning line rather than `errorBody`. Deciding that unattended at the end of an AFK
+  run would have been scope creep with a UI design decision buried in it.
+
 - **Does any source need a PAT scope beyond what the app already requests?** The comments
   endpoint documents `vso.work`, which the work-item pane already needs, so the likely answer
   is no — but "likely" is what convention 28 exists to catch. Task 1 confirms it against a real

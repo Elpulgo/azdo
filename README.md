@@ -455,7 +455,7 @@ both, just with a different shape to match — `"your-org/*"` matches GitHub rep
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `notifications.github.only_configured_repos` | bool | `false` | Narrow the **GitHub share** of the feed to repos listed in `github.repos`; rows from any other backend are unaffected. When `true`, this **overrides** `include_repos` for GitHub rows (which is then ignored, with a startup warning) — the two selection knobs never intersect. |
+| `notifications.github.only_configured_repos` | bool | `false` | Narrow the **GitHub share** of the feed to repos listed in `github.repos`; rows from any other backend pass through untouched. When `true`, this **overrides** `include_repos` entirely — `include_repos` is then ignored for *every* row, not just the GitHub ones, with a startup warning. The two selection knobs never intersect. |
 | `notifications.github.participating_only` | bool | `false` | Narrow the **server-side** fetch to GitHub's "participating" bundle (roughly everything except `subscribed`). Composes with `exclude_reasons` rather than replacing it — see "Precedence" below. |
 | `notifications.github.since_days` | int | `0` (no bound) | Only fetch GitHub notifications updated within the last N days. This is the knob to reach for on a very large inbox — it's the one filter that actually reduces what's fetched from GitHub, rather than merely trimming the client-side result. |
 
@@ -504,8 +504,10 @@ can only ever produce the same unrecognised-value warning as a typo.
 evaluation order is not observable — each is an independent predicate over the row set,
 except for one genuine override: `notifications.github.only_configured_repos` and
 `include_repos` are both *selection* knobs, and when both are set,
-`only_configured_repos` wins outright for GitHub rows (`include_repos` is ignored for
-them, with a warning) while rows from any other backend are unaffected either way.
+`only_configured_repos` wins outright: `include_repos` is ignored for *every* row, with a
+warning, and rows from any backend other than GitHub pass through unnarrowed. So
+`include_repos: ["proj-a"]` together with `only_configured_repos: true` does **not** narrow
+your Azure rows to `proj-a` — it shows Azure rows from every project.
 `exclude_repos`, `exclude_reasons`, and `unread_only` are a plain, order-independent AND —
 each one only ever removes rows, never adds them back, so it doesn't matter which is
 "applied first".
@@ -668,8 +670,11 @@ repository permissions:
 > fine-grained token form. A fine-grained token is fine for everything else in the GitHub
 > backend; it just can't reach the GitHub inbox. An Azure-configured backend needs no extra
 > scope at all (see [Azure DevOps — Personal Access Token](#azure-devops--personal-access-token-pat)
-> above), so an Azure-only or Azure+GitHub-fine-grained setup still gets a working
-> Notifications tab, just without the GitHub half. If you'd rather not switch your GitHub
+> above), so an **Azure-only** setup gets a fully working Notifications tab. If you configure
+> **both** backends and your GitHub token can't reach the inbox, the tab currently shows the
+> GitHub scope error instead of your Azure rows — the failing backend takes the whole pane
+> with it rather than degrading to the half that works. Either grant the GitHub token the
+> `notifications` scope or remove `github.repos` from your config. If you'd rather not switch your GitHub
 > token, see [Disabling the Notifications tab](#notifications-configuration) — add
 > `notifications` to `disabled_panes` and the tab goes away entirely.
 

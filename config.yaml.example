@@ -125,8 +125,8 @@ theme: dark
 #       review_requested: true      # open PRs where you're a reviewer
 #       mentioned: true              # work-item @mentions
 #       assigned: true               # work items assigned to you
-#       ci_failed: true              # pipeline runs of mine that failed
-#                                    # requested by you -- emits the ci_activity
+#       ci_failed: true              # pipeline runs requested by you whose
+#                                    # result is 'failed' -- emits the ci_activity
 #                                    # reason above, a deliberately different name
 #                                    # from this key
 
