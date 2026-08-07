@@ -79,7 +79,18 @@ func DefaultNotificationSourceToggles() NotificationSourceToggles {
 // accidental side effect of a signature change rather than an opt-in. A nil
 // store is still safe to pass here — List, MarkRead and MarkDone all guard
 // it the same way every other Adapter method guards a nil mc.
-func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDays int, toggles NotificationSourceToggles) *Adapter {
+// minPollInterval is task 14's wiring of notifications.azure.min_poll_interval
+// (decision 10): List self-throttles to it, returning its previous result
+// unchanged rather than issuing a real query, whenever called sooner than
+// minPollInterval after its last real query. A non-positive value disables
+// throttling outright — every List call runs a real query — which is what
+// every call site in this package's own tests wants unless it is
+// specifically exercising the throttle; internal/config's LoadFrom is what
+// keeps a real user from ever reaching this constructor with a literal zero
+// (task-11 review decision B: notifications.azure.min_poll_interval: 0 falls
+// back to its own default there, before cmd/azdo-tui ever calls this
+// constructor).
+func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDays int, toggles NotificationSourceToggles, minPollInterval time.Duration) *Adapter {
 	if lookbackDays <= 0 {
 		lookbackDays = DefaultNotificationLookbackDays
 	}
@@ -87,10 +98,11 @@ func NewAdapterWithNotifications(mc *MultiClient, store *TriageStore, lookbackDa
 		lookbackDays = MaxNotificationLookbackDays
 	}
 	return &Adapter{
-		mc:                mc,
-		notifStore:        store,
-		notifLookbackDays: lookbackDays,
-		notifSources:      toggles,
+		mc:                   mc,
+		notifStore:           store,
+		notifLookbackDays:    lookbackDays,
+		notifSources:         toggles,
+		notifMinPollInterval: minPollInterval,
 	}
 }
 
@@ -158,6 +170,20 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 // call, not as three separate lock acquisitions, so a concurrent MarkRead or
 // MarkDone landing mid-poll is never silently lost underneath this method's
 // own write (task 8 review, 🟡 finding 5).
+//
+// Self-throttle (decision 10, task 14): before any of the above runs, this
+// method checks notifThrottled(now) and, if the call falls inside the
+// window opened by the last real query, returns a copy of notifLastResult
+// with a nil error and skips runSourcesConcurrently, Reconcile and
+// notifStore.Swap entirely — no network work, no store write, for that
+// call. Only a real query that lands in this method's absorb branch (at
+// least one source succeeded) advances notifLastPollAt/notifLastResult and
+// so opens the next window; a real query that fails outright (the
+// error-propagating branch below) leaves them exactly as they were, so a
+// total outage is retried on the very next call rather than being
+// remembered as a throttle anchor — see notifThrottled's own doc comment
+// for the first-call case and copyNotifications' for why the cached slice
+// itself cannot be corrupted by a caller mutating what they were handed.
 func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notification, error) {
 	if a.mc == nil {
 		return nil, fmt.Errorf("azdevops: notifications: no client configured")
@@ -170,6 +196,17 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 		// can infer from an error string that Azure's read state happens to
 		// be tracked locally rather than on the server.
 		return nil, fmt.Errorf("azdevops: notifications: not configured")
+	}
+
+	// notifThrottleMu is held for the rest of this call, including the
+	// network work below and the notifStore.Swap that follows it — see the
+	// lock-order comment on the Adapter struct for why that is safe and
+	// does not block MarkRead/MarkDone.
+	a.notifThrottleMu.Lock()
+	defer a.notifThrottleMu.Unlock()
+
+	if a.notifThrottled(now) {
+		return copyNotifications(a.notifLastResult), nil
 	}
 
 	rows, errs, jobCount := a.runSourcesConcurrently(now)
@@ -187,10 +224,58 @@ func (a *Adapter) list(opts provider.NotifOpts, now time.Time) ([]provider.Notif
 		// Absorb: every enabled source succeeded (possibly zero of them, a
 		// legal all-toggles-off empty feed), or enough of them did that at
 		// least one contributed. See this method's doc comment for why this
-		// is keyed on source count, not on len(reconciled).
-		return reconciled, nil
+		// is keyed on source count, not on len(reconciled). This is also
+		// the only branch that advances the throttle: a real query that
+		// fails outright (the branch below) leaves notifLastPollAt and
+		// notifLastResult untouched, so it never starts a throttle window
+		// and never gets cached — see notifThrottled's doc comment.
+		a.notifLastPollAt = now
+		a.notifLastResult = reconciled
+		return copyNotifications(a.notifLastResult), nil
 	}
 	return nil, fmt.Errorf("azdevops: notifications: all %d sources failed: %w", len(errs), errors.Join(errs...))
+}
+
+// notifThrottled reports whether now falls inside the self-throttle window
+// opened by the last real query that produced a cacheable result (list's
+// absorb branch — see its own comment). Must be called with notifThrottleMu
+// held.
+//
+// A non-positive notifMinPollInterval disables throttling unconditionally,
+// checked first and independently of notifLastPollAt/now so that no clock
+// relationship between the two — including one where now is earlier than
+// notifLastPollAt — can make this return true when throttling is off.
+//
+// A zero notifLastPollAt (no real query has ever succeeded yet) needs no
+// dedicated check: time.Time's zero value is year 1, so
+// notifLastPollAt.Add(notifMinPollInterval) still lands far in the past
+// relative to any real now, and now.Before(...) is false — the very first
+// call is never throttled, without a second explicit guard whose effect the
+// first one would already subsume.
+func (a *Adapter) notifThrottled(now time.Time) bool {
+	if a.notifMinPollInterval <= 0 {
+		return false
+	}
+	return now.Before(a.notifLastPollAt.Add(a.notifMinPollInterval))
+}
+
+// copyNotifications returns a fresh slice holding the same elements as rows,
+// so a caller that mutates the result cannot corrupt notifLastResult (the
+// throttle cache list reads from on every throttled return) or reconciled
+// (which becomes notifLastResult on a real query) — phase 1 lost a defect to
+// exactly this aliasing in its conditional-request cache. A per-element copy
+// into a new backing array is already a true value copy here:
+// provider.Notification's fields (Identity's strings, Title, Reason, Read,
+// Done, UpdatedAt, WebURL) are all value types, none a slice, map or
+// pointer, so no field within a copied element can alias anything the
+// caller does not own.
+func copyNotifications(rows []provider.Notification) []provider.Notification {
+	if rows == nil {
+		return nil
+	}
+	out := make([]provider.Notification, len(rows))
+	copy(out, rows)
+	return out
 }
 
 // sourceResult is one source's raw outcome, kept together so

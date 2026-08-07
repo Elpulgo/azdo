@@ -29,7 +29,7 @@ var _ provider.NotificationSource = (*Adapter)(nil)
 // provider/composite_notifications_test.go's identical check on
 // fakeNotifyBackend.
 func TestAdapter_DoesNotImplementPollIntervalHinter(t *testing.T) {
-	var src provider.NotificationSource = NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles())
+	var src provider.NotificationSource = NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles(), 0)
 	if _, ok := src.(provider.PollIntervalHinter); ok {
 		t.Fatal("Adapter must not implement PollIntervalHinter — Azure DevOps has no equivalent hint (decision 10)")
 	}
@@ -58,7 +58,7 @@ func TestNewAdapterWithNotifications_LookbackDays_ClampedToMax(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAdapterWithNotifications(nil, nil, tt.lookbackDays, DefaultNotificationSourceToggles())
+			a := NewAdapterWithNotifications(nil, nil, tt.lookbackDays, DefaultNotificationSourceToggles(), 0)
 			if a.notifLookbackDays != tt.want {
 				t.Errorf("notifLookbackDays = %d, want %d", a.notifLookbackDays, tt.want)
 			}
@@ -71,7 +71,7 @@ func TestNewAdapterWithNotifications_LookbackDays_ClampedToMax(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdapter_List_NilClient_ReturnsDescriptiveError(t *testing.T) {
-	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles(), 0)
 	got, err := a.List(provider.NotifOpts{})
 	if err == nil {
 		t.Fatal("List() error = nil, want a descriptive error for a nil client")
@@ -100,7 +100,7 @@ func TestAdapter_List_NilStore_ReturnsDescriptiveError(t *testing.T) {
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, composerTestUserID)
 
-	a := NewAdapterWithNotifications(mc, nil, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(mc, nil, 0, DefaultNotificationSourceToggles(), 0)
 	got, err := a.List(provider.NotifOpts{})
 	if err == nil {
 		t.Fatal("List() error = nil, want a descriptive error for a nil store")
@@ -114,7 +114,7 @@ func TestAdapter_List_NilStore_ReturnsDescriptiveError(t *testing.T) {
 }
 
 func TestAdapter_MarkRead_NilStore_ReturnsDescriptiveError(t *testing.T) {
-	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles(), 0)
 	err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/1"})
 	if err == nil {
 		t.Fatal("MarkRead() error = nil, want a descriptive error for a nil store")
@@ -125,7 +125,7 @@ func TestAdapter_MarkRead_NilStore_ReturnsDescriptiveError(t *testing.T) {
 }
 
 func TestAdapter_MarkDone_NilStore_ReturnsDescriptiveError(t *testing.T) {
-	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, nil, 0, DefaultNotificationSourceToggles(), 0)
 	err := a.MarkDone(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/1"})
 	if err == nil {
 		t.Fatal("MarkDone() error = nil, want a descriptive error for a nil store")
@@ -148,7 +148,7 @@ func newTestTriageStore(t *testing.T) *TriageStore {
 }
 
 func TestAdapter_MarkRead_WrongKind_ReturnsDescriptiveError(t *testing.T) {
-	a := NewAdapterWithNotifications(nil, newTestTriageStore(t), 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, newTestTriageStore(t), 0, DefaultNotificationSourceToggles(), 0)
 	err := a.MarkRead(provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"})
 	if err == nil {
 		t.Fatal("MarkRead() error = nil, want a descriptive error for a mismatched Kind")
@@ -159,7 +159,7 @@ func TestAdapter_MarkRead_WrongKind_ReturnsDescriptiveError(t *testing.T) {
 }
 
 func TestAdapter_MarkDone_WrongKind_ReturnsDescriptiveError(t *testing.T) {
-	a := NewAdapterWithNotifications(nil, newTestTriageStore(t), 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, newTestTriageStore(t), 0, DefaultNotificationSourceToggles(), 0)
 	err := a.MarkDone(provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "1"})
 	if err == nil {
 		t.Fatal("MarkDone() error = nil, want a descriptive error for a mismatched Kind")
@@ -171,7 +171,7 @@ func TestAdapter_MarkDone_WrongKind_ReturnsDescriptiveError(t *testing.T) {
 
 func TestAdapter_MarkRead_UpdatesLocalTriageState(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}
 	if err := a.MarkRead(id); err != nil {
@@ -192,7 +192,7 @@ func TestAdapter_MarkRead_UpdatesLocalTriageState(t *testing.T) {
 
 func TestAdapter_MarkDone_UpdatesLocalTriageState(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}
 	if err := a.MarkDone(id); err != nil {
@@ -225,7 +225,7 @@ func TestAdapter_MarkDone_UpdatesLocalTriageState(t *testing.T) {
 // notifications.yaml until orphanTTL happened to prune it.
 func TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 
 	err := a.MarkRead(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: ""})
 	if err == nil {
@@ -243,7 +243,7 @@ func TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry(t *testing.T) {
 // TestAdapter_MarkRead_EmptyID_ReturnsErrorAndCreatesNoEntry for MarkDone.
 func TestAdapter_MarkDone_EmptyID_ReturnsErrorAndCreatesNoEntry(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 
 	err := a.MarkDone(provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: ""})
 	if err == nil {
@@ -265,7 +265,7 @@ func TestAdapter_MarkDone_EmptyID_ReturnsErrorAndCreatesNoEntry(t *testing.T) {
 // Flush already cleared it.
 func TestAdapter_MarkRead_AlreadyRead_IsNoOp(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}
 
 	if err := a.MarkRead(id); err != nil {
@@ -313,7 +313,7 @@ func TestAdapter_MarkRead_AlreadyRead_IsNoOp(t *testing.T) {
 // at all.
 func TestAdapter_MarkDone_AlreadyDone_IsNoOp(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/42"}
 
 	if err := a.MarkDone(id); err != nil {
@@ -363,7 +363,7 @@ func TestAdapter_MarkDone_AlreadyDone_IsNoOp(t *testing.T) {
 // way MarkRead's twin asserts Read=true.
 func TestAdapter_MarkDone_UnseenID_CreatesEntryWithSaneLastActivity(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/99"}
 
 	before := time.Now()
@@ -402,7 +402,7 @@ func TestAdapter_MarkDone_UnseenID_CreatesEntryWithSaneLastActivity(t *testing.T
 // the mark survives that poll rather than being resurrected by it.
 func TestAdapter_MarkRead_UnseenID_CreatesEntryWithSaneLastActivity(t *testing.T) {
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(nil, store, 0, DefaultNotificationSourceToggles(), 0)
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "alpha", ID: "review/pr/99"}
 
 	before := time.Now()
@@ -593,7 +593,7 @@ func newComposerAdapter(t *testing.T, f *composerFixture) (*Adapter, *httptest.S
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, composerTestUserID)
 	store := newTestTriageStore(t)
-	a := NewAdapterWithNotifications(mc, store, 14, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(mc, store, 14, DefaultNotificationSourceToggles(), 0)
 	return a, server
 }
 
@@ -712,7 +712,7 @@ func TestAdapter_List_PartialProjectFailure_KeepsSurvivingProjectRows(t *testing
 		"beta":  betaServer,
 	})
 	setUserIDs(mc, composerTestUserID)
-	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, DefaultNotificationSourceToggles(), 0)
 
 	rows, err := a.list(provider.NotifOpts{}, now)
 	if err != nil {
@@ -743,7 +743,7 @@ func TestAdapter_List_AllSourcesFail_ReturnsError(t *testing.T) {
 
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
 	setUserIDs(mc, composerTestUserID)
-	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, DefaultNotificationSourceToggles())
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, DefaultNotificationSourceToggles(), 0)
 
 	rows, err := a.list(provider.NotifOpts{}, now)
 	if err == nil {
@@ -891,7 +891,7 @@ func TestAdapter_List_CIFailedToggleOff_ExcludesSourceFromFeed(t *testing.T) {
 	setUserIDs(mc, composerTestUserID)
 	toggles := DefaultNotificationSourceToggles()
 	toggles.CIFailed = false
-	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, toggles)
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, toggles, 0)
 
 	rows, err := a.list(provider.NotifOpts{}, now)
 	if err != nil {
@@ -924,7 +924,7 @@ func TestAdapter_List_AllTogglesOff_ReturnsEmptyFeedNotError(t *testing.T) {
 	// resolveAuthenticatedUserID error over the network instead of quietly
 	// producing an empty feed, catching the regression outright.
 	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
-	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, NotificationSourceToggles{})
+	a := NewAdapterWithNotifications(mc, newTestTriageStore(t), 14, NotificationSourceToggles{}, 0)
 
 	rows, err := a.list(provider.NotifOpts{}, now)
 	if err != nil {

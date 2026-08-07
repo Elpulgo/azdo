@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -327,8 +328,9 @@ func runTUI() error {
 		}
 		azureNotifStore = notifStore
 
+		lookbackDays, sourceToggles, minPollInterval := azureNotificationArgs(cfg.Notifications.Azure)
 		backends = append(backends, azdevops.NewAdapterWithNotifications(
-			client, notifStore, 0, azdevops.DefaultNotificationSourceToggles()))
+			client, notifStore, lookbackDays, sourceToggles, minPollInterval))
 	}
 
 	// --- GitHub backend (only when at least one repo is configured) ---
@@ -409,6 +411,31 @@ func runTUI() error {
 	}
 
 	return nil
+}
+
+// azureNotificationArgs derives azdevops.NewAdapterWithNotifications's three
+// notifications.azure-sourced arguments (lookback window, per-source
+// toggles, self-throttle interval) from azure. It exists as its own
+// function, separate from the constructor call in runTUI above, purely so a
+// test can drive a non-default NotificationsAzureConfig through it without
+// going through runTUI's keyring/network setup — see
+// TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter
+// (cmd/azdo-tui/main_test.go). config.NotificationsAzureConfig already
+// carries defaults, clamping and validation for LookbackDays and
+// MinPollInterval (task 11); this function does no normalisation of its
+// own, it only reshapes already-normalised fields into the types
+// NewAdapterWithNotifications takes — MinPollInterval is seconds in config
+// (matching notifications.azure.min_poll_interval's YAML units) and a
+// time.Duration in the adapter.
+func azureNotificationArgs(azure config.NotificationsAzureConfig) (lookbackDays int, toggles azdevops.NotificationSourceToggles, minPollInterval time.Duration) {
+	return azure.LookbackDays,
+		azdevops.NotificationSourceToggles{
+			ReviewRequested: azure.Sources.ReviewRequested,
+			Mentioned:       azure.Sources.Mentioned,
+			Assigned:        azure.Sources.Assigned,
+			CIFailed:        azure.Sources.CIFailed,
+		},
+		time.Duration(azure.MinPollInterval) * time.Second
 }
 
 // runSetupWizard launches the interactive setup wizard and saves the config.

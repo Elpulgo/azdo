@@ -2,6 +2,8 @@ package azdevops
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
 )
@@ -16,13 +18,31 @@ type Adapter struct {
 
 	// notifStore, notifLookbackDays and notifSources back the
 	// provider.NotificationSource surface (adapter_notifications.go) only.
-	// A plain NewAdapter(mc) leaves all three at their zero value; List,
-	// MarkRead and MarkDone all treat a nil notifStore as "notifications not
-	// configured" the same way every other method on this type treats a nil
-	// mc — see NewAdapterWithNotifications.
+	// A plain NewAdapter(mc) leaves all five fields below at their zero
+	// value; List, MarkRead and MarkDone all treat a nil notifStore as
+	// "notifications not configured" the same way every other method on
+	// this type treats a nil mc — see NewAdapterWithNotifications.
 	notifStore        *TriageStore
 	notifLookbackDays int
 	notifSources      NotificationSourceToggles
+
+	// notifThrottleMu, notifMinPollInterval, notifLastPollAt and
+	// notifLastResult implement decision 10's self-throttle (List returns
+	// its previous result unchanged when called sooner than
+	// notifMinPollInterval after its last real query). This lock is
+	// intentionally distinct from notifStore's own mu/writeMu
+	// (notifications_store.go): List holds notifThrottleMu for its entire
+	// call, including the network round trip in runSourcesConcurrently and
+	// the later notifStore.Swap, while MarkRead/MarkDone only ever acquire
+	// notifStore's own mu (via ApplyIfChanged) and never touch
+	// notifThrottleMu at all. Lock order for the one call path that ever
+	// holds both — list — is notifThrottleMu before notifStore's mu; no
+	// other code acquires them in the opposite order, so there is no cycle
+	// to deadlock on.
+	notifThrottleMu      sync.Mutex
+	notifMinPollInterval time.Duration
+	notifLastPollAt      time.Time
+	notifLastResult      []provider.Notification
 }
 
 // NewAdapter creates a new Adapter wrapping the given MultiClient.

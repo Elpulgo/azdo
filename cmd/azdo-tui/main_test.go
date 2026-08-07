@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
+
+	"github.com/Elpulgo/azdo/internal/azdevops"
+	"github.com/Elpulgo/azdo/internal/config"
 )
 
 // TestRunTUI_UsesGitHubAdapterWithNotifications pins the GitHub backend
@@ -132,8 +136,10 @@ func TestRunTUI_UsesAzureAdapterWithNotifications(t *testing.T) {
 		sawNewAdapterWithNotifications bool
 		sawBareNewAdapter              bool
 		sawNewTriageStore              bool
+		sawAzureNotificationArgsCall   bool
 		notifAdapterArgCount           int
 		notifAdapterSecondArgIsNil     bool
+		notifAdapterHasHardcodedArg    bool
 	)
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -141,6 +147,14 @@ func TestRunTUI_UsesAzureAdapterWithNotifications(t *testing.T) {
 		if !ok {
 			return true
 		}
+
+		// Bare, unqualified call — looking for azureNotificationArgs(...),
+		// which lives in this same package (main), not behind a package
+		// selector.
+		if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "azureNotificationArgs" {
+			sawAzureNotificationArgsCall = true
+		}
+
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return true
@@ -158,6 +172,31 @@ func TestRunTUI_UsesAzureAdapterWithNotifications(t *testing.T) {
 					notifAdapterSecondArgIsNil = true
 				}
 			}
+			// The third, fourth and fifth arguments (lookbackDays,
+			// toggles, minPollInterval) must come from config, not from a
+			// hardcoded literal 0 or azdevops.DefaultNotificationSourceToggles()
+			// — task 11 parses, defaults, clamps and validates
+			// notifications.azure's fields, and a hardcoded arg here is
+			// exactly the gap task 14 exists to close (a user-set
+			// lookback_days/sources/min_poll_interval accepted, validated,
+			// then silently ignored). This does not pin *which* helper
+			// supplies the value, only that none of these three positions
+			// is a bare 0 literal or a call to
+			// DefaultNotificationSourceToggles — see
+			// TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter for
+			// the runtime proof that azureNotificationArgs itself carries a
+			// non-default value through correctly.
+			for i := 2; i < len(call.Args) && i <= 4; i++ {
+				arg := call.Args[i]
+				if lit, ok := arg.(*ast.BasicLit); ok && lit.Value == "0" {
+					notifAdapterHasHardcodedArg = true
+				}
+				if argCall, ok := arg.(*ast.CallExpr); ok {
+					if argSel, ok := argCall.Fun.(*ast.SelectorExpr); ok && argSel.Sel.Name == "DefaultNotificationSourceToggles" {
+						notifAdapterHasHardcodedArg = true
+					}
+				}
+			}
 		case "NewAdapter":
 			sawBareNewAdapter = true
 		case "NewTriageStore":
@@ -173,13 +212,59 @@ func TestRunTUI_UsesAzureAdapterWithNotifications(t *testing.T) {
 		t.Error("runTUI must not call azdevops.NewAdapter (leaves the notifications store nil, and the zero-value *Adapter still satisfies provider.NotificationSource by method set alone); use azdevops.NewAdapterWithNotifications instead")
 	}
 
-	if notifAdapterArgCount != 4 {
-		t.Errorf("azdevops.NewAdapterWithNotifications called with %d args, want 4 (MultiClient, *TriageStore, lookbackDays, NotificationSourceToggles)", notifAdapterArgCount)
+	if notifAdapterArgCount != 5 {
+		t.Errorf("azdevops.NewAdapterWithNotifications called with %d args, want 5 (MultiClient, *TriageStore, lookbackDays, NotificationSourceToggles, minPollInterval)", notifAdapterArgCount)
 	}
 	if notifAdapterSecondArgIsNil {
 		t.Error("azdevops.NewAdapterWithNotifications's second argument must not be nil — a nil TriageStore makes every notifications List call fail with \"azdevops: notifications: not configured\" while the tab still shows up under the capability check")
 	}
 	if !sawNewTriageStore {
 		t.Error("expected runTUI to construct the local triage store via azdevops.NewTriageStore, found no such call")
+	}
+	if notifAdapterHasHardcodedArg {
+		t.Error("azdevops.NewAdapterWithNotifications's lookbackDays/toggles/minPollInterval arguments must come from notifications.azure config, not a hardcoded 0 literal or azdevops.DefaultNotificationSourceToggles() — a user-set lookback_days, sources toggle or min_poll_interval would be silently ignored")
+	}
+	if !sawAzureNotificationArgsCall {
+		t.Error("expected runTUI to derive azdevops.NewAdapterWithNotifications's config-sourced arguments via azureNotificationArgs, found no such call")
+	}
+}
+
+// TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter is the runtime
+// counterpart to the AST checks above: it proves a non-default
+// notifications.azure value actually reaches azdevops.NewAdapterWithNotifications's
+// arguments, not merely that config.NotificationsAzureConfig parses one.
+// Every field below is deliberately set away from its LoadFrom default
+// (LookbackDays 14, MinPollInterval 300, every Sources bool true) so a
+// regression back to a hardcoded default — the exact bug task 14 exists to
+// fix — fails this test even if it happened to also satisfy the AST checks
+// above.
+func TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter(t *testing.T) {
+	azure := config.NotificationsAzureConfig{
+		LookbackDays:    7,
+		MinPollInterval: 42,
+		Sources: config.NotificationsAzureSourcesConfig{
+			ReviewRequested: false,
+			Mentioned:       true,
+			Assigned:        false,
+			CIFailed:        true,
+		},
+	}
+
+	lookbackDays, toggles, minPollInterval := azureNotificationArgs(azure)
+
+	if lookbackDays != 7 {
+		t.Errorf("lookbackDays = %d, want 7", lookbackDays)
+	}
+	wantToggles := azdevops.NotificationSourceToggles{
+		ReviewRequested: false,
+		Mentioned:       true,
+		Assigned:        false,
+		CIFailed:        true,
+	}
+	if toggles != wantToggles {
+		t.Errorf("toggles = %+v, want %+v", toggles, wantToggles)
+	}
+	if minPollInterval != 42*time.Second {
+		t.Errorf("minPollInterval = %v, want %v", minPollInterval, 42*time.Second)
 	}
 }
