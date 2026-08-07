@@ -14,7 +14,7 @@ import (
 // FilterNotifications applies the notifications config's filter knobs to rows.
 //
 // Selection is an override, not an intersection:
-//   - If cfg.Notifications.OnlyConfiguredRepos is true, keep only rows whose
+//   - If cfg.Notifications.GitHub.OnlyConfiguredRepos is true, keep only rows whose
 //     scope is one of cfg.GitHub.Repos, and include_repos is ignored
 //     entirely (a load-time warning already told the user this).
 //   - Otherwise, if include_repos holds at least one compilable glob, keep
@@ -60,7 +60,7 @@ func FilterNotifications(rows []provider.Notification, cfg *config.Config) []pro
 	// --- Selection (override, not intersection) ---
 	includeRepos := compilableGlobs(nc.IncludeRepos)
 	switch {
-	case nc.OnlyConfiguredRepos:
+	case nc.GitHub.OnlyConfiguredRepos:
 		configured := make(map[string]bool, len(cfg.GitHub.Repos))
 		for _, r := range cfg.GitHub.Repos {
 			// TrimSpace because Validate only rejects an entry that is
@@ -140,11 +140,11 @@ func NotifOptsFromConfig(cfg *config.Config) provider.NotifOpts {
 
 	nc := cfg.Notifications
 	opts := provider.NotifOpts{
-		ParticipatingOnly: nc.ParticipatingOnly,
+		ParticipatingOnly: nc.GitHub.ParticipatingOnly,
 		Max:               nc.MaxItems,
 	}
-	if nc.SinceDays > 0 {
-		since := time.Now().AddDate(0, 0, -nc.SinceDays)
+	if nc.GitHub.SinceDays > 0 {
+		since := time.Now().AddDate(0, 0, -nc.GitHub.SinceDays)
 		// Truncate to the start of the day so repeated calls within the same
 		// day (NotifOpts is derived once per fetch, not frozen at poller
 		// construction) produce an identical Since value, which keeps the

@@ -88,17 +88,16 @@ type MetricsStates struct {
 // possible behaviour — whole inbox, nothing filtered, pane on. There is
 // deliberately no `enabled` key here: the pane disables the same way every
 // other default-on pane does, via `disabled_panes: notifications`.
+//
+// Only the fields below apply to the merged feed regardless of backend
+// (decision 13 of the phase-2 spec). Provider-specific knobs live in the
+// nested GitHub and Azure blocks: `participating_only`, `only_configured_repos`
+// and `since_days` moved to notifications.github because none of the three
+// has a meaningful Azure equivalent — see NotificationsGitHubConfig's doc
+// comment. There is no migration for the old flat keys: a bare
+// `notifications.participating_only` (etc.) is simply an unrecognised key
+// and is silently ignored, not honoured and not warned about (decision 14).
 type NotificationsConfig struct {
-	// OnlyConfiguredRepos restricts the merged feed to repos listed under
-	// github.repos. False (default) shows the whole inbox, including rows
-	// from repos this config never built a client for.
-	OnlyConfiguredRepos bool `mapstructure:"only_configured_repos"`
-	// ExcludeRepos is a glob list ("owner/repo" pattern, path.Match syntax) of
-	// repos to hide from the feed. Empty (default) excludes nothing.
-	ExcludeRepos []string `mapstructure:"exclude_repos"`
-	// IncludeRepos is a glob list narrowing the feed to matching repos.
-	// Empty (default) narrows nothing.
-	IncludeRepos []string `mapstructure:"include_repos"`
 	// ExcludeReasons lists the neutral NotificationReason string names (e.g.
 	// "subscribed", "ci_activity") to trim from the merged feed client-side.
 	// Empty (default) filters no reason.
@@ -114,21 +113,84 @@ type NotificationsConfig struct {
 	// The fetch itself always requests the full inbox regardless of this
 	// setting; false (default) shows both read and unread.
 	UnreadOnly bool `mapstructure:"unread_only"`
+	// ExcludeRepos is a glob list of scopes to hide from the feed
+	// (path.Match syntax). On GitHub a scope is "owner/repo"; on Azure it is
+	// a project name. Empty (default) excludes nothing.
+	ExcludeRepos []string `mapstructure:"exclude_repos"`
+	// IncludeRepos is a glob list narrowing the feed to matching scopes, same
+	// "owner/repo" (GitHub) / project name (Azure) shape as ExcludeRepos.
+	// Empty (default) narrows nothing.
+	IncludeRepos []string `mapstructure:"include_repos"`
+	// MaxItems caps the number of notifications in the merged, sorted feed
+	// across every backend, applied after the newest-first sort. Zero
+	// (default) means no cap.
+	MaxItems int `mapstructure:"max_items"`
+	// PollInterval overrides the global polling_interval for the
+	// notifications poller only. Zero (default) falls back to the backend's
+	// polling-cadence hint when present, else the global polling_interval.
+	PollInterval int `mapstructure:"poll_interval"`
+
+	// GitHub holds GitHub-only notifications knobs — the phase-1 keys that
+	// have no Azure equivalent.
+	GitHub NotificationsGitHubConfig `mapstructure:"github"`
+	// Azure holds Azure-only notifications knobs — populated in full by the
+	// phase-2 spec's task 11. This struct exists here only to give that task
+	// somewhere to land its fields; task 10 invents neither their defaults
+	// nor their validation.
+	Azure NotificationsAzureConfig `mapstructure:"azure"`
+}
+
+// NotificationsGitHubConfig holds the notifications knobs that apply to the
+// GitHub backend only. Each was a top-level notifications.* key in phase 1;
+// decision 13 of the phase-2 spec moved them here because none generalises
+// to Azure: ParticipatingOnly names a GitHub inbox concept with no Azure
+// analogue, OnlyConfiguredRepos is vacuously true on Azure (the adapter only
+// ever queries configured projects), and SinceDays's zero value ("no bound")
+// would be catastrophic applied to Azure's assigned-work-item query, which is
+// why Azure gets its own lookback_days instead of sharing this field.
+type NotificationsGitHubConfig struct {
 	// ParticipatingOnly narrows the server-side fetch to GitHub's
 	// "participating" bundle — roughly everything except `subscribed` — and
 	// composes with, rather than replaces, ExcludeReasons.
 	// False (default) fetches the whole inbox.
 	ParticipatingOnly bool `mapstructure:"participating_only"`
+	// OnlyConfiguredRepos restricts the merged feed to repos listed under
+	// github.repos. False (default) shows the whole inbox, including rows
+	// from repos this config never built a client for.
+	OnlyConfiguredRepos bool `mapstructure:"only_configured_repos"`
 	// SinceDays bounds the feed to notifications updated within the last N
 	// days. Zero (default) means no bound.
 	SinceDays int `mapstructure:"since_days"`
-	// MaxItems caps the number of notifications returned across all fetched
-	// pages, applied after the newest-first sort. Zero (default) means no cap.
-	MaxItems int `mapstructure:"max_items"`
-	// PollInterval overrides the global polling_interval for the
-	// notifications poller only. Zero (default) falls back to the backend's
-	// X-Poll-Interval hint when present, else the global polling_interval.
-	PollInterval int `mapstructure:"poll_interval"`
+}
+
+// NotificationsAzureConfig holds the notifications knobs that apply to the
+// Azure DevOps backend only. Left unpopulated by task 10 on purpose — its
+// fields, defaults and validation are the phase-2 spec's task 11.
+type NotificationsAzureConfig struct {
+	// LookbackDays bounds every Azure notification source to activity within
+	// the last N days. Populated by task 11.
+	LookbackDays int `mapstructure:"lookback_days"`
+	// MinPollInterval is the shortest interval, in seconds, between two real
+	// Azure notification queries; the adapter self-throttles to it. Populated
+	// by task 11.
+	MinPollInterval int `mapstructure:"min_poll_interval"`
+	// Sources holds the per-source enable toggles. Populated by task 11.
+	Sources NotificationsAzureSourcesConfig `mapstructure:"sources"`
+}
+
+// NotificationsAzureSourcesConfig holds the four independent per-source
+// enable toggles for the Azure notifications feed. Defaults are task 11's.
+//
+// CIFailed names a *source* ("my failed pipeline runs"), not a
+// provider.NotificationReason: that source emits NotificationReasonCIActivity
+// (decision 8 of the phase-2 spec), a member that already existed in the
+// enum. The config key keeps the ci_failed spelling because it describes what
+// the source queries; do not read the two spellings as one vocabulary.
+type NotificationsAzureSourcesConfig struct {
+	ReviewRequested bool `mapstructure:"review_requested"`
+	Mentioned       bool `mapstructure:"mentioned"`
+	Assigned        bool `mapstructure:"assigned"`
+	CIFailed        bool `mapstructure:"ci_failed"`
 }
 
 // acceptedNotificationReasons returns the eleven configurable
@@ -373,20 +435,24 @@ func LoadFrom(configPath string) (*Config, error) {
 	v.SetDefault("metrics.states.active", DefaultMetricsActiveState)
 	v.SetDefault("metrics.states.ready_for_test", DefaultMetricsReadyForTestState)
 	v.SetDefault("metrics.states.closed", DefaultMetricsClosedState)
-	// These nine registrations are currently no-ops — every notifications
-	// default is a Go zero value, which mapstructure leaves in place anyway —
-	// and are kept deliberately so the first genuinely non-zero default has a
-	// correct landing site instead of being bolted on ad hoc. max_items and
-	// since_days stay unbounded on purpose.
-	v.SetDefault("notifications.only_configured_repos", false)
+	// These registrations are currently no-ops — every notifications default
+	// is a Go zero value, which mapstructure leaves in place anyway — and are
+	// kept deliberately so the first genuinely non-zero default has a correct
+	// landing site instead of being bolted on ad hoc. max_items and
+	// notifications.github.since_days stay unbounded on purpose.
+	//
+	// notifications.azure.* has no registrations here on purpose: its
+	// defaults (source toggles on, lookback_days, min_poll_interval) are
+	// task 11's, not task 10's.
 	v.SetDefault("notifications.exclude_repos", []string{})
 	v.SetDefault("notifications.include_repos", []string{})
 	v.SetDefault("notifications.exclude_reasons", []string{})
 	v.SetDefault("notifications.unread_only", false)
-	v.SetDefault("notifications.participating_only", false)
-	v.SetDefault("notifications.since_days", 0)
 	v.SetDefault("notifications.max_items", 0)
 	v.SetDefault("notifications.poll_interval", 0)
+	v.SetDefault("notifications.github.only_configured_repos", false)
+	v.SetDefault("notifications.github.participating_only", false)
+	v.SetDefault("notifications.github.since_days", 0)
 
 	// Read config file - return error if not found
 	if err := v.ReadInConfig(); err != nil {
@@ -485,9 +551,9 @@ func LoadFrom(configPath string) (*Config, error) {
 	// with it, so a config setting both is not a conflict -- but silently
 	// ignoring include_repos would be its own trap, hence the warning rather
 	// than staying quiet about it.
-	if cfg.Notifications.OnlyConfiguredRepos && len(cfg.Notifications.IncludeRepos) > 0 {
+	if cfg.Notifications.GitHub.OnlyConfiguredRepos && len(cfg.Notifications.IncludeRepos) > 0 {
 		cfg.Warnings = append(cfg.Warnings,
-			"notifications.only_configured_repos is true — notifications.include_repos is ignored")
+			"notifications.github.only_configured_repos is true — notifications.include_repos is ignored")
 	}
 
 	// Validate configuration
@@ -623,8 +689,8 @@ func (c *Config) Validate() error {
 	// `notifications:` section at all. That default (0 for each of the
 	// three numeric fields, no entries in the two glob lists) already
 	// satisfies every check below, so an absent block is always valid.
-	if c.Notifications.SinceDays < 0 {
-		return fmt.Errorf("notifications.since_days must be >= 0, got %d", c.Notifications.SinceDays)
+	if c.Notifications.GitHub.SinceDays < 0 {
+		return fmt.Errorf("notifications.github.since_days must be >= 0, got %d", c.Notifications.GitHub.SinceDays)
 	}
 	if c.Notifications.MaxItems < 0 {
 		return fmt.Errorf("notifications.max_items must be >= 0, got %d", c.Notifications.MaxItems)

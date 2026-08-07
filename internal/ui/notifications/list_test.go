@@ -949,8 +949,8 @@ func TestUpdate_RKey_RealFetch_ForwardsNotifOptsFromConfig(t *testing.T) {
 	marker := &fakeMarker{}
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ParticipatingOnly: true,
-			MaxItems:          7,
+			MaxItems: 7,
+			GitHub:   config.NotificationsGitHubConfig{ParticipatingOnly: true},
 		},
 	}
 	m := NewModelWithStyles(styles.DefaultStyles(), marker, cfg)

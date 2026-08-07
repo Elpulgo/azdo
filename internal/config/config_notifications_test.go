@@ -32,8 +32,8 @@ theme: dark
 	}
 
 	n := cfg.Notifications
-	if n.OnlyConfiguredRepos {
-		t.Error("OnlyConfiguredRepos = true by default; want false")
+	if n.GitHub.OnlyConfiguredRepos {
+		t.Error("GitHub.OnlyConfiguredRepos = true by default; want false")
 	}
 	if len(n.ExcludeRepos) != 0 {
 		t.Errorf("ExcludeRepos = %v, want empty", n.ExcludeRepos)
@@ -47,11 +47,11 @@ theme: dark
 	if n.UnreadOnly {
 		t.Error("UnreadOnly = true by default; want false")
 	}
-	if n.ParticipatingOnly {
-		t.Error("ParticipatingOnly = true by default; want false")
+	if n.GitHub.ParticipatingOnly {
+		t.Error("GitHub.ParticipatingOnly = true by default; want false")
 	}
-	if n.SinceDays != 0 {
-		t.Errorf("SinceDays = %d, want 0", n.SinceDays)
+	if n.GitHub.SinceDays != 0 {
+		t.Errorf("GitHub.SinceDays = %d, want 0", n.GitHub.SinceDays)
 	}
 	if n.MaxItems != 0 {
 		t.Errorf("MaxItems = %d, want 0", n.MaxItems)
@@ -87,13 +87,13 @@ notifications: {}
 	}
 
 	n := cfg.Notifications
-	if n.OnlyConfiguredRepos || n.UnreadOnly || n.ParticipatingOnly {
+	if n.GitHub.OnlyConfiguredRepos || n.UnreadOnly || n.GitHub.ParticipatingOnly {
 		t.Errorf("expected all bools false for empty block, got %+v", n)
 	}
 	if len(n.ExcludeRepos) != 0 || len(n.IncludeRepos) != 0 || len(n.ExcludeReasons) != 0 {
 		t.Errorf("expected all lists empty for empty block, got %+v", n)
 	}
-	if n.SinceDays != 0 || n.MaxItems != 0 || n.PollInterval != 0 {
+	if n.GitHub.SinceDays != 0 || n.MaxItems != 0 || n.PollInterval != 0 {
 		t.Errorf("expected all ints 0 for empty block, got %+v", n)
 	}
 }
@@ -107,7 +107,6 @@ projects:
 polling_interval: 60
 theme: dark
 notifications:
-  only_configured_repos: true
   exclude_repos:
     - "spammy/*"
     - "owner/noisy-repo"
@@ -117,10 +116,12 @@ notifications:
     - subscribed
     - ci_activity
   unread_only: true
-  participating_only: true
-  since_days: 7
   max_items: 50
   poll_interval: 120
+  github:
+    only_configured_repos: true
+    participating_only: true
+    since_days: 7
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -132,8 +133,8 @@ notifications:
 	}
 
 	n := cfg.Notifications
-	if !n.OnlyConfiguredRepos {
-		t.Error("OnlyConfiguredRepos = false, want true")
+	if !n.GitHub.OnlyConfiguredRepos {
+		t.Error("GitHub.OnlyConfiguredRepos = false, want true")
 	}
 	if len(n.ExcludeRepos) != 2 || n.ExcludeRepos[0] != "spammy/*" || n.ExcludeRepos[1] != "owner/noisy-repo" {
 		t.Errorf("ExcludeRepos = %v, want [spammy/* owner/noisy-repo]", n.ExcludeRepos)
@@ -147,11 +148,11 @@ notifications:
 	if !n.UnreadOnly {
 		t.Error("UnreadOnly = false, want true")
 	}
-	if !n.ParticipatingOnly {
-		t.Error("ParticipatingOnly = false, want true")
+	if !n.GitHub.ParticipatingOnly {
+		t.Error("GitHub.ParticipatingOnly = false, want true")
 	}
-	if n.SinceDays != 7 {
-		t.Errorf("SinceDays = %d, want 7", n.SinceDays)
+	if n.GitHub.SinceDays != 7 {
+		t.Errorf("GitHub.SinceDays = %d, want 7", n.GitHub.SinceDays)
 	}
 	if n.MaxItems != 50 {
 		t.Errorf("MaxItems = %d, want 50", n.MaxItems)
@@ -178,7 +179,7 @@ notifications:
 func TestLoad_NotificationsBlock_MixedCaseKeys_Convention9(t *testing.T) {
 	// Convention 9: viper lowercases all config keys on load. Mixed-case keys
 	// in the YAML must still resolve — this pins that for the notifications
-	// block specifically.
+	// block's own (root-nested) keys.
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 	content := `organization: test-org
@@ -190,7 +191,6 @@ notifications:
   UNREAD_ONLY: true
   Exclude_Reasons:
     - subscribed
-  Only_Configured_Repos: true
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -204,11 +204,107 @@ notifications:
 	if !cfg.Notifications.UnreadOnly {
 		t.Error("UnreadOnly = false, want true (mixed-case key UNREAD_ONLY should still resolve)")
 	}
-	if !cfg.Notifications.OnlyConfiguredRepos {
-		t.Error("OnlyConfiguredRepos = false, want true (mixed-case key Only_Configured_Repos should still resolve)")
-	}
 	if len(cfg.Notifications.ExcludeReasons) != 1 || cfg.Notifications.ExcludeReasons[0] != "subscribed" {
 		t.Errorf("ExcludeReasons = %v, want [subscribed] (mixed-case key Exclude_Reasons should still resolve)", cfg.Notifications.ExcludeReasons)
+	}
+}
+
+// TestLoad_NotificationsGitHubBlock_MixedCaseKeys_Convention9 is the untested
+// half convention 9 calls out: mixed-case keys one level below the root
+// notifications map, inside notifications.github. A resolver that only
+// lowercases the top-level notifications map (and relies on mapstructure's
+// own case folding for everything nested inside a struct field) would still
+// pass the root-level test above while silently failing to bind a mixed-case
+// key here if that assumption were ever wrong.
+func TestLoad_NotificationsGitHubBlock_MixedCaseKeys_Convention9(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  github:
+    Only_Configured_Repos: true
+    PARTICIPATING_ONLY: true
+    Since_Days: 5
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if !cfg.Notifications.GitHub.OnlyConfiguredRepos {
+		t.Error("GitHub.OnlyConfiguredRepos = false, want true (mixed-case key Only_Configured_Repos should still resolve)")
+	}
+	if !cfg.Notifications.GitHub.ParticipatingOnly {
+		t.Error("GitHub.ParticipatingOnly = false, want true (mixed-case key PARTICIPATING_ONLY should still resolve)")
+	}
+	if cfg.Notifications.GitHub.SinceDays != 5 {
+		t.Errorf("GitHub.SinceDays = %d, want 5 (mixed-case key Since_Days should still resolve)", cfg.Notifications.GitHub.SinceDays)
+	}
+}
+
+// TestLoad_NotificationsAzureSourcesBlock_MixedCaseKeys_Convention9 goes one
+// level deeper still: notifications.azure.sources, three levels below the
+// config root. This is the deepest nested map decision 13's shape has, and
+// it is the case most likely to have been missed if the root's lowercasing
+// were hand-rolled per level instead of applying uniformly.
+func TestLoad_NotificationsAzureSourcesBlock_MixedCaseKeys_Convention9(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  azure:
+    Lookback_Days: 21
+    MIN_POLL_INTERVAL: 600
+    sources:
+      Review_Requested: true
+      MENTIONED: true
+      Assigned: true
+      Ci_Failed: true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	a := cfg.Notifications.Azure
+	if a.LookbackDays != 21 {
+		t.Errorf("Azure.LookbackDays = %d, want 21 (mixed-case key Lookback_Days should still resolve)", a.LookbackDays)
+	}
+	if a.MinPollInterval != 600 {
+		t.Errorf("Azure.MinPollInterval = %d, want 600 (mixed-case key MIN_POLL_INTERVAL should still resolve)", a.MinPollInterval)
+	}
+	// Every source is set to true here specifically because task 10 sets no
+	// default for these fields (task 11 owns "defaults on"), so their Go
+	// zero value is false -- asserting true is the only way this test can
+	// fail if the mixed-case key never resolved and the field silently kept
+	// its zero value instead.
+	if !a.Sources.ReviewRequested {
+		t.Error("Azure.Sources.ReviewRequested = false, want true (mixed-case key Review_Requested should still resolve)")
+	}
+	if !a.Sources.Mentioned {
+		t.Error("Azure.Sources.Mentioned = false, want true (mixed-case key MENTIONED should still resolve)")
+	}
+	if !a.Sources.Assigned {
+		t.Error("Azure.Sources.Assigned = false, want true (mixed-case key Assigned should still resolve)")
+	}
+	if !a.Sources.CIFailed {
+		t.Error("Azure.Sources.CIFailed = false, want true (mixed-case key Ci_Failed should still resolve)")
 	}
 }
 
@@ -233,7 +329,7 @@ func TestConfig_Validate_NotificationsRejectsNegative(t *testing.T) {
 	}{
 		{
 			name:    "since_days negative",
-			mutate:  func(c *Config) { c.Notifications.SinceDays = -1 },
+			mutate:  func(c *Config) { c.Notifications.GitHub.SinceDays = -1 },
 			wantErr: "since_days",
 		},
 		{
@@ -272,9 +368,9 @@ func TestConfig_Validate_NotificationsAcceptsZeroBounds(t *testing.T) {
 		PollingInterval: 60,
 		Theme:           "dark",
 		Notifications: NotificationsConfig{
-			SinceDays:    0,
 			MaxItems:     0,
 			PollInterval: 0,
+			GitHub:       NotificationsGitHubConfig{SinceDays: 0},
 		},
 	}
 	if err := cfg.Validate(); err != nil {
@@ -830,9 +926,10 @@ projects:
 polling_interval: 60
 theme: dark
 notifications:
-  only_configured_repos: true
   include_repos:
     - "owner/repo"
+  github:
+    only_configured_repos: true
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -911,5 +1008,53 @@ theme: dark
 
 	if cfg.Warnings != nil && len(cfg.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want empty for a clean config", cfg.Warnings)
+	}
+}
+
+// TestLoad_FlatMovedGitHubKeys_AreNotHonoured pins decision 14 of the
+// phase-2 spec: there is no migration shim and no deprecation warning for
+// the three keys decision 13 moved from notifications.* to
+// notifications.github.*. A flat notifications.participating_only (etc.) is
+// simply an unrecognised key to the current struct shape -- mapstructure
+// silently drops it during Unmarshal because NotificationsConfig carries no
+// field tagged "participating_only" any more, only NotificationsGitHubConfig
+// does, under "github.participating_only". This test would fail loudly (the
+// booleans would read true, the int would read 14) if a shim were ever added
+// back that reads the flat form into the nested struct.
+func TestLoad_FlatMovedGitHubKeys_AreNotHonoured(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  participating_only: true
+  only_configured_repos: true
+  since_days: 14
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	if cfg.Notifications.GitHub.ParticipatingOnly {
+		t.Error("GitHub.ParticipatingOnly = true, want false -- the flat notifications.participating_only key must not be honoured")
+	}
+	if cfg.Notifications.GitHub.OnlyConfiguredRepos {
+		t.Error("GitHub.OnlyConfiguredRepos = true, want false -- the flat notifications.only_configured_repos key must not be honoured")
+	}
+	if cfg.Notifications.GitHub.SinceDays != 0 {
+		t.Errorf("GitHub.SinceDays = %d, want 0 -- the flat notifications.since_days key must not be honoured", cfg.Notifications.GitHub.SinceDays)
+	}
+	// Decision 14 also rules out a deprecation warning, not just a shim: the
+	// flat keys must be silently ignored, never flagged.
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want empty -- decision 14 forbids a deprecation warning for the moved keys", cfg.Warnings)
 	}
 }

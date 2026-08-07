@@ -224,7 +224,6 @@ metrics:
     ready_for_test: "RFT"
     closed: "CL"
 notifications:
-  only_configured_repos: true
   exclude_repos:
     - "spammy/*"
     - "owner/noisy-repo"
@@ -234,10 +233,12 @@ notifications:
     - subscribed
     - ci_activity
   unread_only: true
-  participating_only: true
-  since_days: 14
   max_items: 25
   poll_interval: 90
+  github:
+    only_configured_repos: true
+    participating_only: true
+    since_days: 14
 `
 	if err := os.WriteFile(configPath, []byte(initialConfig), 0644); err != nil {
 		t.Fatalf("Failed to create test config: %v", err)
@@ -270,15 +271,17 @@ notifications:
 		},
 	}
 	wantNotifications := NotificationsConfig{
-		OnlyConfiguredRepos: true,
-		ExcludeRepos:        []string{"spammy/*", "owner/noisy-repo"},
-		IncludeRepos:        []string{"owner/repo"},
-		ExcludeReasons:      []string{"subscribed", "ci_activity"},
-		UnreadOnly:          true,
-		ParticipatingOnly:   true,
-		SinceDays:           14,
-		MaxItems:            25,
-		PollInterval:        90,
+		ExcludeRepos:   []string{"spammy/*", "owner/noisy-repo"},
+		IncludeRepos:   []string{"owner/repo"},
+		ExcludeReasons: []string{"subscribed", "ci_activity"},
+		UnreadOnly:     true,
+		MaxItems:       25,
+		PollInterval:   90,
+		GitHub: NotificationsGitHubConfig{
+			OnlyConfiguredRepos: true,
+			ParticipatingOnly:   true,
+			SinceDays:           14,
+		},
 	}
 
 	// Sanity-check the fixture actually parsed as seeded, before mutating

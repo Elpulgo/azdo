@@ -119,8 +119,10 @@ func TestFilterNotifications_OnlyConfiguredRepos_Alone(t *testing.T) {
 		row("2", "acme/unconfigured", provider.NotificationReasonOther, false),
 	}
 	cfg := &config.Config{
-		GitHub:        config.GitHubConfig{Repos: []string{"acme/configured"}},
-		Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
+		Notifications: config.NotificationsConfig{
+			GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+		},
 	}
 	got := FilterNotifications(rows, cfg)
 	assertIDs(t, got, "1")
@@ -150,8 +152,10 @@ func TestFilterNotifications_OnlyConfiguredRepos_CaseInsensitiveBothDirections(t
 				row("other", "unrelated/repo", provider.NotificationReasonOther, false),
 			}
 			cfg := &config.Config{
-				GitHub:        config.GitHubConfig{Repos: []string{tt.configuredRepo}},
-				Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+				GitHub: config.GitHubConfig{Repos: []string{tt.configuredRepo}},
+				Notifications: config.NotificationsConfig{
+					GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+				},
 			}
 			got := FilterNotifications(rows, cfg)
 			assertIDs(t, got, "match")
@@ -170,8 +174,10 @@ func TestFilterNotifications_OnlyConfiguredRepos_TrimsConfiguredRepoWhitespace(t
 		row("match", "acme/repo", provider.NotificationReasonOther, false),
 	}
 	cfg := &config.Config{
-		GitHub:        config.GitHubConfig{Repos: []string{"  acme/repo "}},
-		Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+		GitHub: config.GitHubConfig{Repos: []string{"  acme/repo "}},
+		Notifications: config.NotificationsConfig{
+			GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+		},
 	}
 	got := FilterNotifications(rows, cfg)
 	assertIDs(t, got, "match")
@@ -392,8 +398,8 @@ func TestFilterNotifications_OnlyConfiguredRepos_OverridesIncludeRepos(t *testin
 	cfg := &config.Config{
 		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
 		Notifications: config.NotificationsConfig{
-			OnlyConfiguredRepos: true,
-			IncludeRepos:        []string{"other/*"},
+			IncludeRepos: []string{"other/*"},
+			GitHub:       config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
 		},
 	}
 	rows := []provider.Notification{
@@ -460,9 +466,9 @@ func TestFilterNotifications_NonFilterKnobs_NotReadByFilter(t *testing.T) {
 		nc   config.NotificationsConfig
 	}{
 		{"no out-of-scope knob set (baseline)", config.NotificationsConfig{}},
-		{"participating_only is fetch-time", config.NotificationsConfig{ParticipatingOnly: true}},
+		{"participating_only is fetch-time", config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{ParticipatingOnly: true}}},
 		{"max_items is the composite's job", config.NotificationsConfig{MaxItems: 1}},
-		{"since_days is fetch-time", config.NotificationsConfig{SinceDays: 1}},
+		{"since_days is fetch-time", config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 1}}},
 	}
 
 	for _, tt := range tests {
@@ -487,8 +493,8 @@ func TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob(t *testing.
 	}
 	withParticipating := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ExcludeReasons:    []string{"subscribed"},
-			ParticipatingOnly: true,
+			ExcludeReasons: []string{"subscribed"},
+			GitHub:         config.NotificationsGitHubConfig{ParticipatingOnly: true},
 		},
 	}
 
@@ -714,8 +720,8 @@ func TestNotifOptsFromConfig_NilConfig_ReturnsZeroValue(t *testing.T) {
 func TestNotifOptsFromConfig_ForwardsParticipatingOnlyAndMax(t *testing.T) {
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ParticipatingOnly: true,
-			MaxItems:          42,
+			MaxItems: 42,
+			GitHub:   config.NotificationsGitHubConfig{ParticipatingOnly: true},
 		},
 	}
 
@@ -734,7 +740,7 @@ func TestNotifOptsFromConfig_ForwardsParticipatingOnlyAndMax(t *testing.T) {
 
 func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
 	cfg := &config.Config{
-		Notifications: config.NotificationsConfig{SinceDays: 7},
+		Notifications: config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 7}},
 	}
 
 	want := time.Now().AddDate(0, 0, -7)
@@ -754,7 +760,7 @@ func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
 // changing the GitHub request path (buildPath) on every single poll tick.
 func TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls(t *testing.T) {
 	cfg := &config.Config{
-		Notifications: config.NotificationsConfig{SinceDays: 3},
+		Notifications: config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 3}},
 	}
 
 	first := NotifOptsFromConfig(cfg)
@@ -770,7 +776,7 @@ func TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls(t
 }
 
 func TestNotifOptsFromConfig_SinceDaysZero_LeavesSinceZeroValue(t *testing.T) {
-	cfg := &config.Config{Notifications: config.NotificationsConfig{SinceDays: 0}}
+	cfg := &config.Config{Notifications: config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 0}}}
 
 	got := NotifOptsFromConfig(cfg)
 	if !got.Since.IsZero() {
@@ -785,11 +791,11 @@ func TestNotifOptsFromConfig_DoesNotReadFilterOnlyKnobs(t *testing.T) {
 	// observable effect on the derived NotifOpts.
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ExcludeRepos:        []string{"acme/*"},
-			ExcludeReasons:      []string{"subscribed"},
-			UnreadOnly:          true,
-			IncludeRepos:        []string{"acme/*"},
-			OnlyConfiguredRepos: true,
+			ExcludeRepos:   []string{"acme/*"},
+			ExcludeReasons: []string{"subscribed"},
+			UnreadOnly:     true,
+			IncludeRepos:   []string{"acme/*"},
+			GitHub:         config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
 		},
 	}
 
