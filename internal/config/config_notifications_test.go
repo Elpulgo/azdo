@@ -855,6 +855,10 @@ func TestConfig_Validate_NotificationsOnly_Passes(t *testing.T) {
 // GitHub-only, both, and neither, each with the other three panes disabled,
 // plus the guard's negative — it must not fire when a pane besides
 // notifications stays enabled, regardless of which backend is configured.
+// It also covers each of pullrequests/workitems/pipelines surviving alone
+// against the other two code panes plus notifications all disabled, so
+// none of the guard's four IsPaneEnabled checks can be forced to always
+// report "disabled" without a row here catching it.
 func TestConfig_Validate_PaneGuard_AcrossBackendCombinations(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -974,6 +978,44 @@ github:
   repos:
     - owner/repo
 disabled_panes: workitems,pipelines
+`,
+			wantErr: false,
+		},
+		{
+			// Each of pullrequests/workitems/pipelines surviving alone,
+			// with the other two code panes and notifications disabled,
+			// must independently satisfy the guard — a mutation forcing
+			// any one of the three IsPaneEnabled checks to always report
+			// "disabled" would wrongly reject one of these three rows.
+			name: "workitems, pipelines, notifications disabled, pullrequests remains",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+disabled_panes: workitems,pipelines,notifications
+`,
+			wantErr: false,
+		},
+		{
+			name: "pullrequests, pipelines, notifications disabled, workitems remains",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+disabled_panes: pullrequests,pipelines,notifications
+`,
+			wantErr: false,
+		},
+		{
+			name: "pullrequests, workitems, notifications disabled, pipelines remains",
+			content: `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+disabled_panes: pullrequests,workitems,notifications
 `,
 			wantErr: false,
 		},
