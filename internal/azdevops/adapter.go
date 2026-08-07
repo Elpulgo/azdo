@@ -13,6 +13,16 @@ import (
 // the interface — they remain on the concrete *MultiClient (Decision 5).
 type Adapter struct {
 	mc *MultiClient
+
+	// notifStore, notifLookbackDays and notifSources back the
+	// provider.NotificationSource surface (adapter_notifications.go) only.
+	// A plain NewAdapter(mc) leaves all three at their zero value; List,
+	// MarkRead and MarkDone all treat a nil notifStore as "notifications not
+	// configured" the same way every other method on this type treats a nil
+	// mc — see NewAdapterWithNotifications.
+	notifStore        *TriageStore
+	notifLookbackDays int
+	notifSources      NotificationSourceToggles
 }
 
 // NewAdapter creates a new Adapter wrapping the given MultiClient.
