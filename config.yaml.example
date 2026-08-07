@@ -74,15 +74,27 @@ theme: dark
 #   unread_only: false          # show only unread rows (client-side; GitHub's fetch
 #                                # always requests the whole inbox regardless)
 #   exclude_repos: []           # glob list (path.Match syntax) of scopes to hide
-#                                # from the feed -- a GitHub "owner/repo" slug or an
-#                                # Azure project name, depending which backend
-#                                # produced the row; "*" does not cross "/" -- write
-#                                # "*/*" to mean "everything"
+#                                # from the feed -- a GitHub "owner/repo" slug, or
+#                                # an Azure project written either bare
+#                                # ("my-project") or org-qualified
+#                                # ("my-org/my-project", so "my-org/*" hides every
+#                                # project); "*" does not cross "/"
 #   include_repos: []           # same glob syntax as exclude_repos, narrowing
-#                                # instead of hiding; ignored for the WHOLE feed
-#                                # when notifications.github.only_configured_repos
-#                                # is true (with a startup warning), not just for
-#                                # the GitHub rows -- non-GitHub rows then pass
+#                                # instead of hiding. Narrows PER BACKEND: a
+#                                # backend is filtered only when a pattern
+#                                # addresses it, so [my-gh-owner/*] narrows GitHub
+#                                # and leaves every Azure project showing, and
+#                                # [my-org/proj-a] narrows Azure and leaves all of
+#                                # GitHub showing. A pattern addresses Azure when
+#                                # it matches a configured project (bare or
+#                                # org-qualified); anything else counts as a
+#                                # GitHub pattern, so a mistyped project name
+#                                # fails open -- Azure stays unnarrowed and a
+#                                # startup warning names the pattern. Ignored for
+#                                # the WHOLE feed when
+#                                # notifications.github.only_configured_repos is
+#                                # true (with a startup warning), not just for the
+#                                # GitHub rows -- non-GitHub rows then pass
 #                                # through unnarrowed
 #   max_items: 0                 # cap the number of notifications in the merged
 #                                # feed across every backend, applied once after

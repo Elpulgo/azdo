@@ -23,8 +23,12 @@ import (
 //     GitHub-only concept (decision 13 of the phase-2 spec) — it never has
 //     an opinion about a row from any other backend, so a row whose Kind is
 //     not GitHub always survives this branch regardless of its Scope.
-//   - Otherwise, if include_repos holds at least one compilable glob, keep
-//     only rows matching at least one of those globs.
+//   - Otherwise, if include_repos holds at least one compilable glob, narrow
+//     per backend: a backend is filtered only when at least one pattern
+//     actually addresses it (see includeSelection), and rows from a backend
+//     no pattern addressed pass through untouched. Rows from a narrowed
+//     backend must match at least one of the globs, tested against every form
+//     of their scope (see scopeCandidates).
 //   - Otherwise keep everything. That includes an include_repos list whose
 //     every entry is uncompilable, which mirrors what the load-time
 //     sanitizer would have handed us (see compilableGlobs).
@@ -97,8 +101,13 @@ func FilterNotifications(rows []provider.Notification, cfg *config.Config) []pro
 			}
 		}
 	case len(includeRepos) > 0:
+		narrowAzure, narrowOther := includeSelection(includeRepos, cfg)
 		for _, row := range rows {
-			if matchesAnyGlob(includeRepos, row.Identity.Scope) {
+			narrowed := narrowOther
+			if row.Identity.Kind == provider.KindAzure {
+				narrowed = narrowAzure
+			}
+			if !narrowed || matchesAnyScope(includeRepos, scopeCandidates(row, cfg.Organization)) {
 				out = append(out, row)
 			}
 		}
@@ -108,8 +117,13 @@ func FilterNotifications(rows []provider.Notification, cfg *config.Config) []pro
 
 	// --- Subtraction: exclude_repos -> exclude_reasons -> unread_only ---
 	if len(nc.ExcludeRepos) > 0 {
+		// No per-backend narrowing rule here, unlike include_repos: a
+		// subtractive list only ever removes, so a pattern that addresses
+		// neither backend is already an inert no-op rather than something that
+		// empties a feed. It gets the same org-qualified candidates so that
+		// one spelling ("myorg/project1") means the same thing in both keys.
 		out = dropWhere(out, func(row provider.Notification) bool {
-			return matchesAnyGlob(nc.ExcludeRepos, row.Identity.Scope)
+			return matchesAnyScope(nc.ExcludeRepos, scopeCandidates(row, cfg.Organization))
 		})
 	}
 
@@ -201,6 +215,104 @@ func matchesAnyGlob(patterns []string, scope string) bool {
 			continue
 		}
 		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// scopeCandidates returns every string a row's scope may be addressed by.
+//
+// A GitHub scope is already "owner/repo", so a glob addresses it directly. An
+// Azure scope is a bare project name -- the four sources all set Scope from
+// PullRequest.ProjectName or its work-item equivalent -- which lives in a
+// different namespace: path.Match's "*" does not cross "/", so "elpulgo/*"
+// cannot match "project1" and "*" cannot match "elpulgo/azdo". One shared
+// include_repos list therefore had no spelling that addressed both backends.
+// Adding the "<org>/<project>" form gives Azure a qualified name in the same
+// shape GitHub already has, so "myorg/*" selects Azure projects the way
+// "elpulgo/*" selects GitHub repos, while a bare project name keeps working
+// for configs written before this existed.
+//
+// org is the config's `organization`. An empty org yields the bare scope
+// alone, never a "/project" candidate that a pattern could match by accident.
+func scopeCandidates(row provider.Notification, org string) []string {
+	if row.Identity.Kind != provider.KindAzure || strings.TrimSpace(org) == "" {
+		return []string{row.Identity.Scope}
+	}
+	return []string{row.Identity.Scope, strings.TrimSpace(org) + "/" + row.Identity.Scope}
+}
+
+// matchesAnyScope reports whether any of scopes matches any of patterns. It is
+// matchesAnyGlob widened over the candidate spellings scopeCandidates
+// produces, and inherits its case-insensitivity and its skip-on-ErrBadPattern
+// rule unchanged.
+func matchesAnyScope(patterns, scopes []string) bool {
+	for _, scope := range scopes {
+		if matchesAnyGlob(patterns, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+// includeSelection decides, per backend, whether include_repos narrows it at
+// all. Every row is still matched against the *whole* pattern list; only the
+// "is this backend filtered in the first place" question is partitioned.
+//
+// include_repos is one shared list, but a pattern written for one backend must
+// not silently empty the other. Before this rule, "include_repos: [elpulgo/*]"
+// -- an ordinary GitHub selection -- deleted every Azure row from the merged
+// feed, with nothing in the pane to say why. So a backend is narrowed only
+// when at least one pattern actually addresses it, and a backend no pattern
+// addressed keeps everything. That is what makes include_repos mean "a subset
+// of what's configured" rather than "the only backend I remembered to name".
+//
+// A pattern addresses Azure when it matches a configured project, bare or
+// org-qualified. That is decidable from the config alone because `projects` is
+// a closed list. GitHub has no equivalent list to test against -- the GitHub
+// inbox spans every repo the user watches, not just github.repos -- so the
+// GitHub side is defined as the complement: a pattern matching no configured
+// project is taken as addressing some other backend. Defining it the other way
+// round (a pattern that matches a project addresses both) would re-create the
+// original trap mirrored, since "myorg/project1" would then narrow GitHub to
+// nothing.
+//
+// The consequence worth knowing: this fails OPEN. A mistyped Azure pattern
+// ("myorg/projct1") matches no project, is read as a GitHub pattern, and
+// leaves Azure unnarrowed -- too many rows rather than none. config.LoadFrom
+// warns on exactly that shape (a first segment equal to the organization that
+// matches no project), because failing open is quiet by nature and a stray
+// extra row is a far cheaper mistake than a silently missing one.
+func includeSelection(patterns []string, cfg *config.Config) (narrowAzure, narrowOther bool) {
+	for _, p := range patterns {
+		if globAddressesAzure(p, cfg.Organization, cfg.Projects) {
+			narrowAzure = true
+			continue
+		}
+		narrowOther = true
+	}
+	return narrowAzure, narrowOther
+}
+
+// globAddressesAzure reports whether pattern matches at least one configured
+// Azure project, in either the bare or the "<org>/<project>" spelling.
+//
+// It tests cfg.Projects -- the API project names -- and not DisplayNames,
+// because Identity.Scope is set from the API name too. Matching the display
+// name here would classify a pattern as Azure-addressing that no row could
+// ever match, narrowing Azure to nothing.
+func globAddressesAzure(pattern, org string, projects []string) bool {
+	for _, p := range projects {
+		project := strings.TrimSpace(p)
+		if project == "" {
+			continue
+		}
+		candidates := []string{project}
+		if trimmedOrg := strings.TrimSpace(org); trimmedOrg != "" {
+			candidates = append(candidates, trimmedOrg+"/"+project)
+		}
+		if matchesAnyScope([]string{pattern}, candidates) {
 			return true
 		}
 	}

@@ -231,7 +231,12 @@ Two notes on names that are deliberate, not oversights:
   glob over `Identity.Scope` — an `owner/repo` on GitHub but a project name on Azure. Renaming them
   to `*_scopes` was considered and rejected: "scope" is internal vocabulary that appears nowhere in
   the user-facing config today, and the keys do work correctly against both. Document the Azure
-  meaning rather than renaming.
+  meaning rather than renaming. **Superseded in part by decision 16** — "the keys do work correctly
+  against both" turned out to be false in the field, and documenting the Azure meaning was not
+  enough.
+- **Decision 16: `include_repos` narrows per backend, and an Azure project is also addressable as
+  `<organization>/<project>`.** Added 2026-08-07, after the branch was tested by hand and before
+  phase 2 shipped. See the subsection below.
 
 `since_days` moving under `github` also resolves a collision this spec would otherwise have
 carried: it and Azure's `lookback_days` are the same idea with incompatible zero values. `0` means
@@ -324,6 +329,65 @@ Sources: [Query fields, operators, macros, and variables](https://learn.microsof
 [Comments — Get Comments Batch (7.1-preview.4)](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/comments/get-comments-batch?view=azure-devops-rest-7.1) ·
 [Use @mentions in work items and pull requests](https://learn.microsoft.com/en-us/azure/devops/organizations/notifications/at-mentions?view=azure-devops)
 
+### Decision 16 in full — per-backend `include_repos` and org-qualified Azure scopes
+
+Added 2026-08-07 after hand-testing the branch, before phase 2 shipped. It supersedes the closing
+half of the `exclude_repos`/`include_repos` bullet above ("the keys do work correctly against
+both").
+
+**What went wrong.** A config carrying nothing but `include_repos: [elpulgo/*]` — an ordinary
+GitHub selection, written before Azure notifications existed — showed an Azure-and-GitHub feed with
+zero Azure rows and no error. The adapter had run: `notifications.yaml` held seven reconciled Azure
+entries with a fresh `last_seen`. `FilterNotifications` is the only place that drops rows
+client-side, and its include branch matched every row against `Identity.Scope`, which is
+`pr.ProjectName` for Azure and `owner/repo` for GitHub. `path.Match`'s `*` does not cross `/`, so
+`elpulgo/*` cannot match a bare project name in any spelling. One shared list, two namespaces, and
+no pattern that spans them: `*/*` addresses only GitHub, `*` only Azure. The workaround Oscar found
+by hand — `include_repos: [elpulgo/*, "*"]` — works for exactly that reason.
+
+**Decision.** Two changes, both in the matcher, neither touching `Identity`:
+
+1. An Azure row is addressable by a second spelling, `<organization>/<project>`, alongside its bare
+   project name (`notifications.scopeCandidates`). This is what gives one list a shape that works
+   for both backends: `myorg/*` selects Azure projects the way `elpulgo/*` selects GitHub repos.
+2. `include_repos` narrows **per backend** (`notifications.includeSelection`). A backend is filtered
+   only when at least one pattern addresses it; a backend nobody addressed keeps everything. Rows
+   from a narrowed backend are still matched against the *whole* pattern list — only the
+   "is this backend narrowed at all" question is partitioned.
+
+A pattern addresses Azure when it matches one of the configured `projects`, bare or org-qualified —
+decidable from config alone, since `projects` is a closed list. GitHub has no equivalent list to
+test against (its inbox spans every repo the user watches, not just `github.repos`), so the GitHub
+side is defined as the *complement*: a pattern matching no configured project is a GitHub pattern.
+
+**Rejected: changing Azure's `Identity.Scope` to `<org>/<project>`.** It looks like the tidier fix
+and is not one. `Scope` is load-bearing for routing — `provider/composite.go:41,97` builds a
+scope→backend map from each backend's `Scopes()` and uses it for `MarkRead`, `MarkDone` and
+open-in-browser — and it also feeds the pane's Repo column. Qualifying at match time changes what a
+glob can address without changing what a scope *is*.
+
+**Rejected: "a pattern that matches a configured project addresses both backends."** The symmetric
+reading, and wrong: it re-creates the original trap mirrored, since `include_repos: [myorg/project1]`
+would then narrow GitHub to nothing. Azure-relevance and GitHub-relevance are deliberately not
+symmetric predicates.
+
+**Accepted tradeoff: this fails open.** A mistyped project (`myorg/projct1`) matches nothing, is
+classified as a GitHub pattern, and leaves Azure unnarrowed — too many rows, never zero. Fail-closed
+would mean one wrong character silently deleting a whole backend's feed, which is the bug this
+decision exists to remove. Because failing open is silent, `LoadFrom` warns on exactly that shape: a
+pattern whose first segment equals `organization` but which matches no configured project. Keying on
+the org prefix keeps it free of false positives — a pattern not naming the org was never addressing
+Azure.
+
+**`exclude_repos` gets the org-qualified candidates but no per-backend rule.** A subtractive list
+only ever removes, so a pattern addressing neither backend is already an inert no-op rather than
+something that empties a feed. It gets the candidates so one spelling means the same thing in both
+keys. **This is a behaviour change worth a release note:** `exclude_repos: [myorg/*]` previously
+matched no Azure row at all and now hides every project in that org.
+
+**`only_configured_repos` is unaffected** — it still overrides `include_repos` outright, with the
+existing warning.
+
 ## Tasks
 
 Task 1 is a spike and gates task 5 only; everything else can start immediately.
@@ -344,6 +408,44 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). *(Re-validated 2026-08-07 against `b0c6d9e`, which closes R1-R5 from round 2; re-ticked. The "returned **by copy**" mechanism in the `→ done:` line below was superseded by round 2's settled decision — `copyNotifications` is deleted and the same guarantee is now delivered by `Reconcile`'s fresh allocation plus `provider.Notification` having no mutable-through field, both pinned by tests. See the third re-validation record at the end of `## Validation: task 14`.)* **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [x] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). *(Landed as `docs/adr/0002-azure-synthetic-notification-feed.md` in `d694235`, corrected in `1cb1a5a`. See `## Validation: task 15`.)* → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
 - [x] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). *(Re-ticked 2026-08-07 after findings 28-31 were fixed — see the seventh subsection at the end of `## Validation: task 16`.)* *(Re-opened 2026-08-07 by the sixth pass against `16c4b2f`: the new 50-item-cap paragraph in `README.md:489-495` prescribes `lookback_days` as the fix for mention-candidate truncation, which that source cannot see — see the sixth re-validation subsection at the end of `## Validation: task 16` for that and three smaller corrections.)* *(Validated 2026-08-07, fifth pass, against `2cd4f5e`: findings 19, 20 and 21 and both nits from the fourth pass are closed, each checked against the code — `config.yaml.example`'s two `include_repos`/`only_configured_repos` sites now match `filter.go`'s switch; `README.md:446`'s `max(configured, hint)` wording and its worked example match `app.go:377-400`, hint-of-zero included; the "widest possible behaviour" sentence now excepts the azure block with the real constants; the "drops GitHub from the other tabs" remedy is true of `config.HasGitHub()` gating the whole GitHub backend in `main.go`. Markup survived the hand edits — every table row in all three markdown files has its header's cell count, `**` spans balance, and the strong-emphasis run crossing a line break in `Architecture.md` renders. A final sweep over every behavioural claim in the phase-2 doc additions produced no further findings, and nothing the four earlier passes verified regressed; `config.yaml.example` still parses with all eighteen notification keys resolving to real struct fields. Build, vet and unit tests clean. See the fifth re-validation subsection at the end of `## Validation: task 16`.)* → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
+
+- [x] 17. **Per-backend `include_repos` + org-qualified Azure scopes** (decision 16, added 2026-08-07 after the branch was hand-tested; blocked by: 16). → done: `notifications.scopeCandidates` gives an Azure row the `<organization>/<project>` spelling alongside its bare project name and a GitHub row only its `owner/repo`, never a phantom `/project` candidate when `organization` is empty; `notifications.includeSelection` classifies each pattern as Azure-addressing (matches a configured project, bare or org-qualified) or not, and narrows only the backends actually addressed, matching rows against the whole pattern list either way; `exclude_repos` gets the same candidates but no per-backend rule, since a subtractive list is already inert when it matches nothing; `config.azureGlobMatchesNoProject` warns at load on a pattern whose first segment equals `organization` but which matches no configured project — the fail-open case that is otherwise silent; tests cover the table of spellings in both directions (GitHub-only pattern leaves Azure whole and vice versa, bare project name still works, `*` and `*/*` stay no-ops, case-insensitivity, the typo failing open, the no-organization install), plus the load-time warning and five patterns that must *not* warn; README's per-backend callout, `config.yaml.example`'s two key comments, `Architecture.md`'s notifications-config paragraph and the `IncludeRepos`/`ExcludeRepos` doc comments all rewritten, each naming the implementing identifier per convention 35's proposal
+
+## Validation: task 17
+
+Verified 2026-08-07 against the working tree, not the diff alone:
+
+- **The reported bug is gone and its workaround is no longer needed.**
+  `TestFilterNotifications_IncludeRepos_NarrowsPerBackend`'s
+  "github pattern narrows github, leaves azure whole" row is Oscar's exact
+  field config (`include_repos: [elpulgo/*]` with Azure projects configured)
+  and now keeps both Azure rows. The `"*"` row pins that his hand-found
+  workaround stays a no-op rather than becoming a narrow-everything.
+- **Fail-open verified by test, not by argument.**
+  `TestFilterNotifications_IncludeRepos_MistypedAzureProject_FailsOpen`
+  asserts the Azure row survives a mistyped project. The complementary
+  load-time warning is pinned by
+  `TestLoadFrom_IncludeRepos_MistypedAzureProject_Warns`, and
+  `TestLoadFrom_IncludeRepos_NoFalsePositiveWarnings` pins the five shapes
+  that must stay quiet — including a plain GitHub pattern, which would make
+  the warning noise if the org-prefix key were dropped.
+- **`Identity.Scope` untouched.** Grepped for writes to `Identity.Scope` in
+  `internal/azdevops`: still `pr.ProjectName` and its work-item equivalents in
+  all four sources. The composite's scope→backend routing map
+  (`provider/composite.go:41,97`) therefore sees exactly what it saw before,
+  so `MarkRead`/`MarkDone`/open-in-browser are unaffected.
+- **`globAddressesAzure` tests `Projects`, not `DisplayNames`.** Checked that
+  Azure `Scope` carries the API project name
+  (`notifications_source_review.go:75`), so matching the display name would
+  classify a pattern as Azure-addressing that no row could ever match, and
+  narrow Azure to nothing. The doc comment states this.
+- **Duplication between `config.azureGlobMatchesNoProject` and
+  `notifications.globAddressesAzure` is deliberate and documented.**
+  `ui/notifications` imports `config`, not the reverse, so the rule cannot be
+  shared without inverting the dependency. Both sites carry the note.
+- **Whole suite green.** `go build ./...`, `go vet ./...` and `go test ./...`
+  all clean with `CGO_ENABLED=0`. `-race` still has not been run in this
+  environment.
 
 ## Validation: task 9
 

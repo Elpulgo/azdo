@@ -442,17 +442,38 @@ seems to have stopped working, check its nesting first.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `notifications.exclude_repos` | []string | `[]` | Glob list of scopes to hide from the feed. Empty excludes nothing. |
-| `notifications.include_repos` | []string | `[]` | Glob list narrowing the feed to matching scopes. Empty means no narrowing. **Ignored entirely** when `notifications.github.only_configured_repos` is `true` — see that key below. |
+| `notifications.include_repos` | []string | `[]` | Glob list narrowing the feed to matching scopes. Empty means no narrowing. Narrowing is **per backend** — a pattern that addresses only GitHub leaves the Azure share of the feed untouched, and vice versa; see the callout below. **Ignored entirely** when `notifications.github.only_configured_repos` is `true` — see that key below. |
 | `notifications.exclude_reasons` | []string | `[]` | Reasons to drop from the feed — see "Reason values" below. |
 | `notifications.unread_only` | bool | `false` | Show only unread rows. The fetch itself always requests the whole feed regardless of this setting; filtering happens client-side. |
 | `notifications.max_items` | int | `0` (no cap) | Caps the number of notifications in the **merged, sorted** feed across every backend, applied after the newest-first sort — not per-backend, so `max_items: 50` means at most 50 rows total even with both backends live. |
 | `notifications.poll_interval` | int | `0` | Overrides the global `polling_interval` for the notifications poller only, in seconds. `0` falls back to the global `polling_interval`. Either way, a backend's own cadence hint (GitHub's `X-Poll-Interval` response header) can **raise** the interval above what you configured but never lower it — the poller runs at `max(configured, hint)`, so `polling_interval: 300` with a 60-second hint still polls every 300 seconds. This is the single poller's cadence — it is unrelated to `notifications.azure.min_poll_interval` below, which the Azure adapter applies to itself independently of this poller's tick rate. |
 
-**`exclude_repos` / `include_repos` mean different things per backend.** Both are glob
-lists matched against `Identity.Scope`, but what that scope *is* differs: on GitHub it's
-the `owner/repo` slug; on Azure it's the plain project name. The same key works against
-both, just with a different shape to match — `"your-org/*"` matches GitHub repos,
-`"your-project"` matches an Azure project.
+**`exclude_repos` / `include_repos` address the two backends differently.** Both are glob
+lists matched against a row's scope, but what that scope *is* differs: on GitHub it's the
+`owner/repo` slug; on Azure it's the plain project name. An Azure project can be written
+either way — bare (`"your-project"`) or qualified with your `organization`
+(`"your-org/your-project"`, and so `"your-org/*"` for every project in it) — so one list
+can address both backends in the same shape.
+
+**`include_repos` narrows each backend separately.** A backend is filtered only if at
+least one pattern actually addresses it; a backend no pattern addressed keeps everything.
+That's what makes `include_repos` mean "a subset of what I configured" rather than "the
+only backend I remembered to name":
+
+```yaml
+notifications:
+  include_repos: [my-gh-owner/*]     # narrows GitHub; every Azure project still shows
+  # include_repos: [my-org/proj-a]   # narrows Azure to proj-a; all of GitHub still shows
+  # include_repos: [my-gh-owner/*, my-org/proj-a]   # narrows both
+  # include_repos: []                # (default) everything, both backends
+```
+
+A pattern counts as addressing Azure when it matches one of your configured `projects`,
+bare or org-qualified. Every other pattern is treated as a GitHub pattern. That means a
+**typo in an Azure project name fails open**: `my-org/porj-a` matches no project, is read
+as a GitHub pattern, and leaves Azure unnarrowed — you get too many rows rather than an
+empty feed. Because that failure is otherwise silent, a pattern that starts with your
+organization name but matches no project gets a startup warning.
 
 #### GitHub-only keys (`notifications.github`)
 
@@ -503,8 +524,9 @@ requests there is no such knob: `lookback_days` does not reach either source.
 
 **Repo glob syntax.** `exclude_repos` / `include_repos` patterns are `path.Match` globs,
 matched case-insensitively (both the pattern and the scope are lower-cased first). `*`
-does not cross `/` — write `*/*` to match everything, not `*` (this only matters for
-GitHub's `owner/repo` scopes; Azure project names never contain a `/`). A pattern that
+does not cross `/`, so `*` matches a bare Azure project name but no `owner/repo`, and
+`*/*` matches every GitHub repo and every org-qualified Azure project. You rarely need
+either: an empty `include_repos` already means "everything". A pattern that
 fails to compile is dropped at load with a startup warning rather than rejected outright,
 and an `include_repos` list that loses every pattern this way falls back to showing the
 whole feed rather than emptying it.

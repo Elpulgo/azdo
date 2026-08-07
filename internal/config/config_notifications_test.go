@@ -1542,6 +1542,93 @@ notifications:
 	}
 }
 
+// TestLoadFrom_IncludeRepos_MistypedAzureProject_Warns pins the one failure the
+// per-backend include rule cannot surface on its own. FilterNotifications
+// treats a pattern as addressing Azure only when it matches a configured
+// project; a misspelled project matches none, so the pattern is read as a
+// GitHub pattern and narrows the wrong half of the feed while Azure stays
+// wide open. That is deliberately fail-open -- too many rows, never zero --
+// but it is also silent, so the load-time warning is the only thing that tells
+// the user their selector missed.
+func TestLoadFrom_IncludeRepos_MistypedAzureProject_Warns(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  include_repos:
+    - "test-org/alfa"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", cfg.Warnings)
+	}
+	msg := cfg.Warnings[0]
+	if !strings.Contains(msg, "test-org/alfa") {
+		t.Errorf("warning should name the offending pattern, got: %s", msg)
+	}
+	if !strings.Contains(msg, "notifications.include_repos") {
+		t.Errorf("warning should name the key, got: %s", msg)
+	}
+	// The pattern is warned about, never dropped: it is a syntactically valid
+	// glob and still selects whatever GitHub repo it happens to match.
+	if len(cfg.Notifications.IncludeRepos) != 1 {
+		t.Errorf("IncludeRepos = %v, want the pattern kept", cfg.Notifications.IncludeRepos)
+	}
+}
+
+// TestLoadFrom_IncludeRepos_NoFalsePositiveWarnings keeps the check narrow.
+// Only a pattern whose first segment names the organization is a candidate for
+// the typo warning; anything else was never trying to address Azure, and
+// warning about it would train the user to ignore the warnings block.
+func TestLoadFrom_IncludeRepos_NoFalsePositiveWarnings(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+	}{
+		{name: "matching org-qualified project", pattern: "test-org/alpha"},
+		{name: "org wildcard matching every project", pattern: "test-org/*"},
+		{name: "bare project name", pattern: "alpha"},
+		{name: "plain github pattern", pattern: "elpulgo/*"},
+		{name: "another owner entirely", pattern: "acme/widget"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			content := `organization: test-org
+projects:
+  - alpha
+polling_interval: 60
+theme: dark
+notifications:
+  include_repos:
+    - "` + tt.pattern + `"
+`
+			if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadFrom(configPath)
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+			if len(cfg.Warnings) != 0 {
+				t.Errorf("Warnings = %v, want none for pattern %q", cfg.Warnings, tt.pattern)
+			}
+		})
+	}
+}
+
 func TestLoad_WhitespaceOnlyGlobEntry_IsLoadError(t *testing.T) {
 	tests := []struct {
 		name string

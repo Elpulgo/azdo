@@ -610,8 +610,19 @@ Decision 13 of the phase-2 notifications spec made this split explicit:
 so a key that only makes sense for one backend can't be set (or silently
 ignored) for the other. `exclude_repos`/`include_repos` glob a scope, but
 "scope" means something different per backend — GitHub's is `"owner/repo"`,
-Azure's is a project name — so the same glob list is matched against two
-different string shapes depending on which backend produced the row. Every
+Azure's is a bare project name — and `path.Match`'s `*` does not cross `/`, so
+before this was addressed no single pattern could span both namespaces and an
+ordinary GitHub selection deleted the entire Azure share of the feed.
+`notifications.scopeCandidates` gives an Azure row a second, org-qualified
+spelling (`"<organization>/<project>"`) so one list addresses both backends in
+the same shape, and `notifications.includeSelection` makes `include_repos`
+narrow **per backend**: a backend is filtered only when at least one pattern
+matches it, which for Azure is decided against the configured `projects` list
+and for GitHub is the complement of that. The rule fails open — a mistyped
+project name is read as a GitHub pattern and leaves Azure unnarrowed, with a
+load-time warning from `config.azureGlobMatchesNoProject` since that failure is
+otherwise silent. `exclude_repos` needs no such rule: it only ever removes, so
+an unmatched pattern is already inert. Every
 filter key defaults to the widest possible behaviour — nothing hidden, nothing
 narrowed. The Azure block is the exception: `lookback_days` (14) and
 `min_poll_interval` (300s) default to real bounds, because an unbounded synthetic

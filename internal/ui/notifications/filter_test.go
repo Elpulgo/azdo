@@ -232,6 +232,179 @@ func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
 	assertIDs(t, got, "1")
 }
 
+// --- include_repos narrows per backend, not globally ---
+
+// TestFilterNotifications_IncludeRepos_NarrowsPerBackend is the table for the
+// whole per-backend rule. include_repos is one shared list, but a pattern
+// written for one backend must not empty the other: "elpulgo/*" is an ordinary
+// GitHub selection and used to delete every Azure row from the merged feed,
+// because path.Match's "*" does not cross "/" so no Azure project name could
+// ever match it. Each case below fixes one spelling and asserts both halves of
+// the feed at once -- the narrowed one and the untouched one.
+func TestFilterNotifications_IncludeRepos_NarrowsPerBackend(t *testing.T) {
+	gh := func(id, scope string) provider.Notification {
+		return provider.Notification{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: scope, ID: id}}
+	}
+	az := func(id, scope string) provider.Notification {
+		return provider.Notification{Identity: provider.Identity{Kind: provider.KindAzure, Scope: scope, ID: id}}
+	}
+	rows := []provider.Notification{
+		gh("gh-azdo", "elpulgo/azdo"),
+		gh("gh-other", "elpulgo/other"),
+		gh("gh-foreign", "acme/thing"),
+		az("az-1", "Project1"),
+		az("az-2", "Project2"),
+	}
+	all := []string{"gh-azdo", "gh-other", "gh-foreign", "az-1", "az-2"}
+
+	tests := []struct {
+		name    string
+		include []string
+		want    []string
+	}{
+		{
+			name:    "no patterns selects everything",
+			include: nil,
+			want:    all,
+		},
+		{
+			name:    "github pattern narrows github, leaves azure whole",
+			include: []string{"elpulgo/*"},
+			want:    []string{"gh-azdo", "gh-other", "az-1", "az-2"},
+		},
+		{
+			name:    "exact github repo narrows github, leaves azure whole",
+			include: []string{"elpulgo/azdo"},
+			want:    []string{"gh-azdo", "az-1", "az-2"},
+		},
+		{
+			// The spelling that had no equivalent before: an Azure project
+			// addressed the same "<owner>/<name>" way a GitHub repo is.
+			name:    "org-qualified azure project narrows azure, leaves github whole",
+			include: []string{"myorg/Project1"},
+			want:    []string{"gh-azdo", "gh-other", "gh-foreign", "az-1"},
+		},
+		{
+			name:    "org wildcard selects every azure project, leaves github whole",
+			include: []string{"myorg/*"},
+			want:    all,
+		},
+		{
+			// Configs written before org-qualification existed used the bare
+			// project name; it still addresses Azure and must keep working.
+			name:    "bare project name still addresses azure",
+			include: []string{"Project1"},
+			want:    []string{"gh-azdo", "gh-other", "gh-foreign", "az-1"},
+		},
+		{
+			name:    "one pattern per backend narrows both",
+			include: []string{"elpulgo/azdo", "myorg/Project2"},
+			want:    []string{"gh-azdo", "az-2"},
+		},
+		{
+			// "*" matches a bare project name but cannot cross "/", so it
+			// addresses Azure only -- which is why Oscar's field workaround
+			// ["elpulgo/*", "*"] restored the Azure rows. Kept as a
+			// regression guard: it must stay a no-op, not become a
+			// narrow-everything.
+			name:    "bare star addresses azure only and hides nothing",
+			include: []string{"*"},
+			want:    all,
+		},
+		{
+			name:    "case differences do not change the classification",
+			include: []string{"MYORG/PROJECT1"},
+			want:    []string{"gh-azdo", "gh-other", "gh-foreign", "az-1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Organization:  "myorg",
+				Projects:      []string{"Project1", "Project2"},
+				Notifications: config.NotificationsConfig{IncludeRepos: tt.include},
+			}
+			assertIDs(t, FilterNotifications(rows, cfg), tt.want...)
+		})
+	}
+}
+
+// TestFilterNotifications_IncludeRepos_MistypedAzureProject_FailsOpen pins the
+// tradeoff the per-backend rule accepts. A pattern addresses Azure only when it
+// matches a configured project, so a typo matches none, is classified as a
+// GitHub pattern, and leaves Azure unnarrowed -- the feed shows too many rows,
+// never zero. Fail-closed here would mean a single mistyped character silently
+// deleting the entire Azure feed, which is the bug this whole change exists to
+// remove. config.LoadFrom warns about this exact shape because the failure is
+// otherwise invisible; see TestLoadFrom_IncludeRepos_MistypedAzureProject_Warns.
+func TestFilterNotifications_IncludeRepos_MistypedAzureProject_FailsOpen(t *testing.T) {
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "elpulgo/azdo", ID: "gh-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project1", ID: "az-1"}},
+	}
+	cfg := &config.Config{
+		Organization:  "myorg",
+		Projects:      []string{"Project1"},
+		Notifications: config.NotificationsConfig{IncludeRepos: []string{"myorg/Projct1"}},
+	}
+	// The typo narrows GitHub (to nothing, since it matches no repo) and
+	// leaves Azure alone.
+	assertIDs(t, FilterNotifications(rows, cfg), "az-1")
+}
+
+// TestFilterNotifications_IncludeRepos_NoOrganization_BareProjectStillWorks
+// covers a GitHub-only install, where `organization` is empty. Without an org
+// there is no "<org>/<project>" spelling to build, so scopeCandidates must
+// yield the bare scope alone rather than a "/Project1" candidate that a
+// pattern like "*/Project1" could match by accident.
+func TestFilterNotifications_IncludeRepos_NoOrganization_BareProjectStillWorks(t *testing.T) {
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "elpulgo/azdo", ID: "gh-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project1", ID: "az-1"}},
+	}
+	cfg := &config.Config{
+		Projects:      []string{"Project1"},
+		Notifications: config.NotificationsConfig{IncludeRepos: []string{"Project1"}},
+	}
+	// The bare name addresses Azure, so Azure narrows to it and GitHub -- which
+	// no pattern addressed -- keeps everything.
+	assertIDs(t, FilterNotifications(rows, cfg), "gh-1", "az-1")
+
+	// The candidate list must not gain a "/Project1" entry when org is empty:
+	// this pattern addresses no configured project, so it is read as a GitHub
+	// pattern and Azure stays whole. Were the phantom candidate built, the
+	// pattern would classify as Azure-addressing and narrow the wrong backend.
+	cfg.Notifications.IncludeRepos = []string{"*/Project1"}
+	assertIDs(t, FilterNotifications(rows, cfg), "az-1")
+}
+
+// TestFilterNotifications_ExcludeRepos_OrgQualifiedAzureProject checks that one
+// spelling means the same thing in both keys. exclude_repos needs no
+// per-backend narrowing rule -- a subtractive list only ever removes, so an
+// unmatched pattern is already an inert no-op -- but it gets the same
+// org-qualified candidates so "myorg/Project1" is not silently different from
+// what include_repos would have selected.
+func TestFilterNotifications_ExcludeRepos_OrgQualifiedAzureProject(t *testing.T) {
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "elpulgo/azdo", ID: "gh-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project1", ID: "az-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project2", ID: "az-2"}},
+	}
+	cfg := &config.Config{
+		Organization:  "myorg",
+		Projects:      []string{"Project1", "Project2"},
+		Notifications: config.NotificationsConfig{ExcludeRepos: []string{"myorg/Project1"}},
+	}
+	assertIDs(t, FilterNotifications(rows, cfg), "gh-1", "az-2")
+
+	// And the org wildcard hides the Azure half wholesale without touching
+	// GitHub -- the behaviour change worth a release note, since "myorg/*"
+	// previously matched no Azure row at all.
+	cfg.Notifications.ExcludeRepos = []string{"myorg/*"}
+	assertIDs(t, FilterNotifications(rows, cfg), "gh-1")
+}
+
 // --- The filter mirrors the load-time sanitizer, so a struct-literal config
 // that bypassed it behaves identically ---
 

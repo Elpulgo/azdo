@@ -126,12 +126,23 @@ type NotificationsConfig struct {
 	// setting; false (default) shows both read and unread.
 	UnreadOnly bool `mapstructure:"unread_only"`
 	// ExcludeRepos is a glob list of scopes to hide from the feed
-	// (path.Match syntax). On GitHub a scope is "owner/repo"; on Azure it is
-	// a project name. Empty (default) excludes nothing.
+	// (path.Match syntax). A GitHub scope is "owner/repo". An Azure scope is
+	// addressable either as a bare project name or as "<organization>/<project>",
+	// so "myorg/*" hides every Azure project the same way "elpulgo/*" hides
+	// every repo of that GitHub owner. Empty (default) excludes nothing.
 	ExcludeRepos []string `mapstructure:"exclude_repos"`
-	// IncludeRepos is a glob list narrowing the feed to matching scopes, same
-	// "owner/repo" (GitHub) / project name (Azure) shape as ExcludeRepos.
-	// Empty (default) narrows nothing.
+	// IncludeRepos is a glob list narrowing the feed to matching scopes, in the
+	// same spellings ExcludeRepos accepts. Empty (default) narrows nothing.
+	//
+	// Narrowing is per backend, not global: a backend is filtered only when at
+	// least one pattern addresses it, so "include_repos: [elpulgo/*]" narrows
+	// the GitHub half of the merged feed and leaves every Azure project in
+	// place rather than deleting them all. A pattern counts as addressing Azure
+	// when it matches one of the configured Projects, bare or org-qualified;
+	// every other pattern is treated as addressing GitHub. See
+	// notifications.FilterNotifications and its includeSelection for the exact
+	// rule, including why a mistyped Azure pattern fails open (and gets a
+	// warning from LoadFrom).
 	IncludeRepos []string `mapstructure:"include_repos"`
 	// MaxItems caps the number of notifications in the merged, sorted feed
 	// across every backend, applied after the newest-first sort. Zero
@@ -308,6 +319,44 @@ func acceptedNotificationReasons() []string {
 		names = append(names, r.String())
 	}
 	return names
+}
+
+// azureGlobMatchesNoProject reports whether pattern's first segment names org
+// (case-insensitively) while the pattern matches none of the configured
+// projects in either the bare or the "<org>/<project>" spelling -- the shape of
+// a mistyped Azure selector.
+//
+// It deliberately duplicates the matching rule
+// notifications.globAddressesAzure applies rather than importing it: the
+// dependency only runs that way (ui/notifications imports config, not the
+// reverse), and the two would drift only if the addressing rule itself changed,
+// at which point both sites need the same edit anyway. It tests Projects (the
+// API names) because that is what Identity.Scope carries, not DisplayNames.
+//
+// An empty org disables the check entirely: with no organization configured
+// there is no prefix that could identify an Azure-directed pattern, so every
+// pattern would either be flagged or none, and neither is informative.
+func azureGlobMatchesNoProject(pattern, org string, projects []string) bool {
+	trimmedOrg := strings.TrimSpace(org)
+	if trimmedOrg == "" {
+		return false
+	}
+	lowerPattern := strings.ToLower(strings.TrimSpace(pattern))
+	if !strings.HasPrefix(lowerPattern, strings.ToLower(trimmedOrg)+"/") {
+		return false
+	}
+	for _, p := range projects {
+		project := strings.TrimSpace(p)
+		if project == "" {
+			continue
+		}
+		for _, candidate := range []string{project, trimmedOrg + "/" + project} {
+			if ok, err := path.Match(lowerPattern, strings.ToLower(candidate)); err == nil && ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // sanitizeRepoGlobs drops any pattern in patterns that path.Match rejects as
@@ -781,6 +830,24 @@ func LoadFrom(configPath string) (*Config, error) {
 	if cfg.Notifications.GitHub.OnlyConfiguredRepos && len(cfg.Notifications.IncludeRepos) > 0 {
 		cfg.Warnings = append(cfg.Warnings,
 			"notifications.github.only_configured_repos is true — notifications.include_repos is ignored")
+	}
+
+	// An include_repos pattern whose first segment names the Azure organization
+	// but which matches no configured project is almost certainly a typo, and
+	// it is the one mistake the filter cannot notice for itself: the per-backend
+	// rule classifies a pattern as Azure-addressing only when it matches a
+	// configured project, so a misspelled one is read as a GitHub pattern
+	// instead and quietly narrows the wrong half of the feed while leaving
+	// Azure wide open. That fails open by design (too many rows, never zero),
+	// but failing open is silent, so say it out loud here. Keying on the
+	// organization prefix keeps the check precise: a pattern that does not name
+	// the org was never trying to address Azure and gets no warning.
+	for _, pattern := range cfg.Notifications.IncludeRepos {
+		if azureGlobMatchesNoProject(pattern, cfg.Organization, cfg.Projects) {
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
+				"notifications.include_repos entry %q names organization %q but matches no configured project — it will be treated as a GitHub pattern and will not narrow Azure",
+				pattern, cfg.Organization))
+		}
 	}
 
 	// notifications.azure.lookback_days: zero means "use the default", never
