@@ -337,7 +337,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 7. **`azdevops`: source — my failed pipeline runs** → `ci_activity` (blocked by: 3). → done: queries runs triggered by me with a failed result; key is `cifail/run/<id>`; reason is `NotificationReasonCIActivity` per decision 8, asserted by name so a future `ci_failed` member cannot be silently swapped in. **The query must narrow server-side, not in Go over `ListPipelineRuns`'s output** (amended 2026-08-06 after review): `ListPipelineRuns` (`pipelines.go:12`) fetches the N most recent builds in the project across all pipelines, all users and all results, so a client-side filter spends `$top` on other people's builds — this is the only one of the four sources whose narrowing is not server-side (review uses `reviewerId`, assigned and mentioned use WIQL), and on a busy project your failure ages out of the window and **disappears from the feed while still unread**, with the failure mode worsening exactly as team activity rises. Add a dedicated client method passing `statusFilter=completed&resultFilter=failed&requestedFor=<id>&minTime=<now-lookbackDays>&queryOrder=finishTimeDescending`; leave `ListPipelineRuns` untouched for the pipelines pane, and **keep the Go-side `requestedFor`/result check as a belt-and-braces re-check** so an ignored or mis-typed server parameter degrades to over-fetching rather than to attributing someone else's build to you. `minTime` also makes this source honour decision 6's lookback — it is the only source that currently does not, which would leave task 11's `lookback_days` silently governing three of four sources. **The subject is not permanently stable:** Azure's *rerun failed jobs* / *rerun stage* re-executes inside the **same run id** on YAML pipelines (classic queues a new id), recomputing `result` and `finishTime` — so `FinishTime` is load-bearing, a re-failure correctly resurfaces the row as unread, and a green rerun expires it per decision 7; that behaviour is wanted, but it must be documented as what it is and pinned by a test that advances `FinishTime` on the same id, not only by the equal-stamp repoll case `Reconcile` already covers
 - [x] 8. **`azdevops`: compose sources concurrently and implement `NotificationSource`** (blocked by: 4,5,6,7). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)` plus a conformance test following `adapter_conformance_test.go`; sources run concurrently and **one failing source degrades to the others rather than emptying the feed** — the same rule phase 1's decision 20 enforces at the composite layer, restated here because a source is to the Azure adapter what a backend is to the composite, and phase 1 lost a defect to exactly this; `Adapter` does **not** implement `PollIntervalHinter` (decision 10), asserted by a negative compile-time check; local state is folded into `Notification.Read` **at this boundary**, per phase 1's unread-semantics constraint — nothing above the adapter may learn that Azure read state is local; **and the composite will discard your rows if you hand it an error** — `composite.go:669-672` does `if r.err != nil { errs = append(errs, r.err); continue }`, and `composite.go:637-641` documents that as deliberate (a backend reporting failure cannot vouch for the completeness *or ordering* of what it returned). So propagating task 4's `*PartialError` upward from `Adapter.List` re-blanks the Azure half of the feed one layer up, re-introducing the exact defect task 4 was reopened to fix. Decide it deliberately: either `Adapter.List` absorbs partial failures and returns `(rows, nil)`, or phase 1's composite rule is revisited — do not leave it to fall out of the code (added 2026-08-06 from task 4's re-validation). **Resolved 2026-08-07: `Adapter.List` absorbs, and the composite rule stands.** The composite's rationale is right *at its own boundary* — it cannot know whether a backend's partial result is sorted or complete — but the Azure adapter is the layer that merged and sorted these rows, so it can vouch for them, and revisiting the composite rule would reopen a phase-1 defect for every backend to fix a problem local to this one. Concretely: `Adapter.List` returns `(rows, nil)` whenever **at least one source succeeded**, and propagates the error only when **every** source failed. (**Corrected 2026-08-07, same day, from task 8's review:** this first read "at least one *row*", which is not the same test and gets a live case wrong — three sources fail, the fourth succeeds, and the user has already triaged its rows away, so `Reconcile` legitimately returns zero. Keying on the row count turns that into `errors.Join` → the composite's `len(errs) == total` → a permanent `errorBody` in the pane, every poll, from a partial outage in which one source demonstrably worked. Keying on the source count says what was actually meant: an empty feed is a feed, an outage is when nothing answered.) — so a total outage still surfaces as an error while a single expired project PAT degrades to a shorter feed. The cost is real and is accepted knowingly: a partial Azure failure becomes **invisible**, since the composite renders `"%d of %d backends failed to load"` from errors alone and the adapter has no non-error channel to report on. That is the lesser harm for an attention feed — missing rows is degradation the user can recover from, an empty pane is an outage that teaches them to stop trusting the tab — but it is a gap, and widening `NotificationSource` with a warnings channel is recorded under `## Unknowns` for Oscar rather than invented here
 - [x] 9. **`azdevops`: `MarkRead`/`MarkDone` write to the local store** (blocked by: 2,8). *(Re-validated 2026-08-07 against `029317c`, which fixes all seven review findings; the original `→ done:` clauses were re-checked and still hold. See the re-validation record at the end of `## Validation: task 9`.)* → done: both take a `provider.Identity` and write through `Identity.ID` as the key; marking an id the store has never seen creates the entry rather than erroring — the composite routes by `Identity.Kind` and cannot know what the store has; `MarkDone` on an already-done id is a no-op, not a double-write; writes go through the debounced store and a `Flush()` on shutdown guarantees durability
-- [x] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the **six** shared keys stay at top level (corrected 2026-08-07 — this said "five", propagated from decision 13's rationale; the YAML lists six and nine minus three is six); keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
+- [ ] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). *(Un-ticked 2026-08-07 — review found one 🟡 that falsifies decision 13's own rationale plus five smaller items; see `## Review feedback: task 10`. The loop only picks the first unblocked **open** task, so findings on a ticked task are never revisited.)* → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the **six** shared keys stay at top level (corrected 2026-08-07 — this said "five", propagated from decision 13's rationale; the YAML lists six and nine minus three is six); keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
 - [ ] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
 - [ ] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
 - [ ] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
@@ -682,6 +682,79 @@ Full suite (`CGO_ENABLED=0 go build ./...`, `go vet ./...`,
 via `cp` from `/tmp/claude-1001/.../scratchpad/backups/config.go.bak`
 (never `git checkout --`); `git status --porcelain` clean and
 `git diff --stat HEAD` empty before finishing.
+
+## Review feedback: task 10
+
+Opus review of `c013808`, 2026-08-07. Verdict REQUEST_CHANGES. Task 10
+un-ticked. Nothing here is a 🔴, but finding 1 falsifies a premise decision 13
+relies on.
+
+**A correction to the record first.** This restructure was reviewed as "a
+breaking config change to a shipped release". It is not: `git tag --contains
+0f90acf` is empty and the newest tag `v0.7.2` predates phase 1's merge by a
+month. Decision 14's own rationale ("merged to `main` but has not been
+released") is factually correct, and the silent-downgrade path is therefore
+low-stakes — the maintainer's dev config plus `config.yaml.example`, which task
+16 owns.
+
+**1. 🟡 `only_configured_repos` is documented as GitHub-only and deletes the
+entire Azure feed.** `FilterNotifications` runs on the **merged** feed
+(`internal/app/app.go:1152`), and its `nc.GitHub.OnlyConfiguredRepos` branch
+(`internal/ui/notifications/filter.go:63`) keeps only rows whose
+`Identity.Scope` appears in `cfg.GitHub.Repos`. Azure rows carry
+`Scope = pr.ProjectName`, never an `owner/repo` string, so the knob drops 100%
+of Azure notifications. Reviewer confirmed it with a throwaway probe: one
+GitHub row and one Azure row in, one GitHub row out. **Decision 13's rationale
+states this key "is vacuously true on Azure (the adapter only ever queries
+configured projects)" — that premise is what justified nesting it under
+`github`, and the code falsifies it.** The predicate is not vacuous for Azure;
+it is always false.
+
+**Resolved 2026-08-07: make the code match decision 13's stated intent.** The
+`OnlyConfiguredRepos` branch passes through any row whose `Identity.Kind` is
+not GitHub, which is what "vacuously true on Azure" means when written as
+code. This is not a design decision to defer — the spec already says what the
+behaviour should be and the code disagrees with it; the alternative (rewrite
+both doc comments to say the `github` block governs the merged feed) would
+have task 10 document a defect instead of fixing it. Pin it with a test that
+puts a GitHub row and an Azure row through the filter with
+`only_configured_repos: true` and asserts **both** survive — a
+GitHub-rows-only test passes either way. The doc comments at `config.go:92-93`
+and `config.go:143-144` must also stop claiming the `github` block is
+merged-feed-neutral, since that is the claim that hid this.
+
+**2. 🟢 `NotificationsAzureConfig`'s doc contradicts the struct it sits on.**
+`config.go:166-168` says "Left unpopulated by task 10 on purpose", with three
+fields declared on the next four lines. What task 10 left out is the *defaults
+and validation*, not the fields. Task 11's implementer reading this cannot tell
+whether the existing fields are authoritative or a stub to replace.
+
+**3. 🟢 The warning-message test cannot tell the new key path from the old.**
+`config_notifications_test.go:947` asserts `Contains(msg,
+"only_configured_repos")`, which the old flat spelling satisfies too. Assert
+the qualified `notifications.github.only_configured_repos` — the qualification
+is the point of the change.
+
+**4. 🟢 `Validate()`'s comment counts three numeric fields where the tree now
+has five.** `config.go:686-691`. `notifications.azure.lookback_days: -30` loads
+clean today with no validation at all. More importantly the comment's premise
+("an absent block is all-zero and therefore valid") stops holding the moment
+task 11 gives `lookback_days` a default of 14 — and this comment is what task
+11's implementer will read.
+
+**5. 🟢 `PollInterval`'s fallback description doesn't match the code.**
+`config.go:128-131` says the backend hint applies only when the key is zero;
+`app.go:369-395` computes `max(configured, hint)` whether or not it is set,
+with a third fallback (`polling.DefaultInterval`) the comment never mentions
+and a `polling.MinInterval` floor. A user setting `poll_interval: 30` gets 60
+against GitHub's hint. Mostly inherited from phase 1, but this commit touched
+the line.
+
+**6. 🟢** `config.go:97-99` says an orphaned flat key "is silently ignored" —
+true for the read path, but `Save()` also writes it back verbatim, so it
+survives in the file forever. Correct under decision 14 (a warning is
+forbidden), but a maintainer reading only this comment would expect the key to
+disappear on the next save.
 
 ## Unknowns
 
