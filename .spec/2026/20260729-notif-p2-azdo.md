@@ -339,7 +339,7 @@ Task 1 is a spike and gates task 5 only; everything else can start immediately.
 - [x] 9. **`azdevops`: `MarkRead`/`MarkDone` write to the local store** (blocked by: 2,8). *(Re-validated 2026-08-07 against `029317c`, which fixes all seven review findings; the original `→ done:` clauses were re-checked and still hold. See the re-validation record at the end of `## Validation: task 9`.)* → done: both take a `provider.Identity` and write through `Identity.ID` as the key; marking an id the store has never seen creates the entry rather than erroring — the composite routes by `Identity.Kind` and cannot know what the store has; `MarkDone` on an already-done id is a no-op, not a double-write; writes go through the debounced store and a `Flush()` on shutdown guarantees durability
 - [x] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). *(Re-validated 2026-08-07 against `6047aa3`, which fixes all six review findings; the original `→ done:` clauses were re-checked against the current code and still hold. See the re-validation record at the end of `## Validation: task 10`.)* → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the **six** shared keys stay at top level (corrected 2026-08-07 — this said "five", propagated from decision 13's rationale; the YAML lists six and nine minus three is six); keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
 - [x] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). *(Re-validated 2026-08-07 against `0eeb10a`, which fixes all seven review findings and implements both settled decisions, plus `6556b25`, which kills the two mutants that re-validation found surviving and corrects three stale comments; the original `→ done:` clauses were re-checked against the current code and still hold. See the two re-validation records at the end of `## Validation: task 11`.)* → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
-- [x] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
+- [ ] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). *(Un-ticked 2026-08-07 after review — the acceptance clauses below all hold against `7040c11`, but the review found a doc bound the code does not enforce, a dropped empty-inbox assertion, and settled Decision C below. Re-tick once `## Review feedback: task 12` is addressed.)* → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
 - [ ] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
 - [ ] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
 - [ ] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
@@ -1409,6 +1409,101 @@ the six pre-existing offenders (`adapter_list_test.go`, `adapter_url_test.go`,
 were applied to `cp`-saved backups and restored via `cp` (never `git
 checkout --`), confirmed byte-identical and `git status` clean before
 finishing.
+
+## Review feedback: task 12
+
+Reviewed at opus against `7040c11`. Verdict REQUEST_CHANGES, but narrowly: the
+substance of the task is right. `mergeNotifications` sorts on the four-key
+total order and *then* applies `all[:maxItems:maxItems]`; both adapters
+genuinely stopped truncating; the new composite test is order-sensitive rather
+than length-only; both adapters carry a `TestAdapter_List_MaxDoesNotTruncateAtThisLayer`
+that fails when truncation is put back. Two findings and one design question.
+
+**1. 🟡 `internal/github/adapter.go:578-579` states a bound the code does not
+enforce.** The new sentence says the returned slice is bounded by
+`maxNotificationPages × notifPerPageCap` (5000). But `notifPerPageCap` is set
+only on the **first** request — `buildPath` (`notifications.go:380`) writes
+`per_page=100`, and pages 2..N are fetched via `c.getPage(next, "")` where
+`next` is `nextPageURL(header)`'s verbatim parse of the server's
+`Link rel="next"` (`client.go:172-193`), with no per-page rewrite. So the
+constant constrains exactly one of up to 50 pages. A GHES instance or caching
+proxy that ignores `per_page` and returns 1000 rows per page yields 50,000
+rows crossing the adapter→composite boundary — and since `opts.Max` no longer
+applies there, this comment is now the *only* stated bound on that boundary.
+What makes it worth fixing rather than shrugging at is the adjacency: the
+constant being cited has a doc comment three lines above
+(`notifications.go:21-30`) explaining that it exists *because* a server
+produced "501 requests and 500 rows with err == nil". The new comment asserts
+a bound premised on the well-behaved server, sitting next to the constant that
+exists for the misbehaving one. Restate it as a conditional bound, not an
+arithmetic one. No code change.
+
+**2. 🟢 `internal/github/adapter_notifications_test.go` — a dropped assertion
+the validation record does not mention.** The deleted `TestAdapter_List_MaxBoundaries`
+carried a row `{name: "Max against an empty result", body: "[]", max: 1,
+wantLen: 0}` and an assertion that the result is empty-but-non-nil. Neither
+survives into the replacement test, and nothing else in `internal/github` pins
+it — while the *paired* assertion for the error path is still there
+(`adapter_notifications_test.go:343`, "want nil alongside the error"). Half of
+a deliberately-paired contract is now unpinned: rewriting
+`out := make([]provider.Notification, len(wire))` as `var out []...` + append
+would return `nil, nil` on an empty inbox with no test failing. Blast radius
+today is nil — `mergeNotifications` accumulates into `var all []Notification`
+so a nil reaches the app on that path regardless, and `app.go:1140-1152`
+documents nil-items/nil-err as "genuinely EMPTY" — which is why this is 🟢.
+Restore the row rather than letting the contract go by attrition.
+
+**Decision C — `NotifOpts.Max`'s "backends must ignore this" is prose-only,
+and the prose contradicts itself. Settled 2026-08-07: zero `Max` on the
+fan-out.** `list_opts.go:66-76` now ends "Backend implementations must
+therefore ignore this field", but `*CompositeProvider` is itself a
+`NotificationSource` (`composite.go:60`) and is the one implementation that
+*does* honour `Max`. Nesting a composite inside a composite reproduces exactly
+the double-apply this task removed. Not reachable today — `main.go:361` builds
+one composite from concrete adapters — and enforcement is two hand-written
+per-adapter tests, so a third backend gets nothing unless its author knows the
+rule exists.
+
+The review offered three options: (a) leave it, (b) `CompositeProvider.List`
+passes `Max: 0` to each backend and keeps the real value for its own cap, (c) a
+shared conformance helper backends' tests opt into. **(b)**, for the same
+reason task 10's finding 1 went the way it did: decision 15 already states that
+the cap lives at the composite, and (b) is what makes the code say that instead
+of asking every future backend author to have read a comment. It is one line,
+it converts prose into a machine-checked invariant — a backend that *does*
+honour `Max` becomes harmless rather than wrong — and it makes the nested-composite
+case correct by construction rather than by nobody having tried it. This is not
+a new design decision; it is the existing one, enforced. The cost is that
+`opts` is no longer forwarded verbatim, so the wording in `list_opts.go`,
+`composite.go` and both adapters has to change with it. (c) is not chosen
+because it catches the mistake only for an author who wires the helper up,
+which is the same author who would have read the comment.
+
+**Priced and found not to be problems** (recorded so they are not re-litigated):
+
+- **The 5000-row slice crossing the boundary costs almost nothing.** Before,
+  the adapter already allocated and mapped all 5000 before truncating; after,
+  the composite's `append` copies 5000 and `all[:50:50]` keeps that array
+  alive — but `FilterNotifications` (`filter.go:59`) unconditionally copies
+  into a fresh slice on both the poller path (`app.go:1152`) and the pane's
+  own (`list.go:369`), so it is released one message-pass later, not held for
+  the poll interval. Net: one extra ~700 KB copy per poll, promptly collected,
+  plus a `sort.SliceStable` over 5000 rows instead of 50. Nothing downstream is
+  sized by the pre-cap slice; on the Azure side phase 1's truncation already
+  ran *after* `Swap`/`Reconcile`, so the triage store's input never changed.
+- **Ties and cursor stability are strictly improved by this change.** The sort
+  is a total order over `(UpdatedAt desc, Kind asc, Scope asc, ID asc)`,
+  entirely data-derived, so a repoll of unchanged rows produces byte-identical
+  order regardless of goroutine completion order, and a tie group straddling
+  the cap resolves deterministically. The pane restores the cursor by
+  `Identity.SameItem`, not by index (`list.go:1231-1244`). The old per-adapter
+  truncation sliced GitHub's raw wire order, which the composite had no control
+  over — removing it helps.
+- **Pre-existing, unchanged by this commit:** an inbox exceeding 50 pages makes
+  `nc.List` return an error rather than a truncated feed, so the pane fails
+  permanently for such a user. `opts.Max` never bounded that walk. Not this
+  task's to fix, but it is why finding 1 matters more than a doc nit usually
+  would.
 
 ## Unknowns
 
