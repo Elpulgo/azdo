@@ -634,6 +634,10 @@ func (cp *CompositeProvider) NotificationsPollInterval() time.Duration {
 // backends returns (nil, nil), not the all-failed error, which len(errs) ==
 // total would otherwise satisfy vacuously at 0 == 0.
 //
+// opts is not forwarded to backends verbatim: ParticipatingOnly and Since
+// reach every backend unchanged, but Max is zeroed first (decision C — see
+// the backendOpts comment below and mergeNotifications' own doc comment).
+//
 // A backend that returns rows *and* a non-nil error has its rows discarded:
 // the error is recorded and the partial rows are not merged, because a
 // backend reporting failure cannot vouch for the completeness or ordering of
@@ -641,6 +645,22 @@ func (cp *CompositeProvider) NotificationsPollInterval() time.Duration {
 // returns (nil, err) on every error path — but the choice is deliberate.
 func (cp *CompositeProvider) List(opts NotifOpts) ([]Notification, error) {
 	capable := cp.capableNotificationBackends()
+
+	// backendOpts carries ParticipatingOnly and Since through unchanged, but
+	// zeroes Max (decision C, phase-2 notifications spec, review of task 12):
+	// Max is honoured exclusively by this method's own post-merge cap via
+	// mergeNotifications, applied once below after every backend's rows are
+	// merged and sorted. Forwarding opts.Max verbatim would let a backend
+	// that itself honours Max double-apply the cap the moment it does so — a
+	// *CompositeProvider is itself a NotificationSource (see the var _
+	// assertion above) and is the one implementation that does honour Max,
+	// so a composite nested inside another composite would otherwise
+	// reproduce exactly the double-apply task 12 removed at the adapter
+	// layer. Zeroing it here makes a backend that happens to honour Max
+	// harmless rather than wrong, regardless of whether its author knew this
+	// rule existed.
+	backendOpts := opts
+	backendOpts.Max = 0
 
 	type result struct {
 		notifs []Notification
@@ -654,7 +674,7 @@ func (cp *CompositeProvider) List(opts NotifOpts) ([]Notification, error) {
 		wg.Add(1)
 		go func(backend NotificationSource) {
 			defer wg.Done()
-			notifs, err := backend.List(opts)
+			notifs, err := backend.List(backendOpts)
 			ch <- result{notifs, err}
 		}(b)
 	}
@@ -690,13 +710,24 @@ func (cp *CompositeProvider) List(opts NotifOpts) ([]Notification, error) {
 // additionally keeps rows identical in all four keys — a duplicate from an
 // overlapping page — in their input order.
 //
-// The maxItems cap re-applies NotifOpts.Max after the merge: List forwards
-// opts verbatim to every capable backend, so N capable backends would
-// otherwise return up to N×Max. It is applied *after* the sort — truncating
-// before it would keep an arbitrary N rather than the newest N — and on both
-// the clean and the partial-error return. The full slice expression makes the
-// truncation irreversible: what Max removed is gone, rather than recoverable
-// via all[:cap(all)] or overwritable by a caller's append.
+// The maxItems cap is applied here and only here (decision 15 / task 12):
+// List zeroes opts.Max before forwarding to each capable backend (decision
+// C), so no backend ever receives a nonzero Max to truncate on — each
+// backend's List returns its rows uncapped, so without this cap the merged
+// length would be whatever each backend's own natural fetch returns,
+// unbounded by maxItems, and with N capable backends that easily exceeds a
+// single-backend-sized maxItems. A backend that truncated to Max on its own
+// (phase 1's original, since-removed per-adapter behaviour) would
+// double-apply the cap the moment a second capable backend exists — each
+// backend keeping only its own top-Max in its own order before this function
+// ever sees the full picture, which can silently drop a row
+// that belongs in the true global top-Max while still returning a
+// plausible-looking, correctly-sized slice. The cap is applied *after* the
+// sort — truncating before it would keep an arbitrary maxItems rather than
+// the newest maxItems — and on both the clean and the partial-error return.
+// The full slice expression makes the truncation irreversible: what Max
+// removed is gone, rather than recoverable via all[:cap(all)] or overwritable
+// by a caller's append.
 //
 // Unlike mergePRs/mergeWorkItems/mergePipelineRuns, the all-failed path
 // preserves the error chain with errors.Join rather than flattening it through

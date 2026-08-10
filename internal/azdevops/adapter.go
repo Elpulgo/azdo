@@ -2,6 +2,8 @@ package azdevops
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/provider"
 )
@@ -13,11 +15,96 @@ import (
 // the interface — they remain on the concrete *MultiClient (Decision 5).
 type Adapter struct {
 	mc *MultiClient
+
+	// notifStore, notifLookbackDays and notifSources back the
+	// provider.NotificationSource surface (adapter_notifications.go) only.
+	// A plain NewAdapter(mc) leaves every notification-related field below
+	// at its zero value; List, MarkRead and MarkDone all treat a nil
+	// notifStore as "notifications not configured" the same way every other
+	// method on this type treats a nil mc — see NewAdapterWithNotifications.
+	notifStore        *TriageStore
+	notifLookbackDays int
+	notifSources      NotificationSourceToggles
+
+	// notifThrottleMu, notifMinPollInterval, notifLastPollAt and
+	// notifLastRawRows implement decision 10's self-throttle: List
+	// re-reconciles and returns fresh rows on every call, but skips the
+	// network round trip and the store write when called sooner than
+	// notifMinPollInterval after its last real query (see list's own doc
+	// comment for what "throttled" still does). This lock is intentionally
+	// distinct from notifStore's own mu/writeMu (notifications_store.go):
+	// List holds notifThrottleMu for its entire call, including the network
+	// round trip in runSourcesConcurrently and the later notifStore.Swap,
+	// while MarkRead/MarkDone only ever acquire notifStore's own mu (via
+	// ApplyIfChanged) and never touch notifThrottleMu at all. Lock order for
+	// the one call path that ever holds both — list — is notifThrottleMu
+	// before notifStore's mu; no other code acquires them in the opposite
+	// order, so there is no cycle to deadlock on.
+	//
+	// A throttled call still re-runs Reconcile — in memory, against
+	// notifLastRawRows (the pre-Reconcile rows from the last real query) and
+	// the store's *current* triage state (read via notifStore.State(), which
+	// only takes notifStore's mu, honouring the same lock order) — so a mark
+	// made after the last real query is reflected on the very next throttled
+	// return instead of being masked until the throttle window closes (task
+	// 14 review, 🔴 finding 1). The state Reconcile returns from that call is
+	// discarded, not written back: a throttled call still does no network
+	// work and writes nothing to the store.
+	//
+	// The consequence of list holding notifThrottleMu across its whole body:
+	// two concurrent List calls on one *Adapter serialise, the second
+	// waiting out the first's full network round trip rather than getting a
+	// cheap throttled return. Reachable in this codebase — internal/app/app.go
+	// hands the same CompositeProvider to both the notifications pane's own
+	// fetch and polling.NewNotificationsPoller's timer, each its own
+	// goroutine. This is a deliberate latency trade, not a defect (task 14
+	// review, 🟡 finding 3), but its safety rests on a precondition, not a
+	// guarantee: a blocked caller's now is the time it entered List, which is
+	// strictly *later* than the winner's notifLastPollAt (the winner's own
+	// entry-time now), not earlier or equal — so the blocked caller is only
+	// throttled if the winner's entire round trip (runSourcesConcurrently
+	// plus notifStore.Swap) finishes before notifMinPollInterval has elapsed
+	// since the winner started. At shipped defaults (a 300-second
+	// notifMinPollInterval against sub-second real-world round trips) that
+	// holds by a wide margin. It is not an absolute: at
+	// notifMinPollInterval=100ms with a round trip parked at ~300ms, a
+	// blocked caller's own now can already be past notifLastPollAt+interval
+	// by the time it acquires the lock, so it takes the real-query branch
+	// too — the throttle does not prevent a second real query in that case,
+	// it just delays it behind the first. Reduce notifMinPollInterval far
+	// enough relative to real request latency and this stops holding. Do not
+	// "fix" the serialisation with a per-caller lock or a singleflight
+	// variant without accounting for the freshness trade it currently
+	// gives: the blocked caller gets the cache the winner *just wrote*,
+	// fresher than an immediate throttled return would have been — the one
+	// edge case is cosmetic: if the winner hits the total-failure branch,
+	// the loser returns the older cached rows with a nil error instead of
+	// the winner's error.
+	notifThrottleMu      sync.Mutex
+	notifMinPollInterval time.Duration
+	notifLastPollAt      time.Time
+	notifLastRawRows     []provider.Notification
 }
 
 // NewAdapter creates a new Adapter wrapping the given MultiClient.
 // A nil MultiClient is allowed (adapter still satisfies the interface; all
 // methods that require a live client will return an error or zero value).
+//
+// The *Adapter this returns also satisfies provider.NotificationSource by
+// method set alone — Go's structural typing does not care that notifStore is
+// left at its zero value (nil) here. A caller that hands this result to
+// something that type-asserts for provider.NotificationSource (e.g. the
+// composite provider's Notifications tab capability check) gets a source
+// that is present but permanently broken: List's nil-notifStore guard
+// (adapter_notifications.go) makes every call return an error rather than
+// panic, so the tab shows up and every poll immediately renders
+// internal/ui/notifications' error state ("Notifications unavailable:
+// azdevops: notifications: not configured") instead of ever showing a row —
+// present, but useless, for the life of the session (task 8 review, 🔴
+// finding 1). Use NewAdapterWithNotifications instead of this constructor
+// whenever the caller wants Azure DevOps notifications to actually work;
+// cmd/azdo-tui's runTUI does, and TestRunTUI_UsesAzureAdapterWithNotifications
+// (cmd/azdo-tui/main_test.go) pins that it keeps doing so.
 func NewAdapter(mc *MultiClient) *Adapter {
 	return &Adapter{mc: mc}
 }

@@ -91,41 +91,55 @@ go install github.com/Elpulgo/azdo/cmd/azdo-tui@latest
 - See [Configuration](#configuration) for how to set up each backend
 
 ### Multi-Tab Interface
-- **Notifications** (Tab 1, GitHub only): Your GitHub inbox as an attention feed — see [Notifications](#notifications-github-only) below
+- **Notifications** (Tab 1): A merged "what needs me now" feed — your GitHub inbox plus a synthesized Azure DevOps feed — see [Notifications](#notifications) below
 - **Pull Requests** (Tab 2): View and track pull requests
 - **Work Items** (Tab 3): Browse and manage work items (GitHub issues appear here too)
 - **Pipelines** (Tab 4): Monitor and drill into pipeline runs (GitHub Actions runs appear here too)
 - Switch between tabs using the number keys or `←`/`→` arrow keys — only enabled tabs are numbered, so the exact digits shift with your config
 
-### Notifications (GitHub only)
+### Notifications
 
-A default-on "what needs me now" pane rendering your GitHub notifications inbox. It's the
-first tab, but only when at least one configured backend supports it — in this phase that
-means **GitHub only**; Azure DevOps has no equivalent inbox API, so an Azure-only config
-never shows the tab (Azure support is a later phase). The tab reappears on its own once a
-future release adds Azure support — no config change needed.
+A default-on "what needs me now" pane merging every configured backend's attention feed
+into one list. It's the first tab, shown automatically the moment at least one configured
+backend supports it:
+
+- **GitHub** — your actual notifications inbox, read from GitHub's own notifications API.
+- **Azure DevOps has no inbox API**, so its share of the feed is *synthesized* from four
+  polled sources instead of fetched: pull requests awaiting your review, @mentions in
+  work-item discussions, work items recently assigned to you, and your failed pipeline
+  runs. Because Azure has no server-side read/done state, read and dismissed markers are
+  tracked locally — see [Local Triage State](#local-triage-state-azure-devops) below.
+
+Mix freely: configure Azure, GitHub, or both, and both halves merge into the same feed.
 
 - One merged feed across every backend that supports it, sorted newest-first
 - Columns are `● | Repo | Reason | Title | Updated`. Unread rows carry a `●` marker and a
   bold title; read rows are unmarked. The Repo column is always shown, even when every
-  visible row is from the same repo — this pane is a cross-repo inbox, so which repo a
-  row belongs to is primary context and shouldn't disappear when a filter narrows the feed
-- Rows from repos you haven't configured are shown too — `o` opens them in the browser
+  visible row is from the same repo/project — this pane is a cross-repo inbox, so which
+  repo a row belongs to is primary context and shouldn't disappear when a filter narrows
+  the feed
+- GitHub rows from repos you haven't configured are shown too (unless
+  `only_configured_repos: true`) — `o` opens them in the browser. Azure only ever queries
+  the projects you've configured, so this doesn't apply there
 - `f` cycles the reason filter (review requested, mentioned, assigned, authored, commented,
   state changed, CI activity, security alert, approval requested, subscribed, other) —
   only reasons present in the current feed are offered, and there's always an "all reasons"
   position
-- `u` marks the selected row read — the `●` marker clears (one-way; GitHub has no
-  mark-unread endpoint). With `unread_only: false` the row stays in place, unmarked
+- `u` marks the selected row read — the `●` marker clears. Neither backend supports an
+  explicit unmark: GitHub has no mark-unread endpoint, and on Azure the locally tracked
+  read flag only clears again once new activity is detected on that subject. With
+  `unread_only: false` the row stays in place, unmarked
 - `d` marks the selected row done (removes it from the feed)
 - `o` opens the selected row in your browser
 - An unread-count badge appears in the footer from every tab, after your config filters
   are applied, and hides entirely at zero
-- Polls on its own cadence, honoring GitHub's `X-Poll-Interval` hint so conditional
-  requests never count against your rate limit harder than necessary
+- Polling cadence differs per backend: GitHub honors its `X-Poll-Interval` response hint so
+  conditional requests never count against your rate limit harder than necessary; Azure
+  self-throttles independently via `notifications.azure.min_poll_interval`, since a single
+  poll fans out to four or more queries per configured project
 - See [Notifications Configuration](#notifications-configuration) below for every filter
-  knob, and [GitHub — Personal Access Token](#github--personal-access-token) for the
-  required token scope
+  knob, and [Azure DevOps — Personal Access Token](#azure-devops--personal-access-token-pat) /
+  [GitHub — Personal Access Token](#github--personal-access-token) for token requirements
 
 ### Pull Requests
 - List view of pull requests with status indicators
@@ -278,20 +292,30 @@ theme: dark
 # At least one pane must remain enabled.
 # disabled_panes: pipelines,workitems
 
-# Notifications tab (GitHub only; on by default whenever github.repos is set).
+# Notifications tab (on by default whenever Azure or GitHub is configured).
 # There is no notifications.enabled key — add "notifications" to
-# disabled_panes above to turn the tab off. See "Notifications Configuration"
-# below for the full reference.
+# disabled_panes above to turn the tab off. Shared keys apply to the merged
+# feed regardless of backend; github/azure keys are provider-specific. See
+# "Notifications Configuration" below for the full reference.
 # notifications:
-#   only_configured_repos: false
 #   exclude_repos: []
 #   include_repos: []
 #   exclude_reasons: []
 #   unread_only: false
-#   participating_only: false
-#   since_days: 0
 #   max_items: 0
 #   poll_interval: 0
+#   github:
+#     participating_only: false
+#     only_configured_repos: false
+#     since_days: 0
+#   azure:
+#     lookback_days: 14
+#     min_poll_interval: 300
+#     sources:
+#       review_requested: true
+#       mentioned: true
+#       assigned: true
+#       ci_failed: true
 
 # Tab labels (optional). Override the name shown for any tab, in both the tab
 # bar and the help dialog. Keys are lowercase snake_case; unset tabs keep their
@@ -330,10 +354,10 @@ theme: dark
 - **At least one backend is required** — set Azure (`organization` + `projects`), GitHub (`github.repos`), or both.
 - `polling_interval`: How often to refresh data in seconds (optional, default: 60)
 - `theme`: Color theme for the UI (optional, default: dark)
-- `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pullrequests`, `pipelines`, `workitems`, `notifications`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed, and remaining tabs are renumbered. At least one pane must remain enabled — a GitHub-only config with only `notifications` enabled is valid. Adding or removing `notifications` here only takes effect on the **next restart**; the tab list is computed once at startup.
+- `disabled_panes`: Comma-separated list of panes to hide (optional). Valid values: `pullrequests`, `pipelines`, `workitems`, `notifications`. When a pane is disabled, its tab, keyboard shortcuts, and all related UI are removed, and remaining tabs are renumbered. At least one pane must remain enabled — a config with only `notifications` enabled is valid as long as at least one notification-capable backend (Azure DevOps or GitHub) is configured. Adding or removing `notifications` here only takes effect on the **next restart**; the tab list is computed once at startup.
 - `terms`: Map of tab label overrides (optional). Keys are lowercase snake_case (`pull_requests`, `work_items`, `pipelines`, `metrics`); the value replaces the tab's name in both the tab bar and the help dialog. Unset tabs keep their default labels.
 - `metrics`: Opt-in management dashboard. See [Metrics Configuration](#metrics-configuration) below for the full reference, and [Features → Metrics Dashboard](#metrics-dashboard-opt-in) for what it does.
-- `notifications`: Default-on GitHub inbox pane (no `enabled` key — see `disabled_panes` above to turn it off). See [Notifications Configuration](#notifications-configuration) below for the full reference, and [Features → Notifications](#notifications-github-only) for what it does.
+- `notifications`: Default-on merged attention feed (no `enabled` key — see `disabled_panes` above to turn it off). Shared keys sit at the top level; GitHub-only and Azure-only keys are nested under `notifications.github` and `notifications.azure`. See [Notifications Configuration](#notifications-configuration) below for the full reference, and [Features → Notifications](#notifications) for what it does.
 
 **Available Themes:**
 - `dark` - Dark theme with blue and cyan accents
@@ -397,31 +421,115 @@ metrics:
 
 ### Notifications Configuration
 
-The Notifications tab is **on by default** whenever GitHub is configured (`github.repos`
-has at least one entry) — there is deliberately no `notifications.enabled` key. To turn it
-off, add `notifications` to `disabled_panes` instead (see [Configuration
-Options](#configuration) above); either way it takes effect on the **next restart**, not
-immediately. All keys live under the top-level `notifications:` block and are optional —
-every default is the widest possible behaviour (whole inbox, nothing filtered).
+The Notifications tab is **on by default** the moment at least one notification-capable
+backend is configured — Azure (`organization` + `projects`), GitHub (`github.repos`), or
+both — there is deliberately no `notifications.enabled` key. To turn it off, add
+`notifications` to `disabled_panes` instead (see [Configuration Options](#configuration)
+above); either way it takes effect on the **next restart**, not immediately.
+
+The `notifications:` block is nested: a handful of keys apply to the **merged feed
+regardless of backend** and stay at the top level, while every key that only makes sense
+for one backend is nested under `notifications.github` or `notifications.azure`. Getting
+this distinction backwards is the easiest way to misconfigure this pane — a key you expect
+to affect both backends but that only lives under `github` (or vice versa) will silently
+do nothing for the other one. Note that an unrecognised key is **ignored silently** — it is
+not a startup error and not a warning — so a key left at the old top level, or nested under
+the wrong backend, looks live in your config file while doing nothing at all. If a knob
+seems to have stopped working, check its nesting first.
+
+#### Shared keys (top level — apply to both backends)
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `notifications.only_configured_repos` | bool | `false` | Narrow the feed to repos listed in `github.repos`. When `true`, this **overrides** `include_repos` (which is then ignored, with a startup warning) — the two selection knobs never intersect. |
-| `notifications.include_repos` | []string | `[]` | Glob list (`path.Match` syntax, e.g. `your-org/*`) narrowing the feed to matching repos. Empty means no narrowing. Ignored when `only_configured_repos: true`. |
-| `notifications.exclude_repos` | []string | `[]` | Glob list of repos to hide from the feed. Empty excludes nothing. |
+| `notifications.exclude_repos` | []string | `[]` | Glob list of scopes to hide from the feed. Empty excludes nothing. |
+| `notifications.include_repos` | []string | `[]` | Glob list narrowing the feed to matching scopes. Empty means no narrowing. Narrowing is **per backend** — a pattern that addresses only GitHub leaves the Azure share of the feed untouched, and vice versa; see the callout below. **Ignored entirely** when `notifications.github.only_configured_repos` is `true` — see that key below. |
 | `notifications.exclude_reasons` | []string | `[]` | Reasons to drop from the feed — see "Reason values" below. |
-| `notifications.unread_only` | bool | `false` | Show only unread rows. The fetch itself always requests the whole inbox regardless of this setting; filtering happens client-side. |
-| `notifications.participating_only` | bool | `false` | Narrow the **server-side** fetch to GitHub's "participating" bundle (roughly everything except `subscribed`). Composes with `exclude_reasons` rather than replacing it — see "Precedence" below. |
-| `notifications.since_days` | int | `0` (no bound) | Only show notifications updated within the last N days. This is the knob to reach for on a very large inbox — it's the one filter that actually reduces what's fetched from GitHub, rather than merely trimming the client-side result. |
-| `notifications.max_items` | int | `0` (no cap) | Caps the number of notifications returned, applied after sorting newest-first. |
-| `notifications.poll_interval` | int | `0` | Overrides the global `polling_interval` for the notifications poller only, in seconds. `0` falls back to GitHub's `X-Poll-Interval` response hint when present, else the global `polling_interval`. |
+| `notifications.unread_only` | bool | `false` | Show only unread rows. The fetch itself always requests the whole feed regardless of this setting; filtering happens client-side. |
+| `notifications.max_items` | int | `0` (no cap) | Caps the number of notifications in the **merged, sorted** feed across every backend, applied after the newest-first sort — not per-backend, so `max_items: 50` means at most 50 rows total even with both backends live. |
+| `notifications.poll_interval` | int | `0` | Overrides the global `polling_interval` for the notifications poller only, in seconds. `0` falls back to the global `polling_interval`. Either way, a backend's own cadence hint (GitHub's `X-Poll-Interval` response header) can **raise** the interval above what you configured but never lower it — the poller runs at `max(configured, hint)`, so `polling_interval: 300` with a 60-second hint still polls every 300 seconds. This is the single poller's cadence — it is unrelated to `notifications.azure.min_poll_interval` below, which the Azure adapter applies to itself independently of this poller's tick rate. |
 
-**Repo glob syntax.** `exclude_repos` / `include_repos` patterns are `path.Match` globs
-against `owner/repo`, matched case-insensitively (both the pattern and the repo name are
-lower-cased first). `*` does not cross `/` — write `*/*` to match everything, not `*`. A
-pattern that fails to compile is dropped at load with a startup warning rather than
-rejected outright, and an `include_repos` list that loses every pattern this way falls back
-to showing the whole inbox rather than emptying it.
+**`exclude_repos` / `include_repos` address the two backends differently.** Both are glob
+lists matched against a row's scope, but what that scope *is* differs: on GitHub it's the
+`owner/repo` slug; on Azure it's the plain project name. An Azure project can be written
+either way — bare (`"your-project"`) or qualified with your `organization`
+(`"your-org/your-project"`, and so `"your-org/*"` for every project in it) — so one list
+can address both backends in the same shape.
+
+**`include_repos` narrows each backend separately.** A backend is filtered only if at
+least one pattern actually addresses it; a backend no pattern addressed keeps everything.
+That's what makes `include_repos` mean "a subset of what I configured" rather than "the
+only backend I remembered to name":
+
+```yaml
+notifications:
+  include_repos: [my-gh-owner/*]     # narrows GitHub; every Azure project still shows
+  # include_repos: [my-org/proj-a]   # narrows Azure to proj-a; all of GitHub still shows
+  # include_repos: [my-gh-owner/*, my-org/proj-a]   # narrows both
+  # include_repos: []                # (default) everything, both backends
+```
+
+A pattern counts as addressing Azure when it matches one of your configured `projects`,
+bare or org-qualified. Every other pattern is treated as a GitHub pattern. That means a
+**typo in an Azure project name fails open**: `my-org/porj-a` matches no project, is read
+as a GitHub pattern, and leaves Azure unnarrowed — you get too many rows rather than an
+empty feed. Because that failure is otherwise silent, a pattern that starts with your
+organization name but matches no project gets a startup warning.
+
+#### GitHub-only keys (`notifications.github`)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `notifications.github.only_configured_repos` | bool | `false` | Narrow the **GitHub share** of the feed to repos listed in `github.repos`; rows from any other backend pass through untouched. When `true`, this **overrides** `include_repos` entirely — `include_repos` is then ignored for *every* row, not just the GitHub ones, with a startup warning. The two selection knobs never intersect. |
+| `notifications.github.participating_only` | bool | `false` | Narrow the **server-side** fetch to GitHub's "participating" bundle (roughly everything except `subscribed`). Composes with `exclude_reasons` rather than replacing it — see "Precedence" below. |
+| `notifications.github.since_days` | int | `0` (no bound) | Only fetch GitHub notifications updated within the last N days. This is the knob to reach for on a very large inbox — it's the one filter that actually reduces what's fetched from GitHub, rather than merely trimming the client-side result. |
+
+#### Azure-only keys (`notifications.azure`)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `notifications.azure.lookback_days` | int | `14` | Bounds the "recently assigned work items" and "failed pipeline runs" sources to activity within the last N days. The other two sources are bounded by their own nature rather than by a date: "PRs awaiting my review" is the set still open and still awaiting you, and "@mentions" is whatever Azure's own recent-mentions query returns. Clamped to a maximum of 30 days. Unlike `github.since_days`, **`0` is not "unbounded" here** — an explicit `lookback_days: 0` falls back to the default instead, because an unbounded assigned-work-item query means "every work item ever assigned to me". |
+| `notifications.azure.min_poll_interval` | int (seconds) | `300` | The shortest interval between two real Azure notification queries; the adapter self-throttles to this and returns its previous result on calls made sooner. Also falls back to the default on an explicit `0`, for the same reason as `lookback_days`. Clamped to a maximum of 86400 seconds. |
+| `notifications.azure.sources.review_requested` | bool | `true` | Include "PRs awaiting my review" (emits reason `review_requested`). |
+| `notifications.azure.sources.mentioned` | bool | `true` | Include "@mentions in work-item discussions" (emits reason `mentioned`). |
+| `notifications.azure.sources.assigned` | bool | `true` | Include "recently assigned work items" (emits reason `assigned`). |
+| `notifications.azure.sources.ci_failed` | bool | `true` | Include "my failed pipeline runs" — completed runs you requested whose result is `failed`. A canceled or partially-succeeded run is deliberately not a failure. **This key names the source, not the reason** — see the callout below. |
+
+**`sources.ci_failed` names a source, not a reason — the two spellings are not the same
+vocabulary.** The toggle is called `ci_failed` because that's what the source *queries*
+("my failed pipeline runs"). What it *emits* into the feed is the `ci_activity` reason —
+the same reason value `exclude_reasons` accepts. So `sources.ci_failed: false` turns the
+source off entirely (no rows, no query), while `exclude_reasons: [ci_activity]` leaves the
+query running but drops its rows client-side afterwards. Don't write `ci_failed` in
+`exclude_reasons` expecting it to match anything — it isn't a reason name and will just
+produce an unrecognised-value warning.
+
+**Turning all four sources off is legal** — it yields an empty Azure share of the feed
+without an error, and it does not hide the tab. If you want the tab gone, use
+`disabled_panes`.
+
+**Each Azure source fetches at most 50 items per project per poll.** This is a fixed
+internal bound, not something `max_items` controls — `max_items: 0` means "don't cap the
+merged feed", not "fetch everything". `@mentions` is capped twice: 50 candidate work items
+per project, then 50 again across all projects merged, so in a three-project org mentions
+truncate at roughly 17 per project.
+
+Three of the four sources ask the server for the newest items first — work items by last
+changed, pipeline runs by finish time — so what survives their cap is the most recent. "PRs
+awaiting my review" sends no ordering at all, so which 50 you get is whatever the server
+returns first. Either way, in a busy org with more than 50 recently assigned work items or
+more than 50 mention candidates, the rest are simply not fetched, and nothing in the pane
+tells you so. Narrowing `lookback_days` helps for assigned work items and failed runs — a
+shorter window means the 50 you do get are the ones you care about. For mentions and review
+requests there is no such knob: `lookback_days` does not reach either source.
+
+**Repo glob syntax.** `exclude_repos` / `include_repos` patterns are `path.Match` globs,
+matched case-insensitively (both the pattern and the scope are lower-cased first). `*`
+does not cross `/`, so `*` matches a bare Azure project name but no `owner/repo`, and
+`*/*` matches every GitHub repo and every org-qualified Azure project. You rarely need
+either: an empty `include_repos` already means "everything". A pattern that
+fails to compile is dropped at load with a startup warning rather than rejected outright,
+and an `include_repos` list that loses every pattern this way falls back to showing the
+whole feed rather than emptying it.
 
 **Reason values.** `exclude_reasons` accepts the following eleven values, lowercase
 snake_case, and they are **case-sensitive** — config keys are lowercased by viper on load,
@@ -433,28 +541,36 @@ the bad value and is then dropped rather than applied or treated as a hard confi
 `ci_activity`, `security_alert`, `approval_requested`, `subscribed`, `other`
 
 `unknown` is **reserved and not accepted** — it exists internally as the enum's zero value
-but nothing GitHub sends is ever mapped to it, so listing it in `exclude_reasons` can only
-ever produce the same unrecognised-value warning as a typo.
+but nothing either backend sends is ever mapped to it, so listing it in `exclude_reasons`
+can only ever produce the same unrecognised-value warning as a typo.
 
-**Precedence.** These five knobs are not a pipeline and their evaluation order is not
-observable — each is an independent predicate over the row set, except for one genuine
-override: `only_configured_repos` and `include_repos` are both *selection* knobs, and when
-both are set, `only_configured_repos` wins outright (`include_repos` is ignored, with a
-warning). `exclude_repos`, `exclude_reasons`, and `unread_only` are a plain, order-independent
-AND — each one only ever removes rows, never adds them back, so it doesn't matter which is
+**Precedence.** The shared and GitHub-only filter knobs are not a pipeline and their
+evaluation order is not observable — each is an independent predicate over the row set,
+except for one genuine override: `notifications.github.only_configured_repos` and
+`include_repos` are both *selection* knobs, and when both are set,
+`only_configured_repos` wins outright: `include_repos` is ignored for *every* row, with a
+warning, and rows from any backend other than GitHub pass through unnarrowed. So
+`include_repos: ["proj-a"]` together with `only_configured_repos: true` does **not** narrow
+your Azure rows to `proj-a` — it shows Azure rows from every project.
+`exclude_repos`, `exclude_reasons`, and `unread_only` are a plain, order-independent AND —
+each one only ever removes rows, never adds them back, so it doesn't matter which is
 "applied first".
 
 ```yaml
 notifications:
-  only_configured_repos: false
   exclude_repos:
     - "some-org/noisy-repo"
   exclude_reasons:
     - subscribed
     - ci_activity
   unread_only: false
-  since_days: 30
   poll_interval: 120
+  github:
+    since_days: 30
+  azure:
+    lookback_days: 7
+    sources:
+      ci_failed: false
 ```
 
 ### Custom Themes
@@ -518,6 +634,29 @@ The application persists a small amount of navigation state between runs (last a
 
 The file is created lazily — no state file is required to run the app. Writes are debounced and flushed on clean exit (including SIGINT / SIGTERM / SIGHUP). Delete the file to reset the saved view.
 
+### Local Triage State (Azure DevOps)
+
+Azure DevOps has no server-side notifications inbox, so there is no read/done state to read
+back from the API the way there is for GitHub. Read and dismissed ("done") markers for the
+Azure share of the Notifications feed are instead tracked in a small local file, alongside
+each row's identity key and the activity timestamp used to detect when a dismissed row
+should resurface. The file is written to:
+
+- **Linux/macOS**: `$XDG_STATE_HOME/azdo-tui/notifications.yaml` if set, otherwise `~/.local/state/azdo-tui/notifications.yaml`
+- **Windows**: `%USERPROFILE%\.local\state\azdo-tui\notifications.yaml`
+
+It lives next to `state.yaml` (same directory resolution) but as its own separate file — a
+missing file loads as empty, not an error, and writes are debounced and flushed on clean
+exit the same way `state.yaml`'s are. Deleting `state.yaml` does not touch it, and deleting
+`notifications.yaml` does not touch your navigation state. Delete `notifications.yaml` to
+clear your Azure triage history — every Azure row then returns unread, which on a busy org
+means a large feed on the next poll.
+
+**This state is local to the machine it runs on and is not synced across machines.**
+Marking an Azure notification read or done on one machine has no effect on any other — only
+GitHub's read/done state lives on GitHub's own servers and follows you everywhere you sign
+in with the same token.
+
 ### 2. Authentication
 
 Run `azdo auth` and pick the backend you want to set credentials for (Azure DevOps or GitHub) — the first run prompts automatically. Configure whichever backend(s) you use. Tokens are securely stored in your system's credential manager:
@@ -535,6 +674,11 @@ If your system doesn't support a keyring, you can fall back to environment varia
 | **Build** | Read | Pipeline runs, build timelines, and logs |
 | **Code** | Read & Write | List PRs, view threads/iterations/diffs, vote on PRs, add comments, and update thread status |
 | **Work Items** | Read & Write | Query and view work items, read/add comments, fetch available states, and change work item state |
+
+**No additional scope is needed for the Azure share of the Notifications tab.** All four
+Azure notification sources reuse existing scopes — including the work-item @mentions
+source, which calls the same work-item comments endpoint the Work Items pane already uses
+under the **Work Items** scope above.
 
 To create a PAT:
 1. Go to Azure DevOps → User Settings → Personal Access Tokens
@@ -565,13 +709,24 @@ repository permissions:
 
 > **Note:** resolving PR comment threads requires a classic `repo` PAT — fine-grained tokens are commonly rejected for that operation.
 
-> **The Notifications tab requires a classic PAT.** GitHub's notifications REST API
+> **The GitHub share of the Notifications tab requires a classic PAT.** This is a GitHub
+> API limitation, not a limitation of this app or of the Azure DevOps side of the feed:
+> GitHub's notifications REST API
 > [only supports classic tokens](https://docs.github.com/en/rest/activity/notifications) —
 > there is no fine-grained permission that enables it, so don't go looking for one in the
 > fine-grained token form. A fine-grained token is fine for everything else in the GitHub
-> backend; it just can't reach the inbox. If you'd rather not switch, see [Disabling the
-> Notifications tab](#notifications-configuration) — add `notifications` to
-> `disabled_panes` and the tab goes away.
+> backend; it just can't reach the GitHub inbox. An Azure-configured backend needs no extra
+> scope at all (see [Azure DevOps — Personal Access Token](#azure-devops--personal-access-token-pat)
+> above), so an **Azure-only** setup gets a fully working Notifications tab. If you configure
+> **both** backends and your GitHub token can't reach the inbox, the tab currently shows the
+> GitHub scope error instead of your Azure rows — the failing backend takes the whole pane
+> with it rather than degrading to the half that works. This is symmetric: an expired Azure
+> PAT blanks a healthy GitHub inbox the same way, so whichever backend the error names is
+> the one to fix. Either grant the GitHub token the `notifications` scope, or remove
+> `github.repos` from your config — note that this drops GitHub from the other tabs too, not
+> just from notifications. If you'd rather not switch your GitHub
+> token, see [Disabling the Notifications tab](#notifications-configuration) — add
+> `notifications` to `disabled_panes` and the tab goes away entirely.
 
 **Upgrading an existing token.** If you already have a GitHub token configured from before
 the Notifications tab existed, it won't have the `notifications` scope and the tab will
@@ -620,7 +775,7 @@ To create a token:
 | Key | Action |
 |-----|--------|
 | `f` | Cycle the reason filter (only reasons present in the current feed, plus an "all reasons" position) |
-| `u` | Mark selected row read (one-way — GitHub has no mark-unread endpoint) |
+| `u` | Mark selected row read (one-way on GitHub, which has no mark-unread endpoint; on Azure the local read flag only clears again once new activity is detected on that subject) |
 | `d` | Mark selected row done (removes it from the feed) |
 | `o` | Open selected row in browser |
 | `x`, `x` | Only shown when the pane is in an error state (e.g. missing token scope) — press twice to disable the tab via `disabled_panes`, takes effect on next restart |

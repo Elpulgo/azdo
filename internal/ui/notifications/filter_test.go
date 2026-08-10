@@ -119,8 +119,10 @@ func TestFilterNotifications_OnlyConfiguredRepos_Alone(t *testing.T) {
 		row("2", "acme/unconfigured", provider.NotificationReasonOther, false),
 	}
 	cfg := &config.Config{
-		GitHub:        config.GitHubConfig{Repos: []string{"acme/configured"}},
-		Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
+		Notifications: config.NotificationsConfig{
+			GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+		},
 	}
 	got := FilterNotifications(rows, cfg)
 	assertIDs(t, got, "1")
@@ -150,8 +152,10 @@ func TestFilterNotifications_OnlyConfiguredRepos_CaseInsensitiveBothDirections(t
 				row("other", "unrelated/repo", provider.NotificationReasonOther, false),
 			}
 			cfg := &config.Config{
-				GitHub:        config.GitHubConfig{Repos: []string{tt.configuredRepo}},
-				Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+				GitHub: config.GitHubConfig{Repos: []string{tt.configuredRepo}},
+				Notifications: config.NotificationsConfig{
+					GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+				},
 			}
 			got := FilterNotifications(rows, cfg)
 			assertIDs(t, got, "match")
@@ -170,11 +174,50 @@ func TestFilterNotifications_OnlyConfiguredRepos_TrimsConfiguredRepoWhitespace(t
 		row("match", "acme/repo", provider.NotificationReasonOther, false),
 	}
 	cfg := &config.Config{
-		GitHub:        config.GitHubConfig{Repos: []string{"  acme/repo "}},
-		Notifications: config.NotificationsConfig{OnlyConfiguredRepos: true},
+		GitHub: config.GitHubConfig{Repos: []string{"  acme/repo "}},
+		Notifications: config.NotificationsConfig{
+			GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+		},
 	}
 	got := FilterNotifications(rows, cfg)
 	assertIDs(t, got, "match")
+}
+
+// TestFilterNotifications_OnlyConfiguredRepos_NonGitHubRowsPassThrough pins
+// decision 13's premise as code: only_configured_repos is a GitHub-only
+// knob, so it must not delete rows from any other backend. This is
+// deliberately NOT a GitHub-rows-only fixture -- a GitHub-only test would
+// pass whether or not the Kind guard exists, since every row would already
+// be filtered by Scope membership in cfg.GitHub.Repos. Mixing an Azure row
+// in is what makes the assertion mean something: before the fix, the Azure
+// row's Scope (a project name) never appears in cfg.GitHub.Repos, so it was
+// silently dropped -- 100% of the Azure feed, every time this knob was on.
+// The unconfigured GitHub row proves the other half: the fix must not turn
+// the knob into a no-op that lets every row through regardless of Kind.
+func TestFilterNotifications_OnlyConfiguredRepos_NonGitHubRowsPassThrough(t *testing.T) {
+	githubConfigured := provider.Notification{
+		Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "acme/configured", ID: "gh-configured"},
+		Title:    "github configured",
+	}
+	githubUnconfigured := provider.Notification{
+		Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "acme/unconfigured", ID: "gh-unconfigured"},
+		Title:    "github unconfigured",
+	}
+	azureRow := provider.Notification{
+		Identity: provider.Identity{Kind: provider.KindAzure, Scope: "SomeAzureProject", ID: "az-1"},
+		Title:    "azure row",
+	}
+
+	rows := []provider.Notification{githubConfigured, githubUnconfigured, azureRow}
+	cfg := &config.Config{
+		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
+		Notifications: config.NotificationsConfig{
+			GitHub: config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
+		},
+	}
+
+	got := FilterNotifications(rows, cfg)
+	assertIDs(t, got, "gh-configured", "az-1")
 }
 
 func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
@@ -187,6 +230,179 @@ func TestFilterNotifications_IncludeRepos_Alone(t *testing.T) {
 	}
 	got := FilterNotifications(rows, cfg)
 	assertIDs(t, got, "1")
+}
+
+// --- include_repos narrows per backend, not globally ---
+
+// TestFilterNotifications_IncludeRepos_NarrowsPerBackend is the table for the
+// whole per-backend rule. include_repos is one shared list, but a pattern
+// written for one backend must not empty the other: "elpulgo/*" is an ordinary
+// GitHub selection and used to delete every Azure row from the merged feed,
+// because path.Match's "*" does not cross "/" so no Azure project name could
+// ever match it. Each case below fixes one spelling and asserts both halves of
+// the feed at once -- the narrowed one and the untouched one.
+func TestFilterNotifications_IncludeRepos_NarrowsPerBackend(t *testing.T) {
+	gh := func(id, scope string) provider.Notification {
+		return provider.Notification{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: scope, ID: id}}
+	}
+	az := func(id, scope string) provider.Notification {
+		return provider.Notification{Identity: provider.Identity{Kind: provider.KindAzure, Scope: scope, ID: id}}
+	}
+	rows := []provider.Notification{
+		gh("gh-azdo", "elpulgo/azdo"),
+		gh("gh-other", "elpulgo/other"),
+		gh("gh-foreign", "acme/thing"),
+		az("az-1", "Project1"),
+		az("az-2", "Project2"),
+	}
+	all := []string{"gh-azdo", "gh-other", "gh-foreign", "az-1", "az-2"}
+
+	tests := []struct {
+		name    string
+		include []string
+		want    []string
+	}{
+		{
+			name:    "no patterns selects everything",
+			include: nil,
+			want:    all,
+		},
+		{
+			name:    "github pattern narrows github, leaves azure whole",
+			include: []string{"elpulgo/*"},
+			want:    []string{"gh-azdo", "gh-other", "az-1", "az-2"},
+		},
+		{
+			name:    "exact github repo narrows github, leaves azure whole",
+			include: []string{"elpulgo/azdo"},
+			want:    []string{"gh-azdo", "az-1", "az-2"},
+		},
+		{
+			// The spelling that had no equivalent before: an Azure project
+			// addressed the same "<owner>/<name>" way a GitHub repo is.
+			name:    "org-qualified azure project narrows azure, leaves github whole",
+			include: []string{"myorg/Project1"},
+			want:    []string{"gh-azdo", "gh-other", "gh-foreign", "az-1"},
+		},
+		{
+			name:    "org wildcard selects every azure project, leaves github whole",
+			include: []string{"myorg/*"},
+			want:    all,
+		},
+		{
+			// Configs written before org-qualification existed used the bare
+			// project name; it still addresses Azure and must keep working.
+			name:    "bare project name still addresses azure",
+			include: []string{"Project1"},
+			want:    []string{"gh-azdo", "gh-other", "gh-foreign", "az-1"},
+		},
+		{
+			name:    "one pattern per backend narrows both",
+			include: []string{"elpulgo/azdo", "myorg/Project2"},
+			want:    []string{"gh-azdo", "az-2"},
+		},
+		{
+			// "*" matches a bare project name but cannot cross "/", so it
+			// addresses Azure only -- which is why Oscar's field workaround
+			// ["elpulgo/*", "*"] restored the Azure rows. Kept as a
+			// regression guard: it must stay a no-op, not become a
+			// narrow-everything.
+			name:    "bare star addresses azure only and hides nothing",
+			include: []string{"*"},
+			want:    all,
+		},
+		{
+			name:    "case differences do not change the classification",
+			include: []string{"MYORG/PROJECT1"},
+			want:    []string{"gh-azdo", "gh-other", "gh-foreign", "az-1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Organization:  "myorg",
+				Projects:      []string{"Project1", "Project2"},
+				Notifications: config.NotificationsConfig{IncludeRepos: tt.include},
+			}
+			assertIDs(t, FilterNotifications(rows, cfg), tt.want...)
+		})
+	}
+}
+
+// TestFilterNotifications_IncludeRepos_MistypedAzureProject_FailsOpen pins the
+// tradeoff the per-backend rule accepts. A pattern addresses Azure only when it
+// matches a configured project, so a typo matches none, is classified as a
+// GitHub pattern, and leaves Azure unnarrowed -- the feed shows too many rows,
+// never zero. Fail-closed here would mean a single mistyped character silently
+// deleting the entire Azure feed, which is the bug this whole change exists to
+// remove. config.LoadFrom warns about this exact shape because the failure is
+// otherwise invisible; see TestLoadFrom_IncludeRepos_MistypedAzureProject_Warns.
+func TestFilterNotifications_IncludeRepos_MistypedAzureProject_FailsOpen(t *testing.T) {
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "elpulgo/azdo", ID: "gh-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project1", ID: "az-1"}},
+	}
+	cfg := &config.Config{
+		Organization:  "myorg",
+		Projects:      []string{"Project1"},
+		Notifications: config.NotificationsConfig{IncludeRepos: []string{"myorg/Projct1"}},
+	}
+	// The typo narrows GitHub (to nothing, since it matches no repo) and
+	// leaves Azure alone.
+	assertIDs(t, FilterNotifications(rows, cfg), "az-1")
+}
+
+// TestFilterNotifications_IncludeRepos_NoOrganization_BareProjectStillWorks
+// covers a GitHub-only install, where `organization` is empty. Without an org
+// there is no "<org>/<project>" spelling to build, so scopeCandidates must
+// yield the bare scope alone rather than a "/Project1" candidate that a
+// pattern like "*/Project1" could match by accident.
+func TestFilterNotifications_IncludeRepos_NoOrganization_BareProjectStillWorks(t *testing.T) {
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "elpulgo/azdo", ID: "gh-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project1", ID: "az-1"}},
+	}
+	cfg := &config.Config{
+		Projects:      []string{"Project1"},
+		Notifications: config.NotificationsConfig{IncludeRepos: []string{"Project1"}},
+	}
+	// The bare name addresses Azure, so Azure narrows to it and GitHub -- which
+	// no pattern addressed -- keeps everything.
+	assertIDs(t, FilterNotifications(rows, cfg), "gh-1", "az-1")
+
+	// The candidate list must not gain a "/Project1" entry when org is empty:
+	// this pattern addresses no configured project, so it is read as a GitHub
+	// pattern and Azure stays whole. Were the phantom candidate built, the
+	// pattern would classify as Azure-addressing and narrow the wrong backend.
+	cfg.Notifications.IncludeRepos = []string{"*/Project1"}
+	assertIDs(t, FilterNotifications(rows, cfg), "az-1")
+}
+
+// TestFilterNotifications_ExcludeRepos_OrgQualifiedAzureProject checks that one
+// spelling means the same thing in both keys. exclude_repos needs no
+// per-backend narrowing rule -- a subtractive list only ever removes, so an
+// unmatched pattern is already an inert no-op -- but it gets the same
+// org-qualified candidates so "myorg/Project1" is not silently different from
+// what include_repos would have selected.
+func TestFilterNotifications_ExcludeRepos_OrgQualifiedAzureProject(t *testing.T) {
+	rows := []provider.Notification{
+		{Identity: provider.Identity{Kind: provider.KindGitHub, Scope: "elpulgo/azdo", ID: "gh-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project1", ID: "az-1"}},
+		{Identity: provider.Identity{Kind: provider.KindAzure, Scope: "Project2", ID: "az-2"}},
+	}
+	cfg := &config.Config{
+		Organization:  "myorg",
+		Projects:      []string{"Project1", "Project2"},
+		Notifications: config.NotificationsConfig{ExcludeRepos: []string{"myorg/Project1"}},
+	}
+	assertIDs(t, FilterNotifications(rows, cfg), "gh-1", "az-2")
+
+	// And the org wildcard hides the Azure half wholesale without touching
+	// GitHub -- the behaviour change worth a release note, since "myorg/*"
+	// previously matched no Azure row at all.
+	cfg.Notifications.ExcludeRepos = []string{"myorg/*"}
+	assertIDs(t, FilterNotifications(rows, cfg), "gh-1")
 }
 
 // --- The filter mirrors the load-time sanitizer, so a struct-literal config
@@ -392,8 +608,8 @@ func TestFilterNotifications_OnlyConfiguredRepos_OverridesIncludeRepos(t *testin
 	cfg := &config.Config{
 		GitHub: config.GitHubConfig{Repos: []string{"acme/configured"}},
 		Notifications: config.NotificationsConfig{
-			OnlyConfiguredRepos: true,
-			IncludeRepos:        []string{"other/*"},
+			IncludeRepos: []string{"other/*"},
+			GitHub:       config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
 		},
 	}
 	rows := []provider.Notification{
@@ -460,9 +676,9 @@ func TestFilterNotifications_NonFilterKnobs_NotReadByFilter(t *testing.T) {
 		nc   config.NotificationsConfig
 	}{
 		{"no out-of-scope knob set (baseline)", config.NotificationsConfig{}},
-		{"participating_only is fetch-time", config.NotificationsConfig{ParticipatingOnly: true}},
+		{"participating_only is fetch-time", config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{ParticipatingOnly: true}}},
 		{"max_items is the composite's job", config.NotificationsConfig{MaxItems: 1}},
-		{"since_days is fetch-time", config.NotificationsConfig{SinceDays: 1}},
+		{"since_days is fetch-time", config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 1}}},
 	}
 
 	for _, tt := range tests {
@@ -487,8 +703,8 @@ func TestFilterNotifications_NonFilterKnobs_ComposeWithAnInScopeKnob(t *testing.
 	}
 	withParticipating := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ExcludeReasons:    []string{"subscribed"},
-			ParticipatingOnly: true,
+			ExcludeReasons: []string{"subscribed"},
+			GitHub:         config.NotificationsGitHubConfig{ParticipatingOnly: true},
 		},
 	}
 
@@ -714,8 +930,8 @@ func TestNotifOptsFromConfig_NilConfig_ReturnsZeroValue(t *testing.T) {
 func TestNotifOptsFromConfig_ForwardsParticipatingOnlyAndMax(t *testing.T) {
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ParticipatingOnly: true,
-			MaxItems:          42,
+			MaxItems: 42,
+			GitHub:   config.NotificationsGitHubConfig{ParticipatingOnly: true},
 		},
 	}
 
@@ -734,7 +950,7 @@ func TestNotifOptsFromConfig_ForwardsParticipatingOnlyAndMax(t *testing.T) {
 
 func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
 	cfg := &config.Config{
-		Notifications: config.NotificationsConfig{SinceDays: 7},
+		Notifications: config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 7}},
 	}
 
 	want := time.Now().AddDate(0, 0, -7)
@@ -754,7 +970,7 @@ func TestNotifOptsFromConfig_SinceDays_ProducesPastCutoff(t *testing.T) {
 // changing the GitHub request path (buildPath) on every single poll tick.
 func TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls(t *testing.T) {
 	cfg := &config.Config{
-		Notifications: config.NotificationsConfig{SinceDays: 3},
+		Notifications: config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 3}},
 	}
 
 	first := NotifOptsFromConfig(cfg)
@@ -770,7 +986,7 @@ func TestNotifOptsFromConfig_SinceDays_TruncatesToDay_StableAcrossSameDayCalls(t
 }
 
 func TestNotifOptsFromConfig_SinceDaysZero_LeavesSinceZeroValue(t *testing.T) {
-	cfg := &config.Config{Notifications: config.NotificationsConfig{SinceDays: 0}}
+	cfg := &config.Config{Notifications: config.NotificationsConfig{GitHub: config.NotificationsGitHubConfig{SinceDays: 0}}}
 
 	got := NotifOptsFromConfig(cfg)
 	if !got.Since.IsZero() {
@@ -785,11 +1001,11 @@ func TestNotifOptsFromConfig_DoesNotReadFilterOnlyKnobs(t *testing.T) {
 	// observable effect on the derived NotifOpts.
 	cfg := &config.Config{
 		Notifications: config.NotificationsConfig{
-			ExcludeRepos:        []string{"acme/*"},
-			ExcludeReasons:      []string{"subscribed"},
-			UnreadOnly:          true,
-			IncludeRepos:        []string{"acme/*"},
-			OnlyConfiguredRepos: true,
+			ExcludeRepos:   []string{"acme/*"},
+			ExcludeReasons: []string{"subscribed"},
+			UnreadOnly:     true,
+			IncludeRepos:   []string{"acme/*"},
+			GitHub:         config.NotificationsGitHubConfig{OnlyConfiguredRepos: true},
 		},
 	}
 

@@ -92,14 +92,24 @@ func (s *State) Unmarshal(data []byte) error {
 // Path returns the on-disk location of the state file, honoring
 // $XDG_STATE_HOME when set and falling back to ~/.local/state/azdo-tui/.
 func Path() (string, error) {
+	return PathFor(fileName)
+}
+
+// PathFor returns the on-disk location of a file living alongside
+// state.yaml, honoring $XDG_STATE_HOME the same way Path does. It exists so
+// sibling stores with their own lifetime (e.g. azdevops's local
+// notification triage store, decision 1 of the phase-2 notifications spec)
+// derive their path identically to state.yaml's — same directory
+// resolution, different file name — without duplicating the XDG lookup.
+func PathFor(name string) (string, error) {
 	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
-		return filepath.Join(base, dirName, fileName), nil
+		return filepath.Join(base, dirName, name), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
-	return filepath.Join(home, ".local", "state", dirName, fileName), nil
+	return filepath.Join(home, ".local", "state", dirName, name), nil
 }
 
 // Load reads and parses the state file. A missing file is not an error —

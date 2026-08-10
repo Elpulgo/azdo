@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -96,9 +97,10 @@ Required GitHub token scopes:
                  Actions       (read)
   Note: resolving PR comment threads requires a classic 'repo' PAT;
         fine-grained tokens are commonly rejected for that operation.
-  Note: the Notifications tab requires a CLASSIC token. GitHub's
-        notifications API supports no fine-grained permission, so
-        there is nothing to grant a fine-grained token here.
+  Note: the GitHub share of the Notifications tab requires a CLASSIC
+        token. GitHub's notifications API supports no fine-grained
+        permission, so there is nothing to grant a fine-grained token
+        here. The Azure DevOps share of the tab is unaffected.
 
 Keyboard shortcuts (in TUI):
   Navigation:
@@ -233,8 +235,9 @@ func runAuthGitHub(store *config.KeyringStore) error {
                 Issues          (read & write)
                 Pull requests   (read & write)
                 Actions         (read)
-  Note: the Notifications tab requires a CLASSIC token — GitHub's
-  notifications API supports no fine-grained permission.`)
+  Note: the GitHub share of the Notifications tab requires a CLASSIC token —
+  GitHub's notifications API supports no fine-grained permission. The Azure
+  DevOps share of the tab is unaffected.`)
 	fmt.Println()
 
 	var model patinput.Model
@@ -287,6 +290,7 @@ func runTUI() error {
 
 	var backends []provider.Provider
 	var azureMC *azdevops.MultiClient
+	var azureNotifStore *azdevops.TriageStore
 
 	// --- Azure backend (only when fully configured) ---
 	if cfg.HasAzure() {
@@ -307,7 +311,28 @@ func runTUI() error {
 			return fmt.Errorf("failed to create Azure DevOps client: %w", err)
 		}
 		azureMC = client
-		backends = append(backends, azdevops.NewAdapter(client))
+
+		// NewAdapter alone (bare, no notifications store) still satisfies
+		// provider.NotificationSource by method set — Go's structural typing
+		// does not care that its notifStore field is left at its zero value.
+		// That would make the Notifications tab appear for an Azure-only
+		// config while List's nil-store guard makes every poll fail
+		// (azdevops.Adapter.list's own doc comment, task 8 review, 🔴
+		// finding 1). NewAdapterWithNotifications is what actually wires the
+		// local read/done triage store notifications need.
+		notifPath, err := azdevops.NotifStorePath()
+		if err != nil {
+			return fmt.Errorf("resolve notifications state path: %w", err)
+		}
+		notifStore, err := azdevops.NewTriageStore(notifPath)
+		if err != nil {
+			return fmt.Errorf("load notifications state: %w", err)
+		}
+		azureNotifStore = notifStore
+
+		lookbackDays, sourceToggles, minPollInterval := azureNotificationArgs(cfg.Notifications.Azure)
+		backends = append(backends, azdevops.NewAdapterWithNotifications(
+			client, notifStore, lookbackDays, sourceToggles, minPollInterval))
 	}
 
 	// --- GitHub backend (only when at least one repo is configured) ---
@@ -376,6 +401,11 @@ func runTUI() error {
 		if flushErr := stateStore.Flush(); flushErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to persist state: %v\n", flushErr)
 		}
+		if azureNotifStore != nil {
+			if flushErr := azureNotifStore.Flush(); flushErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to persist notifications state: %v\n", flushErr)
+			}
+		}
 	}()
 
 	if _, err := p.Run(); err != nil {
@@ -383,6 +413,31 @@ func runTUI() error {
 	}
 
 	return nil
+}
+
+// azureNotificationArgs derives azdevops.NewAdapterWithNotifications's three
+// notifications.azure-sourced arguments (lookback window, per-source
+// toggles, self-throttle interval) from azure. It exists as its own
+// function, separate from the constructor call in runTUI above, purely so a
+// test can drive a non-default NotificationsAzureConfig through it without
+// going through runTUI's keyring/network setup — see
+// TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter
+// (cmd/azdo-tui/main_test.go). config.NotificationsAzureConfig already
+// carries defaults, clamping and validation for LookbackDays and
+// MinPollInterval (task 11); this function does no normalisation of its
+// own, it only reshapes already-normalised fields into the types
+// NewAdapterWithNotifications takes — MinPollInterval is seconds in config
+// (matching notifications.azure.min_poll_interval's YAML units) and a
+// time.Duration in the adapter.
+func azureNotificationArgs(azure config.NotificationsAzureConfig) (lookbackDays int, toggles azdevops.NotificationSourceToggles, minPollInterval time.Duration) {
+	return azure.LookbackDays,
+		azdevops.NotificationSourceToggles{
+			ReviewRequested: azure.Sources.ReviewRequested,
+			Mentioned:       azure.Sources.Mentioned,
+			Assigned:        azure.Sources.Assigned,
+			CIFailed:        azure.Sources.CIFailed,
+		},
+		time.Duration(azure.MinPollInterval) * time.Second
 }
 
 // runSetupWizard launches the interactive setup wizard and saves the config.

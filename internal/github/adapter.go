@@ -561,12 +561,41 @@ func (a *Adapter) PipelineURL(scope string, id int) string {
 // List returns the caller's notification inbox, shaped by opts and mapped to
 // the neutral provider.Notification type via MapNotification.
 //
-// opts.Max is honoured by truncating the mapped result on return, never by
-// stopping nc.List's page walk early: nc.List already performs the full walk
-// and caches it under a path that does not encode Max, so stopping early here
-// would let a later, larger-Max call with the same request shape hit nc's 304
-// cache and be handed back the earlier, truncated set presented as complete.
-// opts.Max is therefore never forwarded into NotificationListOpts.
+// opts.Max is accepted for interface compliance but ignored here: since
+// decision 15 / task 12, NotifOpts.Max is honoured exclusively by
+// provider.CompositeProvider.List, after it has merged every capable
+// backend's rows and sorted them newest-first. Since decision C (review of
+// task 12), CompositeProvider.List also zeroes opts.Max before calling this
+// method, so opts.Max arrives here as 0 on every call reaching this adapter
+// through the composite — but this method's own indifference to the field
+// does not depend on that, and holds the same for a direct caller bypassing
+// the composite with a nonzero Max. Truncating per-backend here
+// (phase 1's original behaviour) would double-apply the cap once a second
+// backend exists — each backend independently discarding rows outside its own
+// Max before the composite ever sees the full picture, based on this
+// backend's own (here, whatever nc.List/GitHub's API happens to return)
+// order rather than the composite's canonical UpdatedAt/Kind/Scope/ID total
+// order. That can silently drop a row that belongs in the true global top-Max
+// in favour of one that does not, while still returning a plausible-looking,
+// correctly-sized slice — worse than the over-fetch it would "fix", since the
+// feed then looks correct while being wrong. It is therefore never forwarded
+// into NotificationListOpts either. The returned slice is consequently no
+// longer bounded by opts.Max at all: what bounds it is nc.List's own walk,
+// capped at maxNotificationPages pages (internal/github/notifications.go).
+// That page count is an unconditional bound; the size of each page is not.
+// notifPerPageCap (100) sets per_page on the first request only (buildPath,
+// notifications.go); pages 2..N are fetched by following the server's own
+// Link rel="next" URL verbatim (nextPageURL, client.go), with no per-page
+// rewrite. So "at most maxNotificationPages × notifPerPageCap rows" holds
+// only conditionally — for as long as the server's own next-links keep
+// returning close to notifPerPageCap rows per page, which GitHub's real API
+// does but which nothing here enforces. A GHES instance or an intermediary
+// caching proxy that ignores per_page in its Link header can return
+// arbitrarily more rows per page; the walk still stops at maxNotificationPages
+// pages, just with more rows in each. maxNotificationPages exists precisely
+// to survive that kind of server misbehaviour (see its own doc comment,
+// notifications.go), so the bound stated next to it must not assume the
+// well-behaved case it was written to distrust.
 //
 // An unsolicited-304 error surfaced by nc.List (a 304 with no matching cache)
 // is returned unchanged, never translated into an empty slice: an emptied
@@ -601,20 +630,6 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 		out[i] = MapNotification(thread, scopeDisplay)
 	}
 
-	// Truncate on return, after the full walk and its caching already happened
-	// inside nc.List above — never stop the walk early.
-	//
-	// The full slice expression (capping cap, not just len) makes the
-	// truncation irreversible rather than merely invisible: a plain
-	// out[:opts.Max] leaves cap(out) == len(wire), so a caller could recover
-	// the dropped rows with out[:cap(out)] and — worse — an append would write
-	// over the first dropped row in place instead of copying. Nothing does
-	// that today, but callers that append into a merged slice, filter in place,
-	// or sort all take this slice, so "what Max removed is gone" is worth
-	// having structurally.
-	if opts.Max > 0 && len(out) > opts.Max {
-		out = out[:opts.Max:opts.Max]
-	}
 	return out, nil
 }
 

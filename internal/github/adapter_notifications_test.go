@@ -251,8 +251,13 @@ func TestAdapter_List_ForwardsParticipatingOnlyAndSince(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NotifOpts.Max is honoured by truncating on return, never by stopping
-// nc.List's walk early.
+// NotifOpts.Max — since decision 15 / task 12 of the phase-2 notifications
+// spec, Max is honoured exclusively by provider.CompositeProvider.List, after
+// it merges every capable backend's rows and sorts them newest-first.
+// Adapter.List no longer truncates on it at all (phase 1's original
+// per-adapter truncation, which these tests used to pin, is removed — see
+// Adapter.List's own doc comment for why leaving it in place would
+// double-apply the cap once a second capable backend exists).
 // ---------------------------------------------------------------------------
 
 const fiveThreadsBodyTemplate = `[
@@ -263,63 +268,27 @@ const fiveThreadsBodyTemplate = `[
   {"id":"5","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t5","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}}
 ]`
 
-// TestAdapter_List_MaxSmallerThanOnePageTruncates is the first of the two Max
-// tests: a single-page response of 5 threads with Max: 2 must come back
-// truncated to 2 rows.
-func TestAdapter_List_MaxSmallerThanOnePageTruncates(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fiveThreadsBodyTemplate))
-	}))
-	defer srv.Close()
-
-	nc := github.NewNotificationsClient("tok")
-	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
-
-	got, err := a.List(provider.NotifOpts{Max: 2})
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("List(Max: 2) len = %d, want 2", len(got))
-	}
-	if got[0].Identity.ID != "1" || got[1].Identity.ID != "2" {
-		t.Fatalf("List(Max: 2) ids = [%s %s], want [1 2]", got[0].Identity.ID, got[1].Identity.ID)
-	}
-	// The truncation must be irreversible, not merely invisible: a plain
-	// out[:Max] leaves cap == 5, so got[:cap(got)] hands the dropped rows back
-	// and append(got, x) overwrites row 3 in place instead of copying. The full
-	// slice expression in Adapter.List caps cap too.
-	if cap(got) != len(got) {
-		t.Errorf("cap(got) = %d, len(got) = %d — want equal: truncation must cap capacity as well as length, so the rows Max removed cannot be recovered or overwritten in place", cap(got), len(got))
-	}
-}
-
-// TestAdapter_List_MaxBoundaries pins the edges around the truncation, in
-// particular Max == len(out) — the off-by-one site, and the only one of these
-// where a >= / > slip changes nothing observable unless it is asserted. Max <= 0
-// means "no cap" per NotifOpts.Max's doc, so a negative value must not be read
-// as a cap of zero (which would empty the feed).
-func TestAdapter_List_MaxBoundaries(t *testing.T) {
+// TestAdapter_List_MaxDoesNotTruncateAtThisLayer pins the new contract: a
+// single-page response of 5 threads comes back as all 5 regardless of Max,
+// including a Max smaller than the result — the exact case that used to
+// truncate before task 12 moved the cap to CompositeProvider.List.
+func TestAdapter_List_MaxDoesNotTruncateAtThisLayer(t *testing.T) {
 	tests := []struct {
-		name    string
-		body    string
-		max     int
-		wantLen int
+		name string
+		max  int
 	}{
-		{name: "negative Max is no cap", body: fiveThreadsBodyTemplate, max: -1, wantLen: 5},
-		{name: "zero Max is no cap", body: fiveThreadsBodyTemplate, max: 0, wantLen: 5},
-		{name: "Max equal to result length", body: fiveThreadsBodyTemplate, max: 5, wantLen: 5},
-		{name: "Max larger than result length", body: fiveThreadsBodyTemplate, max: 99, wantLen: 5},
-		{name: "Max against an empty result", body: `[]`, max: 1, wantLen: 0},
+		{name: "Max smaller than result", max: 2},
+		{name: "negative Max", max: -1},
+		{name: "zero Max", max: 0},
+		{name: "Max equal to result length", max: 5},
+		{name: "Max larger than result length", max: 99},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(tt.body))
+				w.Write([]byte(fiveThreadsBodyTemplate))
 			}))
 			defer srv.Close()
 
@@ -331,86 +300,27 @@ func TestAdapter_List_MaxBoundaries(t *testing.T) {
 			if err != nil {
 				t.Fatalf("List(Max: %d) error = %v", tt.max, err)
 			}
-			if len(got) != tt.wantLen {
-				t.Fatalf("List(Max: %d) len = %d, want %d", tt.max, len(got), tt.wantLen)
-			}
-			// An empty inbox is a result, not an absence: List returns an
-			// empty-but-non-nil slice so a caller cannot confuse it with the
-			// nil it returns alongside an error.
-			if got == nil {
-				t.Errorf("List(Max: %d) = nil, want an empty-but-non-nil slice", tt.max)
+			if len(got) != 5 {
+				t.Fatalf("List(Max: %d) len = %d, want 5 — Adapter.List must not truncate on Max", tt.max, len(got))
 			}
 		})
 	}
 }
 
-// threeThreadsPage2Body is the second page of the cache fixture — ids 6..8,
-// no Link rel="next", so the walk ends here.
-const threeThreadsPage2Body = `[
-  {"id":"6","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t6","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}},
-  {"id":"7","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t7","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}},
-  {"id":"8","unread":true,"reason":"subscribed","updated_at":"2026-07-01T10:00:00Z","subject":{"title":"t8","url":"","type":"Discussion"},"repository":{"full_name":"o/r","html_url":"https://github.com/o/r"}}
-]`
-
-// TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax is the
-// second, load-bearing Max test: this is the one that catches Max being
-// pushed down into NotificationListOpts to bound nc.List's fetch. There are two
-// distinct shapes that mutation can take, and the fixture has to span more than
-// one page to catch both:
-//
-//   - truncate before caching (c.cached = all[:Max]) — caught by any fixture,
-//     single-page included;
-//   - stop the walk at a page boundary (break once len(all) >= Max) — invisible
-//     to a single-page fixture, because there is no rel="next" left to skip.
-//     The walk-stop only diverges from the correct behaviour when the page it
-//     stops on is not the last one.
-//
-// Hence two pages: 5 threads with a rel="next", then 3 without. The first call
-// (Max: 2) must still cache all 8, so the second call (Max: 8) — same request
-// shape, since Max never reaches NotificationListOpts and therefore never
-// reaches buildPath either — is served the whole set back off the 304 and
-// returns 8 rows. A page-boundary stop caches only page 1's 5, and this test
-// then fails on both the request count (2 instead of 3) and the length (5
-// instead of 8).
-//
-// The 304 is driven off the presence of If-Modified-Since rather than a request
-// counter, so the test cannot go tautological the way an earlier test of this
-// shape did: that one failed to echo Last-Modified on its 200, so the client
-// held no validator, never sent If-Modified-Since, and the branch the test
-// existed to exercise was unreachable. Here, a cleared validator means no 304,
-// which means a second full two-page walk, which the request-count assertion
-// catches.
-func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *testing.T) {
-	var srv *httptest.Server
-	var requestedPages []string
-
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		page := r.URL.Query().Get("page")
-		if page == "" {
-			page = "1"
-		}
-		requestedPages = append(requestedPages, page)
-
-		// A conditional request means the client still holds the validator
-		// from the first walk: answer 304 and let it serve its own cache.
-		if r.Header.Get("If-Modified-Since") != "" {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-
-		switch page {
-		case "1":
-			// Last-Modified echoed on every 200 so the client actually keeps a
-			// validator to condition the second call with.
-			w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
-			w.Header().Set("Link", `<`+srv.URL+`/notifications?page=2>; rel="next"`)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(fiveThreadsBodyTemplate))
-		default:
-			w.Header().Set("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(threeThreadsPage2Body))
-		}
+// TestAdapter_List_EmptyInboxReturnsNonNilEmptySlice restores the other half
+// of a deliberately-paired contract: TestAdapter_List_PropagatesUnsolicited304Error
+// below pins that an error path returns nil results, never an empty-but-non-nil
+// slice; this pins the success path's mirror image — a genuinely empty inbox
+// must come back as an empty-but-non-nil slice, never nil. The two are not
+// interchangeable to app.go's poll handler, which treats nil-items/nil-err as
+// "genuinely EMPTY" (app.go's own doc comment on that branch) and would
+// otherwise not notice `out := make([]provider.Notification, len(wire))`
+// silently becoming `var out []provider.Notification` + append, which returns
+// (nil, nil) on an empty inbox with no test failing.
+func TestAdapter_List_EmptyInboxReturnsNonNilEmptySlice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
 	}))
 	defer srv.Close()
 
@@ -418,32 +328,15 @@ func TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax(t *te
 	nc.SetBaseURL(srv.URL)
 	a := github.NewAdapterWithNotifications(nil, nc)
 
-	small, err := a.List(provider.NotifOpts{Max: 2})
+	got, err := a.List(provider.NotifOpts{Max: 1})
 	if err != nil {
-		t.Fatalf("first List(Max: 2) error = %v", err)
+		t.Fatalf("List() error = %v", err)
 	}
-	if len(small) != 2 {
-		t.Fatalf("first List(Max: 2) len = %d, want 2", len(small))
+	if got == nil {
+		t.Fatal("List() result = nil, want an empty-but-non-nil slice for an empty inbox — a nil result reads as an error/skipped-fetch shape downstream, not \"you're clear\"")
 	}
-
-	large, err := a.List(provider.NotifOpts{Max: 8})
-	if err != nil {
-		t.Fatalf("second List(Max: 8) error = %v", err)
-	}
-	// The load-bearing assertion, checked first so a mutant fails on the
-	// behaviour rather than on the bookkeeping below it.
-	if len(large) != 8 {
-		t.Fatalf("second List(Max: 8) len = %d, want 8 — a smaller Max must neither truncate what nc.List caches nor stop its page walk early", len(large))
-	}
-	for i, want := range []string{"1", "2", "3", "4", "5", "6", "7", "8"} {
-		if large[i].Identity.ID != want {
-			t.Errorf("large[%d].Identity.ID = %q, want %q", i, large[i].Identity.ID, want)
-		}
-	}
-	// 3 requests total: page 1 + page 2 on the first call, then one
-	// conditional request answered 304 on the second.
-	if len(requestedPages) != 3 {
-		t.Errorf("server received %d requests (%v), want exactly 3: both pages on the first call, then one 304 proving the second was served from cache", len(requestedPages), requestedPages)
+	if len(got) != 0 {
+		t.Fatalf("List() len = %d, want 0", len(got))
 	}
 }
 

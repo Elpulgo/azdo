@@ -35,9 +35,29 @@ func newNotificationCapableProvider() provider.Provider {
 	return provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil))
 }
 
-// newNotificationIncapableProvider returns the Azure-only shape: a
-// *provider.CompositeProvider whose sole backend is an *azdevops.Adapter, which
-// implements no notifications surface at all.
+// notificationIncapableBackend is a minimal provider.Provider that
+// deliberately does NOT implement provider.NotificationSource. Since task 8
+// (commits 7601636, 3662710) *azdevops.Adapter implements NotificationSource
+// too, so an Azure-only composite is no longer a genuinely incapable shape —
+// this stub is what fills that role now. It embeds provider.Provider (nil) so
+// every method besides Scopes is satisfied by promotion and would correctly
+// panic if ever called (never happens in these tests); Scopes must be
+// implemented directly because provider.NewCompositeProvider calls
+// b.Scopes() on every backend at construction time, which would panic on the
+// nil-embedded promotion before the fixture is even built.
+type notificationIncapableBackend struct {
+	provider.Provider
+}
+
+func (notificationIncapableBackend) Scopes() []string { return nil }
+
+// newNotificationIncapableProvider returns a *provider.CompositeProvider
+// whose sole backend implements provider.Provider but not
+// provider.NotificationSource — genuinely incapable. This is deliberately not
+// an Azure-only composite: *azdevops.Adapter has implemented
+// provider.NotificationSource since task 8, so provider.NewCompositeProvider
+// (azdevops.NewAdapter(nil)) is capable now and would make this fixture
+// vacuous.
 //
 // This fixture is capable-*shaped* on purpose. A nil provider.Provider is NOT
 // an acceptable stand-in for "incapable": nil fails any type assertion, so a
@@ -45,12 +65,12 @@ func newNotificationCapableProvider() provider.Provider {
 // and correctly hides the tab — the test passes while the gate is wrong.
 // *CompositeProvider satisfies NotificationSource unconditionally, so that
 // naive form reports *true* for the composite production actually builds
-// (runTUI always wraps backends in one), shipping the tab to Azure-only users.
-// Only a real composite over a real incapable backend makes the correct gate
-// (CompositeProvider.HasNotifications, which does the per-backend assertion)
-// distinguishable from the naive one.
+// (runTUI always wraps backends in one), shipping the tab to users with no
+// notification-capable backend at all. Only a real composite over a real
+// incapable backend makes the correct gate (CompositeProvider.HasNotifications,
+// which does the per-backend assertion) distinguishable from the naive one.
 func newNotificationIncapableProvider() provider.Provider {
-	return provider.NewCompositeProvider(azdevops.NewAdapter(nil))
+	return provider.NewCompositeProvider(notificationIncapableBackend{})
 }
 
 func TestFormatVersionInfo(t *testing.T) {
@@ -2329,8 +2349,8 @@ const notificationsPaneMarker = "No notifications found."
 //   - capable, pane enabled  → present, and first (notifications lands at
 //     enabledTabs[0] whenever present at all);
 //   - incapable, pane enabled → absent (the tab is gated on capability, never
-//     on config alone — an Azure-only provider must never surface it even
-//     though "notifications" is not in DisabledPanes);
+//     on config alone — a provider with no notification-capable backend must
+//     never surface it even though "notifications" is not in DisabledPanes);
 //   - capable, pane disabled → absent (disabled_panes still applies on top of
 //     capability, same as every other pane).
 //
@@ -2384,34 +2404,52 @@ func TestBuildEnabledTabs_NotificationsGate(t *testing.T) {
 	}
 }
 
-// TestHasNotificationCapability_AzureOnlyComposite_False pins the gate
-// function: the production provider shape for an Azure-only config is a
-// *provider.CompositeProvider wrapping an *azdevops.Adapter, and it must report
-// false.
+// TestHasNotificationCapability_IncapableComposite_False pins the gate
+// function: a *provider.CompositeProvider wrapping a backend that implements
+// no provider.NotificationSource surface at all must report false.
 //
 // This is the assertion the naive `_, ok := p.(provider.NotificationSource)`
 // form fails: *CompositeProvider satisfies NotificationSource unconditionally,
-// so it succeeds and reports capability for a config with no GitHub backend at
-// all. Only calling HasNotifications() — the real per-backend assertion — gets
-// this right.
-func TestHasNotificationCapability_AzureOnlyComposite_False(t *testing.T) {
-	azureOnly := newNotificationIncapableProvider()
+// so it succeeds and reports capability even when no backend can supply an
+// inbox. Only calling HasNotifications() — the real per-backend assertion —
+// gets this right.
+func TestHasNotificationCapability_IncapableComposite_False(t *testing.T) {
+	incapable := newNotificationIncapableProvider()
 
 	// Guard the fixture itself: it must be capable-*shaped*, i.e. it must
 	// satisfy provider.NotificationSource, or it cannot tell the correct gate
 	// from the naive one and the assertion below goes vacuous.
-	if _, ok := azureOnly.(provider.NotificationSource); !ok {
+	if _, ok := incapable.(provider.NotificationSource); !ok {
 		t.Fatal("fixture is not capable-shaped: *CompositeProvider must satisfy provider.NotificationSource, otherwise this test cannot distinguish the capability gate from a bare type assertion")
 	}
 
-	if hasNotificationCapability(azureOnly) {
-		t.Error("hasNotificationCapability(Azure-only composite) = true, want false — the gate must ask CompositeProvider.HasNotifications(), not assert provider.NotificationSource on the composite (Decisions 11, 59)")
+	if hasNotificationCapability(incapable) {
+		t.Error("hasNotificationCapability(incapable composite) = true, want false — the gate must ask CompositeProvider.HasNotifications(), not assert provider.NotificationSource on the composite (Decisions 11, 59)")
 	}
 
 	// The capable shape must still report true, so the gate is not simply
 	// stuck at false.
 	if !hasNotificationCapability(newNotificationCapableProvider()) {
 		t.Error("hasNotificationCapability(GitHub composite) = false, want true")
+	}
+}
+
+// TestHasNotificationCapability_AzureOnlyComposite_True pins the spec
+// constraint (`.spec/2026/20260729-notif-p2-azdo.md`'s Constraints section):
+// Azure-only configs gain the notifications tab automatically the moment the
+// adapter implements provider.NotificationSource, because phase 1 gates tab
+// visibility on capability, not on provider identity (phase-1 decision 11).
+// Since task 8 (commits 7601636, 3662710) *azdevops.Adapter implements
+// provider.NotificationSource, so the production shape for an Azure-only
+// config — provider.NewCompositeProvider(azdevops.NewAdapter(...)) — must now
+// report capable, without any app-layer change. Pairs with
+// TestHasNotificationCapability_IncapableComposite_False, which pins the
+// still-real distinction the naive gate gets wrong.
+func TestHasNotificationCapability_AzureOnlyComposite_True(t *testing.T) {
+	azureOnly := provider.NewCompositeProvider(azdevops.NewAdapter(nil))
+
+	if !hasNotificationCapability(azureOnly) {
+		t.Error("hasNotificationCapability(Azure-only composite) = false, want true — *azdevops.Adapter implements provider.NotificationSource since task 8, so Azure-only configs must gain the capability automatically")
 	}
 }
 
@@ -2423,22 +2461,36 @@ func TestHasNotificationCapability_AzureOnlyComposite_False(t *testing.T) {
 // HasNotifications(), by its own doc comment — correct for the pane's mark
 // routing, wrong for a poller that must never arm its timer against an
 // incapable backend). This is independent of and in addition to Init()'s own
-// isTabEnabled gate: a capable-shaped composite over an Azure-only backend
-// must still yield a nil client here, regardless of what any caller checks
-// before constructing the poller.
+// isTabEnabled gate: a capable-shaped composite over a genuinely incapable
+// backend must still yield a nil client here, regardless of what any caller
+// checks before constructing the poller.
 func TestNotificationsPollerClient_ReturnsNilWhenIncapable(t *testing.T) {
-	azureOnly := newNotificationIncapableProvider()
+	incapable := newNotificationIncapableProvider()
 
-	if _, ok := azureOnly.(provider.NotificationSource); !ok {
+	if _, ok := incapable.(provider.NotificationSource); !ok {
 		t.Fatal("fixture is not capable-shaped: this test needs a composite that satisfies provider.NotificationSource unconditionally, to distinguish the capability-checked helper from a bare notificationMarker call")
 	}
 
-	if got := notificationsPollerClient(azureOnly); got != nil {
-		t.Errorf("notificationsPollerClient(Azure-only composite) = %v, want nil — the poller must never be constructed with a client for a non-notification-capable provider", got)
+	if got := notificationsPollerClient(incapable); got != nil {
+		t.Errorf("notificationsPollerClient(incapable composite) = %v, want nil — the poller must never be constructed with a client for a non-notification-capable provider", got)
 	}
 
 	if got := notificationsPollerClient(newNotificationCapableProvider()); got == nil {
 		t.Error("notificationsPollerClient(GitHub composite) = nil, want a non-nil client")
+	}
+}
+
+// TestNotificationsPollerClient_NonNilForAzureOnlyComposite pins the same
+// spec constraint as TestHasNotificationCapability_AzureOnlyComposite_True at
+// the poller-construction call site: an Azure-only composite must yield a
+// real polling.NotificationsClient now that *azdevops.Adapter implements
+// provider.NotificationSource, so the notifications poller actually arms its
+// timer for Azure-only configs instead of silently staying disarmed.
+func TestNotificationsPollerClient_NonNilForAzureOnlyComposite(t *testing.T) {
+	azureOnly := provider.NewCompositeProvider(azdevops.NewAdapter(nil))
+
+	if got := notificationsPollerClient(azureOnly); got == nil {
+		t.Error("notificationsPollerClient(Azure-only composite) = nil, want a non-nil client — *azdevops.Adapter implements provider.NotificationSource since task 8")
 	}
 }
 
@@ -2455,10 +2507,10 @@ func (h hintingProviderStub) NotificationsPollInterval() time.Duration { return 
 
 // TestNotificationsPollIntervalHint_NonHintingProvider_ReturnsZero pins the
 // "no hint available" branch of notificationsPollIntervalHint: a provider
-// that does not implement notificationsIntervalHinter (e.g. the Azure-only
-// composite, which is capable-shaped for NotificationSource but has no
-// NotificationsPollInterval method) must yield 0, never panic or fall back
-// to some other value.
+// whose backends contribute no poll-interval hint (e.g. the incapable
+// composite fixture, whose sole backend implements neither
+// NotificationSource nor PollIntervalHinter) must yield 0, never panic or
+// fall back to some other value.
 func TestNotificationsPollIntervalHint_NonHintingProvider_ReturnsZero(t *testing.T) {
 	p := newNotificationIncapableProvider()
 	if got := notificationsPollIntervalHint(p); got != 0 {
@@ -2551,7 +2603,7 @@ func TestNotificationsPollInterval_ConfiguredWinsWhenHintSmallerOrAbsent(t *test
 }
 
 // TestModel_NotificationsTab_Absent_WhenIncapable exercises the real NewModel
-// path with the Azure-only composite (never a nil provider — see
+// path with a genuinely incapable composite (never a nil provider — see
 // newNotificationIncapableProvider): the tab bar must not mention notifications
 // at all, no notifications pane body may render, and Pull Requests must keep
 // its "1:" slot.
@@ -2571,7 +2623,7 @@ func TestModel_NotificationsTab_Absent_WhenIncapable(t *testing.T) {
 	m = updated.(Model)
 
 	if m.isTabEnabled(TabNotifications) {
-		t.Error("TabNotifications must not be in enabledTabs for an Azure-only composite")
+		t.Error("TabNotifications must not be in enabledTabs for a composite with no notification-capable backend")
 	}
 	if m.activeTab != TabPullRequests {
 		t.Errorf("activeTab = %v, want TabPullRequests when notifications is capability-absent", m.activeTab)
@@ -2691,6 +2743,36 @@ func TestModel_NotificationsTab_PresentButEmpty_WhenCapable(t *testing.T) {
 	// pipelines pane would only be caught by the assertion above going absent.
 	if strings.Contains(view, "No pipeline runs found.") {
 		t.Errorf("notifications tab rendered the pipelines pane — View()'s content switch fell through; view:\n%s", view)
+	}
+}
+
+// TestModel_NotificationsTab_Present_WhenAzureOnly pins the same spec
+// constraint as TestHasNotificationCapability_AzureOnlyComposite_True and
+// TestNotificationsPollerClient_NonNilForAzureOnlyComposite at the tab-bar
+// level: an Azure-only composite must show the Notifications tab through the
+// real NewModel path, with no app-layer change required. Nothing else in this
+// file pins that; without it, a future change to the capability gate could
+// hide the tab from Azure-only configs again silently.
+func TestModel_NotificationsTab_Present_WhenAzureOnly(t *testing.T) {
+	cfg := &config.Config{
+		Organization:    "testorg",
+		Projects:        []string{"testproject"},
+		PollingInterval: 60,
+		Theme:           "dark",
+	}
+	var client *azdevops.MultiClient
+
+	m := NewModel(provider.NewCompositeProvider(azdevops.NewAdapter(nil)), client, cfg, "dev", "")
+	if !m.isTabEnabled(TabNotifications) {
+		t.Fatal("TabNotifications must be enabled for an Azure-only composite — *azdevops.Adapter implements provider.NotificationSource since task 8")
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "1: Notifications") {
+		t.Errorf("expected tab bar to contain '1: Notifications' for an Azure-only composite, view:\n%s", view)
 	}
 }
 
@@ -3247,8 +3329,8 @@ func TestModel_HelpModal_NotificationsSection_AbsentWhenPaneDisabled(t *testing.
 
 // TestModel_HelpModal_NotificationsSection_AbsentWhenIncapable confirms the
 // section is removed when no configured backend implements
-// provider.NotificationSource, using the capable-*shaped* Azure-only fixture
-// rather than a nil provider.
+// provider.NotificationSource, using the capable-*shaped* genuinely-incapable
+// fixture rather than a nil provider.
 func TestModel_HelpModal_NotificationsSection_AbsentWhenIncapable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",
@@ -4631,8 +4713,8 @@ func TestModel_UnreadBadge_ClearedWhenThePaneIsDisabledAfterRendering(t *testing
 }
 
 // TestModel_UnreadBadge_AbsentWhenProviderIncapable mirrors the disabled-pane
-// case for the other half of isTabEnabled's predicate: an Azure-only
-// provider that implements no notifications capability at all.
+// case for the other half of isTabEnabled's predicate: a provider that
+// implements no notifications capability at all.
 func TestModel_UnreadBadge_AbsentWhenProviderIncapable(t *testing.T) {
 	cfg := &config.Config{
 		Organization:    "testorg",

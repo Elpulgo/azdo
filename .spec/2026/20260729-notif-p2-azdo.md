@@ -1,10 +1,35 @@
 # Notifications Pane — Phase 2: Azure DevOps
 
 **Ticket:** N/A
-**Branch:** feat/notifications-azdo (worktree not yet created)
+**Branch:** feat/notifications-azdo
 **Author:** Oscar Larsson
 **Created:** 2026-07-29
-**Status:** Deferred — do not start until phase 1 (`20260729-notif-p1-github.md`) has merged
+**Status:** Ready. Phase 1 (`20260729-notif-p1-github.md`) merged 2026-08-06 as `0f90acf`, 21/21 tasks.
+Decisions 2 and 3 resolved 2026-08-06 and the task list is populated.
+
+## Probe results
+
+Task 1's spike, run 2026-08-06 against a live org.
+
+**(a) `[System.Id] IN (@RecentMentions)` via `POST /_apis/wit/wiql`** — **WORKS.**
+HTTP 200, 3 work items returned. The doc's blanket "macros are web-portal-only" claim is
+wrong for this macro over REST, exactly as it is for `@Me`. Decision 3 stage 1 ships as
+written; **the `System.History CONTAINS WORDS` fallback is not needed and must not be built.**
+
+**(b) `mentions[]` on `GET /wit/workItems/{id}/comments`** — **populated by default.**
+Same count of mention-bearing comments with and without `$expand=all` (2 either way), so
+`mentions` is returned despite being absent from `CommentExpandOptions`. **The client must
+not send `$expand=all`** — it would cost rendered-text payload for nothing.
+
+**(c) `CommentMention.targetId` vs `GetCurrentUserID()`** — **exact match, no normalising.**
+The comment carried mentions of three distinct users; the authenticated user's GUID matched
+one verbatim, byte-for-byte, same casing and hyphenation. A plain `==` is correct — no
+lowercasing, no GUID parsing. The two non-matching ids confirm the filter actually
+discriminates rather than trivially accepting everything.
+
+**Consequence:** decision 3 stands unchanged and task 5 is unblocked. No PAT scope beyond
+the current set was needed — all three calls succeeded with the existing token (task 16's
+"any PAT scope beyond the current set" question is answered: none).
 
 ## Goal
 
@@ -31,12 +56,14 @@ from queries we already run, with read/done state persisted locally.
 - `azdevops`: `NotificationSource` implementation composing these sources
   1. PRs awaiting my review → `review_requested`
   2. @mentions in work-item discussions → `mentioned`
-  3. Newly assigned work items (delta since last snapshot) → `assigned`
-  4. My failed pipeline runs → `ci_failed`
+  3. Recently assigned work items (bounded lookback, decision 6) → `assigned`
+  4. My failed pipeline runs → `ci_activity` — **not `ci_failed`**, which is not a member of
+     the phase-1 enum; see decision 8
 - Stable synthetic identity key + local read/done store, reusing `internal/state` patterns
-- Snapshot/delta detection so only new or changed subjects surface as unread
-- Auto-expiry rules (e.g. review completed → item auto-done)
-- Config: per-source toggles under `notifications.azure`
+- Activity-stamp reconciliation so only new or changed subjects surface as unread (decision 2)
+- Auto-expiry rules (e.g. review completed → item auto-done) — mostly free, see decision 7
+- Config: restructure `notifications` into shared + `github` + `azure` blocks, with per-source
+  toggles under `notifications.azure.sources` (decision 13)
 - Docs: ADR for the synthetic-feed and local-state design, README, Architecture.md, FAQ
 
 **Out of scope:**
@@ -151,24 +178,3448 @@ not out of phase 1's prose — where the two disagreed, the source won.
 | # | Question | Decision | Rationale |
 |---|----------|----------|-----------|
 | 1 | Where does local read/done state live? | New file under the `internal/state` dir, separate from `state.yaml` | Navigation state is disposable; triage state is not. Different lifetimes, different files |
-| 2 | Identity key shape? | TBD during planning — candidate `kind:scope:entity_id:activity_stamp` | Load-bearing for the whole phase; must not be settled casually |
-| 3 | Which @mention query? | TBD — WIQL over `System.History` vs. the mentions REST surface | Depends on what returns a usable timestamp per mention |
+| 2 | Identity key shape? | `Identity{Kind: KindAzure, Scope: <project API name>, ID: "<source>/<entity>/<entity_id>"}`. The activity stamp is a **stored value, not a key component** | See "Decision 2 in full" below |
+| 3 | Which @mention query? | Two stages: WIQL **narrows** candidate work-item ids, the Comments API **confirms and timestamps** each mention via `mentions[].targetId` | See "Decision 3 in full" below. WIQL cannot answer this alone — it has no per-mention timestamp |
 | 4 | Auto-expiry? | Yes, per-source rules | A completed review that stays in the feed trains the user to ignore the pane |
-| 5 | Per-source config toggles? | Yes, under `notifications.azure` | Orgs differ wildly in which sources are signal vs. noise |
+| 5 | Per-source config toggles? | Yes, four booleans under `notifications.azure.sources`, all defaulting on | Orgs differ wildly in which sources are signal vs. noise |
+| 6 | Snapshot/delta, or a lookback window? | **Bounded lookback window**, no snapshot. Each source queries "changed within the last N days" and local read state does the rest | A snapshot is a second piece of durable state that can be lost, and losing it floods the feed. A lookback is stateless and idempotent — the same poll twice yields the same rows. Also answers the phase's own "does a fresh install flood?" unknown: it cannot, the window bounds it |
+| 7 | How does auto-expiry actually work? | It is **implicit in recomputation**. A source that stops matching a subject stops returning it, and the row is gone. The only explicit work is pruning the now-orphaned local state row on a TTL | Decision 4 asked for per-source expiry rules; recomputing the feed from scratch already provides them. Writing explicit "review completed → mark done" rules would be a second, drift-prone encoding of what the query already says |
+| 8 | Does `ci_failed` need a new reason enum member? | **No.** Failed pipeline runs map to the existing `ci_activity` | Phase 1 documented the eleven-reason vocabulary as closed and `ci_activity` as defined with Azure in mind. `ci_failed` appears in this spec's own prose and in `gh-notifications-arc.md`, but never existed in `provider.NotificationReason` — adding it would widen a user-facing config vocabulary for no triage benefit |
+| 9 | Does config validation need changing? | **Yes** — `config.go:614`'s `notificationsCounts := c.IsPaneEnabled("notifications") && c.HasGitHub()` must widen to "any notification-capable backend" | This is the one app-layer change the phase's constraints do **not** forbid: the constraint bans changes to *tab visibility* and to `ui/notifications`, and this is neither — it is the all-panes-disabled startup guard. The existing comment at `config.go:610-613` predicts this exact edit ("will need revisiting when a second notification-capable backend arrives") |
+| 10 | Azure poll cadence? | **The adapter self-throttles.** One poller and one interval stay as phase 1 shipped them; `notifications.azure.min_poll_interval` makes `Adapter.List` return its previous result when called sooner than that. Azure still does not implement `PollIntervalHinter` | Azure costs 4+ queries per project per cycle against GitHub's one conditional request, so a shared interval prices the whole feed at Azure's cost. But there is no per-backend cadence to configure: phase 1 shipped exactly one `NotificationsPoller` emitting one `NotificationsTickMsg`, and `CompositeProvider.List` fans out to every capable backend on that single tick. A second poller and tick message would contradict this phase's "the UI must not change" constraint. Self-throttling puts the cost control where the cost is, and the poller keeps no knowledge of it. **An earlier draft of this decision specified `notifications.azure.poll_interval` as a second poller interval — that is not implementable; do not reinstate it** |
+| 11 | One merged feed or per-project sections? | **One merged feed.** `Scope` already carries the project and the pane already renders a scope column | The pane is provider-agnostic by constraint; per-project sectioning would be a UI change, which this phase forbids. `MultiClient` fan-out already merges everywhere else in the app |
+| 12 | Do Releases-arc approvals mirror into this feed? | **No** — out of scope for phase 2, revisit when `release-view-arc.md` is spec'd | Mirroring needs the release arc to exist first. Deciding the ownership question now would be designing against an unwritten spec |
+| 13 | Config shape now that a second provider exists? | **Shared keys at top level, provider-specific keys nested** under `notifications.github` and `notifications.azure`. See the block below | Of phase 1's nine keys, only six are genuinely provider-neutral (**corrected 2026-08-07 from task 10 — this read "five", which contradicts the YAML block below and does not subtract to nine; the YAML is the contract and lists six**). `participating_only` has no Azure equivalent by phase 1's own account, and `only_configured_repos` is vacuously true on Azure (the adapter only ever queries configured projects) — both sat at top level looking shared when they never were. Nesting states the truth the flat shape obscured |
+| 14 | Migration for the moved keys? | **None. No shim, no deprecation warning, no compatibility path.** The nested shape is simply the shape | Phase 1 merged to `main` but has **not been released** — these key names have never reached a public build, so there is no installed config anywhere that uses the flat form. Writing a migration would be compatibility code for a version that never existed. Confirmed by Oscar 2026-08-06 |
+| 15 | `max_items` with two live backends? | Cap the **merged feed** after the composite's sort, not per-backend | Phase 1 applies it inside each fetch, which was unambiguous with one backend and silently becomes "up to 2×N rows" with two. A cap the user writes once should mean what it says. Requires moving the truncation from the adapter to the composite — a phase-1 refactor, which the phase's constraints permit (they forbid UI changes, not shared-code refactors) |
+
+The approved config shape:
+
+```yaml
+notifications:
+  # shared — apply to the merged feed regardless of backend
+  exclude_reasons: []
+  unread_only: false
+  exclude_repos: []
+  include_repos: []
+  max_items: 0
+  poll_interval: 0
+
+  github:
+    participating_only: false
+    only_configured_repos: false
+    since_days: 0
+
+  azure:
+    lookback_days: 14
+    min_poll_interval: 300
+    sources:
+      review_requested: true
+      mentioned: true
+      assigned: true
+      ci_failed: true
+```
+
+Two notes on names that are deliberate, not oversights:
+
+- **`sources.ci_failed` names a *source*, not a reason.** Decision 8 established that `ci_failed`
+  is not a member of `provider.NotificationReason` and that this source emits `ci_activity`. The
+  config key keeps the `ci_failed` spelling because it describes what the source *queries* (failed
+  runs) and reads better than `ci_activity: true`, which would suggest toggling a reason. Any test
+  or doc touching both must not treat the two spellings as the same vocabulary.
+- **`exclude_repos`/`include_repos` stay at top level under their phase-1 names**, even though they
+  glob over `Identity.Scope` — an `owner/repo` on GitHub but a project name on Azure. Renaming them
+  to `*_scopes` was considered and rejected: "scope" is internal vocabulary that appears nowhere in
+  the user-facing config today, and the keys do work correctly against both. Document the Azure
+  meaning rather than renaming. **Superseded in part by decision 16** — "the keys do work correctly
+  against both" turned out to be false in the field, and documenting the Azure meaning was not
+  enough.
+- **Decision 16: `include_repos` narrows per backend, and an Azure project is also addressable as
+  `<organization>/<project>`.** Added 2026-08-07, after the branch was tested by hand and before
+  phase 2 shipped. See the subsection below.
+
+`since_days` moving under `github` also resolves a collision this spec would otherwise have
+carried: it and Azure's `lookback_days` are the same idea with incompatible zero values. `0` means
+"no bound" — correct for a GitHub inbox, catastrophic for "work items assigned to me", where
+unbounded means every work item ever assigned. Separate keys under separate providers, each with a
+zero value that is safe in its own context.
+
+### Decision 2 in full — the identity key
+
+Rejected: putting the activity stamp **in** the key (`kind:scope:entity_id:activity_stamp`, the
+original candidate). It makes resurrection automatic — new activity yields a key nothing has seen,
+so the row is unread by construction — but it pays for that three times over:
+
+- `Identity` stops naming an entity and starts naming an *event*. `SameItem` on the same work item
+  returns false across a comment, and phase 1's inputs record `SameItem` and `Identity.Kind` as
+  load-bearing for the composite's mark-read/mark-done routing.
+- The pane's cursor is keyed on identity, so a comment landing mid-triage moves the selection.
+- The state file grows one row per activity event forever, making TTL pruning load-bearing for
+  correctness rather than for hygiene.
+
+Chosen instead: the key names the **subject**, and the stamp is a value stored beside it.
+
+```
+Identity.ID = "<source>/<entity>/<entity_id>"     e.g. "review/pr/1234", "mention/wi/5678"
+local state  = { key: {read, done, last_activity, last_seen} }
+```
+
+- `<source>` rather than `<reason>` so a later remap of a source to a different reason does not
+  churn every key and resurrect the user's whole triaged backlog.
+- `<entity>` is required: work item 42 and PR 42 in one project would otherwise collide. `Kind` is
+  the *backend* (`azure`), not the entity type.
+- Two sources surfacing the same entity stay two rows — "PR 123 awaiting your review" and "PR 123
+  where you were mentioned" are genuinely separate attention items and are triaged separately.
+
+Resurrection becomes an explicit reconcile step instead of a side effect of key churn: on each
+poll, if a subject's current activity timestamp is newer than the stored `last_activity`, clear
+`read`/`done` and advance the stamp. That is a pure function over (rows, state) → rows, which is
+the whole point — it can be table-tested exhaustively, where key-churn semantics can only be
+tested end-to-end.
+
+Per phase 1's constraint, the key stays derivable from an `Identity`: it *is* one.
+
+### Decision 3 in full — the @mention query
+
+Neither candidate in the original framing works alone. The deciding constraint was the one the
+question itself named — a usable timestamp per mention — and **WIQL cannot supply it**: a WIQL
+query returns work items, so the newest timestamp available is `System.ChangedDate`, which says
+when the item last changed, not when *you* were mentioned. Any WIQL-only design has to treat "item
+changed" as "you were mentioned", which resurfaces a dismissed mention on every unrelated edit.
+
+The Comments API does supply it. Each `Comment` carries `createdDate` **and** a structured
+`mentions: CommentMention[]`, where `CommentMention.targetId` is "the resolved target of the
+mention… an example of this could be a user's tfid". So mentions are matched by identity, not by
+scraping display names out of HTML — and `Client.GetCurrentUserID()` (`client.go:198`) already
+resolves the id to match against. `GetWorkItemComments` already exists (`comments.go:35`).
+
+So: **WIQL narrows, Comments confirms and timestamps.**
+
+Stage 1 narrows to candidate work-item ids. Preferred form is the `@RecentMentions` macro:
+
+```sql
+SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project AND [System.Id] IN (@RecentMentions)
+```
+
+**This is unverified over REST and must be probed before it is relied on** (task 1). Microsoft's
+macro reference explicitly lists `@RecentMentions` among macros "only supported from the web
+portal", alongside `@CurrentIteration` — which genuinely does fail over REST. The list is not
+reliable as stated, since it also implies `@Me` is portal-only while `ListMyWorkItems`
+(`workitems.go:255`) ships `@Me` over the REST WIQL endpoint today and works. That makes
+`@RecentMentions` a plausible-but-unconfirmed capability, which is exactly the shape convention 28
+was written about. Probe it; do not reason from the `@Me` precedent.
+
+Fallback if the probe fails — full-text over the History field, bounded by the lookback window:
+
+```sql
+SELECT [System.Id] FROM WorkItems
+WHERE [System.TeamProject] = @project
+  AND [System.History] CONTAINS WORDS '<display name>'
+  AND [System.ChangedDate] >= @Today-<N>
+```
+
+The fallback is strictly worse and its weaknesses are load-bearing, not cosmetic: it needs the
+user's display name (not the id), it matches anyone who typed that name as plain text, and
+`CONTAINS WORDS` requires a full-text index that some deployments do not have. All three are
+survivable **only because stage 2 re-filters by `targetId`** — stage 1 is allowed to over-match,
+never to under-match. Under either form, stage 2 is what decides.
+
+Sources: [Query fields, operators, macros, and variables](https://learn.microsoft.com/en-us/azure/devops/boards/queries/query-operators-variables?view=azure-devops) ·
+[Comments — Get Comments Batch (7.1-preview.4)](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/comments/get-comments-batch?view=azure-devops-rest-7.1) ·
+[Use @mentions in work items and pull requests](https://learn.microsoft.com/en-us/azure/devops/organizations/notifications/at-mentions?view=azure-devops)
+
+### Decision 16 in full — per-backend `include_repos` and org-qualified Azure scopes
+
+Added 2026-08-07 after hand-testing the branch, before phase 2 shipped. It supersedes the closing
+half of the `exclude_repos`/`include_repos` bullet above ("the keys do work correctly against
+both").
+
+**What went wrong.** A config carrying nothing but `include_repos: [elpulgo/*]` — an ordinary
+GitHub selection, written before Azure notifications existed — showed an Azure-and-GitHub feed with
+zero Azure rows and no error. The adapter had run: `notifications.yaml` held seven reconciled Azure
+entries with a fresh `last_seen`. `FilterNotifications` is the only place that drops rows
+client-side, and its include branch matched every row against `Identity.Scope`, which is
+`pr.ProjectName` for Azure and `owner/repo` for GitHub. `path.Match`'s `*` does not cross `/`, so
+`elpulgo/*` cannot match a bare project name in any spelling. One shared list, two namespaces, and
+no pattern that spans them: `*/*` addresses only GitHub, `*` only Azure. The workaround Oscar found
+by hand — `include_repos: [elpulgo/*, "*"]` — works for exactly that reason.
+
+**Decision.** Two changes, both in the matcher, neither touching `Identity`:
+
+1. An Azure row is addressable by a second spelling, `<organization>/<project>`, alongside its bare
+   project name (`notifications.scopeCandidates`). This is what gives one list a shape that works
+   for both backends: `myorg/*` selects Azure projects the way `elpulgo/*` selects GitHub repos.
+2. `include_repos` narrows **per backend** (`notifications.includeSelection`). A backend is filtered
+   only when at least one pattern addresses it; a backend nobody addressed keeps everything. Rows
+   from a narrowed backend are still matched against the *whole* pattern list — only the
+   "is this backend narrowed at all" question is partitioned.
+
+A pattern addresses Azure when it matches one of the configured `projects`, bare or org-qualified —
+decidable from config alone, since `projects` is a closed list. GitHub has no equivalent list to
+test against (its inbox spans every repo the user watches, not just `github.repos`), so the GitHub
+side is defined as the *complement*: a pattern matching no configured project is a GitHub pattern.
+
+**Rejected: changing Azure's `Identity.Scope` to `<org>/<project>`.** It looks like the tidier fix
+and is not one. `Scope` is load-bearing for routing — `provider/composite.go:41,97` builds a
+scope→backend map from each backend's `Scopes()` and uses it for `MarkRead`, `MarkDone` and
+open-in-browser — and it also feeds the pane's Repo column. Qualifying at match time changes what a
+glob can address without changing what a scope *is*.
+
+**Rejected: "a pattern that matches a configured project addresses both backends."** The symmetric
+reading, and wrong: it re-creates the original trap mirrored, since `include_repos: [myorg/project1]`
+would then narrow GitHub to nothing. Azure-relevance and GitHub-relevance are deliberately not
+symmetric predicates.
+
+**Accepted tradeoff: this fails open.** A mistyped project (`myorg/projct1`) matches nothing, is
+classified as a GitHub pattern, and leaves Azure unnarrowed — too many rows, never zero. Fail-closed
+would mean one wrong character silently deleting a whole backend's feed, which is the bug this
+decision exists to remove. Because failing open is silent, `LoadFrom` warns on exactly that shape: a
+pattern whose first segment equals `organization` but which matches no configured project. Keying on
+the org prefix keeps it free of false positives — a pattern not naming the org was never addressing
+Azure.
+
+**`exclude_repos` gets the org-qualified candidates but no per-backend rule.** A subtractive list
+only ever removes, so a pattern addressing neither backend is already an inert no-op rather than
+something that empties a feed. It gets the candidates so one spelling means the same thing in both
+keys. **This is a behaviour change worth a release note:** `exclude_repos: [myorg/*]` previously
+matched no Azure row at all and now hides every project in that org.
+
+**`only_configured_repos` is unaffected** — it still overrides `include_repos` outright, with the
+existing warning.
 
 ## Tasks
 
-<!-- Deliberately empty. Populate after "Inputs from Phase 1" is filled and decision 2
-     is resolved — task breakdown before then would be guesswork. -->
+Task 1 is a spike and gates task 5 only; everything else can start immediately.
+
+- [x] 1. **Spike: probe `@RecentMentions` and `CommentMention` over REST against a real org.** Not a code task — a throwaway script plus a finding recorded in this spec. → done: this spec gains a "Probe results" section stating (a) whether `[System.Id] IN (@RecentMentions)` returns rows via `POST /_apis/wit/wiql`, or the exact error if not; (b) whether `GET /wit/workItems/{id}/comments` populates `mentions[]` **by default** — `mentions` is absent from `CommentExpandOptions` (`none|reactions|renderedText|renderedTextOnly|all`), so if it arrives only under `$expand=all`, that is what the client must send; (c) whether `CommentMention.targetId` string-equals `GetCurrentUserID()`'s value verbatim or needs normalising. Decision 3's fallback is adopted only if (a) fails. If (b) or (c) fails there is **no fallback** and decision 3 must be reopened — say so rather than working around it
+- [x] 2. **`azdevops`: local triage store** — `notifications.yaml` beside `state.yaml`, own `state.Store` instance (decision 1). → done: `map[string]TriageEntry` with `{Read, Done bool; LastActivity, LastSeen time.Time}`; round-trips through the store's atomic write; a missing file loads as empty, not an error; **the file path is derived the same way `state.yaml`'s is** and a test asserts the two are different paths in the same dir; convention 17 applies — every fixture goes through a `t.TempDir()` path, never a bare struct literal
+- [x] 3. **`azdevops`: identity key + reconcile function** (decision 2). → done: `NotifKey(source, entity, id) string` producing `<source>/<entity>/<id>`, guarded per convention 11 (reject `<= 0` ids, not `== 0`, with a negative-input test row); `Reconcile(rows []provider.Notification, state map[string]TriageEntry, now time.Time) ([]provider.Notification, map[string]TriageEntry)` as a **pure function**, table-tested for: unseen subject → unread; seen subject, unchanged stamp → stored `read`/`done` applied; seen subject, **newer** stamp → `read`/`done` cleared and stamp advanced; seen subject, **older** stamp (clock skew / reordered poll) → **triage** state (`Read`/`Done`/`LastActivity`) left untouched, *not* cleared, but `LastSeen` **is** advanced like every other branch — `LastSeen` is presence bookkeeping, not triage, and freezing it lets a row present in every poll be TTL-pruned and resurrect (amended 2026-08-06 after review; decision 2's prose only ever discusses clearing `read`/`done`) — the equal and older cases must be separate rows, since `>` and `>=` differ only on the equal case and that is the every-poll case; `done` rows dropped from the returned slice; orphaned entries older than the TTL pruned, with a boundary row exactly at the TTL (convention 13's shape)
+- [x] 4. **`azdevops`: source — PRs awaiting my review** → `review_requested` (blocked by: 3). → done: reuses `MultiClient.ListPullRequestsAsReviewer` (`multiclient.go:248`), no new client method; key is `review/pr/<id>`; activity stamp is the PR's last-update timestamp so a new push resurrects a dismissed row; `WebURL` follows phase 1's degradation ladder — a PR whose repo/id cannot be resolved falls back to the project page, never to a guessed deep link, and `""` is a legal result
+- [x] 5. **`azdevops`: source — @mentions in work-item discussions** → `mentioned` (blocked by: 1,3). → done: stage 1 narrows via the form task 1 confirmed; stage 2 fetches comments for candidates and keeps only those with a `mentions[].targetId` equal to `GetCurrentUserID()`; key is `mention/wi/<id>`; activity stamp is the **newest matching comment's `createdDate`**, not the work item's `ChangedDate` — a test must pin that an unrelated edit after the mention does not advance the stamp, which is the entire reason stage 2 exists; candidate fan-out is bounded by a constant, and when the bound truncates it **keeps the most recent candidates, not the oldest** — work-item ids are sequential and never reused, so truncating toward low ids systematically discards exactly the mentions the feed exists to surface; the truncation is **surfaced to the caller as structured data on the source's return**, never silently swallowed and never written to stderr — this repo has no logger, nothing calls `slog.SetDefault`, and an unredirected write mid-poll lands on top of Bubble Tea's alt-screen render (amended 2026-08-06 after validation; the line originally said "logged", which assumed a logging facility that does not exist here — task 8 decides how to surface it)
+- [x] 6. **`azdevops`: source — recently assigned work items** → `assigned` (blocked by: 3). → done: WIQL over `[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-N AND [System.State] <> 'Closed' AND [System.State] <> 'Removed'` (decision 6 — no snapshot, no delta state); **the state clause is not optional** — closing a work item is a revision, so it advances `ChangedDate`, and without the clause the one action that completes your work is also the one that guarantees the row returns as unread, inverting decision 7's auto-expiry (amended 2026-08-06 after review; `ListMyWorkItems` at `workitems.go:261-266` already excludes both states); key is `assigned/wi/<id>`; a test proves the same poll run twice yields identical rows and identical state (idempotence is the property that replaces the snapshot); a fresh install with an empty state file surfaces at most the window's worth of items, asserted with a fixture spanning items inside and outside the window
+- [x] 7. **`azdevops`: source — my failed pipeline runs** → `ci_activity` (blocked by: 3). → done: queries runs triggered by me with a failed result; key is `cifail/run/<id>`; reason is `NotificationReasonCIActivity` per decision 8, asserted by name so a future `ci_failed` member cannot be silently swapped in. **The query must narrow server-side, not in Go over `ListPipelineRuns`'s output** (amended 2026-08-06 after review): `ListPipelineRuns` (`pipelines.go:12`) fetches the N most recent builds in the project across all pipelines, all users and all results, so a client-side filter spends `$top` on other people's builds — this is the only one of the four sources whose narrowing is not server-side (review uses `reviewerId`, assigned and mentioned use WIQL), and on a busy project your failure ages out of the window and **disappears from the feed while still unread**, with the failure mode worsening exactly as team activity rises. Add a dedicated client method passing `statusFilter=completed&resultFilter=failed&requestedFor=<id>&minTime=<now-lookbackDays>&queryOrder=finishTimeDescending`; leave `ListPipelineRuns` untouched for the pipelines pane, and **keep the Go-side `requestedFor`/result check as a belt-and-braces re-check** so an ignored or mis-typed server parameter degrades to over-fetching rather than to attributing someone else's build to you. `minTime` also makes this source honour decision 6's lookback — it is the only source that currently does not, which would leave task 11's `lookback_days` silently governing three of four sources. **The subject is not permanently stable:** Azure's *rerun failed jobs* / *rerun stage* re-executes inside the **same run id** on YAML pipelines (classic queues a new id), recomputing `result` and `finishTime` — so `FinishTime` is load-bearing, a re-failure correctly resurfaces the row as unread, and a green rerun expires it per decision 7; that behaviour is wanted, but it must be documented as what it is and pinned by a test that advances `FinishTime` on the same id, not only by the equal-stamp repoll case `Reconcile` already covers
+- [x] 8. **`azdevops`: compose sources concurrently and implement `NotificationSource`** (blocked by: 4,5,6,7). → done: compile-time `var _ provider.NotificationSource = (*Adapter)(nil)` plus a conformance test following `adapter_conformance_test.go`; sources run concurrently and **one failing source degrades to the others rather than emptying the feed** — the same rule phase 1's decision 20 enforces at the composite layer, restated here because a source is to the Azure adapter what a backend is to the composite, and phase 1 lost a defect to exactly this; `Adapter` does **not** implement `PollIntervalHinter` (decision 10), asserted by a negative compile-time check; local state is folded into `Notification.Read` **at this boundary**, per phase 1's unread-semantics constraint — nothing above the adapter may learn that Azure read state is local; **and the composite will discard your rows if you hand it an error** — `composite.go:669-672` does `if r.err != nil { errs = append(errs, r.err); continue }`, and `composite.go:637-641` documents that as deliberate (a backend reporting failure cannot vouch for the completeness *or ordering* of what it returned). So propagating task 4's `*PartialError` upward from `Adapter.List` re-blanks the Azure half of the feed one layer up, re-introducing the exact defect task 4 was reopened to fix. Decide it deliberately: either `Adapter.List` absorbs partial failures and returns `(rows, nil)`, or phase 1's composite rule is revisited — do not leave it to fall out of the code (added 2026-08-06 from task 4's re-validation). **Resolved 2026-08-07: `Adapter.List` absorbs, and the composite rule stands.** The composite's rationale is right *at its own boundary* — it cannot know whether a backend's partial result is sorted or complete — but the Azure adapter is the layer that merged and sorted these rows, so it can vouch for them, and revisiting the composite rule would reopen a phase-1 defect for every backend to fix a problem local to this one. Concretely: `Adapter.List` returns `(rows, nil)` whenever **at least one source succeeded**, and propagates the error only when **every** source failed. (**Corrected 2026-08-07, same day, from task 8's review:** this first read "at least one *row*", which is not the same test and gets a live case wrong — three sources fail, the fourth succeeds, and the user has already triaged its rows away, so `Reconcile` legitimately returns zero. Keying on the row count turns that into `errors.Join` → the composite's `len(errs) == total` → a permanent `errorBody` in the pane, every poll, from a partial outage in which one source demonstrably worked. Keying on the source count says what was actually meant: an empty feed is a feed, an outage is when nothing answered.) — so a total outage still surfaces as an error while a single expired project PAT degrades to a shorter feed. The cost is real and is accepted knowingly: a partial Azure failure becomes **invisible**, since the composite renders `"%d of %d backends failed to load"` from errors alone and the adapter has no non-error channel to report on. That is the lesser harm for an attention feed — missing rows is degradation the user can recover from, an empty pane is an outage that teaches them to stop trusting the tab — but it is a gap, and widening `NotificationSource` with a warnings channel is recorded under `## Unknowns` for Oscar rather than invented here
+- [x] 9. **`azdevops`: `MarkRead`/`MarkDone` write to the local store** (blocked by: 2,8). *(Re-validated 2026-08-07 against `029317c`, which fixes all seven review findings; the original `→ done:` clauses were re-checked and still hold. See the re-validation record at the end of `## Validation: task 9`.)* → done: both take a `provider.Identity` and write through `Identity.ID` as the key; marking an id the store has never seen creates the entry rather than erroring — the composite routes by `Identity.Kind` and cannot know what the store has; `MarkDone` on an already-done id is a no-op, not a double-write; writes go through the debounced store and a `Flush()` on shutdown guarantees durability
+- [x] 10. **`config`: restructure `NotificationsConfig` into shared + `github` + `azure`** (decisions 13, 14) (blocked by: 8). *(Re-validated 2026-08-07 against `6047aa3`, which fixes all six review findings; the original `→ done:` clauses were re-checked against the current code and still hold. See the re-validation record at the end of `## Validation: task 10`.)* → done: the block matches decision 13's YAML exactly; `participating_only`, `only_configured_repos` and `since_days` move under `notifications.github` and the **six** shared keys stay at top level (corrected 2026-08-07 — this said "five", propagated from decision 13's rationale; the YAML lists six and nine minus three is six); keys resolve lowercased at every nesting level (convention 9 — verify the nested maps too, not just the root, since that is the untested half); **no migration shim and no deprecation warning for the old flat keys** (decision 14) — a flat `notifications.participating_only` is simply an unrecognised key, and a test pins that it is *not* silently honoured, since a half-removed shim is worse than none; per convention 25 the documented key list is derived from the struct, not restated by hand
+- [x] 11. **`config`: `notifications.azure` values and source toggles** (decisions 5, 6, 10) (blocked by: 10). *(Re-validated 2026-08-07 against `0eeb10a`, which fixes all seven review findings and implements both settled decisions, plus `6556b25`, which kills the two mutants that re-validation found surviving and corrects three stale comments; the original `→ done:` clauses were re-checked against the current code and still hold. See the two re-validation records at the end of `## Validation: task 11`.)* → done: four independent source toggles, all defaulting **on**; `lookback_days` defaults to 14 and `min_poll_interval` to 300, both rejecting negatives with the same message shape as the existing `since_days` check; **`lookback_days` is additionally clamped to `orphanTTL` (30 days)** — beyond that, an item can be pruned from the triage store while still inside the query window and resurface as unread with nothing having touched it, since `assignedQueryTop` means "inside the window" and "returned by the poll" are different sets (added 2026-08-06 from task 6's review; `orphanTTL`'s doc comment states the guarantee unconditionally and must be corrected to name the condition); **zero is not "unbounded" for `lookback_days`** — it falls back to the default, and a test pins that, because the shared-key convention that zero means widest is exactly what makes this key dangerous (decision 13's closing note); disabling every source is legal and yields an empty Azure feed, **not** a config error — and must not make the adapter claim incapability, since that would silently hide the tab in an Azure-only config
+- [x] 12. **`provider`: move `max_items` truncation from adapter to composite** (decision 15) (blocked by: 8). *(Re-validated 2026-08-07 against `7040c11` + `8a03257`, which fixes both review findings and implements Decision C; re-ticked. See the re-validation record at the end of `## Validation: task 12`.)* → done: `CompositeProvider.List` applies the cap after its merge-and-sort, so `max_items: 50` yields at most 50 rows with two live backends rather than up to 100; the per-backend truncation phase 1 put in `NotifOpts.Max` handling is removed, not left in place to double-apply; a test drives two capable backends each returning more than the cap and asserts the merged length **and** that the surviving rows are the globally newest — a length-only assertion passes against a naive truncate-before-sort; phase 1's existing single-backend `Max` tests must still pass unchanged
+- [x] 13. **`config`: widen the all-panes-disabled guard** (decision 9) (blocked by: 10). *(Re-validated 2026-08-07 against `f478f74` + `d72f98b` + `4274a3e`, which drop the dead `HasAzure()||HasGitHub()` conjunct the review found, correct both the comment and the error message, and add three rows closing the same widening gap on the other three conjuncts; re-ticked. See the re-validation record at the end of `## Validation: task 13`.)* → done: `config.go:614`'s `&& c.HasGitHub()` becomes "any notification-capable backend configured"; the error message at `config.go:617` no longer says the tab "needs a GitHub backend"; the stale comment at `config.go:610-613` predicting this change is removed, not left contradicting the code; tests cover Azure-only, GitHub-only, and both, each with the other three panes disabled
+- [x] 14. **`azdevops`: adapter self-throttling, and wire `notifications.azure` into the adapter** (decision 10) (blocked by: 8,11). *(Re-validated 2026-08-07 against `b0c6d9e`, which closes R1-R5 from round 2; re-ticked. The "returned **by copy**" mechanism in the `→ done:` line below was superseded by round 2's settled decision — `copyNotifications` is deleted and the same guarantee is now delivered by `Reconcile`'s fresh allocation plus `provider.Notification` having no mutable-through field, both pinned by tests. See the third re-validation record at the end of `## Validation: task 14`.)* **Wiring added to this task 2026-08-07, from task 11's implementation.** Task 11 parses, defaults, clamps and validates `lookback_days`, `min_poll_interval` and the four `sources` toggles — and nothing reads them: `cmd/azdo-tui/main.go:330-331` still calls `NewAdapterWithNotifications(client, notifStore, 0, azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero lookback and hardcoded defaults. No task owned that gap, so a user setting `lookback_days: 7` or `sources.mentioned: false` today would see the key accepted, validated, and then silently ignored — the worst of the three possible outcomes, since a rejected key at least tells you. Task 14 is the right home because it already has to plumb `min_poll_interval` from the same block through the same call. → done: `main.go` passes `cfg.Notifications.Azure.LookbackDays`, the `Sources` toggles and `MinPollInterval` through, with a test proving a non-default value reaches the adapter rather than only that it parses; **and** `Adapter.List` returns its previous result unchanged when called within `min_poll_interval` of its last real query, so the single shared poller cannot price the whole feed at Azure's cost; **nothing in `polling` or `app` changes** — no second poller, no second tick message, no new interval arithmetic (phase 1 decision 69 keeps `max(hint, configured)` in app.go untouched); the cached slice is returned **by copy** under a mutex, so a caller mutating it cannot corrupt the next throttled return — phase 1 lost a defect to exactly this in its conditional-request cache, and the test must prove it by mutating the first result and re-checking the second, since comparing two aliases of one backing array is a tautology; a throttled return must not be mistaken for a failure and must not clear the feed; `MarkRead`/`MarkDone` are **never** throttled and must not block behind a poll's network work — **clarified 2026-08-07 from task 9's review**, which observed that the line as written ("take no lock shared with `List`") is already violated: marks take `TriageStore.mu`, and `list` holds that same mutex across its whole `Swap`. Reviewed and accepted as correct — that critical section runs only in-memory `Reconcile`, with no I/O and no callback back into the store, and lock order (`writeMu` → `mu`) is consistent across all of `Apply`/`ApplyIfChanged`/`Swap`/`Flush`. The constraint that was actually meant is about the **throttle** lock this task introduces: a mark must never wait on an in-flight Azure query, so the cached-result mutex `List` holds across its HTTP work must not be the mutex a mark acquires. Sharing the store's in-memory mutex is fine and is what task 8 chose deliberately to close a lost-write window
+- [x] 15. **ADR `docs/adr/000N-azure-synthetic-notification-feed.md`** — decisions 2, 3, 6, 7 (blocked by: 8). *(Landed as `docs/adr/0002-azure-synthetic-notification-feed.md` in `d694235`, corrected in `1cb1a5a`. See `## Validation: task 15`.)* → done: follows `docs/adr/0001`'s shape (≤30 lines, `Status: Accepted`, Context/Decision/Alternatives/Consequences); the Alternatives section records the stamp-in-key design and *why* it lost, since that is the decision most likely to be re-proposed by someone reading only the original candidate
+- [x] 16. **Docs: README, Architecture.md, config.yaml.example, FAQ** (blocked by: 13,14,15). *(Re-ticked 2026-08-07 after findings 28-31 were fixed — see the seventh subsection at the end of `## Validation: task 16`.)* *(Re-opened 2026-08-07 by the sixth pass against `16c4b2f`: the new 50-item-cap paragraph in `README.md:489-495` prescribes `lookback_days` as the fix for mention-candidate truncation, which that source cannot see — see the sixth re-validation subsection at the end of `## Validation: task 16` for that and three smaller corrections.)* *(Validated 2026-08-07, fifth pass, against `2cd4f5e`: findings 19, 20 and 21 and both nits from the fourth pass are closed, each checked against the code — `config.yaml.example`'s two `include_repos`/`only_configured_repos` sites now match `filter.go`'s switch; `README.md:446`'s `max(configured, hint)` wording and its worked example match `app.go:377-400`, hint-of-zero included; the "widest possible behaviour" sentence now excepts the azure block with the real constants; the "drops GitHub from the other tabs" remedy is true of `config.HasGitHub()` gating the whole GitHub backend in `main.go`. Markup survived the hand edits — every table row in all three markdown files has its header's cell count, `**` spans balance, and the strong-emphasis run crossing a line break in `Architecture.md` renders. A final sweep over every behavioural claim in the phase-2 doc additions produced no further findings, and nothing the four earlier passes verified regressed; `config.yaml.example` still parses with all eighteen notification keys resolving to real struct fields. Build, vet and unit tests clean. See the fifth re-validation subsection at the end of `## Validation: task 16`.)* → done: the full nested config block from decision 13 documented, derived from the struct per convention 25 — including which keys are shared and which are provider-specific, since that distinction is the whole point of the restructure; `exclude_repos`/`include_repos` documented as matching an `owner/repo` on GitHub and a **project name** on Azure (decision 13's second note); `sources.ci_failed` documented as a source toggle that emits the `ci_activity` reason, so the two spellings are not read as one vocabulary; the local-state file's path, purpose and "not synced across machines" caveat stated; any PAT scope beyond the current set named explicitly, or its absence confirmed (task 1 answers this); per convention 26, grep for every place the old GitHub-only notifications requirement is stated — README, FAQ, `Architecture.md`, `cmd/azdo-tui`'s help blocks and the auth wizard all asserted it in phase 1 and each must be found and corrected, not just the first one; per convention 29 no phase/task/decision numbers appear in user-facing strings
+
+- [x] 17. **Per-backend `include_repos` + org-qualified Azure scopes** (decision 16, added 2026-08-07 after the branch was hand-tested; blocked by: 16). → done: `notifications.scopeCandidates` gives an Azure row the `<organization>/<project>` spelling alongside its bare project name and a GitHub row only its `owner/repo`, never a phantom `/project` candidate when `organization` is empty; `notifications.includeSelection` classifies each pattern as Azure-addressing (matches a configured project, bare or org-qualified) or not, and narrows only the backends actually addressed, matching rows against the whole pattern list either way; `exclude_repos` gets the same candidates but no per-backend rule, since a subtractive list is already inert when it matches nothing; `config.azureGlobMatchesNoProject` warns at load on a pattern whose first segment equals `organization` but which matches no configured project — the fail-open case that is otherwise silent; tests cover the table of spellings in both directions (GitHub-only pattern leaves Azure whole and vice versa, bare project name still works, `*` and `*/*` stay no-ops, case-insensitivity, the typo failing open, the no-organization install), plus the load-time warning and five patterns that must *not* warn; README's per-backend callout, `config.yaml.example`'s two key comments, `Architecture.md`'s notifications-config paragraph and the `IncludeRepos`/`ExcludeRepos` doc comments all rewritten, each naming the implementing identifier per convention 35's proposal
+
+## Validation: task 17
+
+Verified 2026-08-07 against the working tree, not the diff alone:
+
+- **The reported bug is gone and its workaround is no longer needed.**
+  `TestFilterNotifications_IncludeRepos_NarrowsPerBackend`'s
+  "github pattern narrows github, leaves azure whole" row is Oscar's exact
+  field config (`include_repos: [elpulgo/*]` with Azure projects configured)
+  and now keeps both Azure rows. The `"*"` row pins that his hand-found
+  workaround stays a no-op rather than becoming a narrow-everything.
+- **Fail-open verified by test, not by argument.**
+  `TestFilterNotifications_IncludeRepos_MistypedAzureProject_FailsOpen`
+  asserts the Azure row survives a mistyped project. The complementary
+  load-time warning is pinned by
+  `TestLoadFrom_IncludeRepos_MistypedAzureProject_Warns`, and
+  `TestLoadFrom_IncludeRepos_NoFalsePositiveWarnings` pins the five shapes
+  that must stay quiet — including a plain GitHub pattern, which would make
+  the warning noise if the org-prefix key were dropped.
+- **`Identity.Scope` untouched.** Grepped for writes to `Identity.Scope` in
+  `internal/azdevops`: still `pr.ProjectName` and its work-item equivalents in
+  all four sources. The composite's scope→backend routing map
+  (`provider/composite.go:41,97`) therefore sees exactly what it saw before,
+  so `MarkRead`/`MarkDone`/open-in-browser are unaffected.
+- **`globAddressesAzure` tests `Projects`, not `DisplayNames`.** Checked that
+  Azure `Scope` carries the API project name
+  (`notifications_source_review.go:75`), so matching the display name would
+  classify a pattern as Azure-addressing that no row could ever match, and
+  narrow Azure to nothing. The doc comment states this.
+- **Duplication between `config.azureGlobMatchesNoProject` and
+  `notifications.globAddressesAzure` is deliberate and documented.**
+  `ui/notifications` imports `config`, not the reverse, so the rule cannot be
+  shared without inverting the dependency. Both sites carry the note.
+- **Whole suite green.** `go build ./...`, `go vet ./...` and `go test ./...`
+  all clean with `CGO_ENABLED=0`. `-race` still has not been run in this
+  environment.
+
+## Validation: task 9
+
+Verified against the current state of the code (commit `ba88a24` plus the
+task-8 lineage it builds on, not just the isolated diff):
+
+- Both `MarkRead`/`MarkDone` take a `provider.Identity`, reject wrong `Kind`
+  and empty `ID`, and write through `state[id.ID]` — confirmed by reading
+  `internal/azdevops/adapter_notifications.go:363-430` and by mutating the
+  key lookup to a fixed string, which the existing no-op test caught.
+- Unseen ids create a fresh entry rather than erroring
+  (`TestAdapter_MarkRead_UpdatesLocalTriageState`,
+  `TestAdapter_MarkDone_UpdatesLocalTriageState`); mutated to require a
+  pre-existing entry — both the create test and
+  `TestAdapter_MarkRead_UnseenID_CreatesEntryWithSaneLastActivity` failed as
+  expected.
+- `MarkRead`/`MarkDone` on an already-read/-done id is a true no-op via the
+  new `TriageStore.ApplyIfChanged` — no `LastActivity`/`LastSeen` churn, no
+  re-dirtying. Mutated out the `if entry.Read {return false}` /
+  `if entry.Done {return false}` guards independently; both killed by
+  `TestAdapter_MarkRead_AlreadyRead_IsNoOp` /
+  `TestAdapter_MarkDone_AlreadyDone_IsNoOp`.
+- The empty-`Identity.ID` guard (not named in the `→ done:` line but
+  required by the loop) is present on both methods and independently
+  mutation-killed by `TestAdapter_Mark{Read,Done}_EmptyID_ReturnsErrorAndCreatesNoEntry`.
+- Writes go through the debounced store: `MarkRead`/`MarkDone` call
+  `TriageStore.ApplyIfChanged`, which shares `markDirtyLocked`/the debounce
+  timer with `Apply`; `TriageStore.Flush()` is wired on every exit path in
+  `cmd/azdo-tui/main.go:394-403` against the same `*TriageStore` instance
+  `NewAdapterWithNotifications` was given (`main.go:290-330`).
+- `TriageEntry` gained **no** new field — still exactly `{Read, Done,
+  LastActivity, LastSeen}` (`internal/azdevops/notifications_store.go:24-37`).
+  The `LastCommitID` question in `## Unknowns` remains open, untouched by
+  this task, as the spec's own revised note requires.
+- Reasoned independently through `Reconcile` (not the implementer's
+  comment): a fresh entry created by `MarkRead`/`MarkDone` for an id
+  `Reconcile` has never seen carries `LastActivity = time.Now()`, captured
+  strictly after the `List` call that produced the row the UI is reacting
+  to. On the next poll, that key is already present in the store's map, so
+  `Reconcile` takes the "seen" path, not the "!seen" (fresh-discovery)
+  path — and since the row's real `UpdatedAt` (assuming no genuine new
+  activity in between) is `<=` the mark's `LastActivity`, the row lands in
+  the "unchanged" or "older-stamp" branch, both of which leave the stored
+  `Read`/`Done` untouched rather than clearing it. This is exactly what
+  `TestAdapter_MarkRead_UnseenID_CreatesEntryWithSaneLastActivity` pins by
+  feeding the freshly created entry straight back through `Reconcile` with a
+  row stamped before the mark, and asserting `Read` survives — verified
+  passing, and verified to fail when the no-op guard is removed.
+- Doc comments checked against behaviour: no "always"/"never"/"guaranteed"
+  claim found unpinned by a test — the "`LastActivity` written here is
+  always >= the row's own `UpdatedAt`" claim is the one load-bearing
+  instance and is exactly what the invariant test above pins.
+  **Superseded 2026-08-07 by the review below: that claim is false and the
+  test does not pin it.** Both this validation and the implementer reasoned
+  about the row that *triggered* the mark; `Reconcile` compares against the
+  row as re-fetched on the **next** poll, and the forward clamp can advance
+  that row's stamp with nothing having happened to the subject. See
+  `## Review feedback: task 9`, finding 1.
+
+Mutation testing: 6 targeted mutants (already-read no-op, already-done
+no-op, unseen-id creation gated on pre-existing entry, empty-id guard on
+`MarkRead`, empty-id guard on `MarkDone`, key-lookup swapped to a wrong
+constant) — all 6 killed by the existing test suite. All files restored via
+`cp` from pre-mutation backups, confirmed byte-identical (`diff` clean, `git
+status` clean) before finishing.
+
+Full suite (`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`)
+passes. gofmt offenders in `internal/azdevops/` are the pre-existing ones
+only (`adapter_list_test.go`, `adapter_url_test.go`, `logs_test.go`,
+`mapping_test.go`, `timeline_test.go`, `workitems.go`) — neither file this
+task touched is on that list.
+
+### Re-validation 2026-08-07 — `029317c` (task re-ticked)
+
+Re-checked the **current state of the code** across `ba88a24` + `029317c` +
+the task-8 lineage, not the fix commit's diff in isolation.
+
+**A. Original `→ done:` clauses still hold.** `Reconcile`'s rewrite, the
+deletion of `TriageStore.Replace` and `Apply`'s collapse to a wrapper
+regressed none of them: both marks still take a `provider.Identity` and key
+on `Identity.ID`; create-on-mark, the already-done no-op and the debounced
+write path are all still mutation-killed; `Flush()` is still wired on every
+exit path (`cmd/azdo-tui/main.go:395-405`) against the same `*TriageStore`
+`NewAdapterWithNotifications` was handed (`main.go:320-331`).
+
+**B. Findings, each mutation-tested rather than read.**
+
+1. 🔴 **Fixed.** Every claim in the replacement text at
+   `adapter_notifications.go:354-370` was checked against the code: all four
+   `*ActivityStamp` helpers do clamp with `if stamp.After(now) { return now }`
+   (verified by reading each body), and the `>=` claim is now scoped to "the
+   row the mark was issued from". The forward-clamp case is named as an open
+   question the code does **not** handle and points at `## Unknowns`.
+2. 🟡 **Fixed.** Re-ran the reviewer's exact two mutants. Deleting
+   `if entry.LastActivity.IsZero() {...}` from `MarkDone` now fails three
+   tests (`..._UpdatesLocalTriageState`, `..._AlreadyDone_IsNoOp`,
+   `..._UnseenID_CreatesEntryWithSaneLastActivity`); deleting the `LastSeen`
+   equivalent fails two. `TestAdapter_MarkDone_AlreadyDone_IsNoOp` is no
+   longer a tautology — it fails at its new `first.LastActivity.IsZero()`
+   fatal under the first mutant.
+3. 🟡 **Fixed.** The doc now forbids writing when returning `false`, and
+   compliance is pinned non-accidentally: mutating each mark to write
+   `entry.LastSeen` before its early return kills
+   `TestAdapter_Mark{Read,Done}_Already{Read,Done}_IsNoOp` respectively.
+4. 🟡 **Fixed.** No production caller of `Replace` remains (repo-wide grep;
+   build + vet clean). Locking is a single `mu` acquisition —
+   `Apply` → `ApplyIfChanged` → `markDirtyLocked` — and mutating the
+   wrapper's `return true` to `false` kills eight tests.
+5. 🟡 **Fixed, and the drop is safe.** All four sources set
+   `Identity.ID = NotifKey(...)`, which is `""` only for `id <= 0`, so no
+   legitimate row can be discarded. The `continue` sits *before*
+   `newState[key]` is touched, so real entries' `LastSeen` bookkeeping is
+   untouched: mutants removing `entry.LastSeen = now` from the unchanged-stamp
+   and older-stamp branches both still die, as does flipping the orphan-TTL
+   prune's `>` to `>=` (boundary row). Reverting the drop to the old
+   passthrough fails the renamed table row. Grep confirms no doc comment
+   still describes the passthrough except as history.
+6. 🟢 / 7. 🟢 **Fixed** — the backfill-scope comment now describes the actual
+   `LastActivity.IsZero()` trigger, and the debounce is `time.Hour`.
+
+**Additional `Replace` references:** the three the implementer names
+(`State()`'s doc, `Flush()`'s doc, `notifications_reconcile_test.go:252-256`)
+are accurate. A **fourth** it did not name survives at
+`notifications_store_test.go:692-696`, which still calls the rejected
+alternative "a naive `State() -> compute -> Replace()` call chain" as though
+the method existed; its production-side twin (`notifications_store.go:236-240`)
+was rewritten. Cosmetic, in a test doc comment about a hypothetical — not
+blocking.
+
+**Comment hunt (the package's recurring defect class).** Re-read every comment
+`029317c` changed against the code beneath it. Two residual 🟢 imprecisions,
+neither an invariant the code fails to establish: `MarkRead`'s "own
+`time.Now()` is **always** later" holds only absent a backwards wall-clock
+step (`Reconcile` compares wall clocks, since `row.UpdatedAt` is parsed and
+carries no monotonic reading) — the same stamp-direction family already
+recorded under `## Unknowns`; and `ApplyIfChanged`'s "until either this store
+is dropped … or an unrelated, later call to `Apply`/`ApplyIfChanged`" omits
+`Swap` as a third path that marks the store dirty.
+
+Mutation testing: 9 mutants, all killed — `MarkDone` `LastActivity` backfill,
+`MarkDone` `LastSeen` backfill, `Reconcile`'s empty-key drop reverted to
+passthrough, `LastSeen` in the unchanged-stamp branch, `LastSeen` in the
+older-stamp branch, orphan-TTL `>` → `>=`, `MarkRead`
+writes-then-returns-false, `MarkDone` writes-then-returns-false, and `Apply`'s
+`return true` → `false`. Every file restored by `cp` from a scratchpad backup
+(never `git checkout --`); `git status --porcelain` empty and the package green
+afterwards.
+
+Full suite (`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) passes;
+`go build` and `go vet` clean. `gofmt -l internal/azdevops/` lists only the six
+pre-existing offenders — none of them a file this task touched.
+
+## Review feedback: task 9
+
+Opus review of `ba88a24` plus its task-8 lineage, 2026-08-07. Verdict
+REQUEST_CHANGES. Task 9 un-ticked.
+
+**1. 🔴 The load-bearing "always >=" comment is false.**
+`adapter_notifications.go:344-355` claims the `LastActivity` a mark writes is
+always `>=` the row's own `UpdatedAt`, "which is exactly the invariant
+`Reconcile`'s strictly-newer branch needs". The premise holds for the row that
+*triggered* the mark. `Reconcile` compares against the row as re-fetched on the
+**next** poll, and the clamp in all four `*ActivityStamp` helpers is
+`if stamp.After(now) { return now }` — it caps at *each poll's own* `now`. A
+subject whose raw stamp is ahead of the client clock therefore yields a clamped
+stamp that advances by one poll interval every poll, with nothing having
+happened to the subject, and `Reconcile` reads that as new activity and clears
+the mark. Reproduced end-to-end against the real helpers. Fix the comment to
+claim only what holds (`>=` the `UpdatedAt` of the row the mark was issued
+from); the behaviour itself is decision A below.
+
+**2. 🟡 `MarkDone`'s `LastActivity`/`LastSeen` backfills are unpinned — two
+mutants survive the whole suite.** Deleting either
+`if entry.LastActivity.IsZero()` or `if entry.LastSeen.IsZero()` from
+`MarkDone` (`adapter_notifications.go:420-425`) leaves the suite green; the
+same deletions in `MarkRead` are both killed. The `LastActivity` one is the
+live defect `Reconcile`'s own task-9 invariant paragraph
+(`notifications_reconcile.go:97-102`) warns about: a zero `LastActivity` loses
+to any real `UpdatedAt`, `Done` is cleared, and the row the user dismissed is
+back one poll later. `TestAdapter_MarkDone_UpdatesLocalTriageState` asserts only
+`entry.Done` where its `MarkRead` twin asserts the stamps, and
+`TestAdapter_MarkDone_AlreadyDone_IsNoOp` compares two zero times, which is a
+tautology against this mutant.
+
+**3. 🟡 `ApplyIfChanged`'s doc sanctions an in-memory/on-disk divergence.**
+`notifications_store.go:194-196` says `mutate` "may still write into the live
+map" while returning `false`, and calls the result "not persisted". `mutate`
+receives `s.state` itself, so such a write is immediately visible to `State()`
+and to `Swap`, and is either lost on exit or written later by an unrelated
+`Apply`. What `false` skips is *scheduling*, not persistence. Tighten the
+contract to "must not write when returning `false`" and pin it — it is
+currently unpinned in both directions. `MarkRead`/`MarkDone` are safe only
+because they return before touching the map, and nothing enforces that.
+
+**4. 🟡 Four mutation APIs, two with no production callers.** Every
+`TriageStore.Apply` and `TriageStore.Replace` call site is now in
+`notifications_store_test.go` — marks moved to `ApplyIfChanged`, `Replace` lost
+its caller to `Swap` in task 8. Locking is correct in all four; the problem is
+surface area, and `Apply(f)` is exactly
+`ApplyIfChanged(func(s) bool { f(s); return true })`. Collapse or delete before
+task 14 has to choose between them.
+
+**5. 🟡 An empty-key row is rendered but permanently un-markable.** `NotifKey`
+returns `""` for `id <= 0`; all four sources emit the row anyway and
+`Reconcile` (`notifications_reconcile.go:112-121`) deliberately passes it
+through as unread-and-untracked. The pane renders it, the user presses `u` or
+`d`, and the mark returns `azdevops: mark read: empty identity id` — unread
+forever, an error banner on every attempt. The guard is right at its own
+boundary; the gap is that no layer drops the row. Drop it at `Reconcile` (the
+one choke point all four sources funnel through) and correct the three doc
+comments that each describe this as handled.
+
+**6. 🟢** `MarkRead`'s doc scopes the `LastActivity` backfill to "an id the
+store has never seen"; the code applies it to any entry with a zero
+`LastActivity`, including one `Reconcile` created from a row that had no usable
+stamp. Behaviourally benign, but the comment says something narrower than the
+code does.
+
+**7. 🟢** `TestTriageStore_ApplyIfChanged_TrueDirtiesAndPersists` arms a 10 ms
+debounce and then reads `store.dirty`; a scheduler stall between the two
+statements fails the test spuriously. It calls `Flush()` explicitly anyway, so
+the short debounce buys nothing — use `time.Hour`, as `newTestTriageStore`
+already does for this reason.
+
+**Design decision A — deferred to Oscar. The forward clamp is a resurrection
+engine, and it is not a task-9 defect.** Finding 1's *behaviour* cannot be
+fixed inside `MarkRead`. The four stamp helpers clamp a future raw stamp to the
+current poll's `now` (tasks 4-7) and `Reconcile` reads any advance as new
+activity (task 3); marks are merely where it becomes visible. It bites without
+any mark at all — `Reconcile`'s `!seen` branch stores the clamped value too, so
+such a row resurfaces as unread every poll regardless. Severity scales with how
+far ahead the raw stamp is: a few seconds of NTP skew costs **one** spurious
+resurrection and then settles, because the next poll's `now` has overtaken the
+raw stamp; a genuinely far-future date (`GIT_COMMITTER_DATE`, a
+badly-configured build agent) churns every poll until wall-clock catches up.
+The clamp cannot simply be removed — `prActivityStamp`'s doc explains that an
+unclamped future stamp "would raise the bar past anything a real push could
+ever clear, permanently freezing the row". So the choice is between
+permanent-freeze and permanent-churn, and the code picked churn silently.
+Options: (1) have the stamp helpers report *that* they clamped and have
+`Reconcile` treat a clamped stamp like a zero stamp — no usable activity
+information, stored state applies unchanged; cheap, local, **no change to
+`TriageEntry`'s persisted shape**, so it does not collide with the deferred
+`LastCommitID` decision; (2) store the raw stamp and compare raw-to-raw, which
+changes what `LastActivity` means; (3) the opaque-token design already in
+`## Unknowns`, which solves this *and* the mirror regression case but changes
+the persisted shape and all four sources. Option 1 looks right, but this is the
+same family as the deferred unknown and the loop should not pick.
+
+**Design decision B — resolved, task 14's wording clarified.** The reviewer
+noted that task 14's "`MarkRead`/`MarkDone` … take no lock shared with `List`"
+is already violated as written: marks take `TriageStore.mu`, which `list`
+holds across its whole `Swap`. Reviewed and found **not** a defect — that
+critical section runs only in-memory `Reconcile`, with no I/O and no callback
+into the store, and lock order (`writeMu` → `mu`) is consistent everywhere.
+Task 14's line is clarified below to say what was meant.
+
+## Validation: task 10
+
+Verified against `c013808` (subject: "Restructure NotificationsConfig into
+shared + github + azure blocks"), the current tip of the branch at
+`d022ade`.
+
+- **Shape matches decision 13's YAML exactly.** `NotificationsConfig` carries
+  exactly the six shared `mapstructure` tags (`exclude_reasons`,
+  `unread_only`, `exclude_repos`, `include_repos`, `max_items`,
+  `poll_interval`) plus the two nested blocks; `NotificationsGitHubConfig`
+  carries exactly `participating_only`, `only_configured_repos`,
+  `since_days`; `NotificationsAzureConfig`/`NotificationsAzureSourcesConfig`
+  carry exactly `lookback_days`, `min_poll_interval`,
+  `sources.{review_requested,mentioned,assigned,ci_failed}` — confirmed by
+  `awk`-extracting each struct body and diffing the tag list against the
+  spec's YAML block field-by-field.
+- **Every caller of the three moved fields updated.** Repo-wide grep for
+  `.ParticipatingOnly`/`.OnlyConfiguredRepos`/`.SinceDays` outside
+  `_test.go` turns up only `internal/ui/notifications/filter.go` (now
+  reading `nc.GitHub.*`), `internal/config/config.go`'s own warning/
+  validation lines (now `cfg.Notifications.GitHub.*`), and
+  `internal/github/adapter.go:588`'s `opts.ParticipatingOnly`, which reads
+  `provider.NotifOpts.ParticipatingOnly` — confirmed a distinct type at
+  `internal/provider/list_opts.go:53-59`, not the moved config field. No
+  caller reads the old flat path anywhere in the tree.
+- **Convention 9 at every nesting level, non-vacuously.** Three dedicated
+  tests exercise mixed-case keys at the root
+  (`TestLoad_NotificationsBlock_MixedCaseKeys_Convention9`), one level deep
+  under `notifications.github`
+  (`TestLoad_NotificationsGitHubBlock_MixedCaseKeys_Convention9`), and two
+  levels deep under `notifications.azure.sources`
+  (`TestLoad_NotificationsAzureSourcesBlock_MixedCaseKeys_Convention9`).
+  Mutated `NotificationsAzureSourcesConfig.ReviewRequested`'s
+  `mapstructure` tag to a value with no matching YAML key — the deepest
+  test failed as expected (`Azure.Sources.ReviewRequested = false, want
+  true`), proving the resolution is genuinely exercised by
+  `viper`/`mapstructure`'s built-in case-insensitive field matching (no
+  hand-rolled lowercasing code exists — `v.Unmarshal(&cfg)` is the only
+  resolution path), not a test that would pass regardless.
+- **Decision 14 (no shim) genuinely honoured, including in `Save`.**
+  `TestLoad_FlatMovedGitHubKeys_AreNotHonoured` sets all three flat keys and
+  asserts they land nowhere and produce no warning. Mutation-tested by
+  reintroducing a shim in `LoadFrom` (`if v.IsSet("notifications.
+  participating_only") { cfg.Notifications.GitHub.ParticipatingOnly =
+  v.GetBool(...) }`) — the test failed as expected
+  (`GitHub.ParticipatingOnly = true, want false`), then restored via `cp`
+  from a scratchpad backup. `Config.Save()` was independently confirmed to
+  set no `notifications.*` keys at all (it round-trips whatever the file
+  already contains via `v.ReadInConfig()` + `v.WriteConfig()`), so there is
+  no shim anywhere on the write path either — this task's diff does not
+  touch `Save()`.
+- **Scope respected.** `NotificationsAzureConfig`/`Sources` carry zero Go
+  values with no `v.SetDefault("notifications.azure...")` registrations
+  (confirmed by grep — only `notifications.github.*` and the six shared
+  keys are registered) and no `c.Notifications.Azure.*` reads anywhere in
+  `Validate()` (confirmed by grep — zero hits) — task 11's defaults and
+  validation are untouched. `config.go:680`'s
+  `notificationsCounts := c.IsPaneEnabled("notifications") &&
+  c.HasGitHub()` guard is unchanged — task 13's widening is untouched.
+  `config.yaml.example` was not modified by `c013808` — task 16's docs are
+  untouched. No doc-comment claims a struct populated by a later task is
+  already populated; each says "task 11's"/"populated by task 11"
+  accurately.
+- **Doc comments checked against behaviour.** Re-read every comment
+  `c013808` added or changed: the `NotificationsConfig`,
+  `NotificationsGitHubConfig`, `NotificationsAzureConfig`,
+  `NotificationsAzureSourcesConfig` doc comments and the `LoadFrom`
+  `SetDefault` block comment all describe exactly what the code does — no
+  "always"/"never"/unconditional claim found that the code doesn't
+  establish.
+
+Full suite (`CGO_ENABLED=0 go build ./...`, `go vet ./...`,
+`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) passes.
+`gofmt -l` on every file this task touched (`internal/config/config.go`,
+`internal/config/config_notifications_test.go`,
+`internal/config/config_save_test.go`, `internal/ui/notifications/filter.go`,
+`internal/ui/notifications/filter_test.go`,
+`internal/ui/notifications/list_test.go`) is empty. Both mutants restored
+via `cp` from `/tmp/claude-1001/.../scratchpad/backups/config.go.bak`
+(never `git checkout --`); `git status --porcelain` clean and
+`git diff --stat HEAD` empty before finishing.
+
+### Re-validation 2026-08-07 — `6047aa3` (task re-ticked)
+
+Re-checked the **current state of the code**, not the fix commit's diff in
+isolation.
+
+**A. Original `→ done:` clauses still hold.** The struct still matches decision
+13's YAML exactly (tags re-extracted per struct body: six shared, three under
+`github`, `lookback_days`/`min_poll_interval`/`sources.{review_requested,
+mentioned,assigned,ci_failed}` under `azure`). The three moved fields resolve
+only at their nested paths — repo-wide grep for `.ParticipatingOnly`/
+`.OnlyConfiguredRepos`/`.SinceDays` outside `_test.go` finds only
+`nc.GitHub.*` reads in `filter.go`, `cfg.Notifications.GitHub.*` in
+`config.go`'s warning/validation, and `internal/github/adapter.go:588`'s
+unrelated `provider.NotifOpts.ParticipatingOnly`; `SetDefault` registers only
+the six shared keys plus `notifications.github.*`. Convention 9 holds at all
+three depths and is non-vacuous: mutating
+`NotificationsGitHubConfig.ParticipatingOnly`'s `mapstructure` tag killed
+`TestLoad_NotificationsGitHubBlock_MixedCaseKeys_Convention9` (plus two
+others), and the azure-level test asserts mixed-case `Lookback_Days`/
+`MIN_POLL_INTERVAL` as well as the three-deep `sources` keys. Decision 14 still
+holds end-to-end — a probe loading a config with flat
+`notifications.participating_only`/`since_days` produced
+`GitHub={false,false,0}` with **zero** warnings.
+
+**B. Findings, each checked against the code.**
+
+1. 🟡 **Fixed and pinned in both directions.** The predicate is
+   `if row.Identity.Kind != provider.KindGitHub { pass through }` — stated as
+   "this knob only has an opinion about GitHub rows", not as an Azure carve-out,
+   so a third backend is unaffected without editing this branch. Both mutants
+   re-run: (a) deleting the pass-through fails
+   `TestFilterNotifications_OnlyConfiguredRepos_NonGitHubRowsPassThrough`
+   (`got 1 rows [gh-configured], want 2`); (b) passing everything through
+   unconditionally fails that same test on its unconfigured-GitHub row plus
+   three pre-existing `OnlyConfiguredRepos` tests. The new fixture genuinely
+   mixes kinds (configured GitHub + unconfigured GitHub + Azure).
+   **Same-defect sweep on the other two `github` keys: clean, and for a
+   different reason than the prompt assumed.** `participating_only` and
+   `since_days` never reach `FilterNotifications` at all — it reads neither
+   (verified) — they are fetch-time `provider.NotifOpts` fields, and
+   `azdevops.Adapter.List` documents and implements ignoring both
+   (`adapter_notifications.go:99-107`), narrowing server-side per source
+   instead. So neither can drop an Azure row. (`opts.Max` *is* honoured
+   per-backend by both adapters, which is the known, still-open task 12, not a
+   new finding.) Every notification row from both backends sets
+   `Identity.Kind` explicitly (all four Azure sources, `mapping_notifications.go`),
+   and `Kind`'s zero value is neither constant, so no live row can fall through
+   the guard by accident.
+2. 🟢 **Fixed.** `NotificationsAzureConfig`'s doc now says the three declared
+   fields are task 11's landing site and that what task 10 omitted is their
+   defaults and validation — which matches the code (no
+   `SetDefault("notifications.azure...")`, no `Azure` read in `Validate()`).
+3. 🟢 **Fixed and mutation-killed.** The assertion is now the qualified
+   `notifications.github.only_configured_repos`; rewriting the warning string to
+   the bare `only_configured_repos` spelling fails
+   `TestLoad_OnlyConfiguredRepos_WithIncludeRepos_Warns`.
+4. 🟢 **Fixed and accurate.** `Validate()` really does check exactly
+   `GitHub.SinceDays`, `MaxItems`, `PollInterval`; the Azure block's two numeric
+   fields really are unvalidated, and the comment now names the future
+   `lookback_days: 14` default as what invalidates its own "always valid"
+   premise.
+5. 🟢 **Fixed, verified against `app.go` itself.**
+   `notificationsPollInterval` (app.go:390-400) returns `hint` when
+   `hint > configured`, unconditionally — matching "max(configured, hint)" and
+   "the hint is not overridden just because this field is set".
+   `notificationsConfiguredInterval` (app.go:378-388) is exactly
+   `poll_interval -> polling_interval -> polling.DefaultInterval`, first
+   positive wins. The `polling.MinInterval` floor is in
+   `NewNotificationsPoller` (`notifications_poller.go:53-57`) and `SetInterval`
+   (`:84-87`), as claimed. The hint's GitHub source really is `X-Poll-Interval`
+   (`github/notifications.go:381-391`).
+6. 🟢 **Fixed, and the behaviour is real.** Probed directly: after
+   `LoadFrom` + `Save()`, the orphaned flat `notifications.participating_only`/
+   `since_days` are still in the file verbatim. Note the cited pin,
+   `TestConfigSave_PreservesKeysOutsideTheConfigStruct`, exercises a *top-level*
+   unmodeled section rather than an orphaned key inside the modeled
+   `notifications` map — the general rule, not this instance. Cosmetic.
+
+**Comment hunt (this loop's recurring defect class).** Re-read every comment
+`6047aa3` touched against the code beneath it; the five above all check out.
+Two residual 🟢 imprecisions, neither an invariant the code fails to establish:
+`filter.go:19-20`'s "include_repos is ignored entirely **for those rows**"
+under-states it — the `switch` skips the include_repos case for *every* row, so
+a non-GitHub row is not subject to include_repos either (the next sentence does
+say such a row always survives the branch); and the `Azure` *field* comment in
+`NotificationsConfig` still reads "populated in full by task 11. This struct
+exists here only to give that task somewhere to land its fields", which is
+finding 2's wording one line away from where it was fixed, though its closing
+clause ("task 10 invents neither their defaults nor their validation") says the
+accurate thing.
+
+Mutation testing: 4 mutants, all killed — Kind pass-through deleted,
+`only_configured_repos` branch made unconditional, warning message
+de-qualified, `participating_only`'s `mapstructure` tag broken. Every file
+restored by `cp` from a scratchpad backup (never `git checkout --`), md5-checked
+against the pre-mutation copy; the temporary probe test was deleted and
+`git status --porcelain` is empty.
+
+Full suite (`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) passes;
+`go build ./...` and `go vet ./...` clean. `gofmt -l` on all four files
+`6047aa3` touched is empty.
+
+## Review feedback: task 10
+
+Opus review of `c013808`, 2026-08-07. Verdict REQUEST_CHANGES. Task 10
+un-ticked. Nothing here is a 🔴, but finding 1 falsifies a premise decision 13
+relies on.
+
+**A correction to the record first.** This restructure was reviewed as "a
+breaking config change to a shipped release". It is not: `git tag --contains
+0f90acf` is empty and the newest tag `v0.7.2` predates phase 1's merge by a
+month. Decision 14's own rationale ("merged to `main` but has not been
+released") is factually correct, and the silent-downgrade path is therefore
+low-stakes — the maintainer's dev config plus `config.yaml.example`, which task
+16 owns.
+
+**1. 🟡 `only_configured_repos` is documented as GitHub-only and deletes the
+entire Azure feed.** `FilterNotifications` runs on the **merged** feed
+(`internal/app/app.go:1152`), and its `nc.GitHub.OnlyConfiguredRepos` branch
+(`internal/ui/notifications/filter.go:63`) keeps only rows whose
+`Identity.Scope` appears in `cfg.GitHub.Repos`. Azure rows carry
+`Scope = pr.ProjectName`, never an `owner/repo` string, so the knob drops 100%
+of Azure notifications. Reviewer confirmed it with a throwaway probe: one
+GitHub row and one Azure row in, one GitHub row out. **Decision 13's rationale
+states this key "is vacuously true on Azure (the adapter only ever queries
+configured projects)" — that premise is what justified nesting it under
+`github`, and the code falsifies it.** The predicate is not vacuous for Azure;
+it is always false.
+
+**Resolved 2026-08-07: make the code match decision 13's stated intent.** The
+`OnlyConfiguredRepos` branch passes through any row whose `Identity.Kind` is
+not GitHub, which is what "vacuously true on Azure" means when written as
+code. This is not a design decision to defer — the spec already says what the
+behaviour should be and the code disagrees with it; the alternative (rewrite
+both doc comments to say the `github` block governs the merged feed) would
+have task 10 document a defect instead of fixing it. Pin it with a test that
+puts a GitHub row and an Azure row through the filter with
+`only_configured_repos: true` and asserts **both** survive — a
+GitHub-rows-only test passes either way. The doc comments at `config.go:92-93`
+and `config.go:143-144` must also stop claiming the `github` block is
+merged-feed-neutral, since that is the claim that hid this.
+
+**2. 🟢 `NotificationsAzureConfig`'s doc contradicts the struct it sits on.**
+`config.go:166-168` says "Left unpopulated by task 10 on purpose", with three
+fields declared on the next four lines. What task 10 left out is the *defaults
+and validation*, not the fields. Task 11's implementer reading this cannot tell
+whether the existing fields are authoritative or a stub to replace.
+
+**3. 🟢 The warning-message test cannot tell the new key path from the old.**
+`config_notifications_test.go:947` asserts `Contains(msg,
+"only_configured_repos")`, which the old flat spelling satisfies too. Assert
+the qualified `notifications.github.only_configured_repos` — the qualification
+is the point of the change.
+
+**4. 🟢 `Validate()`'s comment counts three numeric fields where the tree now
+has five.** `config.go:686-691`. `notifications.azure.lookback_days: -30` loads
+clean today with no validation at all. More importantly the comment's premise
+("an absent block is all-zero and therefore valid") stops holding the moment
+task 11 gives `lookback_days` a default of 14 — and this comment is what task
+11's implementer will read.
+
+**5. 🟢 `PollInterval`'s fallback description doesn't match the code.**
+`config.go:128-131` says the backend hint applies only when the key is zero;
+`app.go:369-395` computes `max(configured, hint)` whether or not it is set,
+with a third fallback (`polling.DefaultInterval`) the comment never mentions
+and a `polling.MinInterval` floor. A user setting `poll_interval: 30` gets 60
+against GitHub's hint. Mostly inherited from phase 1, but this commit touched
+the line.
+
+**6. 🟢** `config.go:97-99` says an orphaned flat key "is silently ignored" —
+true for the read path, but `Save()` also writes it back verbatim, so it
+survives in the file forever. Correct under decision 14 (a warning is
+forbidden), but a maintainer reading only this comment would expect the key to
+disappear on the next save.
+
+## Validation: task 11
+
+Verified against `ca6b3c7` ("config: notifications.azure defaults, source
+toggles, and lookback clamp"), current tip of the branch at this validation.
+
+- **Four independent source toggles, all defaulting on.** `LoadFrom`
+  registers `v.SetDefault("notifications.azure.sources.{review_requested,
+  mentioned,assigned,ci_failed}", true)`. This is not vacuous: mutating one
+  registration to `false` fails `TestLoad_NotificationsDefaults_WhenBlockAbsent`
+  and `TestConfigSave_PreservesMetricsAndNotifications` (confirmed by mutation,
+  restored via `cp`). A dedicated
+  `TestLoad_AzureSourceToggle_ExplicitFalse_OverridesDefaultTrue` sets exactly
+  one toggle (`review_requested: false`) and leaves the other three unset,
+  proving an explicit `false` is genuinely honoured and the unset three still
+  default on — a fixture that only checked "all true, nothing set" would pass
+  against a hardcoded-true implementation. Confirmed independently that
+  viper's `Unmarshal` does materialize an explicit `false`/`0` over the
+  registered default (neutralizing the zero-fallback branch below made the
+  explicit-zero test fail), so the mixed-case test at
+  `config_notifications_test.go` setting `MENTIONED: false`/`Ci_Failed: false`
+  is a real assertion, not a coincidental pass against the true default.
+- **`lookback_days` defaults to 14, `min_poll_interval` defaults to 300, both
+  reject negatives with the same message shape as `since_days`.**
+  `Validate()` returns `"notifications.azure.lookback_days must be >= 0, got
+  %d"` / `"notifications.azure.min_poll_interval must be >= 0, got %d"`,
+  matching `"notifications.github.since_days must be >= 0, got %d"`'s shape
+  exactly. `TestConfig_Validate_NotificationsRejectsNegative` covers both via
+  the same table-test pattern as the existing `since_days` row (a direct
+  `Validate()` mutation test, not end-to-end through `LoadFrom` — the same
+  pattern the pre-existing `since_days` negative row already uses, so this is
+  parity, not a gap specific to this task).
+- **`lookback_days` clamped to `orphanTTL`/`azureLookbackDaysMax` (30).**
+  `config.go` clamps `> azureLookbackDaysMax` down to it after the
+  zero-fallback. The three-row boundary test (29/30/31) genuinely pins the
+  exact threshold, verified independently: mutating the comparison to `> 25`
+  (a "one day early" threshold) leaves the 30 and 31 rows green — both land on
+  the same clamp target (30) regardless of which threshold fired — and is
+  caught only by the 29 row (`got 30, want 29`). Restored via `cp`, confirmed
+  byte-identical (`diff` clean) before continuing.
+- **Zero is not "unbounded" for `lookback_days`.** An explicit
+  `lookback_days: 0` falls back to `DefaultAzureLookbackDays` via a dedicated
+  `if cfg.Notifications.Azure.LookbackDays == 0 { ... }` branch in `LoadFrom`,
+  pinned by `TestLoad_AzureLookbackDays_Zero_FallsBackToDefault`. Verified
+  this branch is load-bearing, not redundant with `v.SetDefault`: neutralizing
+  it (`if false { ... }`) fails the test (`LookbackDays = 0, want 14`) because
+  viper's `Unmarshal` materializes an explicit `0` from the file over the
+  registered default. Restored via `cp`, confirmed byte-identical.
+- **`orphanTTL`'s doc comment corrected to name the condition.**
+  `internal/azdevops/notifications_reconcile.go`'s comment now reads "It is
+  generous relative to the default lookback only while
+  notifications.azure.lookback_days stays <= 30: beyond that, ... different
+  sets", replacing the prior unconditional guarantee, and cross-references
+  `internal/config.azureLookbackDaysMax`. `config.go`'s `azureLookbackDaysMax`
+  comment points back at `azdevops.orphanTTL` by name. Both comments read
+  accurately against the code; each says "if this value changes, change the
+  other," which is the best two files that cannot import each other can do —
+  correctly flagged by the implementer as a duplication that cannot be
+  structurally prevented from drifting, only documented against.
+- **`Validate()`'s absent-block comment updated and now true.** The comment
+  above the numeric checks now correctly states that `Azure.LookbackDays`/
+  `Azure.MinPollInterval` default non-zero via `v.SetDefault` (unlike the
+  three Go-zero-value fields), and that an absent/all-default block remains
+  valid only because those defaults themselves satisfy `>= 0` — matching
+  task 10 review finding 4's request.
+- **Disabling every source is legal, not a config error, and does not hide
+  the tab.** `TestLoad_AzureSources_AllDisabled_IsLegal` pins `LoadFrom`
+  returning no error with all four toggles false.
+  `NotificationsConfig.Azure`'s doc comment states this is a Go interface
+  fact about `*azdevops.Adapter`, not config-driven; grepped the whole tree
+  for `Sources.{ReviewRequested,Mentioned,Assigned,CIFailed}` and
+  `Notifications.Azure` usage outside `_test.go` — the only production
+  reader is `internal/azdevops/adapter_notifications.go` (task 8/14's
+  per-source dispatch), and nothing in `internal/config` or any capability
+  check reads the toggles to decide whether Azure implements
+  `provider.NotificationSource`.
+- **Scope respected.** `config.go:790`'s
+  `c.IsPaneEnabled("notifications") && c.HasGitHub()` guard is unchanged
+  (task 13 untouched). `cmd/azdo-tui/main.go:330-331` still calls
+  `NewAdapterWithNotifications(client, notifStore, 0,
+  azdevops.DefaultNotificationSourceToggles())` with a hardcoded zero
+  lookback and default toggles — confirmed this is task 14's wiring gap, not
+  a task 11 failure, per the task list's own note. `ca6b3c7` touches no
+  README/Architecture.md/config.yaml.example/FAQ file (task 16 untouched).
+- **Doc comments checked against behaviour.** Re-read every comment
+  `ca6b3c7` added or changed in `config.go` and
+  `notifications_reconcile.go` against the code beneath it — no
+  "always"/"never"/unconditional claim found unpinned; the one previously
+  unconditional claim (`orphanTTL`'s guarantee) is the one this task was
+  required to fix, and it now names its condition correctly.
+
+Mutation testing: 3 targeted mutants (SetDefault flipped to `false` on one
+source toggle, clamp threshold shifted to `> 25`, zero-fallback branch
+neutralized) — all 3 killed by the existing test suite, each verified
+independently in this validation pass rather than taken on the implementer's
+word. All files restored via `cp` from pre-mutation backups (never `git
+checkout --`), confirmed byte-identical (`diff` clean) and `git status
+--porcelain` empty before finishing.
+
+Full suite (`CGO_ENABLED=0 go build ./...`, `go vet ./...`,
+`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) passes.
+`gofmt -l` on every file this task touched (`internal/config/config.go`,
+`internal/config/config_notifications_test.go`,
+`internal/config/config_save_test.go`,
+`internal/azdevops/notifications_reconcile.go`) is empty.
+
+### Re-validation 2026-08-07 — `0eeb10a` (INCOMPLETE, task stays un-ticked)
+
+Re-checked the **current state of the code**, not the fix commit's diff in
+isolation. Build, vet and the full suite
+(`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) are green;
+`gofmt -l` on all six files `0eeb10a` touched is empty.
+
+**A. Original `→ done:` clauses still hold.** Four toggles still default on
+(`v.SetDefault("notifications.azure.sources.*", true)`, mutation-killed:
+flipping `mentioned` to `false` fails three tests); `lookback_days` defaults
+to 14 and `min_poll_interval` to 300; both reject negatives with
+`"notifications.azure.<key> must be >= 0, got %d"`, the same shape as
+`notifications.github.since_days`; the 30-day clamp still holds with its
+29/30/31 boundary rows; `lookback_days: 0` still falls back to 14
+(mutation-killed); all four toggles false still loads clean
+(`TestLoad_AzureSources_AllDisabled_IsLegal`) and cannot affect capability —
+`hasNotificationCapability` is a type assertion plus
+`CompositeProvider.HasNotifications`, which asserts `b.(NotificationSource)`
+and reads no toggle, and `Adapter.list` returns `(rows, nil)` at
+`jobCount == 0` rather than treating "no sources ran" as an outage.
+
+**B. Every finding and both decisions genuinely fixed — each verified, not read.**
+
+1. 🟡 **Fixed.** `config.go:203-222` now states the real post-condition set:
+   "a value that reached LoadFrom's body is negative (a config error
+   Validate() rejects below) or in [1, 30]" — i.e. `{n < 0} ∪ [1, 30]` — and
+   names the un-normalized case explicitly ("a *Config not built via LoadFrom
+   -- NewWithPath's setup-wizard constructor, or any bare struct literal").
+   Checked against the code: the `== 0` fallback and the `> 30` clamp are the
+   only two normalizations, and `Validate()`'s guard is `< 0`.
+2. 🟡 **Fixed, verified against the four source files rather than the
+   comment.** `SourceAssigned` and `SourceCIFailed` are the only two whose
+   signatures take `lookbackDays`; `SourceReviewRequested(mc, userID, top,
+   now)` and `SourceMentioned(mc, userID, now)` do not. Confirmed at the
+   query layer too: `ListRecentlyMentionedWorkItems`' WIQL
+   (`workitems.go:316-318`) is `[System.Id] IN (@RecentMentions)` with no
+   date clause, while `ListRecentlyAssignedWorkItems` (`workitems.go:387-393`)
+   and `ListMyFailedPipelineRuns` (`pipelines.go:55-59`) both consume it.
+3. 🟡 **Fixed, and the drift detector genuinely detects.**
+   (a) `NewAdapterWithNotifications` clamps independently
+   (`adapter_notifications.go:86-88`); deleting that clamp fails
+   `TestNewAdapterWithNotifications_LookbackDays_ClampedToMax`'s two
+   above-max rows. `orphanTTL`'s comment no longer claims the gap can only
+   be closed by config. (b) `MaxNotificationLookbackDays` is **derived**,
+   `int(orphanTTL / (24 * time.Hour))`, not restated. Shrinking `orphanTTL`
+   to `7 * 24 * time.Hour` fails `TestAzureLookbackDaysMax_ConfigAndAdapterAgree`
+   with `config.AzureLookbackDaysMax = 30, azdevops.MaxNotificationLookbackDays = 7`;
+   the default sibling fires too (`DefaultNotificationLookbackDays` 14 → 15
+   fails `TestDefaultAzureLookbackDays_ConfigAndAdapterAgree`). No import
+   cycle: `go list -deps ./internal/config` contains no `internal/azdevops`,
+   and `internal/config`'s import list is `errors fmt internal/provider viper
+   go-keyring os path path/filepath strings`.
+4. 🟡 **Fixed — the named mutant is dead.** Changing `config.go:704`'s
+   `== 0` to `<= 0` fails
+   `TestLoad_AzureLookbackDaysNegative_RejectedByLoadFrom`
+   ("LoadFrom() = nil error, want an error naming
+   notifications.azure.lookback_days").
+5. 🟢 **Fixed.** All four mixed-case source rows now assert an explicit
+   `false` against a `true` default, so none can pass by coincidence.
+6. 🟢 **Fixed, and the judgement call is correct.** The comment documents the
+   post-change state: both numeric `SetDefault`s are redundant given their
+   `== 0` fallbacks, while the four `sources.*` ones are load-bearing.
+   Verified by mutation both ways — deleting **both** numeric registrations
+   leaves the entire tree green (the comment's claim exactly), while flipping
+   one `sources.*` registration fails three tests.
+7. 🟢 **Fixed and accurate.** The disabled-source triage-history note matches
+   `Reconcile`'s `now.Sub(v.LastSeen) > orphanTTL` prune on entries the
+   current rows do not carry.
+- **Decision A — done and pinned in both directions.** The clamp appends to
+  `Config.Warnings` in the established shape
+  (`"notifications.azure.lookback_days: 90 exceeds the 30-day maximum — using 30"`);
+  deleting the append fails `TestLoad_AzureLookbackDays_ClampWarns`, and
+  *adding* an append to the `0 → 14` branch fails
+  `TestLoad_AzureLookbackDays_ZeroFallback_NoWarning`. It surfaces exactly
+  like the other three: `app.go:1799` passes `m.config.Warnings` to
+  `notificationsTabContent` → `notificationsWarningsBanner`, which joins the
+  slice verbatim — no per-message filtering anywhere on that path.
+- **Decision B — done and pinned.** `min_poll_interval: 0` falls back to 300
+  (`config.go:737-739`); deleting the branch fails
+  `TestLoad_AzureMinPollInterval_Zero_FallsBackToDefault`.
+
+**C. What is still missing — two live surviving mutants, both one-line test
+additions.** Neither is a behavioural defect: the code is correct today.
+Both are the same class this loop keeps re-finding — a normalization whose
+negative half nothing pins, next to a name or comment that claims it is
+covered.
+
+1. **`min_poll_interval`'s `== 0` → `<= 0` survives the whole tree.** This is
+   the exact twin of finding 4, created by decision B *in this same commit*.
+   Verified: `config.go:737`'s `if cfg.Notifications.Azure.MinPollInterval == 0`
+   changed to `<= 0` leaves `./internal/... ./cmd/...` fully green — a user's
+   `min_poll_interval: -1` would then silently become 300 instead of erroring.
+   Finding 4's own argument carries verbatim ("`since_days` has no `LoadFrom`
+   branch that can swallow a negative before `Validate()` sees it"), and
+   `min_poll_interval` now has one. The risk is concrete rather than
+   theoretical because the code comment at `config.go:729-736` explicitly
+   frames this branch as "Symmetric with lookback_days above", inviting a
+   future maintainer to edit both together — at which point one is caught and
+   one is not. `TestConfig_Validate_NotificationsRejectsNegative`'s
+   `min_poll_interval` row cannot substitute: it calls `Validate()` on a
+   struct literal and never runs `LoadFrom`'s normalization, which is the
+   whole reason finding 4 demanded a `LoadFrom`-level row.
+   **Fix:** add a `TestLoad_AzureMinPollIntervalNegative_RejectedByLoadFrom`
+   alongside the `lookback_days` one — a temp YAML with
+   `min_poll_interval: -1`, asserting `LoadFrom` errors and the message names
+   `notifications.azure.min_poll_interval`.
+
+2. **`NewAdapterWithNotifications`' `<= 0` floor → `== 0` survives the whole
+   tree, and the new test's row name claims otherwise.**
+   `adapter_notifications.go:83`'s `if lookbackDays <= 0` changed to `== 0`
+   leaves `./internal/... ./cmd/...` green, so a negative `lookbackDays`
+   reaches `notifLookbackDays` un-floored (the WIQL builders then clamp it to
+   `@Today-0`, the degenerate window the floor exists to prevent). The gap is
+   pre-existing, but `0eeb10a` added the test that now covers this
+   constructor and gave its only sub-30 row the name **"non-positive falls
+   back to the default"** while supplying `lookbackDays: 0` — the row asserts
+   less than its name claims, which is finding 5's shape one file over.
+   Convention 11 also asks for this directly: "Test a negative input row
+   alongside the zero row."
+   **Fix:** add `{name: "negative falls back to the default", lookbackDays:
+   -1, want: DefaultNotificationLookbackDays}` to
+   `TestNewAdapterWithNotifications_LookbackDays_ClampedToMax`'s table, and
+   either rename the existing row to "zero falls back to the default" or
+   leave it once the negative row makes the "non-positive" claim true.
+
+**Comment hunt (the recurring class), residual 🟢 only — none blocking.**
+Re-read every comment `0eeb10a` changed against the code beneath it. Three
+imprecisions, none an invariant the code fails to establish: `orphanTTL`'s
+"If this constant's value ever changes, **both** `MaxNotificationLookbackDays`
+and `internal/config.AzureLookbackDaysMax` must change with it" asks a
+maintainer to hand-edit a constant that is derived and changes by itself, one
+line above the comment that says so; the same comment's "that gap cannot open
+through any caller of this package" is true for the constructor path but
+`SourceAssigned`, `SourceCIFailed` and `Reconcile` are all exported, so a
+caller composing them directly could still open it; and `Config.Warnings`'
+own field comment (`config.go:42-44`) plus `notificationsWarningsBanner`'s
+(`app.go:1660`) both still enumerate the warning sources as "unrecognised
+exclude_reasons and malformed repo globs" — already two short before this
+commit, three short now that the clamp warns. Separately,
+`config_notifications_test.go:653`'s "All three rows use -1 on purpose" sits
+above a five-row table (inherited from `ca6b3c7`, untouched here).
+
+Mutation testing: 11 mutants — 9 killed (`lookback_days` `== 0` → `<= 0`;
+`orphanTTL` 30d → 7d; `DefaultNotificationLookbackDays` 14 → 15; the
+constructor's max clamp deleted; the clamp's `Warnings` append deleted;
+`min_poll_interval`'s zero fallback deleted; a `Warnings` append added to the
+`0 → 14` branch; `sources.mentioned`'s `SetDefault` flipped to false; and
+both numeric `SetDefault`s deleted, which correctly changed nothing, as its
+comment claims) and **2 survived** (section C). Every file restored by `cp`
+from `scratchpad/valbak/` (never `git checkout --`), md5-verified identical
+to the pre-mutation copy; `git status --porcelain` empty and the tree green
+afterwards.
+
+### Re-validation 2026-08-07 — `6556b25` (task re-ticked)
+
+Narrow re-check of the delta only; `0eeb10a`'s record above still stands
+unchanged. `6556b25` touches no production behaviour — its `config.go` and
+`app.go` hunks are comment-only, and the two code-adjacent files are a new
+test and a table row.
+
+**Both surviving mutants are now dead, verified by applying each mutation
+against the whole tree rather than by reading the report.**
+
+1. `config.go`'s `if cfg.Notifications.Azure.MinPollInterval == 0` changed to
+   `<= 0` now fails `TestLoad_AzureMinPollIntervalNegative_RejectedByLoadFrom`
+   ("LoadFrom() = nil error, want an error naming
+   notifications.azure.min_poll_interval"). The new test drives the full
+   `LoadFrom` path from a `t.TempDir()` YAML fixture carrying
+   `min_poll_interval: -1`, mirroring its `lookback_days` twin, and asserts
+   the error names the qualified key.
+2. `adapter_notifications.go:83`'s `if lookbackDays <= 0` changed to `== 0`
+   now fails
+   `TestNewAdapterWithNotifications_LookbackDays_ClampedToMax/negative_falls_back_to_the_default`
+   ("notifLookbackDays = -1, want 14"). Both row names now match what they
+   supply ("zero …" / "negative …"), satisfying convention 11's
+   negative-row-alongside-the-zero-row requirement.
+
+**The three rewritten comments read accurately against their code.**
+
+- `Config.Warnings`' field comment enumerates exactly four diagnostics, and
+  the file has exactly four `Warnings = append(...)` sites: the
+  `exclude_reasons` sanitizer (`config.go:674`), `sanitizeRepoGlobs`
+  (`config.go:335`, called for both `exclude_repos` and `include_repos` —
+  one diagnostic class, which is how the comment words it),
+  `only_configured_repos` overriding a non-empty `include_repos`
+  (`config.go:694`) and the `lookback_days` clamp (`config.go:728`).
+  Enumerated list and append sites match one-for-one.
+- `notificationsWarningsBanner`'s comment (`app.go:1658-1668`) lists the same
+  four and explicitly defers to `Config.Warnings`' comment as "the
+  authoritative list", so the next warning added has one place to drift from
+  rather than two.
+- `orphanTTL`'s rewrite no longer asks for a hand-edit of the derived
+  constant — it now states that `MaxNotificationLookbackDays` "updates
+  itself … derived from orphanTTL, not restated" while
+  `internal/config.AzureLookbackDaysMax` "does not and must be changed by
+  hand", which is exactly the code. Its replacement claim about the exported
+  bypass paths was checked against all three signatures rather than taken on
+  trust: `SourceAssigned(mc, lookbackDays, now)` and `SourceCIFailed(mc,
+  userID, lookbackDays, top, now)` both pass `lookbackDays` straight to the
+  client layer with no upper bound anywhere (`ListRecentlyAssignedWorkItems`
+  and `ListMyFailedPipelineRuns` clamp only *negatives* to 0, never a
+  maximum), and `Reconcile(rows, stored, now)` takes no `lookbackDays` at
+  all. So all three are genuinely reachable without the constructor's clamp.
+  The list is illustrative rather than exhaustive — `MultiClient`/`Client`'s
+  own exported `List*` methods are unbounded too — but it errs toward
+  claiming the gap is *open*, which is the safe direction for this class of
+  comment.
+
+**Nothing outside scope moved.** `cmd/azdo-tui/main.go` still calls
+`NewAdapterWithNotifications(client, notifStore, 0,
+azdevops.DefaultNotificationSourceToggles())` with a hardcoded lookback and
+default toggles (task 14's wiring gap, untouched); no `mapstructure` key was
+added or renamed; `## Unknowns` and every other spec section are untouched by
+`6556b25` (it contains no `.spec` file).
+
+Full suite (`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) passes;
+`go build ./...` and `go vet ./...` clean; `gofmt -l` on all five files
+`6556b25` touched is empty. Both mutants restored by `cp` from
+`scratchpad/valbak2/`, md5-verified byte-identical to the pre-mutation copy;
+`git status --porcelain` empty afterwards.
+
+## Review feedback: task 11
+
+Opus review of `ca6b3c7`, 2026-08-07. Verdict REQUEST_CHANGES. Task 11
+un-ticked. No 🔴 — the mechanics are right and were verified independently.
+
+**Two things the review confirmed, recorded because they are subtle.** The
+clamp genuinely *closes* the resurfaces-as-unread gap at `lookback_days <= 30`
+rather than merely narrowing it: pruning needs `now - LastSeen > 30d`, and for
+an unchanged subject `LastSeen >=` the field the server-side window filters on,
+so by the time the TTL fires the subject is already outside any window `<= 30`.
+And the `>` vs `>=` mutant at the clamp really is **equivalent** — `if x > 30 {
+x = 30 }` and `if x >= 30 { x = 30 }` agree on every input because the
+assignment target equals the threshold. The implementer's judgement was right;
+that is not a coverage gap.
+
+**1. 🟡 `LookbackDays`' doc states a post-condition the code does not
+establish** (`config.go:211-212`). It says the field is "always either 0 (a
+config error caught below) or in [1, 30]". `0` is impossible at `Validate()`
+time — the fallback at `:653` already replaced it — and if it did arrive it
+would be *accepted*, since the guard at `:819` is `< 0`. The set the code
+establishes is `{n < 0} ∪ [1, 30]`, and negatives are exactly what the sentence
+omits. Failure: task 14's implementer reads this as the contract for the value
+it plumbs in, concludes non-positive cannot reach the adapter, and drops
+`NewAdapterWithNotifications`'s `if lookbackDays <= 0` floor — but a `Config`
+from `NewWithPath` (the setup wizard) or any struct literal has `LookbackDays
+== 0`, passes `Validate()`, and reaches Azure with `@Today-0`.
+
+**2. 🟡 `LookbackDays` is documented as bounding all four sources; it bounds
+two** (`config.go:203`). Only `SourceAssigned` and `SourceCIFailed` take a
+`lookbackDays`. `SourceReviewRequested` is "open PRs where I am a reviewer",
+unbounded by time, and `SourceMentioned`'s stage-1 WIQL is `@RecentMentions`
+with no date clause at all. `azdevops`' own `DefaultNotificationLookbackDays`
+gets this right, so the two packages now contradict each other — and task 16
+derives its documented key list from the struct per convention 25, so the wrong
+claim would ship to the README.
+
+**3. 🟡 The duplicated 30-day bound has no drift detector.** The commit message
+says the cross-referencing comments mean the constants "cannot drift silently".
+They can — comments are documentation, not a mechanism; nothing in the build,
+the type system or the suite relates `config.azureLookbackDaysMax` to
+`azdevops.orphanTTL`. Failure: someone shrinks `orphanTTL` to 7 days to bound
+the state file, updates nothing in `internal/config`, and `lookback_days: 30`
+still loads clean — reintroducing precisely the defect the clamp was added to
+prevent, with the suite green. **Fix both ways, they are complementary:**
+(a) apply the clamp inside `NewAdapterWithNotifications` too, where `orphanTTL`
+is actually in scope and where the window is decided — this also fixes
+`orphanTTL`'s new comment, which claims the gap "cannot open through ordinary
+config loading" while any direct caller passing 90 opens it; and (b) export the
+bound from `azdevops` and assert equality against `config`'s in a one-line test
+in a package that already imports both (`cmd/azdo-tui` or `internal/app`), so
+no new dependency is created for `internal/config`. The same pattern applies to
+`DefaultAzureLookbackDays` ↔ `azdevops.DefaultNotificationLookbackDays`.
+
+**4. 🟡 A live surviving mutant: nothing pins that a negative `lookback_days`
+reaches `Validate()`.** `TestConfig_Validate_NotificationsRejectsNegative`
+calls `Validate()` on a struct literal, which never sees `LoadFrom`'s
+normalization, and no YAML fixture anywhere writes a negative. **Verified:
+changing `== 0` to `<= 0` at `config.go:653` leaves the whole `internal/config`
+suite green** — the user's `lookback_days: -1` silently becomes 14 and they
+never learn the key was malformed. The `since_days` parity argument does not
+carry: `since_days` has no `LoadFrom` branch that can swallow a negative before
+`Validate()` sees it, and `lookback_days` now does. Add a `LoadFrom`-level row
+writing `lookback_days: -1` to a temp config and asserting the error.
+
+**5. 🟢** Two of the four mixed-case source assertions
+(`config_notifications_test.go:314,320`) set `true` where the default is now
+`true`, so they would pass even if viper stopped lowercasing keys — while their
+failure messages claim to pin case resolution. The two `false` rows do
+discriminate; only the claim is wrong.
+
+**6. 🟢** `v.SetDefault("notifications.azure.lookback_days", …)`
+(`config.go:535`) is fully redundant given the `== 0` fallback — deleting it
+changes nothing observable and no test fails. Harmless and good symmetry, but
+the block comment presents both mechanisms as load-bearing, so the next person
+mutation-testing this file burns time on a survivor that is by design.
+
+**7. 🟢** Disabling a source for >30 days silently discards its triage history:
+`Reconcile` prunes on `LastSeen`, which only advances for rows a source
+actually returns. Toggle `sources.mentioned: false` for a month and back on and
+every mention you had read or dismissed returns as unread. Defensible, but
+undocumented, and it belongs next to the toggles where the user makes that
+choice.
+
+**Decision A — settled 2026-08-07: the clamp warns.** `lookback_days: 90`
+currently becomes 30 with no feedback. `Config.Warnings` exists for exactly this
+class and is already used three times in the same function for notifications
+config, and it renders as a banner *in the notifications tab itself* — the one
+screen where a lookback surprise is noticed. The review read the silence as
+having fallen out of the code rather than chosen, and the evidence supports
+that: the comment at `config.go:662-664` weighs exactly two options, silent
+normalization versus a validation error, and never considers the third sitting
+three lines above it. Decision 14 forbids a *deprecation* warning for removed
+keys, which is a different thing. So: **warn on the clamp** (shape:
+`notifications.azure.lookback_days: 90 exceeds the 30-day maximum — using 30`),
+and **stay silent on `0 → 14`**, because zero reads as "unset" rather than as
+an expressed intent. This is settled here rather than deferred because it
+applies a pattern this file already established three times over; it invents
+nothing.
+
+**Decision B — settled 2026-08-07: `min_poll_interval: 0` falls back to 300.**
+`lookback_days: 0` falls back to its default while `min_poll_interval: 0` is
+currently left as a literal 0, with the semantics deferred to task 14. Under
+decision 10 a literal 0 means *no self-throttle* — 4+ queries per project on
+every 30-second tick, which is exactly the cost decision 10 exists to bound.
+That is the same footgun `lookback_days: 0` was given a fallback for, and
+decision 13's closing note already states the principle: the shared-key
+convention that zero means widest is what makes these keys dangerous. Applying
+the spec's own stated rule to the sibling key is not a new design decision.
+Both keys therefore treat 0 as unset. If a genuine "no throttle" escape hatch
+is ever wanted it should be an explicit sentinel, not a value a typo produces.
+
+## Validation: task 12
+
+Verified against `7040c11` by reading the code (not the implementer's
+commit message) and mutation-testing every load-bearing claim.
+
+- **Cap applied after merge-and-sort, at the composite only.** Read
+  `internal/provider/composite.go`'s `mergeNotifications`: the
+  `sort.SliceStable` over `UpdatedAt`/`Kind`/`Scope`/`ID` runs before the
+  `if maxItems > 0 && len(all) > maxItems { all = all[:maxItems:maxItems] }`
+  truncation. Mutated the file (via a `cp`-saved backup, restored the same
+  way afterward) to swap the two blocks so truncation ran *before* the sort.
+  Three tests went red, including the new
+  `TestCompositeProvider_Notifications_TwoBackendsEachExceedCap_KeepsGlobalNewest`
+  and the pre-existing `TestCompositeProvider_Notifications_MaxTruncatesToNewest`
+  / `..._MaxAppliedOnPartialPath` — so the required test is genuinely
+  order-sensitive, not length-only. File restored via `cp`, `git status`
+  clean afterward.
+- **Per-backend truncation removed, not left in place.** Grepped the whole
+  tree for every non-test `.Max`/`opts.Max` reference
+  (`internal/provider/composite.go`, `internal/provider/list_opts.go`,
+  `internal/github/adapter.go`, `internal/github/notifications.go`,
+  `internal/azdevops/adapter_notifications.go`) — every hit is either the
+  composite's own application of the cap or a doc comment stating that the
+  backend ignores it. Confirmed there are only two production
+  `NotificationSource` implementations in the repo
+  (`internal/github/adapter.go`, `internal/azdevops/adapter_notifications.go`)
+  and mutation-tested both directly: reintroduced a truncation block in
+  `github.Adapter.List` (killed by
+  `TestAdapter_List_MaxDoesNotTruncateAtThisLayer/Max_smaller_than_result`)
+  and in `azdevops.Adapter.list` (killed by the same-named test's identical
+  subtest) — both restored via `cp`, `git status` clean afterward.
+- **Required test present and correctly shaped.**
+  `TestCompositeProvider_Notifications_TwoBackendsEachExceedCap_KeepsGlobalNewest`
+  drives two capable backends each returning 5 rows (Max: 4) in
+  non-canonical (non-newest-first) arrival order and asserts both `len(got)
+  == 4` and the exact surviving IDs span both backends and are the true
+  global newest (`gh-i9,az-i8,az-i7,az-i6`) — a naive
+  truncate-per-backend-then-merge bug is shown in the test's own doc comment
+  to pass a length-only assertion while failing this one (confirmed above by
+  mutation).
+- **Convention 13 boundary rows.**
+  `TestCompositeProvider_Notifications_MaxBoundary_ExactlyCapAcrossTwoBackends`
+  (merged total across two backends lands exactly on Max) and
+  `TestCompositeProvider_Notifications_MaxBoundary_SingleBackendSuppliesExactlyCap`
+  (one backend alone supplies exactly Max rows, the other's rows are pushed
+  out entirely) are both present and new to this commit.
+- **Convention 11 negative row alongside zero.**
+  `TestCompositeProvider_Notifications_MaxNegativeIsUncapped` (new, two
+  backends, `Max: -1`) sits alongside the pre-existing single-backend
+  `TestCompositeProvider_Notifications_MaxZeroIsUncapped` (`Max: 0`) —
+  confirmed both present and unmodified/added respectively.
+- **Partial failure + cap.** The pre-existing
+  `TestCompositeProvider_Notifications_MaxAppliedOnPartialPath` already
+  covers this exactly: one backend returns `broken.listErr`, the healthy
+  backend returns 3 rows against `Max: 2`, and the test asserts both
+  `errors.As(err, &pe)` (a `*PartialError` still surfaces) and that the cap
+  held (`"new,mid"`, `cap(got) == len(got)`). This test was not touched by
+  `7040c11` (confirmed by the diff below) and still passes.
+- **Phase 1's existing single-backend `Max` tests unchanged.**
+  `git diff 0f90acf..HEAD -- internal/provider/composite_notifications_test.go`
+  shows only additions (four new `Test...` functions appended after the
+  pre-existing `TestCompositeProvider_Notifications_MaxAppliedOnPartialPath`)
+  — no edits to any pre-existing test body, confirmed by reading the diff
+  directly rather than trusting the commit message.
+- **Per-adapter replacement tests are load-bearing, not decorative.**
+  `TestAdapter_List_MaxDoesNotTruncateAtThisLayer` in both
+  `internal/github/adapter_notifications_test.go` and
+  `internal/azdevops/adapter_notifications_test.go` were each confirmed to
+  fail when truncation is reintroduced in their respective adapter (see
+  above) — not tautologies.
+- **Deleted `TestAdapter_List_LargerMaxLaterServedFromCache_IsNotStuckAtSmallerMax`
+  (github) drops no non-Max coverage.** Its two components — multi-page
+  `Link rel="next"` walk assembly, and 304-conditional cache reuse across
+  sequential calls (including copy-safety, mutating the first result before
+  the second call) — are both independently and thoroughly covered at the
+  `NotificationsClient` level, unaffected by this deletion:
+  `TestNotificationsClient_List_FollowsLinkHeader_MultipleRels` (multi-page
+  assembly), `TestNotificationsClient_List_304_ReturnsCachedSliceUnchanged`
+  (304 cache reuse + copy safety), `TestNotificationsClient_List_304OnSecondPage_FailsWholeList`
+  (multi-page + 304 interaction), and
+  `TestNotificationsClient_List_DifferentRequestShape_NeverSendsMismatchedValidator`
+  (cache scoped to request shape) — all pre-dating this commit. The deleted
+  test's own unique angle (a *smaller* `Max` poisoning the cache validator
+  for a *later, larger* `Max` call) is moot under the new contract: `Adapter.List`
+  no longer forwards `opts.Max` into `NotificationListOpts`/`buildPath` at
+  all (confirmed by reading `internal/github/adapter.go:597-600`), so two
+  calls with different `Max` values are now, by construction, the same
+  request shape — there is no adapter-level scenario left for that test to
+  guard.
+- **Doc comments checked against code.** `internal/github/adapter.go`'s
+  claim that `List`'s returned slice is bounded by `maxNotificationPages ×
+  notifPerPageCap` was checked against `NotificationsClient.List`
+  (`internal/github/notifications.go:251-352`): the page-walk loop enforces
+  `pages > maxNotificationPages` as cycle protection, `buildPath` sets
+  `per_page=notifPerPageCap` on every request, and `Adapter.List` maps the
+  wire slice 1:1 with no additional filter or truncation — the bound holds
+  as an upper bound. `internal/provider/list_opts.go`,
+  `internal/provider/composite.go`, `internal/github/notifications.go` and
+  `internal/azdevops/adapter_notifications.go`'s rewritten comments were all
+  read against their code and match.
+- **Out-of-scope check.** `cmd/azdo-tui/main.go:330-331` still passes a
+  hardcoded `0` and `azdevops.DefaultNotificationSourceToggles()` (task 14's
+  territory) — untouched by this commit, confirmed by reading the current
+  file.
+
+Full suite (`CGO_ENABLED=0 go build ./... && go vet ./...` then
+`CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`) passes clean.
+`gofmt -l internal/provider internal/github internal/azdevops` lists only
+the six pre-existing offenders (`adapter_list_test.go`, `adapter_url_test.go`,
+`logs_test.go`, `mapping_test.go`, `timeline_test.go`, `workitems.go`, all in
+`internal/azdevops/`) — none of the files this task touched. All mutations
+were applied to `cp`-saved backups and restored via `cp` (never `git
+checkout --`), confirmed byte-identical and `git status` clean before
+finishing.
+
+### Re-validation 2026-08-07 — `8a03257` (task re-ticked)
+
+Escalated re-validation after an opus review returned REQUEST_CHANGES on the
+first COMPLETE (see `## Review feedback: task 12` below, which is
+authoritative for the reasoning). Re-checked `8a03257`'s fix for Decision C
+and both findings by mutation, not by reading.
+
+**Decision C — `CompositeProvider.List` zeroes `Max` on the fan-out, keeps it
+for its own cap.**
+
+- Reverted the zeroing (`backend.List(backendOpts)` → `backend.List(opts)`,
+  via a `cp`-saved backup, restored the same way): both
+  `TestCompositeProvider_Notifications_ZeroesMaxOnFanOut` and
+  `TestCompositeProvider_Notifications_NestedComposite_ZeroesMaxAtEveryLevel`
+  went red (`backend received Max = 2, want 0`). The nested test genuinely
+  exercises double-zeroing through two composite levels, not just the outer
+  one — it is not testing what its name claims by accident.
+- Mutated `backendOpts.ParticipatingOnly = false` and separately
+  `backendOpts.Since = time.Time{}` immediately after the `Max = 0` line
+  (each reverted before the next): both mutations turned the same two tests
+  red (`ParticipatingOnly = false, want true`; `Since = 0001-01-01…, want
+  2026-07-01…`), confirming `ParticipatingOnly`/`Since` genuinely reach
+  backends intact and the tests do not just check `Max`.
+- Grepped `internal/provider/composite.go` for `.List(` — exactly one
+  fan-out call site (`backend.List(backendOpts)` inside the single
+  goroutine loop in `List`). Nothing else calls a backend's `List`, so
+  there is no second, unzeroed path to miss.
+- Re-ran the earlier truncate-before-sort mutation on `mergeNotifications`
+  (moving `all[:maxItems:maxItems]` above `sort.SliceStable`) against the
+  current code: `TestCompositeProvider_Notifications_MaxTruncatesToNewest`,
+  `..._MaxAppliedOnPartialPath` and
+  `..._TwoBackendsEachExceedCap_KeepsGlobalNewest` all still went red exactly
+  as in the first pass — Decision C's zeroing did not touch, and did not
+  accidentally neuter, the composite's own real-value cap.
+
+**Finding 1 (🟡, github page bound) — fixed and re-read against the code.**
+`internal/github/adapter.go`'s comment now states the bound conditionally:
+`maxNotificationPages` is an unconditional cap on the page *count*; the
+`× notifPerPageCap` row-count multiplier holds only "for as long as the
+server's own next-links keep returning close to `notifPerPageCap` rows per
+page". Checked against `buildPath` (`notifications.go:371-381`, which sets
+`per_page=notifPerPageCap` only on the request it builds for page 1) and
+`nextPageURL` (`client.go:166-190`, which parses and returns the server's
+`Link rel="next"` URL verbatim with no rewrite) — pages 2..N are fetched via
+`c.getPage(next, "")` with that server-supplied URL, so nothing in the walk
+re-asserts `per_page` past the first request. The claim now correctly
+attributes the unconditional part (page count) and the conditional part (row
+count per page) to what the code actually guarantees, and does not assume a
+well-behaved server — which is exactly the case `maxNotificationPages`'s own
+doc comment says the constant exists to survive.
+
+**Finding 2 (🟢, dropped empty-inbox assertion) — fixed and mutation-killed.**
+Rewrote `Adapter.List`'s `out := make([]provider.Notification, len(wire))` +
+indexed assignment as `var out []provider.Notification` + `append` (via a
+`cp`-saved backup, restored after): `TestAdapter_List_EmptyInboxReturnsNonNilEmptySlice`
+went red (`List() result = nil, want an empty-but-non-nil slice`), confirming
+the restored test is load-bearing, not decorative.
+
+**Recurring comment-rewrite class.** Re-read all four files `8a03257`
+rewrote doc comments in (`internal/provider/list_opts.go`,
+`internal/provider/composite.go`, `internal/github/adapter.go`,
+`internal/azdevops/adapter_notifications.go`) against the code beneath them.
+`list_opts.go` and `composite.go` now correctly distinguish
+`ParticipatingOnly`/`Since` (forwarded unchanged) from `Max` (zeroed before
+forwarding); `azdevops/adapter_notifications.go`'s addition correctly states
+that the adapter's own indifference to `opts.Max` does not depend on the
+composite zeroing it, which is consistent with the adapter never reading
+`opts.Max` anywhere in `list`/`List`. No overclaim found.
+
+**Out-of-scope re-check.** `cmd/azdo-tui/main.go:330-331` still hardcodes
+`0` and `azdevops.DefaultNotificationSourceToggles()` — untouched by
+`8a03257` (confirmed by reading the current file). Tasks 13, 15, 16 remain
+unticked. `git diff ad7bf98..8a03257 -- .spec/2026/20260729-notif-p2-azdo.md`
+is empty — `8a03257` touched only code, not the spec, so `## Unknowns` and
+every other spec section are untouched by this commit.
+
+Full suite re-run clean (`CGO_ENABLED=0 go build ./... && go vet ./...`,
+then `CGO_ENABLED=0 go test -count=1 ./internal/... ./cmd/...`);
+`gofmt -l internal/provider internal/github internal/azdevops` still lists
+only the same six pre-existing offenders, none touched by this commit. Every
+mutation in this re-validation was applied to a `cp`-saved backup and
+restored via `cp`, confirmed byte-identical (`diff` clean) and `git status`
+clean before finishing.
+
+## Review feedback: task 12
+
+Reviewed at opus against `7040c11`. Verdict REQUEST_CHANGES, but narrowly: the
+substance of the task is right. `mergeNotifications` sorts on the four-key
+total order and *then* applies `all[:maxItems:maxItems]`; both adapters
+genuinely stopped truncating; the new composite test is order-sensitive rather
+than length-only; both adapters carry a `TestAdapter_List_MaxDoesNotTruncateAtThisLayer`
+that fails when truncation is put back. Two findings and one design question.
+
+**1. 🟡 `internal/github/adapter.go:578-579` states a bound the code does not
+enforce.** The new sentence says the returned slice is bounded by
+`maxNotificationPages × notifPerPageCap` (5000). But `notifPerPageCap` is set
+only on the **first** request — `buildPath` (`notifications.go:380`) writes
+`per_page=100`, and pages 2..N are fetched via `c.getPage(next, "")` where
+`next` is `nextPageURL(header)`'s verbatim parse of the server's
+`Link rel="next"` (`client.go:172-193`), with no per-page rewrite. So the
+constant constrains exactly one of up to 50 pages. A GHES instance or caching
+proxy that ignores `per_page` and returns 1000 rows per page yields 50,000
+rows crossing the adapter→composite boundary — and since `opts.Max` no longer
+applies there, this comment is now the *only* stated bound on that boundary.
+What makes it worth fixing rather than shrugging at is the adjacency: the
+constant being cited has a doc comment three lines above
+(`notifications.go:21-30`) explaining that it exists *because* a server
+produced "501 requests and 500 rows with err == nil". The new comment asserts
+a bound premised on the well-behaved server, sitting next to the constant that
+exists for the misbehaving one. Restate it as a conditional bound, not an
+arithmetic one. No code change.
+
+**2. 🟢 `internal/github/adapter_notifications_test.go` — a dropped assertion
+the validation record does not mention.** The deleted `TestAdapter_List_MaxBoundaries`
+carried a row `{name: "Max against an empty result", body: "[]", max: 1,
+wantLen: 0}` and an assertion that the result is empty-but-non-nil. Neither
+survives into the replacement test, and nothing else in `internal/github` pins
+it — while the *paired* assertion for the error path is still there
+(`adapter_notifications_test.go:343`, "want nil alongside the error"). Half of
+a deliberately-paired contract is now unpinned: rewriting
+`out := make([]provider.Notification, len(wire))` as `var out []...` + append
+would return `nil, nil` on an empty inbox with no test failing. Blast radius
+today is nil — `mergeNotifications` accumulates into `var all []Notification`
+so a nil reaches the app on that path regardless, and `app.go:1140-1152`
+documents nil-items/nil-err as "genuinely EMPTY" — which is why this is 🟢.
+Restore the row rather than letting the contract go by attrition.
+
+**Decision C — `NotifOpts.Max`'s "backends must ignore this" is prose-only,
+and the prose contradicts itself. Settled 2026-08-07: zero `Max` on the
+fan-out.** `list_opts.go:66-76` now ends "Backend implementations must
+therefore ignore this field", but `*CompositeProvider` is itself a
+`NotificationSource` (`composite.go:60`) and is the one implementation that
+*does* honour `Max`. Nesting a composite inside a composite reproduces exactly
+the double-apply this task removed. Not reachable today — `main.go:361` builds
+one composite from concrete adapters — and enforcement is two hand-written
+per-adapter tests, so a third backend gets nothing unless its author knows the
+rule exists.
+
+The review offered three options: (a) leave it, (b) `CompositeProvider.List`
+passes `Max: 0` to each backend and keeps the real value for its own cap, (c) a
+shared conformance helper backends' tests opt into. **(b)**, for the same
+reason task 10's finding 1 went the way it did: decision 15 already states that
+the cap lives at the composite, and (b) is what makes the code say that instead
+of asking every future backend author to have read a comment. It is one line,
+it converts prose into a machine-checked invariant — a backend that *does*
+honour `Max` becomes harmless rather than wrong — and it makes the nested-composite
+case correct by construction rather than by nobody having tried it. This is not
+a new design decision; it is the existing one, enforced. The cost is that
+`opts` is no longer forwarded verbatim, so the wording in `list_opts.go`,
+`composite.go` and both adapters has to change with it. (c) is not chosen
+because it catches the mistake only for an author who wires the helper up,
+which is the same author who would have read the comment.
+
+**Priced and found not to be problems** (recorded so they are not re-litigated):
+
+- **The 5000-row slice crossing the boundary costs almost nothing.** Before,
+  the adapter already allocated and mapped all 5000 before truncating; after,
+  the composite's `append` copies 5000 and `all[:50:50]` keeps that array
+  alive — but `FilterNotifications` (`filter.go:59`) unconditionally copies
+  into a fresh slice on both the poller path (`app.go:1152`) and the pane's
+  own (`list.go:369`), so it is released one message-pass later, not held for
+  the poll interval. Net: one extra ~700 KB copy per poll, promptly collected,
+  plus a `sort.SliceStable` over 5000 rows instead of 50. Nothing downstream is
+  sized by the pre-cap slice; on the Azure side phase 1's truncation already
+  ran *after* `Swap`/`Reconcile`, so the triage store's input never changed.
+- **Ties and cursor stability are strictly improved by this change.** The sort
+  is a total order over `(UpdatedAt desc, Kind asc, Scope asc, ID asc)`,
+  entirely data-derived, so a repoll of unchanged rows produces byte-identical
+  order regardless of goroutine completion order, and a tie group straddling
+  the cap resolves deterministically. The pane restores the cursor by
+  `Identity.SameItem`, not by index (`list.go:1231-1244`). The old per-adapter
+  truncation sliced GitHub's raw wire order, which the composite had no control
+  over — removing it helps.
+- **Pre-existing, unchanged by this commit:** an inbox exceeding 50 pages makes
+  `nc.List` return an error rather than a truncated feed, so the pane fails
+  permanently for such a user. `opts.Max` never bounded that walk. Not this
+  task's to fix, but it is why finding 1 matters more than a doc nit usually
+  would.
+
+## Validation: task 13
+
+Verified against `f478f74` (`internal/config/config.go`,
+`internal/config/config_test.go`, `internal/config/config_notifications_test.go`
+— the only three files touched, confirmed by `git show --stat f478f74`).
+
+- **Guard argument checked against the code, not accepted from the diff.**
+  `cmd/azdo-tui/main.go:293` builds `azdevops.NewAdapterWithNotifications`
+  (a real backend) whenever `cfg.HasAzure()` is true, unconditionally of the
+  four `notifications.azure.sources` toggles; `main.go:335` builds the
+  GitHub backend whenever `cfg.HasGitHub()` is true. Both are confirmed
+  `provider.NotificationSource` implementers by the compile-time assertions
+  in `internal/azdevops/adapter_notifications_test.go:22` and
+  `internal/github/adapter_notifications_test.go:22`. Since `Validate()`
+  runs before either backend is constructed, `HasAzure() || HasGitHub()` is
+  an accurate proxy for "a notification-capable backend will exist," per
+  task 11's own finding that disabling every Azure source stays capable.
+- The new comment at `config.go:855-865` was read against the code line by
+  line and is accurate; the stale comment predicting this exact widening
+  (formerly at `config.go:610-613`) is gone.
+- The error message (`config.go:868`) no longer names GitHub and carries no
+  phase/task/decision numbers (convention 29).
+- `TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend`
+  (`config_notifications_test.go`) covers Azure-only, GitHub-only, and both,
+  each with the other three panes disabled and each with all four disabled;
+  plus the "no backend configured" negative and two "a non-notifications
+  pane stays enabled" negatives.
+- The pre-existing row edited in `TestConfig_Validate_InvalidDisabledPane`
+  (`config_test.go`) was checked against `git diff f478f74~1..f478f74 --
+  internal/config/config_test.go`: its fixture sets `Organization`/`Projects`
+  and no GitHub repos, so it genuinely pinned the old GitHub-only rejection.
+  The edit adds a new negative row (all four panes disabled) rather than
+  weakening any existing assertion.
+
+**Mutation-tested, not trusted:**
+- `c.HasAzure() || c.HasGitHub()` → `c.HasGitHub()`: Azure-only rows in both
+  `config_notifications_test.go` and `config_test.go` went red as expected.
+- `→ c.HasAzure() && c.HasGitHub()`: both single-backend rows went red,
+  "both configured" stayed green.
+- "No backend configured, panes not all disabled" case: still caught by an
+  earlier, pane-guard-independent check in `Validate()`
+  (`if !c.HasAzure() && !c.HasGitHub() { return ... "no backend configured" }`)
+  that runs before the widened guard is ever reached — confirmed by reading
+  the function body and by the "neither configured" test row expecting that
+  exact message.
+
+All files restored via `cp` from a scratchpad backup after each mutation
+(never `git checkout --`); `git status --porcelain` clean before finishing.
+
+Full suite: `CGO_ENABLED=0 go build ./... && go vet ./... && go test -count=1
+./internal/... ./cmd/...` — all packages pass. `gofmt -l` on the three
+touched files is clean.
+
+Out of scope, correctly left untouched: task 14's `main.go:330-331`
+hardcoded lookback/toggles, task 15's ADR, task 16's docs.
+
+### Re-validation 2026-08-07 — `d72f98b` + `4274a3e` (task re-ticked)
+
+Escalated re-check after an opus review returned REQUEST_CHANGES on the first
+pass (`## Review feedback: task 13` below). The core finding bears directly
+on this validation's own method: the first pass's mutation set only
+*narrowed* the guard's predicate (`→ HasGitHub()`, `→ HasAzure() &&
+HasGitHub()`), which cannot expose a dead conjunct — nothing was mutated
+*wider*. Re-checked harder this time, per the coordinator's instruction to
+also force each conjunct to the literal `true` in isolation.
+
+**1. The dead conjunct is gone.** `config.go:867` is now
+`!c.IsPaneEnabled("pullrequests") && !c.IsPaneEnabled("workitems") &&
+!c.IsPaneEnabled("pipelines") && !c.IsPaneEnabled("notifications")` — four
+symmetric `IsPaneEnabled` conjuncts, no leftover `notificationsCounts`
+variable, confirmed by reading `git show d72f98b -- internal/config/config.go`
+and the current file. The rewritten comment (`config.go:854-865`) was read
+line by line: it states only that the earlier "require at least one backend"
+check (line ~805) already guarantees a capable backend by this point, that
+both backends satisfy `NotificationSource` unconditionally once configured,
+and that the old `HasGitHub()` special case existed only while GitHub was
+the sole capable backend — no claim about a hazard this function can no
+longer reach.
+
+**2. Error message and stale assertions.** `config.go:868` now reads
+`cannot disable all panes: at least one of 'pullrequests', 'workitems',
+'pipelines' or 'notifications' must remain enabled` — no backend clause, no
+GitHub mention. Grepped both `config_test.go` and `config_notifications_test.go`
+for the old string (`notification-capable backend configured`,
+`GitHub backend`) — zero hits; every `wantErrContains`/`forbidErrContains`
+row in `TestConfig_Validate_PaneGuard_AcrossBackendCombinations` asserts
+against the new message shape only.
+
+**3. Renames landed, all rows kept.** `git show d72f98b --
+internal/config/config_notifications_test.go internal/config/config_test.go`
+confirms `TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend`
+→ `TestConfig_Validate_PaneGuard_AcrossBackendCombinations` (same table, same
+row count before `4274a3e`'s additions) and the `config_test.go` row
+`"valid - three code panes disabled, Azure configured rescues notifications"`
+→ `"valid - three code panes disabled, notifications remains"` — no row
+deleted, no assertion weakened.
+
+**4. "Metrics cannot rescue this" corrected, behaviour unchanged, `##
+Unknowns` not pre-empted.** The comment now reads "Metrics is not counted
+here: it is separately gated on `metrics.enabled` and on a live Azure
+client, neither of which this method can confirm" — matches
+`app.go:411`'s `cfg.Metrics.Enabled && azurePresent` gate, which this
+guard genuinely cannot see. Built a scratch test (not committed — written to
+`internal/config/zz_scratch_metrics_test.go`, run, then deleted; `git status
+--porcelain` confirmed clean afterward) with `organization`+`projects` set,
+`metrics.enabled: true`, all four panes disabled: `LoadFrom` still returns
+the "cannot disable all panes" error, so a metrics-only config is still
+rejected at startup — the guard's *behaviour* is unchanged, only the
+comment's claim about *why* was corrected. `## Unknowns` still carries "A
+metrics-only dashboard is rejected at startup, and shouldn't be" as an open
+question for Oscar, untouched by this commit.
+
+**5. Widening-mutation table, reproduced independently** (not taken from the
+implementer's report). Each of the guard's four `!c.IsPaneEnabled(...)`
+conjuncts forced to the literal `true` in isolation, full suite re-run,
+restored via `cp` from a scratchpad backup between each:
+
+| Conjunct forced to `true` | Failing tests | Count |
+|---|---|---|
+| `pullrequests` | `TestConfig_Validate_PaneGuard_AcrossBackendCombinations/workitems,_pipelines,_notifications_disabled,_pullrequests_remains` | 1 |
+| `workitems` | `.../pullrequests,_pipelines,_notifications_disabled,_workitems_remains` | 1 |
+| `pipelines` | `.../pullrequests,_workitems,_notifications_disabled,_pipelines_remains` | 1 |
+| `notifications` | `TestConfig_Validate_NotificationsOnly_Passes`; `.../Azure-only,_other_three_panes_disabled`; `.../GitHub-only,_other_three_panes_disabled`; `.../both_Azure_and_GitHub_configured,_other_three_panes_disabled`; `TestConfig_Validate_InvalidDisabledPane/valid_-_three_code_panes_disabled,_notifications_remains` | 5 |
+
+Matches the implementer's reported "1, 1, 1 and 5" exactly. All four
+conjuncts are load-bearing — none survives being forced wider. This closes
+the gap the first pass's narrowing-only mutation set could not have caught:
+narrowing a conjunct (`→ HasGitHub()`, `→ HasAzure() && HasGitHub()`) can
+only prove a predicate is *sufficient*, never that it is *necessary* — only
+a forced-`true`/forced-`false` substitution on each conjunct in isolation
+proves necessity, and dead code survives exactly that test the first pass
+never ran.
+
+**6. Original acceptance clauses re-confirmed against the rewrite.**
+`TestConfig_Validate_PaneGuard_AcrossBackendCombinations` still covers
+Azure-only, GitHub-only, and both, each with the other three panes disabled
+(all `wantErr: false`) and each with all four disabled (all `wantErr: true`,
+`"cannot disable all panes"`); the "no backend configured" negative and the
+two "a non-notifications pane stays enabled" negatives are unchanged from
+the first pass.
+
+**Out of scope, confirmed still untouched:** `git diff f478f74..4274a3e
+--stat` touches only `.spec/...`, `internal/config/config.go`,
+`config_notifications_test.go`, `config_test.go`. `cmd/azdo-tui/main.go:330-331`
+still passes `0, azdevops.DefaultNotificationSourceToggles()` hardcoded
+(task 14's); no README/docs/ADR file touched (tasks 15/16's).
+
+All files restored via `cp` from a scratchpad backup after each mutation
+(never `git checkout --`); `git status --porcelain` clean before finishing.
+Full suite (`CGO_ENABLED=0 go build ./... && go vet ./... && go test -count=1
+./internal/... ./cmd/...`) passes; `gofmt -l` on the three touched files is
+clean.
+
+## Review feedback: task 13
+
+Reviewed at opus against `f478f74`. Verdict REQUEST_CHANGES. The behaviour is
+right and decision 9's letter is satisfied — but the widening made the new
+conjunct **provably dead**, and both the replaced comment and the reworded
+error message describe a condition `Validate()` can no longer reach.
+
+**The fact everything hangs off.** `config.go:805` already returns before the
+pane guard:
+
+```go
+if !c.HasAzure() && !c.HasGitHub() {
+    return fmt.Errorf("no backend configured in config.yaml\n\n...")
+}
+```
+
+`Validate()` is straight-line between 805 and 866, and the only other early
+return (the `azurePartial` branch at 787) also returns. So at line 866,
+`c.HasAzure() || c.HasGitHub()` is a tautology. The reviewer **measured** this
+rather than arguing it: replacing the whole conjunct with the literal `true`
+leaves `./internal/... ./cmd/...` fully green, including both tables `f478f74`
+widened. The validator's mutations (`→ c.HasGitHub()`, `→ HasAzure() && HasGitHub()`)
+could not have caught it — both *narrow* the predicate, so of course they go
+red. Nothing mutated it *wider*, which is the direction that exposes inert code.
+Worth carrying into the reflection step: narrowing-only mutation sets
+systematically miss dead conjuncts.
+
+**1. 🟡 `config.go:855-865` — the comment justifies the conjunct with a hazard
+that cannot occur.** It says a naive four-way guard "would let a config with
+the other three panes disabled pass here and then start with zero navigable
+tabs if no configured backend implements NotificationSource". True when the
+conjunct was `HasGitHub()`; false now, because the only config with no capable
+backend is the config with no backend, rejected 60 lines earlier. The comment's
+second half — that both Azure and GitHub satisfy `provider.NotificationSource`
+unconditionally once configured, Azure regardless of its per-source toggles —
+**is accurate** and was verified against `main.go:293/330/335/351` and the
+compile-time assertions. It just does not rescue the paragraph: being equivalent
+to capability is not the same as being load-bearing.
+
+*Failure scenario:* a maintainer later adds an offline/demo mode and relaxes the
+line-805 backend requirement. The comment tells them the pane guard catches the
+resulting zero-tab config. It does not, and no test can produce that case, so
+they ship the relaxation trusting a conjunct that has never been exercised in
+the role the comment assigns it.
+
+**Settled 2026-08-07: option (a) — drop the conjunct.** `notificationsCounts :=
+c.IsPaneEnabled("notifications")`, with a comment stating only what is true: the
+backend requirement above already guarantees a capable backend, both backends
+satisfy `NotificationSource` once configured, and the `HasGitHub()` special case
+existed only while GitHub was the sole capable backend. The reviewer offered
+(b) — keep it as defence-in-depth against the 805 check moving, labelled as
+redundant-on-purpose. Rejected: decision 9 says the special case *disappears*,
+and (b) preserves a line no test can cover while a third backend would force
+rewriting 805 and the conjunct together anyway, so it does not buy the
+future-proofing it claims.
+
+**2. 🟡 `config.go:868-869` — the error message names a cause that can never be
+the cause.** Verbatim: `...must remain enabled (or leave 'notifications'
+enabled with a notification-capable backend configured)`. Since the guard can
+only fire when all four panes are in `disabled_panes`, the backend half is
+never the missing piece. The old message named a concrete key (`at least one
+repo under github.repos`); the new one names none — it lost the actionable half
+and kept the unactionable one. Note `backend` *is* established user-facing
+vocabulary (`README.md:330`, `README.md:103`), so the term is defensible; the
+problem is that the clause restates the code's conjunct instead of naming an
+edit.
+
+*Failure scenario:* a user with a working Azure org writes
+`disabled_panes: pullrequests,workitems,pipelines,notifications`. Startup aborts
+telling them to leave notifications enabled "with a notification-capable backend
+configured" — which they have. They go audit PAT scopes and their
+`organization`/`projects` block, all fine, because the message pointed at the
+backend. The one edit that fixes it (drop any name from `disabled_panes`) is
+only implied, and `notifications` is not even among the panes named at the front
+of the sentence.
+
+**Settled: say the only reachable cause, matching line 848's shape** —
+`cannot disable all panes: at least one of 'pullrequests', 'workitems',
+'pipelines' or 'notifications' must remain enabled`.
+
+**3. 🟢 `config_notifications_test.go:857` — the test name overclaims.**
+`TestConfig_Validate_PaneGuard_NotificationsRequiresConfiguredBackend` asserts
+the one property that is now vacuous, and the table proves it: the row at 946
+expects `"no backend configured"` and its own comment concedes it is rejected
+by the earlier check, "not by the pane guard this task widens". No row in the
+table lets the backend conjunct decide the outcome, because none is
+constructible. Rename to what the table walks — e.g.
+`TestConfig_Validate_PaneGuard_AcrossBackendCombinations`. The row coverage is
+good and stays.
+
+**4. 🟢 `config_test.go:659-664` — the flipped row's name describes a dimension
+its table does not vary.** `"valid - three code panes disabled, Azure
+configured rescues notifications"`, but every row shares one struct literal with
+`Organization`/`Projects` set, so "Azure configured" is a constant of the
+harness. It *does* earn its place — narrowing the predicate back to
+`c.HasGitHub()` turns it red, so it pins the GitHub-only coupling out of a
+second file — but shorten the name to
+`"valid - three code panes disabled, notifications remains"`.
+
+**5. 🟢 Pre-existing and NOT introduced here, but re-asserted by the rewrite:
+"Metrics cannot rescue this" is false when metrics is on.** `buildEnabledTabs`
+(`app.go:411`) does `if cfg.Metrics.Enabled && azurePresent { tabs = append(tabs,
+TabMetrics) }`, and the pane guard never consults `Metrics.Enabled`. So
+`organization` + `projects` set, `metrics.enabled: true`, all four panes
+disabled yields exactly one navigable tab at runtime and works fine — but
+`Validate()` rejects it at startup. **A user who wants a metrics-only dashboard
+cannot have one.** Fixing the guard is out of task 13's scope and is recorded
+under `## Unknowns` for Oscar; what *is* in scope is that this rewrite
+re-asserted the false claim instead of re-deriving it, so the sentence must be
+corrected to what is true: metrics is not counted here because it is separately
+gated on `metrics.enabled` **and** a live Azure client, neither of which this
+method can confirm.
+
+**Clean negatives — checked and not found, recorded so they are not
+re-litigated:** `HasAzure()` is an honest capability proxy given the current
+wiring (every failure inside `main.go:293`'s block aborts `runTUI` rather than
+degrading to a non-notifying adapter; same for GitHub at 335). No PAT scope or
+auth mode can make a configured Azure org non-capable. There is no
+`notifications.enabled` key. All four Azure source toggles off is legal per task
+11 and yields a navigable-but-empty tab — a design consequence already ratified
+there, and not even reachable until task 14 wires the toggles. The widening
+exposes no newly-untested runtime path: the guard was never what kept Azure-only
+users off the tab (`hasNotificationCapability` was, and task 8 made Azure
+capable), so the only new shape is notifications-as-sole-tab, which was already
+reachable for GitHub-only. The only surviving "notifications needs GitHub" text
+in *code* is `main.go:99` and `main.go:236`, both correctly about classic vs
+fine-grained tokens for GitHub's inbox API, and owned by task 16.
+
+## Validation: task 15
+
+Validated 2026-08-07 against `d694235` (the ADR) and `1cb1a5a` (a correction).
+COMPLETE. Documentation-only task, so the test suite was deliberately not run —
+it proves nothing here. What was checked instead was every technical claim in
+the ADR against the source, and that is where both defects were.
+
+**Shape.** `docs/adr/0002-azure-synthetic-notification-feed.md`, 21 lines
+(`0001` is 24, the cap is 30), `Status: Accepted`, the same four sections in the
+same order, matching `0001`'s density rather than a generic template.
+
+**The Alternatives clause — the one that mattered.** All three of decision 2's
+reasons for rejecting stamp-in-key are present in substance: identity stops
+naming an entity and starts naming an event, so same-item comparison breaks
+across a comment; the identity-keyed pane cursor moves mid-triage as activity
+lands; the state file grows one row per activity event forever, making TTL
+pruning load-bearing for correctness rather than hygiene. Rendered in plain
+language, not as `SameItem`/`Identity.Kind` — convention 29 clean, no phase,
+task or decision numbers, nothing that only means something inside this
+codebase.
+
+**Two factual errors found and fixed — both would have shipped.** A docs task
+turned out to need the same verification rigour as a code task, which is the
+generalisable finding here:
+
+1. The Consequences section claimed two sources could surface the same entity
+   "e.g. a PR awaiting review and a PR carrying a mention". No source produces
+   that row — mentions key work items only (`mention/wi/<id>`), review keys PRs
+   (`review/pr/<id>`). Corrected before the first commit to the case that is
+   real: a work item both assigned to you and mentioning you.
+2. The Decision section claimed "assignment and mention sources use a bounded
+   lookback window instead of a snapshot". False for mentions: only
+   `SourceAssigned` and `SourceCIFailed` take `lookbackDays`, and
+   `ListRecentlyMentionedWorkItems`' WIQL (`workitems.go:316-318`) is
+   `[System.Id] IN (@RecentMentions)` with **no date clause at all** — it leans
+   entirely on the server's opaque macro. `SourceReviewRequested` has no date
+   clause either (`git.go:168-169`: `status=active&reviewerId=<id>`). Rewritten
+   in `1cb1a5a` to state what is actually true of each of the four and what they
+   genuinely share, which is statelessness, not a day bound.
+
+**Remaining claims verified against code, not against the spec's intent:** the
+four key prefixes (`review/pr`, `mention/wi`, `assigned/wi`, `cifail/run`);
+`TriageEntry`'s fields are exactly `{Read, Done bool; LastActivity, LastSeen
+time.Time}`; `Reconcile` is pure — no I/O, only map and slice manipulation;
+auto-expiry is implicit in recomputation with TTL pruning the only explicit
+work; the two-stage mentions query and the stated reason WIQL alone cannot
+timestamp a mention.
+
+**One honest caveat on the corrected sentence.** It now claims idempotence for
+all four sources. That is true of the code by inspection — each is a pure
+function of (server response, `now`) with no caching or randomness, and
+`SourceMentioned` sorts specifically to remove goroutine-completion-order
+nondeterminism before returning — but it is unevenly *pinned*: `assigned` has
+`TestSourceAssigned_Idempotence_SamePollTwiceYieldsIdenticalRowsAndState`,
+`cifailed` has real double-poll coverage via
+`TestSourceCIFailed_RepollSameRun_DoesNotResurrectDismissedRow`, and `review`
+and `mentioned` have no test that invokes the source twice. Recorded rather
+than fixed: task 15 is a documentation task and may not add tests, but the gap
+is real and belongs to whoever owns source coverage.
+
+`git show --stat` confirms `d694235` added exactly one file and `1cb1a5a`
+changed exactly one line of it.
+
+## Validation: task 14
+
+Validated 2026-08-07 against `9b127eb`. COMPLETE. `git show --stat 9b127eb` confirms
+only `cmd/azdo-tui/main.go`, `cmd/azdo-tui/main_test.go`,
+`internal/azdevops/adapter.go`, `internal/azdevops/adapter_notifications.go`,
+`internal/azdevops/adapter_notifications_test.go` (mechanical fifth-arg-added
+call-site updates only) and the new
+`internal/azdevops/adapter_notifications_throttle_test.go` changed — **no**
+`polling` or `app` package touched, so no second poller/tick/interval
+arithmetic was introduced.
+
+**Half A — config wiring.** `main.go`'s Azure block now calls
+`azureNotificationArgs(cfg.Notifications.Azure)` and threads its three return
+values into `NewAdapterWithNotifications`, replacing the old hardcoded
+`0, azdevops.DefaultNotificationSourceToggles()`. Reverted the wiring to the
+old hardcoded call by hand (`cp`-backed, restored afterward) and reran
+`TestRunTUI_UsesAzureAdapterWithNotifications`: it fails exactly as claimed,
+on both the "must come from config" and "must call azureNotificationArgs"
+assertions. `TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter` drives
+non-default `LookbackDays`/`MinPollInterval`/`Sources` values through the pure
+helper and asserts all three land unchanged — this is the "reaches the
+adapter" proof the task requires, not merely a config-parses test.
+
+**Half B — self-throttling.** `Adapter.list` acquires `notifThrottleMu` for
+its entire call (network fan-out + `Reconcile` + `notifStore.Swap`) and
+returns `copyNotifications(a.notifLastResult)` unchanged when
+`notifThrottled(now)` is true — no network call, no store write for that
+call. `MarkRead`/`MarkDone` only ever acquire `notifStore`'s own `mu` (via
+`ApplyIfChanged`) and never touch `notifThrottleMu`.
+
+- **Copy-not-alias.** Mutated `copyNotifications` to `return rows` (identity,
+  no copy) and reran `TestAdapter_List_Throttled_ReturnsCopyNotAlias`: fails
+  with the expected aliasing message. Restored via `cp`; `diff` clean.
+- **Throttled return is not an error and does not clear the feed** — pinned by
+  `TestAdapter_List_Throttled_ReturnsCachedResultWithoutRealQuery` (asserts
+  `err == nil` and the previous non-empty rows survive unchanged).
+- **The three throttle-anchor decisions**, each backed by a dedicated,
+  currently-passing test: first call never throttled
+  (`TestAdapter_List_FirstCall_NeverThrottled`, full-hour interval, first call
+  still returns all 4 fixture rows); partial failure (one of four sources
+  failing) still caches the degraded result and opens the window
+  (`TestAdapter_List_PartialFailure_StillEstablishesThrottleWindow` — fixture
+  repaired between calls, throttled call still returns the degraded 3-row
+  result); total failure advances nothing, so an identical `now` on the very
+  next call retries rather than replaying a cached error
+  (`TestAdapter_List_FullFailure_DoesNotEstablishThrottleWindow` — asserts
+  `notifLastPollAt.IsZero()` after the failure, and a same-`now` second call
+  against a healthy backend succeeds).
+
+**`notifThrottled`'s two conjuncts — widened and narrowed, not just
+narrowed.** The predicate is `interval > 0 && now.Before(lastPollAt.Add(interval))`.
+Forced each conjunct to `true` independently (`cp`-backed, restored after
+each):
+- Removed the `interval <= 0` guard entirely (widening the first conjunct to
+  always-true) → `TestAdapter_notifThrottled` fails on the
+  "zero interval, now before lastPollAt" case (the case the test's own comment
+  says exists specifically to catch this).
+- Replaced the `Before` comparison with a bare `return true` after the guard
+  (widening the second conjunct) → `TestAdapter_notifThrottled` plus all four
+  integration-level throttle tests fail (first-call, cached-result,
+  copy-not-alias, partial-failure).
+- Narrowed the guard from `<= 0` to `< 0` (so `interval == 0` falls through to
+  the `Before` check instead of short-circuiting) → `TestAdapter_notifThrottled`
+  fails on the "zero interval disables throttling" cases, confirming the `== 0`
+  boundary itself is pinned, not just the sign.
+
+No conjunct is dead; the first-call zero-value reasoning (`time.Time{}` +
+`Add` staying in the past relative to any real `now`, needing no dedicated
+`IsZero()` guard) holds under both widen and narrow probes.
+
+**Lock-order/reachability finding (reported, not judged).** `list()` holds
+`notifThrottleMu` across its entire body, including the network fan-out —
+this satisfies the letter of "marks never take `notifThrottleMu`" (confirmed:
+`MarkRead`/`MarkDone` only touch `notifStore.mu`). But it means two concurrent
+`Adapter.List` calls serialise: the second waits out the first's full network
+round trip rather than getting the cheap throttled return. This is reachable
+in this codebase, not merely theoretical: `internal/app/app.go` builds one
+`provider.NotificationSource` marker via `notificationMarker(p)` and hands the
+*same* `p` (the `CompositeProvider`, which fans out to the Azure `*Adapter`)
+to both `internal/ui/notifications/list.go`'s `fetchNotifications` closure
+(driven by the pane's own `Init()` and the `r` refresh key, each its own
+`tea.Cmd` goroutine) and `polling.NewNotificationsPoller` (driven by its own
+timer, also its own goroutine). A manual `r` refresh landing while a poller
+tick's fetch is still in flight — or vice versa — is exactly this scenario.
+No test in this diff or the package pins the *behaviour* of two concurrent
+`List` calls on one `*Adapter` (only `TestAdapter_MarkRead_NotBlockedByInFlightList`
+exercises concurrency, and that is List-vs-Mark, not List-vs-List). Whether
+this is acceptable is a reviewer call, not adjudicated here.
+
+**Timing test stability.** `TestAdapter_MarkRead_NotBlockedByInFlightList`
+delays the fixture server by 200ms and asserts `MarkRead` returns in under
+`delay/2` (100ms) while a `List` call is in flight holding
+`notifThrottleMu` across the delayed network round trip. Ran
+`CGO_ENABLED=0 go test -count=5 ./internal/azdevops/...` (whole package, not
+just this test) — stable, all green, ~7.25s total. Instrumented (temporarily,
+`cp`-restored after) to log the actual elapsed time under `-count=5 -run
+TestAdapter_MarkRead_NotBlockedByInFlightList`: measured 5.7–35.2µs against the
+100ms threshold — roughly 3,000–17,000× headroom. Not flaky in this
+environment and has substantial margin.
+
+**Not run:** `-race` — `cc1` is blocked at the OS level in this sandbox per
+the environment note, so the concurrency claims (lock discipline, no aliasing
+under concurrent access) are verified by targeted mutation and by timing, not
+by the race detector.
+
+**Full suite:** `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and
+`go test -count=1 ./internal/... ./cmd/...` all clean/pass after every
+mutation was restored via `cp` (never `git checkout --`); `git status
+--porcelain` empty throughout. `gofmt -l` on every file this task touched is
+clean; the repo-wide `gofmt -l .` count is 19, matching the pre-existing,
+task-unrelated figure noted in the validation instructions.
+
+### Re-validation 2026-08-07 against `2b979ba` — INCOMPLETE
+
+Re-checked after the REQUEST_CHANGES review. Five of the seven findings are
+genuinely closed and were falsified in both directions; three defects remain
+(one of them the task-13 dead-line class, one a surviving non-equivalent
+mutant, one a falsified doc claim). Task 14 stays un-ticked.
+
+`git show --stat 2b979ba`: `internal/azdevops/adapter.go`,
+`adapter_notifications.go`, `adapter_notifications_test.go`,
+`adapter_notifications_throttle_test.go`, `internal/config/config.go`,
+`config_notifications_test.go`, `config_test.go`. **No `polling` or `app`
+file touched.** Build/vet/`go test -count=1 ./internal/... ./cmd/...` clean;
+`gofmt -l` clean on all seven touched files; `git status --porcelain` empty at
+start and end. Every mutation below was `cp`-backed and restored by `cp`,
+each restore verified with `diff` (never `git checkout --`). `-race` still
+cannot build (`cc1` blocked at the OS level), so the concurrency argument
+remains inspection-plus-mutation only.
+
+**🔴 1 — closed, verified independently, not by rerunning the implementer's
+tests.** Wrote a throwaway test against the real four-source `composerFixture`
+with an HTTP request counter wrapped around the handler:
+
+- (a) `list` → `MarkDone(mention/wi/100)` → `list(now+1m)` (throttled) returns
+  `[review/pr/42 assigned/wi/100 cifail/run/7]` — the dismissed row is gone on
+  the very next throttled call. Same shape for `MarkRead` (`cifail/run/7`
+  comes back `Read=true`).
+- (b) The throttled call issued **0** HTTP requests (counter unchanged across
+  it) and did **0** store writes — asserted on `TriageStore.gen` (the
+  `markDirtyLocked` counter, read under `mu`) being unchanged *and* on
+  `store.State()` being `reflect.DeepEqual` before and after. Not a
+  "it was fast" proxy.
+- (c) `TriageStore.State()` is **pre-existing** (`notifications_store.go:168`,
+  used by ~15 existing tests), takes only `s.mu` — never `writeMu`, never
+  `notifThrottleMu` — so the `notifThrottleMu → mu` order the struct comment
+  claims is preserved and there is no inversion against `Flush`'s
+  `writeMu → mu` (Flush releases `mu` before taking `writeMu`). It returns
+  `s.state.clone()`, a fresh map of value-typed `TriageEntry`s — a real copy,
+  not the live map, so the throttled path cannot mutate triage state through
+  it.
+- (d) By-copy end-to-end after the re-reconcile: mutated `rows2[0]`'s
+  `Title`/`Read`/`Identity.ID` and confirmed `rows3` (the next throttled call)
+  is untouched, having first asserted `&rows2[0] != &rows3[0]` so the check is
+  not a tautology over one backing array. Also mutated the *real-query*
+  result and confirmed the following throttled return is clean.
+- Discrimination: reverting the throttled branch to
+  `return copyNotifications(a.notifLastResult), nil` fails both
+  `TestAdapter_List_Throttled_ReflectsMarkReadMadeDuringWindow` and
+  `...ReflectsMarkDoneMadeDuringWindow` with their intended messages.
+
+**🔴 2 — closed, both drift directions falsified.**
+- Added `v.SetDefault("notifications.max_items", 42)` after `LoadFrom`'s loop
+  (a key on one side only) → `TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults`
+  fails (`MaxItems:42` vs `0`).
+- Made `defaultNotificationsConfig` skip
+  `notifications.azure.sources.mentioned` (removing it from the other side) →
+  the same test fails (`Mentioned:false` vs `true`).
+- Extra probe: deleting the entry from the shared `notificationsDefaults`
+  list entirely (so both sides agree on the *wrong* value, which the drift
+  test cannot see) is caught by three pre-existing tests —
+  `TestLoad_NotificationsDefaults_WhenBlockAbsent`,
+  `TestLoad_AzureSourceToggle_ExplicitFalse_OverridesDefaultTrue`,
+  `TestConfigSave_PreservesMetricsAndNotifications`. No hole.
+- Original defect gone: built a `*Config` exactly as `setupwizard.go:546`
+  does (`config.NewWithPath(org, projects, 60, "nord", <tmp>)`) and pushed it
+  through `azureNotificationArgs` → `lookback=14`, `minPoll=5m0s`, toggles
+  `{true true true true}`. `internal/demo/demo.go:64` still behaves: the demo
+  builds its adapter with `NewAdapter` (no notifications), the only fields it
+  fills by hand are `Metrics`/`DisplayNames`, `metrics.go:44`'s "NewWithPath
+  bypasses viper defaults" comment is still true *for Metrics*, and
+  `./internal/demo` passes.
+
+**Self-reported mapstructure bug — closed and pinned.** Reverted
+`defaultNotificationsConfig` to unmarshal into a bare `NotificationsConfig`
+(the silent-all-zeros shape the implementer reported fixing) →
+`TestNewWithPath_NotificationsConfig_MatchesLoadFromDefaults` fails with
+`LookbackDays:0 MinPollInterval:0 Sources:{false false false false}`. The
+failure mode cannot regress silently.
+
+**🟢 5 — closed and genuinely recursive.** Added `Labels []string` to
+`provider.Notification` → `TestCopyNotifications_NoMutableFieldAliasing`
+fails naming `provider.Notification.Labels`. Added
+`Aliases map[string]string` to the *nested* `provider.Identity` → it fails
+naming `provider.Notification.Identity.Aliases`, so the walk really descends
+rather than only checking the top level.
+
+**🟢 7 — closed and discriminating.** Made `MarkRead` acquire
+`notifThrottleMu` → `TestAdapter_MarkRead_NotBlockedByInFlightList` fails in
+5.01s on the intended message. Constraint re-confirmed by inspection:
+`MarkRead`/`MarkDone` touch only `notifStore`'s `mu` via `ApplyIfChanged`.
+
+**🟡 4 — closed.** `adapter.go:21` now says "every notification-related field
+below", no arithmetic to go stale; `NewAdapter` is `&Adapter{mc: mc}`, so the
+claim is exact.
+
+#### Remaining — must be fixed before task 14 can be ticked
+
+**R1 (task-13 class — dead state, dead call sites, and a false doc claim).**
+`notifLastResult` is now **write-only**: `grep` finds exactly one write
+(`adapter_notifications.go:269`) and one read (line 270, the very next line).
+Nothing else in production or test code reads it — the throttled path reads
+`notifLastRawRows` instead. Consequence, verified by mutation: replacing
+*both* `list()` returns with `return reconciled, nil` and
+`return a.notifLastResult, nil` (i.e. deleting `copyNotifications` from the
+production path entirely) **passes the whole `internal/azdevops` package**,
+including `TestAdapter_List_Throttled_ReturnsCopyNotAlias`, whose own doc
+comment asserts "the only way that can hold is if the throttled path returns
+a genuine copy (`copyNotifications`)". That sentence is now false: the
+throttled path's `reconciled` is freshly allocated by `Reconcile`, so the
+copy is unobservable there, and `notifLastResult` is unobservable everywhere.
+The *behaviour* the task requires still holds (proved in (d) above) — but it
+holds by accident of `Reconcile`'s allocation, and the test the task
+mandates ("the test must prove it by mutating the first result and
+re-checking the second") no longer proves anything about the copy.
+Additionally, `copyNotifications`' doc comment — **rewritten in this
+commit** — now claims `notifLastResult` is "the slice a real query's absorb
+branch caches and *every subsequent call reads from until the next real query
+replaces it*". No subsequent call reads it. Fix by deciding one of: drop
+`notifLastResult` and the now-dead `copyNotifications` call sites, or keep
+them and give them an observable purpose — either way the doc comment must
+describe what the code does.
+
+**R2 (surviving mutant; the equivalence claim is wrong).** `>` → `>=` on
+`if cfg.Notifications.Azure.MinPollInterval > AzureMinPollIntervalMax`
+survives the whole of `./internal/config` and `./cmd/...`. It is **not**
+equivalent: the branch has a side effect beyond the clamp — it appends to
+`cfg.Warnings`. Under `>=`, a config with `min_poll_interval: 86400`
+(exactly the max) gains the user-visible, self-contradicting warning
+"`notifications.azure.min_poll_interval: 86400 exceeds the 86400-second
+maximum — using 86400`", which the notifications pane renders. The
+implementer's "clamping X=Max to Max is a no-op either way" reasoning covers
+the value and misses the warning. `TestLoad_AzureMinPollInterval_ClampedToMax`
+has the right "exactly at the clamp" row but asserts only the value; adding
+`len(cfg.Warnings) == 0` to that row kills the mutant. (The identical hole
+exists on `lookback_days`' older clamp — pre-existing, from task 11, worth
+closing in the same edit but not required here.)
+
+**R3 (falsified doc claim — the recurring class).** The new 🟡-3 paragraph at
+`adapter.go:57-66` states that "whenever throttling is enabled (a positive
+`notifMinPollInterval`) ... a blocked caller's `now` is always <= the winner's
+`notifLastPollAt` by the time it acquires the lock, meaning `notifThrottled`
+is always true for it — **no ordering produces a second real query**", and
+names throttling-disabled as the one exception. Both halves are wrong.
+`a.notifLastPollAt = now` stores the *winner's entry-time* `now`, and a loser
+that entered `List` after the winner has a strictly **larger** `now`, so the
+relation is `loserNow >= notifLastPollAt`, not `<=`. The conclusion only
+holds while the winner's lock-hold time is shorter than
+`notifMinPollInterval`. Falsified with a throwaway test: `minPollInterval =
+100ms`, fixture handler parked on a channel for ~300ms, two concurrent
+`List` calls — the winner issued 4 requests, and after release the blocked
+caller issued **3 more**, i.e. a full second real query, with throttling
+enabled. At the shipped 300s default this is unreachable in practice, which
+is fine — but the comment must state the precondition it actually depends on
+(round trip < `min_poll_interval`) instead of an absolute that a reader can
+disprove. This wording originated in the review's own settled text for
+finding 3, so correct it there too rather than only in the code.
+
+**R4 (minor, same class).** `adapter.go:29-31` still describes the mechanism
+as "List returns its previous result unchanged when called sooner than
+`notifMinPollInterval` after its last real query" — "unchanged" is precisely
+what 🔴 1's fix removed, and the same comment block contradicts it twelve
+lines later. **R5 (trivial):** the same block cites "internal/app.go"; the
+file is `internal/app/app.go` (the substantive claim it supports — line 678
+`polling.NewNotificationsPoller(...)` and line 709
+`notifications.NewModelWithStyles(..., notificationMarker(p), ...)` both
+receiving the same `p` — was verified and holds).
+
+Convention 29: clean — no added string literal contains a phase/task/decision
+number or a review glyph; the one new user-facing string is the
+`min_poll_interval` clamp warning.
+
+### Re-validation 2026-08-07 against `b0c6d9e` — COMPLETE (task re-ticked)
+
+Third pass, scoped to R1-R5 plus regression. Every claim below was falsified in
+both directions where a predicate exists to narrow, and by throwaway probe where
+the claim is about behaviour. `git show --stat b0c6d9e`: six files —
+`internal/azdevops/adapter.go`, `adapter_notifications.go`,
+`adapter_notifications_test.go`, `adapter_notifications_throttle_test.go`,
+`notifications_reconcile_test.go`, `internal/config/config_notifications_test.go`.
+**No `polling` or `app` file touched.** Build/vet clean;
+`go test -count=1 ./internal/... ./cmd/...` green; `./internal/azdevops` green at
+`-count=3`; `gofmt -l` clean on all six touched files; `git status --porcelain`
+empty at start and end. Every mutation `cp`-backed and `cp`-restored, each restore
+`diff`-verified (never `git checkout --`); the two throwaway probe files were
+deleted. `-race` still cannot build (`cc1` blocked at OS level), so the
+concurrency argument remains inspection-plus-probe.
+
+**R1 — closed, all four sub-checks.**
+- (a) *The by-copy contract still holds.* Probe against the real four-source
+  `composerFixture`: real query → throttled call → mutate `rows2[0]`'s
+  `Title`/`Read`/`Identity.ID` → next throttled call is untouched. Asserted
+  `&rows1[0] != &rows2[0]` and `&rows2[0] != &rows3[0]` **first**, so neither
+  check is a tautology over one backing array.
+- (b) *`TestReconcile_ReturnedRowsDoNotAliasInputSlice` discriminates.* Mutating
+  `Reconcile` to `return rows, newState` fails it (plus four other tests).
+  Mutating only the allocation to a **partial** alias — `result := rows[:0]`,
+  semantics otherwise identical — fails it too, at the
+  `&gotRows[0] == &rows[0]` check. So it catches the subtle form, not only
+  wholesale `return rows`.
+- (c) *The renamed `TestAdapter_List_Throttled_ReturnsFreshSliceNotAlias` now
+  fails for the reason its comment states.* The same `result := rows[:0]` mutant
+  — which breaks exactly the stated mechanism ("both branches return
+  `Reconcile`'s own freshly allocated result slice") — kills it, on its own
+  aliasing message at line 237. Its predecessor survived deleting
+  `copyNotifications` outright; this one does not survive breaking the mechanism
+  it now names.
+- (d) Repo-wide grep for `notifLastResult`/`copyNotifications` outside `.spec/`:
+  three hits, all in comments and all describing the deletion as history ("the
+  former copyNotifications helper was dead code and was deleted" ×2, "there is
+  no copyNotifications helper" ×1). No live reference in production or test code.
+  Both `list()` branches return `reconciled` directly
+  (`adapter_notifications.go:248`, `:273`).
+
+**R2 — closed, on both clamps and in both directions.** `>` → `>=` on
+`AzureMinPollIntervalMax` now dies on
+`TestLoad_AzureMinPollInterval_ClampedToMax/exactly_at_the_clamp_is_unchanged`;
+the identical mutant on `AzureLookbackDaysMax` dies on its twin. Widening probes:
+forcing either clamp predicate to `true` fails 9+ tests including all three rows
+of both tables; forcing it to `false` fails the "one past the clamp" row and the
+`ClampWarns` test of each. Neither clamp branch is dead and neither boundary row
+is vacuous.
+
+**R3/R4/R5 — closed; every sentence of the rewritten block checked.** R4: the
+block now opens with "List re-reconciles and returns fresh rows on every call,
+but skips the network round trip and the store write" — matched to code
+(`adapter_notifications.go:236-248`) and to the probe below. R5:
+`internal/app/app.go` is correct, and the claim it supports holds —
+`app.go:678` `polling.NewNotificationsPoller(notificationsPollerClient(p), ...)`
+(which returns `notificationMarker(p)`, `app.go:342`) and `app.go:709`
+`notifications.NewModelWithStyles(appStyles, notificationMarker(p), cfg)` both
+receive the same `p`. Lock claims re-verified: `notifThrottleMu` appears in
+production code only inside `list`; `MarkRead`/`MarkDone` reach only
+`notifStore.mu` via `ApplyIfChanged`; `State()` takes only `mu`.
+
+R3 itself, reproduced against `b0c6d9e` with a channel-parked fixture and a
+request counter (a full real query against this fixture = **7** HTTP requests):
+
+| loser enters | `min_poll_interval` | winner round trip | loser's requests |
+|---|---|---|---|
+| +50ms | 100ms | 400ms | **0** (throttled) |
+| +250ms | 100ms | 400ms | **7** (second real query) |
+| +250ms | 5m | 400ms | **0** (throttled) |
+
+Row 2 is the comment's own counterexample at its own stated parameters, and it
+now predicts what is observed: the blocked caller does take the real-query
+branch. The `now`-direction claim is correct — the blocked caller's `now` is its
+entry time, strictly later than the winner's `notifLastPollAt`.
+
+*Non-blocking imprecision, recorded not blocked on.* Row 1 shows the per-caller
+condition is the **entry-time delta** (`loserNow - winnerNow < interval`), not
+the round trip: a caller entering 50ms behind the winner is throttled even though
+the winner's round trip (400ms) is four times the interval. The comment's "the
+blocked caller is only throttled if the winner's entire round trip finishes
+before `notifMinPollInterval` has elapsed" is true read as the *universal*
+guarantee ("**every** blocked caller is throttled only if …", which is exactly
+what the round-2 finding settled and is exactly right: round trip ≤ interval ⟹
+no blocked caller escapes), and false read per-caller. The block never states the
+per-caller rule, so a reader could over-read a slow network as "every concurrent
+caller re-queries". Cosmetic wording, not a false behavioural claim, and it
+matches the settled text verbatim — worth a sentence if this block is edited
+again, not a re-open.
+
+*Correction to the round-2 record.* That pass reported the counterexample as
+"the winner issued 4 requests, and after release the blocked caller issued 3
+more". A full real query against `composerFixture` is 7 requests (the mention
+source's WIQL → work-items → comments chain is sequential), so 4 + 3 = one
+query: those 3 were almost certainly the winner finishing, not the loser. The
+*conclusion* was right — row 2 above proves the double query — but the numbers
+attributed to it were not, which is why this pass re-derived them with per-caller
+accounting rather than reusing them.
+
+**On the declined test for the double-query case.** The implementer's call is
+defensible and is not held against it, but only half its justification survives.
+The scope half is sound: 🟡 3 settled "leave the behaviour, document it", round 2
+asked only for the doc correction, and pinning an accepted trade with a test
+ossifies a behaviour the same comment explicitly invites revisiting
+(singleflight). The "a deterministic two-`List` race test would be
+disproportionate" half is wrong: `list(opts, now)` already takes an injected
+`now`, and this very file's `TestAdapter_MarkRead_NotBlockedByInFlightList`
+already has the `serverEntered`/`releaseServer` handshake that pins ordering
+without a sleep or a wall-clock threshold. Composing the two gives a ~40-line
+deterministic test — winner parked mid-handler, loser called with
+`T0+2*interval` vs `T0+interval/2`, assert the request counter — which is what
+the table above is, minus the sleeps. Given that this block has now carried a
+false claim through two commits precisely because nothing executable checked it,
+that test is cheap insurance rather than a disproportionate one; the reason not
+to write it is scope, not cost.
+
+**Regression — the round-1 closures survive `b0c6d9e`.**
+- 🔴 1's re-reconcile: mutating the throttled branch's `state :=
+  a.notifStore.State()` to an empty `TriageState{}` still kills
+  `TestAdapter_List_Throttled_Reflects{MarkRead,MarkDone}MadeDuringWindow`.
+- 🟢 5's reflect guard survived its rename: adding `Labels []string` to
+  `provider.Notification` fails `TestNotification_NoMutableFieldAliasing` naming
+  the field.
+- 🟢 7's ordering test is untouched by this commit (both hunks in that file land
+  well above it) and still gates on channels, not on a 100ms threshold.
+- 🔴 2's defaults-drift test and the mapstructure pin live in files this commit
+  does not touch (`config.go`, `config_test.go`); the suite is green.
+- Half A wiring: `TestRunTUI_UsesAzureAdapterWithNotifications` and
+  `TestAzureNotificationArgs_NonDefaultValuesReachTheAdapter` both pass.
+- A throttled call makes **zero** HTTP requests (counter unchanged across it)
+  and **zero** store writes — asserted on `TriageStore.gen` under `mu` *and* on
+  `State()` being `reflect.DeepEqual` before and after, not on a timing proxy.
+- `MarkRead`/`MarkDone` never acquire `notifThrottleMu` (grep above).
+- Convention 29: `b0c6d9e` adds no production string literal at all — the only
+  changed strings are test failure messages; the task/finding numbers it
+  introduces are all in comments, which the convention exempts.
+
+## Review feedback: task 14
+
+Opus review of `9b127eb`, 2026-08-07. **REQUEST_CHANGES**, two 🔴, two 🟡, three 🟢.
+Build, vet, gofmt on all six touched files and the full suite were clean at the
+reviewed commit — every finding below is a behaviour defect, not a hygiene one.
+Both 🔴s were reproduced with throwaway probes against the real four-source
+fixture, not inferred.
+
+Half A's blast radius was checked file-by-file and is clean: all 21 updates in
+`adapter_notifications_test.go` are a literal `, 0` appended to the argument
+list, changing no assertion or fixture. One consequence worth knowing: every
+pre-existing `List` test therefore runs with throttling *disabled*, so the
+throttle is pinned only by the new test file.
+
+### 🔴 1 — the throttle cache masks `MarkRead`/`MarkDone`; a dismissed row comes back
+
+`adapter_notifications.go:205-210`. The throttled path returns
+`copyNotifications(a.notifLastResult)` — a snapshot computed *before* any
+subsequent mark — and so skips `notifStore.Swap` and with it `Reconcile`, the
+only thing that folds local triage state into `Read`/`Done` and drops done rows.
+Nothing in `MarkRead`/`MarkDone` invalidates the cache. Reproduced:
+
+```
+rows1                    = [mention/wi/100 review/pr/42 assigned/wi/100 cifail/run/7]
+MarkDone(mention/wi/100)
+rows2 (throttled, +1min) = [mention/wi/100 review/pr/42 assigned/wi/100 cifail/run/7]
+                           -> dismissed row still present, Done=false Read=false
+rows3 (post-window, +6m) = [review/pr/42 assigned/wi/100 cifail/run/7]
+```
+
+At shipped defaults (`min_poll_interval: 300`, `polling.DefaultInterval` 30s,
+`markDebounceWindow` 30s at `internal/ui/notifications/list.go:163`): user
+presses `d` at T=10 and the row hides optimistically; the override expires at
+T=40; the T=60 poller tick returns the pre-mark cache and **the dismissed row
+reappears, unread**, and stays until T=300. Pressing `r` does not help — the
+manual refresh is throttled too. `min_poll_interval` has no upper bound
+(`config.go:900` only rejects negatives), so this scales with the knob. This is
+convention 19/31's failure class and worse than a no-op: the action visibly
+works, then silently undoes itself.
+
+**Settled: re-reconcile on the throttled path, do not invalidate from the mark.**
+Cache the raw pre-`Reconcile` rows alongside the reconciled ones, and on a
+throttled return call `Reconcile(cachedRaw, <current state>, now)` and **discard**
+the returned state. `Reconcile` is a pure function
+(`notifications_reconcile.go:141`) and this is in-memory only, so a throttled
+call still does no network work and still writes nothing to the store — the task
+constraint holds. It is also idempotent by construction: the raw rows are
+unchanged, so their stamps already match stored, which is precisely the
+statelessness the ADR claims. The two alternatives — invalidating
+`notifLastPollAt` from a mark, or patching `notifLastResult` in place — both
+require a mark to acquire `notifThrottleMu`, which this task forbids outright.
+Skipping the orphan TTL prune on throttled calls is fine; that is hygiene, not
+correctness. Pin it with a mark-then-throttled-`List` test for *both* `MarkRead`
+and `MarkDone`; nothing in the current suite covers that pair.
+
+### 🔴 2 — the setup-wizard path gets all four sources off and throttling disabled
+
+`main.go:331` + `adapter_notifications.go:88-92`. `runTUI` (`main.go:277`) uses
+`runSetupWizard()`'s return value for the rest of the process. That `*Config`
+comes from `setupwizard.GetConfig()` → `config.NewWithPath` (`config.go:756`), a
+bare struct literal that never touches `Notifications`, so neither viper's
+`SetDefault` registrations (`config.go:590`) nor `LoadFrom`'s explicit
+zero-fallbacks (`config.go:742`) are ever reached. First run after the wizard:
+`Sources` is the zero value → `NotificationSourceToggles{false,false,false,false}`
+→ `runSourcesConcurrently` gets `jobCount == 0` → `list` takes task 8's absorb
+branch → **empty feed, nil error, for the whole session**, with the tab still
+shown (`buildEnabledTabs` gates on the method-set-based `notifCapable`).
+Restarting fixes it, because run two goes through `LoadFrom`. `MinPollInterval`
+is 0 on the same path, so decision 10 is silently off for that session.
+`LookbackDays` is the only survivor, because the constructor still defends it
+with its own `<= 0` guard — the asymmetry is the tell. This is a regression: the
+pre-change call site passed `DefaultNotificationSourceToggles()`, which worked.
+
+The doc at `adapter_notifications.go:88-92` asserts the opposite as fact
+("`LoadFrom` is what keeps a real user from ever reaching this constructor with a
+literal zero"). `main.go:277` is the counterexample.
+
+**Settled: fix `NewWithPath`, not the constructor.** The reviewer offered
+"default zero toggles inside `NewAdapterWithNotifications`" as the small-diff
+option; **do not take it** — it is wrong. Nothing in `Validate` rejects all four
+toggles being false, so `sources: {review_requested: false, mentioned: false,
+assigned: false, ci_failed: false}` is a legitimate, reachable user config, and a
+constructor that reads all-false as "use defaults" would silently switch on four
+sources the user deliberately turned off. Instead make `NewWithPath` return a
+genuinely fully-defaulted `*Config` — its own doc already claims "creates a
+Config with all fields set", which is false today, and `internal/demo/metrics.go:44`
+already carries a comment noting the bypass. Populate the whole `Notifications`
+block there with the same values viper's `SetDefault` registrations produce, and
+factor the constants so the two lists cannot drift (a test that fails when a
+`SetDefault` key has no `NewWithPath` counterpart is the durable form). Both
+callers — `setupwizard.go:546` and `demo.go:64` — benefit. Then delete the false
+claim at `adapter_notifications.go:88-92` and say what is actually true.
+Re-reading the saved file through `LoadFrom` after the wizard was the reviewer's
+other suggestion; rejected, because the wizard holds credentials in memory that
+`Save` does not write to the file, and a re-read would drop them.
+
+### 🟡 3 — concurrent `List` calls serialise across the network fan-out — accepted as-is
+
+`adapter_notifications.go:205-206`. This is the finding the validator surfaced and
+was told not to judge. The reviewer's judgment, which I accept: **a latency trade,
+not a defect.** `List` reads `time.Now()` before locking, so a blocked caller's
+`now` is always ≤ the winner's `notifLastPollAt` and `notifThrottled` is always
+true when it finally acquires the lock — no ordering produces a double fetch.
+
+**Corrected 2026-08-07 by the re-validation of `2b979ba`, which falsified that
+last sentence.** `notifLastPollAt` stores the winner's *entry-time* `now`, and
+the loser entered later, so the loser's `now` is strictly **larger**, not ≤. The
+real precondition is that the winner's whole round trip completes inside
+`min_poll_interval`. Falsified concretely at `min_poll_interval: 100ms` with the
+handler parked ~300ms: the winner issued 4 requests and the blocked caller then
+issued 3 more. At shipped defaults (300s against sub-second round trips) the
+precondition holds by a wide margin, so the trade stands and nothing about the
+behaviour changes — but it is a precondition, not a guarantee, and the doc must
+say which. The rest of the reasoning below survives unchanged. Recorded rather
+than quietly patched because the wrong version was *settled text in this
+section*, and an implementer copied it verbatim into `adapter.go`.
+
+The
+blocked caller gets the cache the winner *just wrote*, i.e. fresher data than an
+immediate cached return would give, so there is no staleness either (the one
+exception is cosmetic: if the winner takes the total-failure branch, the loser
+returns the older rows with `nil` and the pane flips error → stale feed). `OnTick`
+re-arms via `tea.Batch` independently of the fetch, so ticks can queue, but each
+queued caller returns at lock-handoff speed — no unbounded pileup.
+
+The cost is real and measured: against a 300ms-per-request fixture the "cheap
+throttled return" took 754ms against the winner's 904ms, and because
+`CompositeProvider.List` waits for every backend, that also holds the GitHub half
+of the merged feed.
+
+**Settled: leave the behaviour, document it.** The struct comment at
+`adapter.go:34-41` explains why marks are safe and is silent on the
+`List`-vs-`List` consequence, which is the non-obvious half — state it plainly
+there, including that the loser gets fresher data rather than staler, so nobody
+"optimises" it later into the singleflight variant and trades freshness away
+without knowing that is the trade.
+
+### 🟡 4 — stale field count in the lock-order comment (convention 25)
+
+`adapter.go:21`: "leaves all five fields below at their zero value". There are
+seven notification fields below that line, or six excluding the mutex, or three
+if "below" means only that comment's own group. Five matches none. The
+pre-change text said "three", correct for its group; the edit widened the scope
+and kept arithmetic that no longer applies. Drop the number entirely.
+
+The substantive claim in the same block — `list` is the only call path holding
+both, order `notifThrottleMu` before the store's `mu`, no opposite-order
+acquirer — was verified independently and holds.
+
+### 🟢 5 — `copyNotifications`' "none a slice, map or pointer" is unenforced prose
+
+`adapter_notifications.go:264-271`. The conclusion is right for what callers can
+mutate (`provider.Notification` and `provider.Identity` are strings, bools, a
+`Kind` and a `time.Time`), but the sentence is literally false — `time.Time`
+carries an unexported `loc *time.Location`, harmless because it is a shared
+immutable singleton, but the kind of claim a future reader trusts verbatim.
+Reword to "no field a caller can mutate through", and add a cheap reflect-based
+guard test over `provider.Notification` that fails when a slice, map or pointer
+field appears. Today the comment is the only thing standing between a future
+`Labels []string` and a silently shallow copy.
+
+### 🟢 6 — `notifThrottled`'s zero-value argument has an unstated upper bound
+
+`adapter_notifications.go:249-254` reasons that `time.Time`'s year-1 zero value
+plus the interval always lands before any real `now`. True only for intervals
+under roughly 2025 years, and nothing enforces that: `Validate` (`config.go:900`)
+rejects negatives and imposes no ceiling. `min_poll_interval: 99999999999` throttles
+the **first** call, so `List` returns `nil, nil` — empty feed, no error, forever.
+Separately `time.Duration(azure.MinPollInterval) * time.Second` (`main.go:437`)
+overflows int64 above ~9.2e9 seconds and can flip sign, disabling throttling
+instead. Add an upper clamp in `LoadFrom` mirroring `AzureLookbackDaysMax`, which
+makes the removed `IsZero()` guard genuinely dead rather than dead-under-an-
+unstated-bound, and puts the bound where a user can find it.
+
+### 🟢 7 — replace the 100ms timing assertion with an ordering assertion
+
+`adapter_notifications_throttle_test.go:346,368,376`. The test does discriminate
+— a `MarkRead` that acquired `notifThrottleMu` would block ~150ms and trip the
+threshold — but it is a wall-clock assertion on shared CI, and its
+`time.Sleep(delay / 4)` handshake is unasserted, so it cannot distinguish "not
+blocked" from "never contended". Gate the fixture handler on a channel instead:
+handler blocks on `<-releaseServer`, test closes a `markDone` channel after
+`MarkRead` returns, handler asserts `markDone` is already closed before
+releasing. That turns the property into the ordering claim it actually is — the
+mark completed while a request was parked inside the handler — needs no
+threshold, and pins the handshake the sleep currently only hopes for. Keep a
+generous `select` timeout so a real deadlock fails fast.
+
+### Round 2 — from the re-validation of `2b979ba` (2026-08-07)
+
+The fix commit closed 🔴 1, 🔴 2, 🟡 4, 🟢 5 and 🟢 7, each falsified by mutation
+rather than read. Three defects remain; see the dated subsection of
+`## Validation: task 14` for the reproductions.
+
+**R1 — `copyNotifications` is now dead in production (the task-13 class again).**
+`notifLastResult` has exactly one write (`adapter_notifications.go:269`) and one
+read (:270) and is referenced nowhere else. Replacing **both** `list()` returns
+with the bare slice and deleting `copyNotifications` outright still passes the
+whole `internal/azdevops` package — including
+`TestAdapter_List_Throttled_ReturnsCopyNotAlias`, whose comment claims "the only
+way that can hold is if the throttled path returns a genuine copy". The by-copy
+behaviour does still hold, but 🔴 1's fix moved *what delivers it*: both paths
+now return `Reconcile`'s freshly allocated slice of value copies, and 🟢 5's
+reflect guard is what keeps `provider.Notification` free of fields a caller could
+mutate through. Together those two are a stronger guarantee than the old copy
+was — but nothing says so, and a dead helper plus a test that passes for a reason
+other than the one it states is exactly what task 13 shipped past a clean
+validation.
+
+**Settled: delete `notifLastResult` and `copyNotifications`, and name the real
+mechanism.** Rewrite `TestAdapter_List_Throttled_ReturnsCopyNotAlias`'s comment to
+say the contract is delivered by `Reconcile` allocating fresh output over a
+`Notification` with no mutable-through fields, and add a test pinning `Reconcile`
+itself — that it never returns a slice aliasing its input — since that is now
+load-bearing and lives in another file where nobody editing it would know. Do not
+keep the helper "for safety": an uncalled copy defends nothing and the next
+reader has to re-derive that it is inert.
+
+**R2 — a surviving, non-equivalent mutant.** `>` → `>=` on the new
+`AzureMinPollIntervalMax` clamp survives `./internal/config` and `./cmd/...`. The
+implementer reported this as an equivalent mutant; it is not. The branch also
+appends to `cfg.Warnings`, so at exactly `86400` the mutant emits a user-visible
+`min_poll_interval: 86400 exceeds the 86400-second maximum — using 86400`. The
+"exactly at the clamp" row asserts only the resulting value; asserting
+`len(cfg.Warnings) == 0` on that row kills it. Worth carrying into the reflection
+step: **a claimed equivalent mutant deserves the same scepticism as a passing
+test** — this one was wrong because the analysis looked only at the value the
+branch computes and not at the side effect it also performs.
+
+**R3/R4/R5 — three false claims in the new `adapter.go` block.** R3 is the
+correction recorded above under 🟡 3, copied verbatim from this section into
+`adapter.go:57-66`; restate it as the round-trip precondition it actually is. R4:
+the same block still opens with `List` "returns its previous result unchanged",
+which is precisely what 🔴 1's fix stopped doing — it now re-reconciles. R5:
+"internal/app.go" should be `internal/app/app.go`.
+
+### Confirmed correct, no action
+
+The three throttle-anchor decisions match decision 10 and task 8's absorb rule,
+each with a dedicated test. **Partial-failure caching is not a defect**: not
+advancing the anchor would let any persistently-failing source disable the
+throttle entirely and price the feed at Azure's cost exactly when things are
+broken. The five-minute silent hole is real but its cause is the already-approved
+combination of task 8's absorb rule and decision 10's window — what this commit
+adds is a *multiplier*, 30s becoming 300s, now appended to the existing
+`## Unknowns` warnings-channel entry so it is costed rather than re-litigated.
+
+`now` injection: `List` reads `time.Now()` once and threads it down; nothing
+below reads the wall clock. Because both sides originate from `time.Now()`, the
+comparison is on **monotonic** readings in production and is immune to NTP steps
+— genuinely better than the forward-clamp path in `## Unknowns`, and worth
+saying so in the doc comment so nobody "fixes" it later by round-tripping
+through UTC. Absorb/propagate branch untouched; the anchor write sits inside the
+absorb branch only; no `polling` or `app` file touched.
 
 ## Unknowns
 
-- Cost: four queries per poll cycle across N projects. Does this need its own, slower
-  interval than the GitHub feed?
-- Can "newly assigned" be detected without a snapshot, e.g. via a changed-date filter, so a
-  fresh install does not flood the feed on first run?
-- Does any source need a PAT scope beyond what the app already requests?
-- Multi-project: one merged Azure feed, or per-project grouping when many projects are
-  configured?
-- Should approvals from the Releases arc (`release-view-arc.md`) mirror into this feed as
-  `approval_pending`, and if so which side owns that mapping?
+Resolved by the decisions above: poll cadence (10), first-run flood (6), multi-project
+grouping (11), Releases-arc mirroring (12). Still genuinely open:
+
+- **A metrics-only dashboard is rejected at startup, and shouldn't be.** Found by task
+  13's review, 2026-08-07; **pre-existing, not introduced by phase 2**, and out of task
+  13's scope, so it is recorded here rather than fixed in passing. `buildEnabledTabs`
+  (`app.go:411`) appends `TabMetrics` when `cfg.Metrics.Enabled && azurePresent`, but the
+  all-panes-disabled guard in `Validate()` never consults `Metrics.Enabled`. So a config
+  with `organization` + `projects` set, `metrics.enabled: true`, and all four panes in
+  `disabled_panes` would start fine with exactly one navigable tab — but `Validate()`
+  aborts it. The fix is a one-line widening (`|| (c.Metrics.Enabled && c.HasAzure())`),
+  but it is a behaviour change to a shipped guard and it is Oscar's call whether a
+  metrics-only TUI is a configuration worth supporting at all. Task 13 only corrects the
+  comment that asserted the opposite.
+
+- **What should happen when an activity stamp is forward-clamped?** Raised by task 9's
+  review, 2026-08-07, and it is the mirror of the regression question below — same root,
+  opposite direction, and it applies to all four sources. Full analysis and the three
+  candidate fixes are under `## Review feedback: task 9`, decision A. **Deferred to Oscar
+  deliberately:** the cheapest fix still changes `Reconcile`'s contract and all four stamp
+  helpers' signatures, and it should be decided together with the token question below
+  rather than separately, since option 3 answers both at once.
+
+- **Should `provider.NotificationSource` gain a non-error warnings channel?** Task 8 resolves
+  the partial-failure question by having `Adapter.List` absorb a `*PartialError` and return
+  `(rows, nil)` whenever it has rows, because the composite discards the rows of any backend
+  that reports an error (`composite.go:669-672`) and propagating would blank the Azure half of
+  the feed. The consequence is that a partial failure — one project's PAT expired, one project
+  403s — is now **silent**: the user sees a shorter feed and nothing tells them why, because
+  the only channel for "something went wrong" is the error return the adapter just swallowed.
+  A second return value, or a `Warnings []error` field the pane could render as a subdued
+  status line, would close it. **Deferred to Oscar deliberately:** it widens an interface
+  phase 1 shipped and that GitHub also implements, so it is a cross-provider design decision,
+  not a fix for this loop to make on its own. **Task 14's review adds a multiplier to this,
+  2026-08-07:** decision 10's self-throttle caches the *degraded* result and holds it for the
+  whole `min_poll_interval`, so a transient one-source blip no longer hides rows for one poll
+  interval (30s) but for the throttle window (300s at defaults, unbounded above by config).
+  That is not a new defect — it is the same silence, priced higher — but it raises what the
+  warnings channel is worth, and the reviewer judged the alternative (not anchoring the
+  throttle on a partial failure) strictly worse, since it would let a persistently failing
+  source disable throttling entirely and price the feed at Azure's cost precisely when
+  things are broken.
+
+  **A third instance of the same missing channel, found by task 16's review:** every Azure
+  source is capped at 50 items per project per poll (`reviewRequestedQueryTop`,
+  `ciFailedQueryTop`, `assignedQueryTop`, `mentionCandidateQueryTop`), and mentions carry a
+  second cap of 50 candidates *merged across all projects* (`mentionCandidateLimit`, applied
+  after `interleaveMentionCandidates`). Only that merged cut is measured: the source counts
+  it into `SourceMentionedResult.CandidatesDropped` and then throws the count away —
+  `adapter_notifications.go:370-382` documents that it is discarded precisely because there
+  is nowhere to report it. The four per-project `$top` cuts aren't measured at all. So a user
+  in a busy org silently loses rows, with no badge, no warning and nothing in the pane to
+  suggest the feed is incomplete. Now documented in the README and Architecture.md so it is at least
+  discoverable, but it is the third thing the warnings channel would fix, and the one with
+  a ready-made value to report.
+
+- **The pane discards a partial result and renders the error instead — one failing backend
+  takes the whole tab.** Found 2026-08-07 by task 16's third validation, while checking a
+  docs claim rather than by looking for it. The provider layer does the right thing at both
+  levels: task 8 has `Adapter.List` absorb a partial Azure failure, and
+  `composite.go:686-696` returns the healthy backend's rows *alongside* a `*PartialError`.
+  The UI then throws the rows away — `internal/ui/notifications/list.go:810-817` calls
+  `HandleFetchResult(nil, err)` on any non-nil error, and `View()` (`:736-740`) returns
+  `errorBody(err)` before it ever reaches the table. Reproduced: one Azure row plus a
+  `*PartialError` wrapping GitHub's 403 renders "Notifications unavailable — GitHub token
+  scope required: notifications" with the Azure row absent. Because the 403 repeats every
+  poll, an Azure + fine-grained-GitHub user gets that screen permanently.
+
+  This is **pre-existing phase-1 UI code**, but phase 2 is what makes it bite: with one
+  backend there was nothing to degrade to, and now the phase's own stated principle —
+  decision 20's "one backend failing degrades to the others rather than emptying the feed",
+  which task 8 went to some trouble to honour one layer down — is undone at the last step.
+  Phase 2's docs promised the working behaviour; they have been corrected to describe what
+  the code actually does (README's classic-PAT note, FAQ's "I don't see a Notifications
+  tab"), so nothing ships a false claim, but the promise is the one worth keeping.
+
+  **Deferred to Oscar deliberately, not left undone by accident.** The fix is not mechanical:
+  it changes what a shipped pane renders, and it needs a design answer for what a degraded
+  pane *looks* like — rows plus a subdued banner, rows plus a count in the header, or
+  something else — which is the same question the `NotificationSource` warnings-channel entry
+  above is already asking. They should be decided together. The narrow version, if you want
+  the smallest change that stops the bleeding: have `HandleFetchResult` keep `items` when
+  `err` is a `*provider.PartialError` and `len(items) > 0`, and have `View` render the table
+  with a warning line rather than `errorBody`. Deciding that unattended at the end of an AFK
+  run would have been scope creep with a UI design decision buried in it.
+
+- **Does any source need a PAT scope beyond what the app already requests?** The comments
+  endpoint documents `vso.work`, which the work-item pane already needs, so the likely answer
+  is no — but "likely" is what convention 28 exists to catch. Task 1 confirms it against a real
+  org before it reaches the README.
+- **Cost of the mention source specifically.** Sources 1, 3 and 4 are one query per project per
+  cycle. Source 2 is one WIQL plus one comments call *per candidate work item*, so its cost
+  scales with how much a user is mentioned. Decision 10's slower interval bounds the damage and
+  task 5 bounds the fan-out, but the constant is a guess until someone runs it against a busy
+  org. Revisit after the first real-world use.
+- **Should resurrection key off a changed activity *token* rather than a newer timestamp?**
+  Raised by task 4's review, 2026-08-06, and it applies to every source, not just PRs. Every
+  stamp this design uses is attacker- or accident-settable and can move backwards: a PR's
+  committer date (`GIT_COMMITTER_DATE`, `rebase --committer-date-is-author-date`, force-push to
+  an older commit) and task 5's newest-matching-comment `createdDate` (deleting that comment
+  regresses it permanently). `Reconcile`'s `After` test then reads real new activity as "older"
+  and leaves a dismissed row stranded. Clamping future stamps to `now` — done in task 4 — closes
+  the permanent-strand variant but not the regression one. The alternative is a `LastCommitID`
+  or generic opaque-token field on `TriageEntry`, where *any* change means new activity
+  regardless of clock direction; `CommitID` is already decoded and unused. **Deferred to Oscar
+  deliberately:** it changes `TriageEntry`'s persisted shape and `Reconcile`'s contract across
+  all four sources, which is a design decision, not a fix an implementer should make mid-loop.
+  ~~Decide before task 9 hardens the store's schema.~~ **Revised 2026-08-07: the deadline was
+  wrong and task 9 does not need it.** `TriageState` is a `map[string]TriageEntry` serialised by
+  the store's YAML round-trip, so a later `LastCommitID string \`yaml:"last_commit_id,omitempty"\``
+  is purely additive: an existing file simply loads that field as `""`, which is the same value a
+  fresh entry would carry. Task 9 therefore adds **no** field to `TriageEntry` and leaves this
+  open. What *does* change if Oscar adopts the token is `Reconcile`'s contract and all four
+  sources' population of it — none of which task 9 touches. Decide before task 14, or after the
+  loop; either is fine.
+
+## Validation: task 16
+
+Verified against `0f89440` (docs-only: `README.md`, `Architecture.md`, `FAQ.md`,
+`config.yaml.example`) and the current state of `internal/config/config.go`,
+`internal/ui/notifications/filter.go`, `internal/azdevops/notifications_*.go`,
+`cmd/azdo-tui/main.go`.
+
+**Clauses checked against the code, not the implementer's report:**
+
+1. ✅ **Full nested config block, derived from the struct.** `NotificationsConfig`
+   (top-level: `exclude_reasons`, `unread_only`, `exclude_repos`, `include_repos`,
+   `max_items`, `poll_interval` — six keys), `NotificationsGitHubConfig`
+   (`participating_only`, `only_configured_repos`, `since_days`) and
+   `NotificationsAzureConfig` (`lookback_days`, `min_poll_interval`,
+   `sources.{review_requested,mentioned,assigned,ci_failed}`) match README's tables,
+   Architecture.md's summary and `config.yaml.example`'s block key-for-key via their
+   `mapstructure` tags. Defaults and clamps checked directly against
+   `DefaultAzureLookbackDays`=14/`AzureLookbackDaysMax`=30 and
+   `DefaultAzureMinPollInterval`=300/`AzureMinPollIntervalMax`=86400 — all four numbers
+   match what's documented in all four files. `acceptedNotificationReasons()`'s eleven
+   values match the reason list documented in README verbatim, in enum order.
+2. ✅ **`config.yaml.example` parses as YAML and matches the struct.** Verified by
+   stripping the leading `#`/one space from the commented `notifications:` block and
+   parsing it with `yaml.safe_load` — it produces the exact nested shape
+   `NotificationsConfig` expects, with every key present. No typo'd key.
+3. ✅ **`exclude_repos`/`include_repos` per-backend meaning.** README states GitHub
+   scope is `owner/repo`, Azure scope is a project name; confirmed against
+   `filter.go` (matches `Identity.Scope`) and `notifications_source_review.go`
+   (`scope := pr.ProjectName`, the project **API name**, not a display name or
+   `org/project` compound) — the claim holds.
+4. ✅ **`sources.ci_failed` vs. `ci_activity` reason.** Documented distinctly and
+   correctly in README (dedicated callout), Architecture.md and `config.yaml.example`;
+   matches `NotificationsAzureSourcesConfig.CIFailed` `mapstructure:"ci_failed"` and
+   `NotificationReasonCIActivity` in the source.
+5. ✅ **Local triage state file path.** README/Architecture.md state
+   `$XDG_STATE_HOME/azdo-tui/notifications.yaml` falling back to
+   `~/.local/state/azdo-tui/notifications.yaml`, resolved the same way `state.yaml`
+   is — matches `NotifStorePath()`/`notifFileName = "notifications.yaml"` in
+   `internal/azdevops/notifications_store.go`.
+6. ✅ **PAT-scope claim.** README ("No additional scope is needed…") and FAQ state the
+   Azure share needs no scope beyond the existing Build/Code/Work Items set, matching
+   the probe results' conclusion exactly — not overstated into "no PAT needed".
+7. ❌ **Convention 26 sweep — incomplete.** README, FAQ and Architecture.md are clean
+   (grepped for `GitHub only`/`GitHub-only`/`requires GitHub`; every remaining hit is a
+   legitimately-scoped GitHub-only *knob*, not a claim that the whole tab needs GitHub).
+   `RELEASES.md`, `CONTRIBUTING.md`, `Skill.md` are clean (no "notification" hits at
+   all). **`cmd/azdo-tui/main.go` was not touched by this diff (`git show --stat
+   0f89440` lists only the four docs files) and still carries the stale phase-1 claim
+   in two places:**
+   - `runHelp()`, line 100: `Note: the Notifications tab requires a CLASSIC token.`
+   - `runAuthGitHub()`, line 237: `Note: the Notifications tab requires a CLASSIC
+     token — GitHub's notifications API supports no fine-grained permission.`
+
+   Both assert unqualified that "the Notifications tab" needs a classic GitHub token —
+   the exact overstatement the README's own equivalent text had before this diff
+   corrected it to "**The GitHub share of** the Notifications tab requires a classic
+   PAT" (README.md:663). On an Azure-only config the tab needs no GitHub token at all,
+   classic or otherwise, so the bare claim is false for that setup. The task line
+   explicitly names "`cmd/azdo-tui`'s help blocks and the auth wizard" as places that
+   "must be found and corrected, not just the first one" — neither was.
+8. ✅ **Convention 29.** No phase/task/decision vocabulary in README.md, FAQ.md or
+   `config.yaml.example` (grepped, zero hits). Architecture.md's "Decision N" references
+   (including the new "Decision 13 of the phase-2 notifications spec" at line 593) are
+   not a new violation — the file numbered architectural decisions this way before this
+   diff (`Decision 5`, `Decision 20`, `Decision 3` all pre-exist at `0f90acf`), and
+   Architecture.md is a contributor-facing doc, not the user-facing error/help strings
+   convention 29's own example (Decision 91) was written about.
+9. ✅ **Classic-PAT warning preserved and correctly rescoped.** README.md:663 still
+   states GitHub's notifications API is classic-only, sourced to GitHub's docs, and now
+   additionally clarifies an Azure-only or Azure+fine-grained-GitHub setup still gets a
+   working tab minus the GitHub half — rescoped, not weakened or deleted.
+10. ✅ **Anchors.** The renamed heading (`### Notifications (GitHub only)` →
+    `### Notifications`, dropping the `#notifications-github-only` anchor) has no
+    remaining referrers anywhere in the repo (grepped `notifications-github-only`,
+    zero hits). Every link into `#notifications` / `#notifications-configuration` /
+    `#local-triage-state-azure-devops` / `#azure-devops--personal-access-token-pat` /
+    `#github--personal-access-token` resolves to a heading that exists, including
+    FAQ.md's cross-file link into `README.md#notifications-configuration`.
+
+**Build/test:** `CGO_ENABLED=0 go build ./...` clean (docs-only diff, as expected).
+`git status --porcelain` empty throughout — no temporary edits were made; all checks
+were read-only (grep, YAML parse in a throwaway Python snippet, `git show`).
+
+**Verdict: INCOMPLETE.** Finding 7 is the blocker — task 16's own acceptance line names
+`cmd/azdo-tui`'s help blocks and the auth wizard as required corrections, and both still
+carry the pre-phase-2 "the Notifications tab requires a CLASSIC token" overstatement.
+Fix: reword both notes in `cmd/azdo-tui/main.go` (lines 100 and 237) to scope the
+classic-PAT requirement to the GitHub share of the tab, matching README.md:663's
+"**The GitHub share of** the Notifications tab requires a classic PAT." Everything
+else in task 16 — the config tables, the per-backend `exclude_repos`/`include_repos`
+semantics, the `ci_failed`/`ci_activity` split, the triage-state-file section, the PAT
+scope confirmation, and the anchor renames — is done and verified against the code.
+
+### Re-validation 2026-08-07 — against `0f89440` + `3bbad61`
+
+Scoped to (a) the round-1 blocking finding and (b) an independent factual audit of the
+highest-risk documentation claims, checked against the code rather than against the
+round-1 record.
+
+**(a) Blocking finding 7 — CLOSED.** `3bbad61` rewords both strings and both are now
+accurate for all three configurations:
+- `cmd/azdo-tui/main.go:100-103` (`runHelp()`): "the **GitHub share of** the Notifications
+  tab requires a CLASSIC token … The Azure DevOps share of the tab is unaffected."
+- `cmd/azdo-tui/main.go:238-240` (`runAuthGitHub()`): same rescoping, same closing
+  sentence.
+
+Both sit inside a "Required GitHub token scopes" block, so the surrounding context was
+already GitHub-scoped; the added clause makes the Azure-only and Azure+fine-grained-GitHub
+cases explicit rather than leaving them to inference. No phase/task/decision vocabulary
+(convention 29 holds).
+
+**Repo-wide sweep for the unqualified claim (convention 26), files opened, not assumed:**
+- `RELEASES.md`, `CONTRIBUTING.md`, `Skill.md` — grepped for `notification`/`classic`/
+  `token`: **zero hits in all three**, so nothing to correct.
+- `internal/ui/setupwizard/setupwizard.go` — **zero** `notification` hits; the wizard never
+  mentions the tab or its token flavor.
+- `internal/ui/notifications/list.go:901-947` — the three 403/401/generic error bodies are
+  reached only via `errors.As(err, &github.APIError)` on the GitHub half and each names
+  "GitHub token scope required: notifications" explicitly. No body claims the tab as a
+  whole needs a classic token.
+- `internal/app/app.go:637-642` help-modal section — key bindings only, no token text.
+- `README.md:649` (`| notifications | The Notifications tab: list, mark read, mark done
+  (**classic only**) |`) sits inside the **GitHub Classic PAT scope table**; the "used for"
+  column describes what that GitHub scope buys, and the note at 663 rescopes it explicitly.
+  Not the unqualified claim.
+- `Architecture.md:618-621` and `FAQ.md:102-108` both open with an explicit "the GitHub
+  share of" / "This applies to the GitHub share of the feed only" qualifier.
+
+**(b) Factual audit.**
+
+11. ✅ **Every documented default and maximum, re-derived from the code.** All fifteen
+    leaf keys in README's three tables match `notificationsDefaults`
+    (`internal/config/config.go:559-575`) entry-for-entry and value-for-value:
+    `exclude_repos`/`include_repos`/`exclude_reasons` `[]`, `unread_only` false,
+    `max_items` 0, `poll_interval` 0, `github.only_configured_repos` false,
+    `github.participating_only` false, `github.since_days` 0, `azure.lookback_days`
+    `DefaultAzureLookbackDays`=**14**, `azure.min_poll_interval`
+    `DefaultAzureMinPollInterval`=**300**, all four `azure.sources.*` true. Maxima read
+    off the constants themselves, not off the previous record: `AzureLookbackDaysMax`=**30**
+    (config.go:503) and `AzureMinPollIntervalMax`=**86400** (config.go:518, the constant
+    round 2 of task 14 added) — README:466/467 and `config.yaml.example`:117/124 state
+    exactly those two numbers. `LoadFrom`'s zero-fallback (config.go:797, 830) and clamp
+    (config.go:815, 839) match the "0 falls back to the default, not unbounded" wording in
+    both files. `Validate()` rejects only negatives (config.go:1016-1021), as documented.
+12. ✅ **`exclude_repos`/`include_repos` semantics hold for all four Azure sources**, not
+    just review. `filter.go` matches globs against `row.Identity.Scope`
+    (filter.go:95/101/112), and every source sets that field to the project **API** name:
+    `notifications_source_review.go:76` `scope := pr.ProjectName`,
+    `..._assigned.go:78` `wi.ProjectName`, `..._mentioned.go:399` `wi.ProjectName`,
+    `..._cifailed.go:151` `run.ProjectName` — each with `ProjectDisplayName` kept in the
+    separate `ScopeDisplay` field, so a display-name-based exclude rule correctly does not
+    match. README:448-452's per-backend callout is therefore right for every Azure row, and
+    an exclude rule cannot silently miss one source's rows.
+13. ✅ **All four `sources.*` false is a silently empty feed, exactly as documented.**
+    `adapter_notifications.go:251,262` — `runSourcesConcurrently` reports `jobCount == 0`,
+    the `jobCount == 0 || len(errs) < jobCount` guard takes the absorb branch and returns
+    `(reconciled, nil)`. No error, no special case. Nothing in `config.Validate()` inspects
+    `Notifications.Azure.Sources`, so the config is legal. Tab presence is a compile-time
+    `provider.NotificationSource` fact about `*azdevops.Adapter`, not config-driven.
+    README:471 ("Disabling all four toggles is legal and simply yields an empty Azure share
+    of the feed; it does not hide the tab") and config.go:160-167 agree with the code.
+14. ✅ **Azure read/done is stated as local-only everywhere, with no implied server sync.**
+    README:110-111, README:591-609 ("**This state is local to the machine it runs on and is
+    not synced across machines.**"), Architecture.md:474-487 and FAQ all describe
+    `TriageStore`/`notifications.yaml` as the sole home of the state. README:128-131's
+    "no explicit unmark … on Azure the locally tracked read flag only clears again once new
+    activity is detected on that subject" matches `Reconcile`'s stamp-advance rule. Nothing
+    claims or implies a server-side Azure read state, and the `orphanTTL` prune (30 days)
+    is documented at Architecture.md:481 with the same number as
+    `notifications_reconcile.go:37`.
+15. ✅ **`config.yaml.example` parses and every key resolves.** `3bbad61` did not touch it
+    (`git show --stat` lists `cmd/azdo-tui/main.go` only). Whole file re-parsed with
+    `yaml.safe_load`; the commented `notifications:` block re-parsed after stripping the
+    leading `# ` yields exactly the fifteen leaf keys above, in the shape
+    `NotificationsConfig`/`...GitHubConfig`/`...AzureConfig`/`...SourcesConfig` declare
+    via their `mapstructure` tags, with values equal to the registered defaults. No orphan
+    or typo'd key.
+16. ❌ **`ci_failed` is documented as including partially-succeeded runs; it does not.**
+    Two sites, both introduced by `0f89440`:
+    - `config.yaml.example:128`: `ci_failed: true # failed/partially-succeeded pipeline
+      runs requested by you`
+    - `Architecture.md:459`: `| ci_failed | pipeline runs RequestedFor the user that failed
+      **or partially succeeded**, bounded by lookback_days | …`
+
+    The code excludes `partiallySucceeded` **deliberately and twice over**:
+    `internal/azdevops/pipelines.go:62` builds the query with
+    `statusFilter=completed&resultFilter=failed` (server-side), and
+    `notifications_source_cifailed.go:140` re-checks
+    `run.Status != "completed" || run.Result != "failed"` in Go — whose own doc comment
+    (lines 105-118) states the exclusion is intentional and explains why: it "rules out a
+    'canceled' or 'partiallySucceeded' run ever being mistaken for a failure". No path
+    exists by which a partially-succeeded run reaches the feed, so both strings promise
+    rows the user will never see, and a contributor reading Architecture.md's source table
+    would read the code's deliberate behaviour as a bug. Convention 25/28 territory: the
+    description was not derived from the source of truth.
+
+    Fix: drop "partially-succeeded"/"or partially succeeded" from both lines so they say
+    only "failed pipeline runs requested by you" — the wording README:471 already uses
+    correctly ("Include \"my failed pipeline runs\"."). If the exclusion of
+    `partiallySucceeded` (and `canceled`) is worth calling out for a contributor,
+    Architecture.md is the place, but it must be stated as an exclusion, not folded into
+    the "what it queries" cell as an inclusion.
+
+**Build/test:** `CGO_ENABLED=0 go build ./...`, `go vet ./...` and
+`go test -count=1 ./internal/... ./cmd/...` all clean (27 packages `ok`).
+`gofmt -l cmd/azdo-tui/main.go` prints nothing. `-race` not buildable in this sandbox
+(`cc1` blocked). No temporary edits were made — every check was read-only (grep, a
+throwaway Python YAML parse in the scratchpad, `git show`); `git status --porcelain` empty
+before and after apart from this spec file.
+
+**Verdict: INCOMPLETE.** Round 1's blocker is closed and the audited claims — defaults,
+maxima, `Identity.Scope` across all four sources, the all-toggles-off path, and the
+local-only triage state — all hold against the code. Finding 16 is the new blocker: two
+user- and contributor-facing lines added by this task assert the `ci_failed` source
+surfaces partially-succeeded runs, which the code goes out of its way to exclude. Task 16
+stays unticked until both lines are corrected.
+
+### Re-validation 2026-08-07 (third pass) — against `0f89440` + `3bbad61` + `a832149`
+
+Scoped to (a) round 2's `ci_failed` blocker, (b) regression on the two closed blockers, and
+(c) a sweep of the behavioural claims in the phase-2 doc additions that neither prior pass
+named as verified — prioritising anything that describes what the user will see.
+
+**(a) Blocking finding 16 — CLOSED.** `a832149` touches exactly two lines
+(`git show --stat`: `Architecture.md`, `config.yaml.example`) and both are now accurate:
+- `Architecture.md:459` — "completed pipeline runs `RequestedFor` the user whose result is
+  `failed`, bounded by `lookback_days`. A `canceled` or `partiallySucceeded` run is
+  deliberately not a failure and never appears." The new positive "never appears" claim
+  holds on **every** path, not just the two round 2 named: `mapFailedRuns`
+  (`notifications_source_cifailed.go:91-100`) is the sole producer of `ci_activity` rows on
+  the Azure side, both of `SourceCIFailed`'s branches (clean return, line 86; partial-error
+  return, line 83) route through it, and it gates every row on `isMyFailedRun`, whose
+  `run.Status != "completed" || run.Result != "failed"` (line 140) rejects `canceled` and
+  `partiallySucceeded` in Go independently of the server's `resultFilter=failed`
+  (`pipelines.go:62`). No other call site constructs a `cifail/run/<id>` identity.
+  "bounded by `lookback_days`" also holds — `adapter_notifications.go:396` passes
+  `a.notifLookbackDays` into `ListMyFailedPipelineRuns`' `minTime`.
+- `config.yaml.example:128` — "pipeline runs of mine that failed". Accurate: the source
+  filters on `RequestedFor` twice (server-side `requestedFor=<userID>` at `pipelines.go:62`,
+  re-checked as `run.RequestedFor.ID == userID` at `notifications_source_cifailed.go:143`).
+  *Nit, non-blocking:* the continuation line below it still reads "# requested by you", so
+  the comment now runs "pipeline runs of mine that failed requested by you" — factually
+  right, grammatically doubled. Worth a one-word trim next time this file is touched.
+
+**(b) Regression check on the two closed blockers — clean.** `3bbad61`'s help strings are
+byte-identical to what round 2 recorded (`cmd/azdo-tui/main.go:100-103` and `238-240`, both
+still carrying "the **GitHub share of** the Notifications tab … The Azure DevOps share of
+the tab is unaffected"), and `a832149` touched neither file nor reintroduced an unqualified
+GitHub-only claim in the two lines it did change.
+
+**(c) Sweep of previously-unnamed behavioural claims.** Verified against code:
+columns `● | Repo | Reason | Title | Updated` with no predicate on the column set
+(`list.go:262-267`, `toColumns` at 1410); newest-first merge sort and the `max_items` cap
+applied *after* the sort on the merged feed (`composite.go:737-766`); `unread_only` filtered
+client-side while the fetch always asks `all=true` (`filter.go:136`,
+`github/notifications.go:219-222`); the `f` cycle offering only reasons present in the feed
+plus an "all reasons" position (`presentReasons`, `list.go:1377-1391`; `reasonFilterActive`
+at 1156-1168) and the README's eleven-reason list matching `enums.go`'s declaration order
+exactly; the unread badge rendering from every tab over the config-filtered feed, ignoring
+the `f` narrowing, and hiding at zero (`app.go:1469-1476`, `list.go:1344`,
+`components/statusbar.go:380-384`); notifications registered first so it lands at
+`enabledTabs[0]`, gated on capability **and** pane-enabled (`buildEnabledTabs`,
+`app.go:408-411`), the same predicate gating the poller's timer (`app.go:784-788`);
+`lookback_days` bounding only the assigned and ci_failed sources (`app`/adapter wiring at
+`adapter_notifications.go:388,396` — review and mentioned take no lookback); the Azure
+self-throttle returning the previous query's rows re-reconciled, with no network work and no
+store write (`adapter_notifications.go:236-249`); triage-store 500ms debounce + atomic write,
+missing file loads as empty, flushed on clean exit (`notifications_store.go:96-97,136`,
+`cmd/azdo-tui/main.go:405`); the glob rules (`path.Match`, both sides lower-cased, bad
+patterns dropped, an all-uncompilable `include_repos` falling back to the whole feed —
+`filter.go:196-239`); and Architecture.md's 403 claim that absent
+`X-Accepted-OAuth-Scopes` is itself the "fine-grained token" diagnosis
+(`list.go:887-901`). All hold.
+
+Two claims do **not** hold:
+
+17. ❌ **"Azure keeps working when GitHub's half fails" — the pane renders a full-screen
+    error instead, hiding every Azure row.** Two sites, both added by `0f89440`:
+    - `README.md:663-669`: "…so an Azure-only or Azure+GitHub-fine-grained setup still gets
+      a working Notifications tab, just without the GitHub half."
+    - `FAQ.md:96-98`: "a GitHub auth failure only hides the GitHub share of the feed if
+      Azure is also configured and healthy, but empties the whole tab on a GitHub-only
+      config."
+
+    The composite does behave as documented — `CompositeProvider.List` returns the Azure
+    rows alongside a `*provider.PartialError` (`composite.go:686-696`, and its own doc
+    comment at 628-630 says "A failing backend never empties the feed"). The **UI layer then
+    throws those rows away**: `app.go:1152` passes `msg.Err` straight through, and
+    `notifications.Model.HandleFetchResult` (`list.go:810-817`) short-circuits on any non-nil
+    error with `m.list.HandleFetchResult(nil, err)` — items discarded — after which `View()`
+    (`list.go:736-740`) returns `errorBody(err)` before it ever reaches the table.
+    `*PartialError` implements `Unwrap() []error` (`provider/errors.go:26`), so `errors.As`
+    recovers the wrapped `*github.APIError` and the pane renders the full 403 scope body.
+    Nothing anywhere in `internal/ui/notifications` mentions `PartialError` (grepped: zero
+    hits in `list.go` and `list_test.go`), so there is no partial-failure path in the pane at
+    all. Measured, not inferred: a throwaway test in the package fed one Azure row plus a
+    `PartialError{Failed:1, Total:2}` wrapping a 403 `*github.APIError` into
+    `HandleFetchResult(...).View()` and got the "Notifications unavailable … GitHub token
+    scope required: notifications" screen with the Azure row's title **absent**. Since the
+    GitHub 403 repeats on every poll, an Azure+fine-grained-GitHub user sees that error
+    screen permanently — the exact configuration README:669 tells them will work. (Test file
+    deleted immediately after; `git status --porcelain` empty.)
+
+    Fix — pick one, they are not equivalent:
+    - **Docs-only (in scope for task 16):** reword both sites to say what actually happens —
+      a GitHub failure currently puts the whole tab into an error state even when Azure rows
+      were fetched successfully, and the remedy is to fix the GitHub token or drop
+      `github.repos`. Do not promise a working Azure half.
+    - **Code (a new task, not task 16):** demote a `*provider.PartialError` in
+      `Model.HandleFetchResult` — keep the rows, surface the failed backend as a warning
+      banner rather than as the pane's error state — and then the current wording becomes
+      true. Note convention 19's neighbourhood here: the pane's own status field is not the
+      right surface; `notificationsWarningsBanner` (`app.go:1658-1690`) already renders above
+      the pane and is the obvious home.
+
+18. ❌ **`only_configured_repos` is documented as ignoring `include_repos` "for GitHub
+    rows"; it ignores it for every row.** `README.md:458` ("…this **overrides**
+    `include_repos` for GitHub rows (which is then ignored, with a startup warning)"),
+    `README.md:507` ("`only_configured_repos` wins outright for GitHub rows (`include_repos`
+    is ignored for them, with a warning) while rows from any other backend are unaffected
+    either way") and `README.md:442`, which — unlike the phase-1 text it replaced
+    (`0f89440^:README.md:410`, "Ignored when `only_configured_repos: true`") — no longer
+    mentions the interaction at all.
+
+    `FilterNotifications` is a `switch`: `case nc.GitHub.OnlyConfiguredRepos:` is taken first
+    and the `case len(includeRepos) > 0:` branch is never evaluated (`filter.go:66-98`), and
+    inside that branch every non-GitHub row is appended unconditionally (`filter.go:90-93`).
+    The function's own doc comment says so in as many words — "include_repos is then ignored
+    for every row, not just the GitHub ones" (`filter.go:19-21`) — as does
+    `config.go:777-783`, whose warning string is likewise unqualified
+    ("notifications.github.only_configured_repos is true — notifications.include_repos is
+    ignored"). So a user with `include_repos: ["proj-a"]` **and**
+    `github.only_configured_repos: true` sees Azure rows from *every* configured project,
+    not just `proj-a` — "rows from any other backend are unaffected either way" is false in
+    exactly the direction that adds rows the user asked to filter out. Convention 25/28
+    again: the phase-2 rewrite narrowed a correct phase-1 sentence on plausibility rather
+    than deriving it from `filter.go`.
+
+    Fix: restore the unqualified statement at all three sites — when
+    `only_configured_repos: true`, `include_repos` is ignored **for the whole feed**, not
+    just for GitHub rows — and put the "Ignored when `only_configured_repos: true`" note
+    back on the `include_repos` row of the shared-keys table (README:442).
+
+**`config.yaml.example` re-checked:** whole file parses with `yaml.safe_load`, and the
+commented `notifications:` block (leading `# ` stripped) still yields exactly the fifteen
+leaf keys in the shape `NotificationsConfig`/`…GitHubConfig`/`…AzureConfig`/`…SourcesConfig`
+declare via their `mapstructure` tags, values equal to the registered defaults. No orphan or
+typo'd key.
+
+**Build/test:** `CGO_ENABLED=0 go build ./...`, `go vet ./...` and
+`go test -count=1 ./internal/... ./cmd/...` all clean (27 packages `ok`). `-race` not
+buildable here (`cc1` blocked at OS level). The one temporary file (a scratch test in
+`internal/ui/notifications/`) was deleted; `git status --porcelain` empty apart from this
+spec file.
+
+**Verdict: INCOMPLETE.** Round 2's `ci_failed` blocker is closed and correct on every path,
+the two earlier blockers show no regression, and the large majority of the phase-2 doc
+claims check out against code. Findings 17 and 18 are the remaining blockers — both are
+"what rows the user sees" claims that the code contradicts, and both were introduced by this
+task's own diff. Task 16 stays unticked until both are corrected (17 may be closed by docs
+alone; a code fix for it belongs in a separate task).
+
+### Re-validation 2026-08-07 (fourth pass) — against `4ce7ae5`
+
+Scoped to (a) round 3's two blockers, (b) `config.yaml.example`'s reworded `ci_failed`
+comment, (c) regression on everything the three earlier passes verified, and (d) one more
+sweep for the same error class.
+
+**(a1) Finding 17 — CLOSED as a docs correction; the behaviour is unchanged and now
+correctly described.** `4ce7ae5` does not touch the pane, and it does not claim to: the
+underlying defect is recorded as a new `## Unknowns` entry and deferred. The three claims
+the new wording makes were each re-derived from the code:
+- **Azure-only gets a fully working tab.** `HasGitHub()` is `len(c.GitHub.Repos) > 0`
+  (`config.go:65-67`), so with no `github.repos` `main.go:337` never builds a GitHub
+  backend; the composite has one capable backend, `mergeNotifications` returns
+  `(rows, nil)`, and the tab is gated on capability + pane-enabled only
+  (`buildEnabledTabs`, `app.go:408-411`). No GitHub token of any flavor is consulted. ✅
+- **Both backends + a GitHub token that can't reach the inbox shows the GitHub scope
+  error, not the Azure rows.** Traced end to end this pass rather than re-read from
+  round 3: `composite.go:689-697` collects the failing backend's error and returns the
+  healthy backend's rows via `mergeNotifications`, which at `len(errs) > 0` returns
+  `(all, &PartialError{...})`; `NotificationsPoller.FetchNotifications`
+  (`notifications_poller.go:163-169`) forwards `items` and `err` verbatim;
+  `app.go:1152-1153` passes both into `notifications.Model.HandleFetchResult`, which at
+  `list.go:813-815` discards the items and stores the error; `View()` (`list.go:735-739`)
+  returns `errorBody(err)`; `errorBody` (`list.go:874-885`) recovers the wrapped
+  `*github.APIError` through `PartialError.Unwrap() []error` (`provider/errors.go:26`)
+  and renders `scopeErrorBody` for a non-rate-limited 403. The README's "the tab currently
+  shows the GitHub scope error instead of your Azure rows" is exactly what happens. ✅
+- **Both suggested remedies work.** Granting the `notifications` scope removes the error
+  entirely, so the composite returns `(rows, nil)` and the merged feed renders. Removing
+  `github.repos` flips `HasGitHub()` to false, which removes the GitHub *backend* (not
+  just its notifications half) at `main.go:337`, leaving a healthy Azure-only feed — so
+  "remove `github.repos` if you only want the Azure feed" (FAQ) and the README's equivalent
+  are both true. ✅ *Nit, non-blocking:* the README's bare "or remove `github.repos` from
+  your config" does not say that this also removes GitHub PRs/issues from the other tabs;
+  the FAQ's "if you only want the Azure feed" hedges it and the README's does not.
+
+  The new `## Unknowns` entry's own claims check out: the cited line ranges are right
+  (`list.go:810-817`, `list.go:736-740`, and `composite.go:686-696` for the collect loop
+  whose `return` at 697 produces the `*PartialError`), and the sketched narrow fix is
+  workable — with one implementation note the sketch leaves implicit: keeping `items`
+  routes through `SetFeed` → `SetItems`, which is the only thing that clears
+  `listview.Model.err` (`listview.go:424-437`), so the pane must hold the demoted
+  `*PartialError` in a *new* field for `View` to render its warning line from. It cannot
+  simply keep passing the error to `m.list`, because `listview.HandleFetchResult`
+  (`listview.go:386-392`) returns early on any non-nil error and never sets items.
+
+**(a2) Finding 18 — CLOSED for the two README sites that were wrong.** `filter.go:66-104`
+is a `switch`: `case nc.GitHub.OnlyConfiguredRepos:` is taken first, `case
+len(includeRepos) > 0:` is therefore never evaluated, and inside the first branch every
+row with `Identity.Kind != provider.KindGitHub` is appended unconditionally
+(`filter.go:90-93`). So:
+- `README.md:458` ("`include_repos` is then ignored for *every* row, not just the GitHub
+  ones, with a startup warning") ✅ — and the warning is real and unqualified
+  (`config.go:777-783`).
+- `README.md:505-510`'s Precedence paragraph ✅, **including the worked example**, which is
+  literally correct: with `only_configured_repos: true` the selection switch appends every
+  Azure row regardless of `include_repos: ["proj-a"]`, and the subtraction stage
+  (`exclude_repos`/`exclude_reasons`/`unread_only`) is not engaged by either key, so Azure
+  rows from every configured project survive.
+- *Nit, non-blocking:* round 3 also asked for the "Ignored when `only_configured_repos:
+  true`" note to be restored on the `include_repos` row of the shared-keys table
+  (`README.md:442`). It was not. The row as it stands ("Glob list narrowing the feed to
+  matching scopes. Empty means no narrowing.") is not *false*, and the override is stated
+  twice within the same section, so this is a discoverability loss rather than a wrong
+  claim.
+
+**(b) `config.yaml.example`'s `ci_failed` comment.** Now reads "pipeline runs requested by
+you whose result is 'failed' -- emits the ci_activity reason above, a deliberately
+different name from this key", across four continuation lines with no doubled clause. ✅
+Accurate on both halves: `requestedFor=<userID>` + `resultFilter=failed` server-side
+(`pipelines.go:62`), re-checked in Go at `notifications_source_cifailed.go:140,143`, and
+the emitted reason is `NotificationReasonCIActivity`. Whole file re-parsed with
+`yaml.safe_load`, and the commented `notifications:` block (leading `# ` stripped) still
+yields exactly the fifteen leaf keys in the shape `NotificationsConfig`/`…GitHubConfig`/
+`…AzureConfig`/`…SourcesConfig` declare, with values equal to `notificationsDefaults`
+(`config.go:559-575`) entry-for-entry. No orphan or typo'd key.
+
+**(c) Regression — clean.** `4ce7ae5` touches four files (`git show --stat`: the spec,
+`FAQ.md`, `README.md`, `config.yaml.example`). `cmd/azdo-tui/main.go:100-103` and `238-240`
+still carry `3bbad61`'s rescoped help strings verbatim. `Architecture.md` is untouched, so
+`a832149`'s `ci_failed` row (":459", "A `canceled` or `partiallySucceeded` run is
+deliberately not a failure and never appears") stands. Defaults/maxima re-read off the
+constants again (14/30, 300/86400) and still match README:466-467 and
+`config.yaml.example`:117/124. Key paths, the triage-state path
+(`$XDG_STATE_HOME/azdo-tui/notifications.yaml`) and the "no additional PAT scope" claim are
+unchanged. **Anchors re-checked mechanically** (GitHub's slug rules, every `.md` in the
+repo, both same-file and cross-file links): the only unresolved link in the repo is
+`CONTRIBUTING.md:26` → `ARCHITECTURE.md` (the file is `Architecture.md`), which predates
+this branch entirely (`3d164fd`, PR #16) and is outside task 16. Every link into the
+sections `4ce7ae5` reworded — `#notifications-configuration`,
+`#azure-devops--personal-access-token-pat`, `#github--personal-access-token`, including
+`FAQ.md`'s cross-file one — resolves.
+
+**(d) Final sweep, same error class.** Three findings, all in files this task's own diff
+rewrote and none named by any prior pass:
+
+19. ❌ **`config.yaml.example` still carries exactly the finding-18 falsehood the README
+    fix removed — in two places.** Both were introduced by `0f89440` and `4ce7ae5` did not
+    touch them:
+    - `config.yaml.example:79-83` (`include_repos`): "…ignored for GitHub rows when
+      `notifications.github.only_configured_repos` is true (with a startup warning) --
+      **Azure rows are unaffected by that toggle either way**". This says `include_repos`
+      keeps narrowing Azure rows when the toggle is on. `filter.go:66-104` ignores
+      `include_repos` for **every** row, Azure included, so a user with
+      `include_repos: ["proj-a"]` + `only_configured_repos: true` sees Azure rows from
+      every project — the same claim, in the same direction (extra rows the user asked to
+      filter out), that round 3 blocked the README for.
+    - `config.yaml.example:96-101` (`only_configured_repos`): "wins over `include_repos`
+      **for GitHub rows** when both are set (`include_repos` is then ignored **for those
+      rows**, with a startup warning); other backends' rows are unaffected" — the same
+      scoping error, reading as though `include_repos` survives for non-GitHub rows.
+
+    Fix: mirror the corrected README wording into both comments — when
+    `only_configured_repos: true`, `include_repos` is ignored for the whole feed, and
+    non-GitHub rows pass through unnarrowed rather than "unaffected either way".
+
+20. ⚠️ **`README.md:446`'s `poll_interval` row describes a fallback the code does not
+    implement.** "`0` falls back to GitHub's `X-Poll-Interval` response hint when present,
+    else the global `polling_interval`." The cadence is `max(configured, hint)`
+    (`notificationsPollInterval`, `app.go:390-400`), where `configured` is
+    `notifications.poll_interval` → `polling_interval` → `polling.DefaultInterval`
+    (`app.go:377-388`). The hint is applied whether or not `poll_interval` is 0, and it
+    only ever *raises* the interval — so with `polling_interval: 300` and a 60s hint the
+    poller runs at 300s, not at the hint. `config.yaml.example:88-93` states the same
+    behaviour **correctly** ("can still raise this above what's configured, never lower
+    it"), so the two files disagree. **Non-blocking:** the wrong clause is inherited
+    phase-1 text (`0f89440^:README.md:417`), not invented by phase 2 — but the line *is*
+    inside this task's diff (phase 2 appended the `min_poll_interval` sentence to it), so
+    it should be corrected in the same pass as 19.
+
+21. ⚠️ **"Every key defaults to the widest possible behaviour (nothing filtered)" is no
+    longer true of the block it introduces.** `config.yaml.example:57-58` and
+    `Architecture.md:601` both carry it, and both lines were re-emitted by `0f89440` in
+    paragraphs that now document `notifications.azure`. Phase 2's own keys contradict it:
+    `lookback_days` defaults to **14** (a filter) and `min_poll_interval` to **300** (a
+    throttle), and README:466 correctly says so in as many words ("`0` is not 'unbounded'
+    here"). **Non-blocking**, same reasoning as 20 — inherited sentence, but it is now
+    wrong specifically because of what this task documents. Cheapest fix: qualify it as
+    "every *shared* and *GitHub* key defaults to the widest behaviour; the two Azure
+    numeric keys default to a bounded window — see their comments".
+
+**Build/test:** `CGO_ENABLED=0 go build ./...`, `go vet ./...` and
+`go test -count=1 ./internal/... ./cmd/...` all clean (27 packages `ok`). `-race` not
+buildable here (`cc1` blocked at OS level). Every check this pass was read-only — grep,
+`git show`/`git log -L`, a throwaway Python YAML parse and a throwaway Python anchor
+resolver, both in the scratchpad. No file under the worktree was edited except this spec;
+`git status --porcelain` empty apart from it.
+
+**Verdict: INCOMPLETE.** Round 3's two blockers are both properly closed: 17's wording now
+matches a behaviour traced end to end this pass (composite → poller → `HandleFetchResult` →
+`View` → `errorBody`), both its remedies genuinely work, and the deferred `## Unknowns`
+entry is accurate down to its sketched fix; 18's README row, Precedence paragraph and its
+new worked example are all literally correct against `filter.go`'s switch. The `ci_failed`
+comment is accurate and the file still parses. Nothing the three earlier passes verified
+regressed, and no anchor broke. Finding 19 is the blocker — the identical
+`include_repos`/`only_configured_repos` scoping falsehood survives in `config.yaml.example`
+at two sites, in a file task 16 names explicitly and this task's own diff wrote. Findings 20
+and 21 are not blockers on their own but are the same error class in the same two files and
+should be fixed in the same pass. Task 16 stays unticked.
+
+### Re-validation 2026-08-07 (fifth pass) — against `2cd4f5e`
+
+Verified against the docs-only diff `2cd4f5e` (`README.md`, `FAQ.md`, `Architecture.md`,
+`config.yaml.example`) and the current code. `go build`, `go vet` and
+`go test ./internal/... ./cmd/...` are all clean (28 packages, no failures); `-race`
+still can't build in this sandbox (`cc1` blocked), unchanged from the previous passes and
+irrelevant to a docs-only diff.
+
+**Findings 19, 20, 21 and the two nits — all closed:**
+
+22. ✅ **Finding 19 closed.** `config.yaml.example:81-86` (`include_repos`) and `:99-104`
+    (`only_configured_repos`) now both say `include_repos` is ignored "for the WHOLE feed"
+    / "for every row" and that non-GitHub rows "pass through unnarrowed". That is exactly
+    `filter.go:66-107`: the `switch` takes the `OnlyConfiguredRepos` branch, which never
+    consults `includeRepos` at all, and `filter.go:91-94` passes every non-`KindGitHub` row
+    through unconditionally. The two sites now agree with each other and with README's
+    row and Precedence paragraph — no remaining site states the old "GitHub rows only"
+    scoping.
+23. ✅ **Finding 20 closed, and the worked example is arithmetically right.**
+    `README.md:446` now reads "`0` falls back to the global `polling_interval`. … the
+    poller runs at `max(configured, hint)`, so `polling_interval: 300` with a 60-second
+    hint still polls every 300 seconds." `app.go:377-400` is literally that:
+    `notificationsConfiguredInterval` = `Notifications.PollInterval` if > 0, else
+    `PollingInterval` if > 0, else `polling.DefaultInterval`; `notificationsPollInterval`
+    returns `hint` only when `hint > configured`. max(300s, 60s) = 300s ✓. The
+    hint-of-zero case is covered correctly by the "can **raise** … but never lower it"
+    phrasing — a 0 hint (no `PollIntervalHinter` backend, or none has fetched yet;
+    `app.go:361-367`) is never greater than a configured interval, so it changes nothing.
+    `config.yaml.example:90-95` and `config.go:140-155` already said the same thing; all
+    three now agree. Non-blocking nit, **not** a new finding and not worth a further
+    iteration: neither doc mentions that `NewNotificationsPoller`/`SetInterval` additionally
+    floor the result at `polling.MinInterval` (5s, `polling/poller.go:16`), so the stated
+    formula is exact only for a configured interval ≥ 5s. Reachable only via
+    `notifications.poll_interval: 1..4` (config validation allows ≥ 0); the docs are not
+    wrong for any interval a user would plausibly set, and this simplification predates
+    phase 2.
+24. ✅ **Finding 21 closed.** `config.yaml.example:57-60` and `Architecture.md:598-605` now
+    scope the claim to *filter* keys and name the azure block as the exception with the two
+    real numbers — `lookback_days` 14 (`config.DefaultAzureLookbackDays`) and
+    `min_poll_interval` 300s (`config.DefaultAzureMinPollInterval`), both re-checked against
+    the constants this pass. The azure block's other keys (`sources.*`, all `true`) are
+    indeed widest-behaviour, so "the azure block is the exception … lookback_days and
+    min_poll_interval" is precise rather than over-broad.
+25. ✅ **Nit 1 closed.** `README.md:443`'s `include_repos` row now carries
+    "**Ignored entirely** when `notifications.github.only_configured_repos` is `true`",
+    so the table row no longer reads as complete on its own.
+26. ✅ **Nit 2 closed, and the "other tabs" claim is true.** `README.md:677-679` and
+    `FAQ.md:99` now note that removing `github.repos` "drops GitHub from the other tabs as
+    well". Confirmed: `github.repos` is the *only* gate on the whole GitHub backend —
+    `config.HasGitHub()` (`config.go:65-67`) is `len(c.GitHub.Repos) > 0`, and
+    `cmd/azdo-tui/main.go:339-356` builds and appends the GitHub backend to `backends` only
+    inside `if cfg.HasGitHub()`. With it removed the composite has no GitHub backend at all,
+    so GitHub PRs, issues and Actions runs disappear from the Pull Requests, Work Items and
+    Pipelines tabs too. The remedy is correctly qualified in both files.
+
+**Markup, checked because the edits were hand-made:**
+
+27. ✅ **No broken markup in any of the four files.** Every markdown table in `README.md`,
+    `Architecture.md` and `FAQ.md` was re-parsed programmatically (split on unescaped `|`,
+    per-table cell-count comparison against the header): every row in every table has the
+    header's cell count — including the four edited `README.md` rows. `**` markers are
+    balanced in all four files. The hand-edited `**no \n`notifications.enabled` key**` span
+    in `Architecture.md:604-605` is a strong-emphasis run crossing a soft line break inside
+    a single paragraph, which CommonMark renders as intended; the surrounding paragraph is
+    unbroken.
+
+**Final sweep over every behavioural claim in the phase-2 doc additions — no further
+findings.** Re-derived from code this pass, beyond what earlier passes covered:
+
+- Azure identity keys `review/pr/<id>`, `mention/wi/<id>`, `assigned/wi/<id>`,
+  `cifail/run/<id>` (Architecture.md's source table) match the four `NotifKey(...)` call
+  sites verbatim. `orphanTTL` really is 30 days, the triage store's debounce really is
+  500 ms and its writes are atomic (`notifications_store.go:96-97`, `os.Rename`).
+- "Azure … does not implement `PollIntervalHinter` at all" — pinned by
+  `TestAdapter_DoesNotImplementPollIntervalHinter`; only `github.Adapter` and the composite
+  expose the hint.
+- "`u` … on Azure the local read flag only clears again once new activity is detected on
+  that subject" (README feature bullet and key table) matches `Reconcile`'s
+  `row.UpdatedAt.After(entry.LastActivity)` branch — and only that branch — clearing
+  `Read`/`Done`.
+- "the adapter self-throttles … and returns its previous result on calls made sooner"
+  matches `Adapter.list`'s throttled path: no network, no store write, re-`Reconcile` of
+  `notifLastRawRows` against fresh triage state.
+- "`max_items` … not per-backend, so `max_items: 50` means at most 50 rows total" matches
+  `CompositeProvider.List` zeroing `backendOpts.Max` and `mergeNotifications` applying the
+  cap once, after the sort.
+- `lookback_days` "bounds the assigned and ci_failed sources (the other two aren't
+  time-bounded the same way)" matches `runSourcesConcurrently`: only `SourceAssigned` and
+  `SourceCIFailed` take `notifLookbackDays`.
+- `since_days`/`participating_only` are correctly documented as GitHub-only: Azure's
+  `List` ignores `NotifOpts` entirely.
+- FAQ's "the tab appears as soon as at least one backend is configured" holds —
+  `hasNotificationCapability` → `HasNotifications()` over backends, and `main.go` always
+  wires Azure via `NewAdapterWithNotifications` (never bare `NewAdapter`).
+
+**No regression in anything the four earlier passes verified.** Re-checked directly: the two
+`cmd/azdo-tui/main.go` help blocks (`:100`, `:238`) still scope the classic-token note to
+"the GitHub share"; the `ci_failed`/`ci_activity` distinction and the "canceled or
+partiallySucceeded never appears" wording are intact in all four files; findings 17 and 18's
+corrected wording is unchanged; every documented default, maximum and key path
+(`state.yaml` / `notifications.yaml` resolution, `XDG_STATE_HOME`, the Windows path) still
+matches the constants; the Azure "no additional PAT scope" claim still holds. No leftover
+"Notifications is GitHub only" statement anywhere outside `docs/adr/0001-*` (a dated
+phase-1 decision record, correctly left alone). `config.yaml.example` still parses: the
+commented `notifications:` block (lines 62-134) was extracted by stripping exactly one
+leading `#` plus one space per line and parsed with `yaml.safe_load` — it yields the exact
+nested shape, and all eighteen keys resolve to real `mapstructure` tags on
+`NotificationsConfig` / `NotificationsGitHubConfig` / `NotificationsAzureConfig` /
+`NotificationsAzureSourcesConfig`.
+
+**Verdict: COMPLETE.** Findings 19, 20 and 21 and both nits are closed, each verified
+against the code rather than the summary; the markup survived the hand edits; the full
+behavioural sweep produced no further findings. Task 16 is ticked.
+
+### Re-validation 2026-08-07 (sixth pass) — against `16c4b2f` (INCOMPLETE, task un-ticked)
+
+Scoped to `16c4b2f` alone (`README.md`, `FAQ.md`, `Architecture.md`, `docs/adr/0002-*`, the
+spec's `## Unknowns`) — the five earlier passes cover the rest of the phase-2 docs. `go
+build`, `go vet` and `go test ./internal/... ./cmd/...` are clean (28 packages); `-race`
+still can't build here (`cc1` blocked), irrelevant to a docs-only diff. Markup re-parsed
+programmatically: every table row in all four files matches its header's cell count, `**`
+is balanced in every paragraph, and every relative link and anchor resolves — including the
+new `FAQ.md:78` → `README.md#local-triage-state-azure-devops` cross-file link (heading
+`README.md:608`) and both rewritten "see …" pointers, which now name `FAQ.md:111`
+("The Notifications tab says my token is missing a scope"), a question that exists and does
+sit below both referring sites (`FAQ.md:29`, `FAQ.md:99`).
+
+**Findings — one blocker, three corrections:**
+
+28. 🔴 **`README.md:493-495` prescribes a knob the mention source cannot see.** The
+    paragraph names two overflow examples — "more than 50 recently assigned work items or
+    more than 50 recent mention candidates in a single project" — and then says "Narrowing
+    `lookback_days` is the knob that helps here". `lookback_days` reaches only
+    `SourceAssigned` and `SourceCIFailed` (`adapter_notifications.go:388`, `:396`).
+    `SourceMentioned` is called as `SourceMentioned(a.mc, userID, now)`
+    (`adapter_notifications.go:382`) and its stage-1 query,
+    `Client.ListRecentlyMentionedWorkItems` (`workitems.go:311-320`), is a bare
+    `@RecentMentions` WIQL with no date predicate at all; `SourceReviewRequested` is
+    likewise unbounded by date (`git.go:169`, `status=active`). So for one of the two cases
+    the paragraph itself cites, the prescribed remedy does nothing. It also contradicts
+    `README.md:469` — rewritten in this same commit — which correctly says the other two
+    sources are "bounded by their own nature rather than by a date". Fix: either drop the
+    mention-candidate example from the sentence the remedy attaches to, or say plainly that
+    `lookback_days` narrows only the assigned and ci_failed sources and that nothing narrows
+    the other two.
+29. 🟡 **"newest first" (`README.md:489`) is unbacked for `review_requested`.** True for the
+    other three: assigned and mentioned both send `ORDER BY [System.ChangedDate] DESC`
+    server-side ahead of `$top` (`workitems.go:393`, `:318`), and ci_failed sends
+    `queryOrder=finishTimeDescending` (`pipelines.go:63`). `Client.ListPullRequestsAsReviewer`
+    (`git.go:169`) sends `$top=50&searchCriteria.status=active&searchCriteria.reviewerId=…`
+    with **no** ordering parameter, so which 50 active PRs survive the server's cut is
+    unspecified — the merge sort in `listPullRequestsAsReviewer` (`multiclient.go:401-403`)
+    runs after truncation and cannot recover a dropped row. Qualify the claim or drop
+    "newest first".
+30. 🟡 **The mention source's effective bound is not "per project" (`README.md:489`,
+    `Architecture.md:461`, `docs/adr/0002-*` "capped at a fixed 50 items per project per
+    poll").** Every *query* top genuinely is per project — all four constants are passed
+    into a per-`Client` fan-out (`multiclient.go:369-375`, `:484-490`, `:145-151`;
+    `notifications_source_mentioned.go:183-194`) — so that clause is right for
+    review/assigned/ci_failed. Mentions carry a second, tighter cap the docs do not mention:
+    `mentionCandidateLimit = 50` (`notifications_source_mentioned.go:30`) applied by
+    `boundMentionCandidates` to the *interleaved, cross-project* candidate list
+    (`:134`), so with N projects at most 50 mention candidates total — not 50 per project —
+    ever reach stage 2 and become rows. In a 3-project org, mentions truncate at ~17 per
+    project, well below the number the README tells the user to expect.
+31. 🟡 **Wrong file pointer, and the measured truncation is the other cap
+    (`Architecture.md:461-463`).** Only `reviewRequestedQueryTop` and `ciFailedQueryTop` live
+    in `internal/azdevops/adapter_notifications.go:27-28`; `assignedQueryTop` is
+    `notifications_source_assigned.go:14` and `mentionCandidateQueryTop` is
+    `notifications_source_mentioned.go:16`. A contributor following the citation finds two of
+    the four. Related: the sentence "The mention source is the only one that even *measures*
+    its truncation" sits in a paragraph about the per-project cap, but `CandidatesDropped`
+    measures the *merged* `mentionCandidateLimit` truncation (finding 30), not the
+    per-project `$top` cut — the per-project cut is unmeasured in all four sources, since
+    `QueryWorkItemIDs` simply receives at most `$top` ids with no dropped count.
+
+**Verified correct against the code — no action:**
+
+- **`CandidatesDropped` exists, is genuinely computed, and is genuinely discarded.**
+  Declared `notifications_source_mentioned.go:51-53`, computed at `:136-139` from
+  `boundMentionCandidates`' `beforeTruncation`, set on the result at `:146`; the caller does
+  `res, err := SourceMentioned(...); return res.Rows, err`
+  (`adapter_notifications.go:382-383`) — `CandidatesDropped`, `CandidateLimit` and
+  `CommentFetchFailures` all die at that line. The claim that the other three sources do not
+  measure theirs holds: `SourceReviewRequested`, `SourceAssigned` and `SourceCIFailed` return
+  a bare `([]provider.Notification, error)` and never compare a returned length against the
+  `top` they asked for.
+- **`max_items` is applied where the docs say.** `CompositeProvider.List` zeroes
+  `backendOpts.Max` before fan-out (`composite.go:662-663`) and passes `opts.Max` to
+  `mergeNotifications` (`:697`), which caps *after* the `sort.SliceStable`
+  (`:747-762`). "Bounds the merged feed after the sort, not what each source fetches" is
+  exact, and the cap is unrelated to the four `$top` constants.
+- **Partial failure really is symmetric.** A wholly-failed Azure backend — expired PAT, so
+  `resolveAuthenticatedUserID` fails for three sources and `MultiClient`'s "all projects
+  failed" path for the fourth — hits `len(errs) == jobCount` and returns `(nil, err)`
+  (`adapter_notifications.go:262-275`), not a partial result. The composite records that
+  error, drops the failing backend's rows, and returns the healthy backend's rows alongside
+  a `*PartialError` (`composite.go:689-693`, `:763-764`). The poller forwards both
+  (`polling/notifications_poller.go:163-166`) and `HandleFetchResult` takes the
+  `err != nil` branch, which sets `m.err` and never assigns `m.items`
+  (`listview.go:387-393`) — the healthy rows are fetched and discarded, exactly as
+  `README.md:694-696` and `FAQ.md:102-105` now say, in both directions.
+- **The FAQ's three remedies all work.** Dropping `organization`/`projects` leaves a valid
+  GitHub-only config: `azurePartial` is false when *both* are absent, and the
+  "at least one backend" guard is satisfied by `HasGitHub()` (`config.go:891-932`), so the
+  Azure backend is simply not built and the GitHub feed keeps working.
+- **Silent key handling.** `LoadFrom` uses a plain `v.Unmarshal` with no `ErrorUnused`
+  decoder option, so an unrecognised or wrongly-nested key is neither an error nor a
+  `Config.Warnings` entry — spelled out at `config.go:105-111`, whose "Save() round-trips
+  whatever the file already contains" half is real: `Save` re-reads the existing file before
+  setting its own keys (`config.go:1116-1125`), pinned by
+  `TestConfigSave_PreservesKeysOutsideTheConfigStruct`.
+- **`notifications.yaml` reset — all four clauses.** Same directory as `state.yaml` via
+  `state.PathFor(notifFileName)` (`notifications_store.go:68-74`); missing file returns an
+  empty `TriageState` and no error (`:78-85`); the two files are owned by separate stores
+  with no shared state, so deleting either leaves the other untouched; and with no stored
+  entry `Reconcile` leaves `Read`/`Done` at false and creates a fresh entry
+  (`notifications_reconcile.go:141-200`), so every Azure row does come back unread.
+- **The `lookback_days` row rewrite (`README.md:469`) describes the real queries.** Review
+  requests: `searchCriteria.status=active` + `reviewerId` (`git.go:169`) — "still open and
+  still awaiting you". Mentions: `[System.Id] IN (@RecentMentions)` (`workitems.go:316-318`)
+  — "whatever Azure's own recent-mentions query returns".
+- **`ci_failed` row and the Work Items scope row.** `statusFilter=completed&resultFilter=failed&requestedFor=<id>`
+  (`pipelines.go:61-65`) is literally "completed runs you requested whose result is
+  `failed`", and `resultFilter=failed` is what excludes `canceled`/`partiallySucceeded`.
+  Stage 2 of the mention source calls `GET /wit/workItems/{id}/comments`
+  (`comments.go:48-56`), so `FAQ.md:21`'s added "read work-item comments" is correct and
+  needs no scope beyond Work Items → Read.
+- **The relocated group-level fact is intact and correct** (`README.md:485-487`): all four
+  toggles off yields `jobCount == 0`, which takes `Adapter.list`'s absorb branch and returns
+  an empty slice with a nil error (`adapter_notifications.go:262-273`), and tab visibility
+  depends only on `disabled_panes` via `IsPaneEnabled` — no source toggle is consulted.
+
+**Verdict: INCOMPLETE.** Finding 28 is the blocker: the new paragraph tells a user to narrow
+`lookback_days` to fix mention-candidate truncation, which that source cannot see, and it
+contradicts the `lookback_days` table row rewritten in the same commit. Findings 29-31 are
+small factual corrections in the same two paragraphs and the ADR sentence. Everything else
+in `16c4b2f` — the partial-failure symmetry, the `CandidatesDropped` claim, the silent-key
+and `notifications.yaml` paragraphs, the `ci_failed` and Work Items scope rows, and all
+markup and links — is verified correct against the code. Task 16 is un-ticked.
+
+### Findings 28-31 fixed — 2026-08-07
+
+All four confirmed against the code before editing, then fixed by hand rather than by
+another implementer round, since every one is a sentence-level factual correction in text
+this loop wrote:
+
+- **28 (🔴).** `lookback_days` reaches only `SourceAssigned` and `SourceCIFailed`
+  (`adapter_notifications.go:388,396`); `SourceMentioned(a.mc, userID, now)` at `:382` never
+  receives it, and `ListRecentlyMentionedWorkItems` (`workitems.go:311-320`) is a bare
+  `@RecentMentions` WIQL with no date predicate. The README paragraph now says the knob
+  helps for assigned work items and failed runs and names mentions and review requests as
+  the two it does not reach — which also removes the contradiction with the `lookback_days`
+  table row rewritten in the same commit.
+- **29 (🟡).** "Newest first" is true for assigned and mentioned (`ORDER BY
+  [System.ChangedDate] DESC`) and for ci_failed (`queryOrder=finishTimeDescending`,
+  `pipelines.go:63`), but `ListPullRequestsAsReviewer` (`git.go:169`) sends no ordering
+  parameter at all, and the merged sort runs *after* truncation. Now stated as three of four
+  sources, with review requests called out as "whatever the server returns first".
+- **30 (🟡).** Every `$top` genuinely is per project, but `mentionCandidateLimit = 50`
+  (`notifications_source_mentioned.go:30`, applied at `:269-272`) trims the candidate list
+  *after* `interleaveMentionCandidates` merges the projects — so a three-project org
+  truncates mentions at roughly 17 per project, not 50. The second cap is now documented in
+  the README, `Architecture.md` and the ADR.
+- **31 (🟡).** `assignedQueryTop` lives in `notifications_source_assigned.go:14` and
+  `mentionCandidateQueryTop` in `notifications_source_mentioned.go:16`, not in
+  `adapter_notifications.go`. Pointers corrected. The same paragraph's claim that mentions
+  are "the only source that measures its truncation" was true but attached to the wrong cap:
+  `CandidatesDropped` counts the *merged* cut, not the per-project one, and the four
+  per-project cuts are not measured at all. `Architecture.md` and the spec's `## Unknowns`
+  entry now say so.
+
+Build, vet and `go test -count=1 ./internal/... ./cmd/...` clean. Task 16 re-ticked.

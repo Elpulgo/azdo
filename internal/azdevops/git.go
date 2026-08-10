@@ -11,19 +11,42 @@ import (
 
 // PullRequest represents a pull request in Azure DevOps
 type PullRequest struct {
-	ID                 int        `json:"pullRequestId"`
-	Title              string     `json:"title"`
-	Description        string     `json:"description"`
-	Status             string     `json:"status"` // "active", "completed", "abandoned"
-	CreationDate       time.Time  `json:"creationDate"`
-	SourceRefName      string     `json:"sourceRefName"` // e.g., "refs/heads/feature/my-feature"
-	TargetRefName      string     `json:"targetRefName"` // e.g., "refs/heads/main"
-	IsDraft            bool       `json:"isDraft"`
-	CreatedBy          Identity   `json:"createdBy"`
-	Repository         Repository `json:"repository"`
-	Reviewers          []Reviewer `json:"reviewers"`
-	ProjectName        string     `json:"-"` // Set by MultiClient, not from API
-	ProjectDisplayName string     `json:"-"` // Set by MultiClient, display name for UI
+	ID            int        `json:"pullRequestId"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	Status        string     `json:"status"` // "active", "completed", "abandoned"
+	CreationDate  time.Time  `json:"creationDate"`
+	SourceRefName string     `json:"sourceRefName"` // e.g., "refs/heads/feature/my-feature"
+	TargetRefName string     `json:"targetRefName"` // e.g., "refs/heads/main"
+	IsDraft       bool       `json:"isDraft"`
+	CreatedBy     Identity   `json:"createdBy"`
+	Repository    Repository `json:"repository"`
+	Reviewers     []Reviewer `json:"reviewers"`
+	// LastMergeSourceCommit is the commit at the head of the source branch as
+	// of Azure DevOps's most recent mergeability re-check. Despite the API
+	// doc's "at the time of the last pull request merge" wording, the service
+	// reruns this check — and therefore updates this field — on every push to
+	// the source branch, not only at completion. It is the only push-driven
+	// timestamp GetPullRequests exposes on the core PR object (there is no
+	// top-level "last updated" field): the review-requested notification
+	// source reads Committer.Date off it as the PR's activity stamp so a new
+	// push resurrects a dismissed row (phase-2 notifications spec, decision 2).
+	LastMergeSourceCommit *GitCommitRef `json:"lastMergeSourceCommit"`
+	ProjectName           string        `json:"-"` // Set by MultiClient, not from API
+	ProjectDisplayName    string        `json:"-"` // Set by MultiClient, display name for UI
+}
+
+// GitUserDate carries a user identity and timestamp for a Git operation
+// (commit authoring or committing). Only Date is consumed today.
+type GitUserDate struct {
+	Date time.Time `json:"date"`
+}
+
+// GitCommitRef is a minimal projection of Azure DevOps's GitCommitRef type —
+// only the fields consumed today (see PullRequest.LastMergeSourceCommit).
+type GitCommitRef struct {
+	CommitID  string      `json:"commitId"`
+	Committer GitUserDate `json:"committer"`
 }
 
 // Identity represents a user identity in Azure DevOps

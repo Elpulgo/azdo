@@ -17,10 +17,25 @@ const commentsTopLimit = 200
 
 // WorkItemComment is a single comment from a work item's Discussion section.
 type WorkItemComment struct {
-	ID          int       `json:"id"`
-	Text        string    `json:"text"`
-	CreatedBy   Identity  `json:"createdBy"`
-	CreatedDate time.Time `json:"createdDate"`
+	ID          int              `json:"id"`
+	Text        string           `json:"text"`
+	CreatedBy   Identity         `json:"createdBy"`
+	CreatedDate time.Time        `json:"createdDate"`
+	Mentions    []CommentMention `json:"mentions"`
+}
+
+// CommentMention is a single @mention resolved within a comment's text, as
+// returned by GET .../comments without needing $expand=all — task 1's spike
+// (phase-2 notifications spec, "Probe results" (b)) confirmed mentions[] is
+// populated by default even though it is absent from CommentExpandOptions
+// (none|reactions|renderedText|renderedTextOnly|all).
+type CommentMention struct {
+	// TargetID is the resolved identity of the mentioned user or group — "an
+	// example of this could be a user's tfid" per Microsoft's docs. It is
+	// matched against Client.GetCurrentUserID() with a plain string ==, no
+	// lowercasing or GUID parsing (probe result (c): the two are exact
+	// matches, byte-for-byte, verified against a live org).
+	TargetID string `json:"targetId"`
 }
 
 // workItemCommentsResponse is the CommentList wrapper returned by the GET endpoint.

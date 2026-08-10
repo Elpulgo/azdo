@@ -1657,12 +1657,15 @@ func (m Model) notificationsKeybindings() string {
 
 // notificationsWarningsBanner renders Config.Warnings ahead of the
 // notifications pane's own render state. internal/config populates this slice
-// at load time (currently the unrecognised-exclude_reasons and bad-repo-glob
-// diagnostics) and never prints it itself — a TUI has no safe place to write a
-// line before or after Bubble Tea's alt-screen switch — so this is the one
-// delivery route. Returns "" for an empty (or nil) slice so an unpopulated
-// Warnings field never reserves a blank line ahead of the pane's content; see
-// notificationsTabContent, which is what actually enforces that.
+// at load time — currently an unrecognised exclude_reasons entry, a
+// malformed exclude_repos/include_repos glob, only_configured_repos
+// overriding a non-empty include_repos, and lookback_days being clamped to
+// AzureLookbackDaysMax (see Config.Warnings' own doc comment for the
+// authoritative list) — and never prints it itself — a TUI has no safe place
+// to write a line before or after Bubble Tea's alt-screen switch — so this is
+// the one delivery route. Returns "" for an empty (or nil) slice so an
+// unpopulated Warnings field never reserves a blank line ahead of the pane's
+// content; see notificationsTabContent, which is what actually enforces that.
 func notificationsWarningsBanner(warnings []string) string {
 	if len(warnings) == 0 {
 		return ""

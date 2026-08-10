@@ -916,3 +916,256 @@ func TestClient_UpdateWorkItemState_APIError(t *testing.T) {
 		t.Error("Expected error for bad request, got nil")
 	}
 }
+
+// TestClient_ListRecentlyMentionedWorkItems_SortsByChangedDateDescending
+// pins the fix for the task 5 review's 🔴: the WIQL query's ORDER BY only
+// sorts the ids QueryWorkItemIDs returns, not the work items GetWorkItems
+// fetches next — the GET /wit/workitems batch endpoint returns
+// response.Value in its own order, unrelated to the ids list's order. The
+// mock below models that directly: the WIQL response lists ids ascending
+// (1, 2, 3) but the batch GetWorkItems response deliberately returns them in
+// an unrelated order (3, 1, 2) that does not match either the WIQL order or
+// ChangedDate order. If ListRecentlyMentionedWorkItems returned
+// GetWorkItems' response order unsorted, this test would observe [3, 1, 2]
+// (or, under an id-order-preserving fixture, would never catch the defect
+// at all — see the phase-2 notifications spec's task 5 review feedback).
+// Only an explicit post-fetch sort by Fields.ChangedDate descending recovers
+// the correct [newest ID 3, middle ID 2, oldest ID 1] order asserted here.
+func TestClient_ListRecentlyMentionedWorkItems_SortsByChangedDateDescending(t *testing.T) {
+	oldest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			// WIQL: ids returned in ascending order, unrelated to ChangedDate.
+			response := WIQLResponse{
+				WorkItems: []WorkItemReference{{ID: 1}, {ID: 2}, {ID: 3}},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		// GetWorkItems batch: deliberately not in request order (1,2,3) and
+		// not in ChangedDate order either, modelling the batch endpoint's
+		// own independent ordering.
+		response := WorkItemsResponse{
+			Value: []WorkItem{
+				{ID: 3, Fields: WorkItemFields{Title: "Newest", ChangedDate: newest}},
+				{ID: 1, Fields: WorkItemFields{Title: "Oldest", ChangedDate: oldest}},
+				{ID: 2, Fields: WorkItemFields{Title: "Middle", ChangedDate: middle}},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	items, err := client.ListRecentlyMentionedWorkItems(50)
+	if err != nil {
+		t.Fatalf("ListRecentlyMentionedWorkItems() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 work items, got %d", len(items))
+	}
+
+	wantOrder := []int{3, 2, 1} // newest ChangedDate first
+	for i, wantID := range wantOrder {
+		if items[i].ID != wantID {
+			t.Errorf("items[%d].ID = %d, want %d (ChangedDate descending)", i, items[i].ID, wantID)
+		}
+	}
+}
+
+// TestClient_ListRecentlyAssignedWorkItems_SortsByChangedDateDescending
+// mirrors TestClient_ListRecentlyMentionedWorkItems_SortsByChangedDateDescending's
+// fix for the same trap (see that test's doc comment): the WIQL query's
+// ORDER BY only sorts the ids QueryWorkItemIDs returns, not the work items
+// GetWorkItems fetches next. The WIQL response here lists ids ascending
+// (1, 2, 3) but the batch GetWorkItems response deliberately returns them in
+// an unrelated order (3, 1, 2) that matches neither the WIQL order nor
+// ChangedDate order — only an explicit post-fetch sort by Fields.ChangedDate
+// descending recovers the correct [3, 2, 1] order asserted below.
+func TestClient_ListRecentlyAssignedWorkItems_SortsByChangedDateDescending(t *testing.T) {
+	oldest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			response := WIQLResponse{
+				WorkItems: []WorkItemReference{{ID: 1}, {ID: 2}, {ID: 3}},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		response := WorkItemsResponse{
+			Value: []WorkItem{
+				{ID: 3, Fields: WorkItemFields{Title: "Newest", ChangedDate: newest}},
+				{ID: 1, Fields: WorkItemFields{Title: "Oldest", ChangedDate: oldest}},
+				{ID: 2, Fields: WorkItemFields{Title: "Middle", ChangedDate: middle}},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	items, err := client.ListRecentlyAssignedWorkItems(14, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 work items, got %d", len(items))
+	}
+
+	wantOrder := []int{3, 2, 1} // newest ChangedDate first
+	for i, wantID := range wantOrder {
+		if items[i].ID != wantID {
+			t.Errorf("items[%d].ID = %d, want %d (ChangedDate descending)", i, items[i].ID, wantID)
+		}
+	}
+}
+
+// TestClient_ListRecentlyAssignedWorkItems_QueryContainsLookbackWindow pins
+// that lookbackDays is threaded into the WIQL query as the literal N in
+// `@Today-N`, and that the query still scopes to @Me and @project — decision
+// 6's bounded lookback window (no snapshot, no delta state) only bounds the
+// feed if N actually reaches the query Azure evaluates server-side.
+func TestClient_ListRecentlyAssignedWorkItems_QueryContainsLookbackWindow(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListRecentlyAssignedWorkItems(21, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+
+	if !strings.Contains(capturedBody, "@Today-21") {
+		t.Errorf("WIQL query must bound the lookback window via @Today-21, got query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@Me") {
+		t.Errorf("WIQL query must scope to @Me, got query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@project") {
+		t.Errorf("WIQL query must scope to @project to prevent duplicates in multi-project mode, got query body: %s", capturedBody)
+	}
+}
+
+// TestClient_ListRecentlyAssignedWorkItems_QueryExcludesClosedAndRemoved
+// pins that the state clause matches ListMyWorkItems (workitems.go:261-266)
+// exactly. Without it, closing a work item advances System.ChangedDate (a
+// close is itself a revision), so the item would match this query again on
+// the very next poll and resurrect as unread — inverting decision 7's
+// auto-expiry.
+func TestClient_ListRecentlyAssignedWorkItems_QueryExcludesClosedAndRemoved(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListRecentlyAssignedWorkItems(14, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+
+	// The request body is JSON-encoded, which escapes `<`/`>` to
+	// `<`/`>` — decode it back to the literal query text before
+	// asserting on it, rather than matching the escaped form.
+	var decoded struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(capturedBody), &decoded); err != nil {
+		t.Fatalf("failed to decode captured WIQL request body: %v", err)
+	}
+
+	if !strings.Contains(decoded.Query, "[System.State] <> 'Closed'") {
+		t.Errorf("WIQL query must exclude Closed items, got query: %s", decoded.Query)
+	}
+	if !strings.Contains(decoded.Query, "[System.State] <> 'Removed'") {
+		t.Errorf("WIQL query must exclude Removed items, got query: %s", decoded.Query)
+	}
+}
+
+// TestClient_ListRecentlyAssignedWorkItems_NegativeLookbackDays_ClampsToZero
+// pins that a negative lookbackDays is clamped to 0 rather than interpolated
+// as-is: `@Today--5` is malformed WIQL and would fail with HTTP 400 on
+// every project, degrading this source to nothing.
+func TestClient_ListRecentlyAssignedWorkItems_NegativeLookbackDays_ClampsToZero(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			capturedBody = string(bodyBytes)
+			response := WIQLResponse{WorkItems: []WorkItemReference{}}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		org:        "test-org",
+		project:    "test-project",
+		pat:        "test-pat",
+		baseURL:    server.URL + "/test-org/test-project/_apis",
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := client.ListRecentlyAssignedWorkItems(-5, 50)
+	if err != nil {
+		t.Fatalf("ListRecentlyAssignedWorkItems() error = %v", err)
+	}
+
+	if strings.Contains(capturedBody, "@Today--5") {
+		t.Errorf("negative lookbackDays must not reach the query as-is, got malformed query body: %s", capturedBody)
+	}
+	if !strings.Contains(capturedBody, "@Today-0") {
+		t.Errorf("negative lookbackDays must clamp to 0, got query body: %s", capturedBody)
+	}
+}

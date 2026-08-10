@@ -77,3 +77,17 @@ promote them — move a line up into Active to accept it, delete it to reject.
 31. **State conveyed only by font weight or colour is invisible to some users and some themes — give it a glyph.** If the sole feedback for an action is a style change, the action looks like a no-op when that style is subtle. _(Phase 1 notifications, Decision 89 — unread was bold-only, so `u` appeared to do nothing.)_
 
 32. **Index row cells by named constant, never by literal position.** Tests that carry their own `const fooCol = 1` keep passing against a shifted layout while asserting the wrong cell, and the failure reads as a data bug. _(Phase 1 notifications, Decision 90.)_
+
+33. **Mutation-test with a widening mutant, not only narrowing ones.** A set of mutants that only makes a predicate stricter cannot tell a load-bearing guard from a dead one — the tests pass either way because the guard was never the thing being exercised. For every predicate you claim is pinned, also flip it the *loose* way (`if x` → `if true`, `>=` → `>`, drop the clause entirely) and confirm something fails.
+
+34. **Treat "this mutant is equivalent" as a claim to disprove, not a conclusion.** An equivalence argument that reasons only about the value a branch computes misses the side effects it also performs — appending a warning, advancing a timestamp, writing to a store. Read the whole branch body before declaring a mutant unkillable; a passing test and an equivalence claim deserve exactly the same scepticism.
+
+35. **Every behavioural sentence in user-facing docs must name the code line that makes it true.** A docs task is a verification task, not a writing task: README/FAQ/ADR prose asserting how a feature behaves is as falsifiable as an assertion, and this repo has repeatedly shipped plausible-sounding sentences the code contradicts. Trace each claim to its implementation before committing it, and re-trace it after any edit that touches the surrounding paragraph.
+
+36. **Never report a file as already-correct without opening it.** "That file already says the right thing" is a claim about content, and inferring it from a task description, a filename or a previous pass's summary has produced false clears more than once. Open it, or say you did not check it.
+
+37. **When a helper's last real caller goes away, delete it — do not keep it "for safety".** A defensive copy or guard that nothing reaches is not insurance; it is a claim the code no longer makes, and the next reader will build on it. If the guarantee moved elsewhere, point the doc comment at the new home and remove the old code.
+
+38. **Trace a config knob to every code path the docs claim it bounds.** A key that reaches two of a feature's four sources will be documented as bounding all four unless someone follows the value through each call site. Grep for the field name and read every use before writing "narrowing X helps here".
+
+39. **Never `git checkout --` a file inside the loop's worktree.** It discards uncommitted work with no recovery and no prompt. To undo a temporary edit, `cp` a backup first and restore from it, then `diff` to confirm the restore was exact.
