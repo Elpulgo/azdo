@@ -2,6 +2,7 @@ package demo
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Elpulgo/azdo/internal/azdevops"
@@ -35,6 +36,129 @@ func minutesAgo(m int) time.Time { return now.Add(-time.Duration(m) * time.Minut
 func daysAgo(d int) time.Time    { return now.AddDate(0, 0, -d) }
 
 func ptr[T any](v T) *T { return &v }
+
+// mockPullRequestsFor returns the PRs belonging to the given API project,
+// keyed off each PR's repository. An unknown project returns everything so
+// direct calls without a project segment keep working in tests.
+func mockPullRequestsFor(project string) []azdevops.PullRequest {
+	return filterByProject(mockPullRequests(), project, func(pr azdevops.PullRequest) string {
+		if pr.Repository.ID == repoIDNexus {
+			return projectNexus
+		}
+		return projectHorizon
+	})
+}
+
+// mockWorkItemsFor returns the work items belonging to the given API project,
+// keyed off each item's iteration path (which carries the display name).
+func mockWorkItemsFor(project string) []azdevops.WorkItem {
+	return filterByProject(mockWorkItems(), project, func(wi azdevops.WorkItem) string {
+		if strings.HasPrefix(wi.Fields.IterationPath, displayNexus) {
+			return projectNexus
+		}
+		return projectHorizon
+	})
+}
+
+// mockPipelineRunsFor returns the pipeline runs belonging to the given API
+// project, keyed off each run's Project field.
+func mockPipelineRunsFor(project string) []azdevops.PipelineRun {
+	return filterByProject(mockPipelineRuns(), project, func(run azdevops.PipelineRun) string {
+		return run.Project.Name
+	})
+}
+
+// filterByProject keeps the rows whose projectOf matches project. A project
+// that matches no row at all (including "") returns the full set unfiltered.
+func filterByProject[T any](rows []T, project string, projectOf func(T) string) []T {
+	var filtered []T
+	for _, row := range rows {
+		if projectOf(row) == project {
+			filtered = append(filtered, row)
+		}
+	}
+	if filtered == nil {
+		return rows
+	}
+	return filtered
+}
+
+// filterAssignedToDemoUser mirrors the WIQL the assigned queries send
+// (ListMyWorkItems, ListRecentlyAssignedWorkItems): assigned to @Me — the
+// demo user — and not in a Closed/Removed state.
+func filterAssignedToDemoUser(items []azdevops.WorkItem) []azdevops.WorkItem {
+	var filtered []azdevops.WorkItem
+	for _, item := range items {
+		if item.Fields.AssignedTo == nil || item.Fields.AssignedTo.ID != demoUserID {
+			continue
+		}
+		if item.Fields.State == "Closed" || item.Fields.State == "Removed" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+// mentionedWorkItemIDs are the work items whose discussion contains an
+// @mention of the demo user — the ids the @RecentMentions WIQL macro
+// resolves to, confirmed by the comments mockWorkItemComments serves.
+var mentionedWorkItemIDs = map[int]bool{5002: true, 6004: true}
+
+// filterMentionCandidates mirrors the @RecentMentions WIQL macro: only work
+// items whose comments actually mention the demo user survive.
+func filterMentionCandidates(items []azdevops.WorkItem) []azdevops.WorkItem {
+	var filtered []azdevops.WorkItem
+	for _, item := range items {
+		if mentionedWorkItemIDs[item.ID] {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+// mockWorkItemComments returns the discussion for a work item. The items in
+// mentionedWorkItemIDs carry a comment with a resolved mention of the demo
+// user (Alex Chen) — that mention is what the notifications tab's
+// "mentioned" source confirms against. Other items get a generic
+// mention-free discussion.
+func mockWorkItemComments(id int) []azdevops.WorkItemComment {
+	switch id {
+	case 5002:
+		return []azdevops.WorkItemComment{
+			{
+				ID: 301, Text: "@Alex Chen could you double-check the thumbnail sizes with the design team? 128px looks too small for the new profile header.",
+				CreatedBy: team[1], CreatedDate: hoursAgo(3),
+				Mentions: []azdevops.CommentMention{{TargetID: demoUserID}},
+			},
+			{
+				ID: 300, Text: "Upload endpoint is done, starting on the crop UI next.",
+				CreatedBy: team[1], CreatedDate: hoursAgo(20),
+			},
+		}
+	case 6004:
+		return []azdevops.WorkItemComment{
+			{
+				ID: 402, Text: "@Alex Chen the vendor chunk is still 800KB after splitting routes — mind pairing on the webpack config tomorrow?",
+				CreatedBy: team[3], CreatedDate: hoursAgo(4),
+				Mentions: []azdevops.CommentMention{{TargetID: demoUserID}},
+			},
+			{
+				ID: 401, Text: "Route-level splitting shipped, initial load is down to 1.1MB.",
+				CreatedBy: team[3], CreatedDate: hoursAgo(28),
+			},
+		}
+	case 5001:
+		return []azdevops.WorkItemComment{
+			{
+				ID: 201, Text: "Reproduced on iOS 17.2 — looks like the crash comes from the WebAuthn feature detection.",
+				CreatedBy: team[2], CreatedDate: hoursAgo(5),
+			},
+		}
+	default:
+		return []azdevops.WorkItemComment{}
+	}
+}
 
 func mockPullRequests() []azdevops.PullRequest {
 	return []azdevops.PullRequest{
@@ -319,6 +443,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8001, BuildNumber: "20240315.1", Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/main", SourceVersion: "a3f1c2e",
 			QueueTime: hoursAgo(2), StartTime: &startTime1, FinishTime: &finishTime1,
+			RequestedFor: team[2],
 			Definition: azdevops.PipelineDefinition{ID: 1, Name: "CI Build"},
 			Project:    azdevops.Project{ID: "proj-nexus-001", Name: "nexus-platform"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/nexus-platform/_build/results?buildId=8001"}},
@@ -327,6 +452,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8002, BuildNumber: "20240315.2", Status: "completed", Result: "failed",
 			SourceBranch: "refs/heads/feature/auth-refactor", SourceVersion: "b7d4e5f",
 			QueueTime: hoursAgo(3), StartTime: &startTime2, FinishTime: &finishTime2,
+			RequestedFor: team[0], // the demo user's branch — feeds the CI-failed notification source
 			Definition: azdevops.PipelineDefinition{ID: 2, Name: "Integration Tests"},
 			Project:    azdevops.Project{ID: "proj-nexus-001", Name: "nexus-platform"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/nexus-platform/_build/results?buildId=8002"}},
@@ -335,6 +461,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8003, BuildNumber: "20240315.3", Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/main", SourceVersion: "c8f9a0b",
 			QueueTime: hoursAgo(5), StartTime: &startTime3, FinishTime: &finishTime3,
+			RequestedFor: team[1],
 			Definition: azdevops.PipelineDefinition{ID: 3, Name: "Deploy Staging"},
 			Project:    azdevops.Project{ID: "proj-nexus-001", Name: "nexus-platform"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/nexus-platform/_build/results?buildId=8003"}},
@@ -343,6 +470,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8004, BuildNumber: "20240315.4", Status: "inProgress", Result: "",
 			SourceBranch: "refs/heads/feature/rate-limiting", SourceVersion: "d1e2f3a",
 			QueueTime: hoursAgo(1), StartTime: &startTime4, FinishTime: nil,
+			RequestedFor: team[3],
 			Definition: azdevops.PipelineDefinition{ID: 1, Name: "CI Build"},
 			Project:    azdevops.Project{ID: "proj-nexus-001", Name: "nexus-platform"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/nexus-platform/_build/results?buildId=8004"}},
@@ -351,6 +479,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8005, BuildNumber: "20240315.1", Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/main", SourceVersion: "e4f5a6b",
 			QueueTime: hoursAgo(8), StartTime: &startTime5, FinishTime: &finishTime5,
+			RequestedFor: team[5],
 			Definition: azdevops.PipelineDefinition{ID: 10, Name: "CI Build"},
 			Project:    azdevops.Project{ID: "proj-horizon-001", Name: "horizon-app"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/horizon-app/_build/results?buildId=8005"}},
@@ -359,6 +488,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8006, BuildNumber: "20240315.2", Status: "completed", Result: "partiallySucceeded",
 			SourceBranch: "refs/heads/feature/dark-mode", SourceVersion: "f7a8b9c",
 			QueueTime: hoursAgo(10), StartTime: &startTime6, FinishTime: &finishTime6,
+			RequestedFor: team[5],
 			Definition: azdevops.PipelineDefinition{ID: 11, Name: "E2E Tests"},
 			Project:    azdevops.Project{ID: "proj-horizon-001", Name: "horizon-app"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/horizon-app/_build/results?buildId=8006"}},
@@ -367,6 +497,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8007, BuildNumber: "20240315.3", Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/main", SourceVersion: "a0b1c2d",
 			QueueTime: hoursAgo(12), StartTime: &startTime7, FinishTime: &finishTime7,
+			RequestedFor: team[4],
 			Definition: azdevops.PipelineDefinition{ID: 12, Name: "Deploy Preview"},
 			Project:    azdevops.Project{ID: "proj-horizon-001", Name: "horizon-app"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/horizon-app/_build/results?buildId=8007"}},
@@ -375,6 +506,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8008, BuildNumber: "20240314.5", Status: "completed", Result: "failed",
 			SourceBranch: "refs/heads/fix/table-sort-persist", SourceVersion: "b3c4d5e",
 			QueueTime: hoursAgo(6), StartTime: &startTime8, FinishTime: &finishTime8,
+			RequestedFor: team[0], // Alex re-ran the failed E2E job — second CI-failed notification
 			Definition: azdevops.PipelineDefinition{ID: 11, Name: "E2E Tests"},
 			Project:    azdevops.Project{ID: "proj-horizon-001", Name: "horizon-app"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/horizon-app/_build/results?buildId=8008"}},
@@ -383,6 +515,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8009, BuildNumber: "20240314.4", Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/main", SourceVersion: "c5d6e7f",
 			QueueTime: hoursAgo(14), StartTime: &startTime9, FinishTime: &finishTime9,
+			RequestedFor: team[2],
 			Definition: azdevops.PipelineDefinition{ID: 13, Name: "Security Scan"},
 			Project:    azdevops.Project{ID: "proj-nexus-001", Name: "nexus-platform"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/nexus-platform/_build/results?buildId=8009"}},
@@ -391,6 +524,7 @@ func mockPipelineRuns() []azdevops.PipelineRun {
 			ID: 8010, BuildNumber: "20240314.3", Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/main", SourceVersion: "d7e8f9a",
 			QueueTime: hoursAgo(16), StartTime: &startTime10, FinishTime: &finishTime10,
+			RequestedFor: team[1],
 			Definition: azdevops.PipelineDefinition{ID: 10, Name: "CI Build"},
 			Project:    azdevops.Project{ID: "proj-horizon-001", Name: "horizon-app"},
 			Links:      azdevops.Links{Web: azdevops.Link{Href: "https://dev.azure.com/contoso/horizon-app/_build/results?buildId=8010"}},

@@ -9,6 +9,7 @@ import (
 	"github.com/Elpulgo/azdo/internal/app"
 	"github.com/Elpulgo/azdo/internal/azdevops"
 	"github.com/Elpulgo/azdo/internal/config"
+	"github.com/Elpulgo/azdo/internal/provider"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -39,10 +40,14 @@ func Run(version, commit string) error {
 		return fmt.Errorf("failed to create demo client: %w", err)
 	}
 
-	// Override base URLs and user IDs to point at mock server
+	// Override base URLs and user IDs to point at mock server. Each project
+	// client gets its own path prefix so the mock can scope responses to the
+	// requesting project — without it, both clients hit identical URLs and
+	// every multi-project fan-out (PRs, work items, runs, notifications)
+	// returns the full dataset twice, once tagged per project.
 	for _, project := range projects {
 		c := client.ClientFor(project)
-		c.SetBaseURL(srv.URL)
+		c.SetBaseURL(srv.URL + "/" + project)
 		c.SetUserID(demoUserID)
 	}
 
@@ -70,8 +75,24 @@ func Run(version, commit string) error {
 		return fmt.Errorf("failed to seed demo metrics: %w", err)
 	}
 
-	adapter := azdevops.NewAdapter(client)
-	model := app.NewModel(adapter, client, cfg, version+" (demo)", commit)
+	// Wire notifications the same way runTUI does: an adapter constructed via
+	// NewAdapterWithNotifications (a bare NewAdapter would satisfy
+	// provider.NotificationSource by method set but fail every poll on its nil
+	// triage store), wrapped in a CompositeProvider whose HasNotifications()
+	// is what gates the Notifications tab on. The triage store lives in the
+	// demo temp dir so read/done marks never touch real user state, and a
+	// zero minPollInterval disables the self-throttle — polling is already
+	// inert via demoPollingInterval.
+	notifStore, err := azdevops.NewTriageStore(filepath.Join(tmpDir, "notifications.json"))
+	if err != nil {
+		return fmt.Errorf("failed to create demo notifications store: %w", err)
+	}
+
+	adapter := azdevops.NewAdapterWithNotifications(
+		client, notifStore, azdevops.DefaultNotificationLookbackDays,
+		azdevops.DefaultNotificationSourceToggles(), 0)
+	composite := provider.NewCompositeProvider(adapter)
+	model := app.NewModel(composite, client, cfg, version+" (demo)", commit)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

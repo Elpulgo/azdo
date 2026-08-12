@@ -15,7 +15,7 @@ func TestServerPullRequests(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/git/pullrequests?api-version=7.1&$top=25&searchCriteria.status=active")
+	resp, err := http.Get(srv.URL + "/nexus-platform/git/pullrequests?api-version=7.1&$top=25&searchCriteria.status=active")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestServerWIQL(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/wit/wiql?api-version=7.1&$top=50", "application/json",
+	resp, err := http.Post(srv.URL+"/nexus-platform/wit/wiql?api-version=7.1&$top=50", "application/json",
 		strings.NewReader(`{"query":"SELECT [System.Id] FROM WorkItems"}`))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
@@ -67,7 +67,7 @@ func TestServerWorkItems(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/wit/workitems?ids=5001,5002&fields=System.Title&api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/wit/workitems?ids=5001,5002&fields=System.Title&api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestServerPipelineRuns(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/build/builds?api-version=7.1&$top=25&queryOrder=queueTimeDescending")
+	resp, err := http.Get(srv.URL + "/nexus-platform/build/builds?api-version=7.1&$top=25&queryOrder=queueTimeDescending")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestServerPRThreads(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/git/repositories/repo-001/pullRequests/1042/threads?api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/git/repositories/repo-001/pullRequests/1042/threads?api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestServerPRIterations(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/git/repositories/repo-001/pullRequests/1042/iterations?api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/git/repositories/repo-001/pullRequests/1042/iterations?api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestServerIterationChanges(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/git/repositories/repo-001/pullRequests/1042/iterations/1/changes?api-version=7.1&$compareTo=0")
+	resp, err := http.Get(srv.URL + "/nexus-platform/git/repositories/repo-001/pullRequests/1042/iterations/1/changes?api-version=7.1&$compareTo=0")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestServerBuildTimeline(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/build/builds/8001/timeline?api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/build/builds/8001/timeline?api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestServerBuildLogs(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/build/builds/8001/logs?api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/build/builds/8001/logs?api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestServerBuildLogContent(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/build/builds/8001/logs/1?api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/build/builds/8001/logs/1?api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestServerWorkItemTypeStates(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/wit/workitemtypes/Bug/states?api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/wit/workitemtypes/Bug/states?api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestServerVotePullRequest(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPut,
-		srv.URL+"/git/repositories/repo-001/pullRequests/1042/reviewers/user-001?api-version=7.1",
+		srv.URL+"/nexus-platform/git/repositories/repo-001/pullRequests/1042/reviewers/user-001?api-version=7.1",
 		strings.NewReader(`{"vote": 10}`))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -326,7 +326,7 @@ func TestServerReplyToThread(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(
-		srv.URL+"/git/repositories/repo-001/pullRequests/1042/threads/1/comments?api-version=7.1",
+		srv.URL+"/nexus-platform/git/repositories/repo-001/pullRequests/1042/threads/1/comments?api-version=7.1",
 		"application/json",
 		strings.NewReader(`{"content": "test reply"}`))
 	if err != nil {
@@ -352,7 +352,7 @@ func TestServerResolveThread(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPatch,
-		srv.URL+"/git/repositories/repo-001/pullRequests/1042/threads/1?api-version=7.1",
+		srv.URL+"/nexus-platform/git/repositories/repo-001/pullRequests/1042/threads/1?api-version=7.1",
 		strings.NewReader(`{"status": "fixed"}`))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -370,7 +370,7 @@ func TestServerUpdateWorkItemState(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPatch,
-		srv.URL+"/wit/workitems/5001?api-version=7.1",
+		srv.URL+"/nexus-platform/wit/workitems/5001?api-version=7.1",
 		strings.NewReader(`[{"op":"replace","path":"/fields/System.State","value":"Resolved"}]`))
 	req.Header.Set("Content-Type", "application/json-patch+json")
 	resp, err := http.DefaultClient.Do(req)
@@ -388,7 +388,7 @@ func TestServerFileContent(t *testing.T) {
 	srv := httptest.NewServer(newMockHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/git/repositories/repo-001/items?path=/src/auth.go&versionType=branch&version=main&api-version=7.1")
+	resp, err := http.Get(srv.URL + "/nexus-platform/git/repositories/repo-001/items?path=/src/auth.go&versionType=branch&version=main&api-version=7.1")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
