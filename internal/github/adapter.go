@@ -36,6 +36,18 @@ type Adapter struct {
 	// this nil; a nil nc is a reachable, supported state (see
 	// NewAdapterWithNotifications's doc comment), not defensive padding.
 	nc *NotificationsClient
+
+	// done is the persisted mark-done tombstone store
+	// (notifications_donestore.go). Set once at construction alongside nc,
+	// for the same no-setter reason. It exists because GitHub's REST API can
+	// write done state but never read it back: List always fetches all=true,
+	// and that response keeps returning done threads with no field marking
+	// them as done, so without a local record every mark-done row would
+	// resurrect on the next full fetch. nil is a reachable, supported state
+	// (NewAdapter, and tests that exercise the adapter without persistence):
+	// List then skips filtering and MarkDone records nothing locally —
+	// pre-store behaviour, not a panic.
+	done *DoneStore
 }
 
 // NewAdapter creates an Adapter wrapping the given MultiClient.
@@ -48,8 +60,9 @@ func NewAdapter(mc *MultiClient) *Adapter {
 	return &Adapter{mc: mc}
 }
 
-// NewAdapterWithNotifications creates an Adapter wrapping both the given
-// MultiClient and the given user-scoped NotificationsClient.
+// NewAdapterWithNotifications creates an Adapter wrapping the given
+// MultiClient, the given user-scoped NotificationsClient, and the given
+// mark-done tombstone store.
 //
 // mc may be nil (see NewAdapter). nc may also be nil: this is a reachable
 // state, not defensive padding — Adapter satisfies provider.NotificationSource
@@ -59,8 +72,20 @@ func NewAdapter(mc *MultiClient) *Adapter {
 // List. List/MarkRead/MarkDone all return a descriptive error rather than
 // panicking when nc is nil, matching NewAdapter(nil)'s documented contract for
 // the rest of the interface.
-func NewAdapterWithNotifications(mc *MultiClient, nc *NotificationsClient) *Adapter {
-	return &Adapter{mc: mc, nc: nc}
+//
+// done may be nil too, but unlike nc that degrades silently rather than
+// erroring: List skips tombstone filtering and MarkDone records nothing
+// locally, so every mark-done row resurrects on the next full fetch (the
+// pre-store behaviour). That is acceptable for tests exercising other parts
+// of the adapter; production wiring (cmd/azdo-tui) always supplies a real
+// store. The store rides this constructor rather than getting a sibling
+// (NewAdapterWithNotificationsAndStore-style) because it is meaningless
+// without nc — it only ever acts on rows nc fetched and marks nc issued — so
+// the two opt in as one capability, mirroring how
+// azdevops.NewAdapterWithNotifications takes its TriageStore alongside
+// everything else notifications need in a single constructor.
+func NewAdapterWithNotifications(mc *MultiClient, nc *NotificationsClient, done *DoneStore) *Adapter {
+	return &Adapter{mc: mc, nc: nc, done: done}
 }
 
 // Kind returns provider.KindGitHub to identify the GitHub backend.
@@ -608,6 +633,14 @@ func (a *Adapter) PipelineURL(scope string, id int) string {
 // empty (letting the mapper fall back to Scope itself) when it is not — most
 // inbox rows come from repos that are not configured at all, so mc cannot
 // resolve a display name for them anyway.
+//
+// Locally persisted mark-done tombstones are applied last, at this boundary,
+// via done.Filter — the wire response cannot carry done state at all (see
+// DoneEntry's doc comment), so this filter is the only thing standing between
+// a marked-done thread in the all=true response and the feed resurrecting it.
+// It runs on every List return path nc produces, including a 304-served cache
+// replay, because it sits after the fetch rather than inside it. A nil done
+// store skips the filter (see NewAdapterWithNotifications).
 func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error) {
 	if a.nc == nil {
 		return nil, fmt.Errorf("github: notifications: no notifications client configured")
@@ -628,6 +661,10 @@ func (a *Adapter) List(opts provider.NotifOpts) ([]provider.Notification, error)
 			scopeDisplay = a.mc.DisplayNameFor(thread.Repository.FullName)
 		}
 		out[i] = MapNotification(thread, scopeDisplay)
+	}
+
+	if a.done != nil {
+		out = a.done.Filter(out, time.Now())
 	}
 
 	return out, nil
@@ -668,6 +705,20 @@ func (a *Adapter) MarkRead(id provider.Identity) error {
 // DELETE /notifications/threads/{id}, forwarding id.ID straight through to
 // nc.MarkDone. See MarkRead's doc comment: the nil-nc guard, the Kind check,
 // and the no-lock contract are all shared and not repeated here.
+//
+// A successful server mark is additionally recorded in the local done store
+// (when one is configured): the server accepts the DELETE but its list
+// endpoint can never report the resulting done state back (DoneEntry's doc
+// comment), so the tombstone written here is what keeps the row from
+// resurrecting on the next fetch. The order is deliberate — server first,
+// tombstone second — because a failed server mark must not hide the row
+// locally while GitHub still counts it as live, and the reverse failure mode
+// (server succeeded, then the process dies before the tombstone persists) is
+// self-healing: the row resurrects once and the user marks it again. The
+// store call takes only the store's own short-lived mutex, never nc's fetch
+// mutex, so MarkDone stays non-blocking with respect to an in-flight List.
+// MarkRead needs no such record: read state, unlike done state, round-trips
+// through the server (the all=true fetch reports unread per thread).
 func (a *Adapter) MarkDone(id provider.Identity) error {
 	if a.nc == nil {
 		return fmt.Errorf("github: mark done: no notifications client configured")
@@ -675,7 +726,13 @@ func (a *Adapter) MarkDone(id provider.Identity) error {
 	if id.Kind != provider.KindGitHub {
 		return fmt.Errorf("github: mark done: identity kind %q is not %q", id.Kind, provider.KindGitHub)
 	}
-	return a.nc.MarkDone(id.ID)
+	if err := a.nc.MarkDone(id.ID); err != nil {
+		return err
+	}
+	if a.done != nil {
+		a.done.MarkDone(id.ID, time.Now())
+	}
+	return nil
 }
 
 // PollInterval forwards nc's cadence hint (parsed from GitHub's

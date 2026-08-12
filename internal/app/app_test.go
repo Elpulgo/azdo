@@ -32,7 +32,7 @@ import (
 // time even with nil mc/nc, which is enough for wiring/layout tests that never
 // make real API calls.
 func newNotificationCapableProvider() provider.Provider {
-	return provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil))
+	return provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil, nil))
 }
 
 // notificationIncapableBackend is a minimal provider.Provider that
@@ -3657,7 +3657,7 @@ func TestModel_NotificationsTab_Error_RendersThroughFullView(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(Model)
 
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
@@ -4031,7 +4031,7 @@ func TestModel_NotificationMarker_IsWiredToThePane(t *testing.T) {
 
 	// A provider that IS the marker, so NewModel's own notificationMarker(p)
 	// type assertion is what has to find it — not a hand-injected pane.
-	m := NewModel(provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil)), client, cfg, "dev", "")
+	m := NewModel(provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil, nil)), client, cfg, "dev", "")
 	if got := notificationMarker(m.client); got == nil {
 		t.Fatal("notificationMarker returned nil for a capable provider — the pane would silently no-op on u/d")
 	}
@@ -4103,7 +4103,7 @@ func TestModel_ThemeChange_KeepsTheMarkerWiredToTheRebuiltPane(t *testing.T) {
 	cfg := config.NewWithPath("testorg", []string{"testproject"}, 60, "dark", cfgPath)
 	var client *azdevops.MultiClient
 
-	m := NewModel(provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil)), client, cfg, "dev", "")
+	m := NewModel(provider.NewCompositeProvider(github.NewAdapterWithNotifications(nil, nil, nil)), client, cfg, "dev", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(Model)
 

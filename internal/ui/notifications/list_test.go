@@ -1263,7 +1263,7 @@ func TestView_ActiveFilter_GenuinelyEmptyFeed_ReadsAsClear_NotFilterEmpty(t *tes
 // pin that the error state pre-empts the table view rather than rendering
 // stale rows underneath it.
 func TestView_Error_Generic_CarriesNilClientMessage_ButNotScopeBanner(t *testing.T) {
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
@@ -1502,7 +1502,7 @@ func TestView_Error_RateLimited403_DoesNotClaimMissingScope(t *testing.T) {
 // "len(items) == 0" precondition. View()'s error check must run before its
 // items-emptiness check for this to hold.
 func TestView_Error_TakesPriorityOverEmptyInbox_WhenFeedIsEmpty(t *testing.T) {
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
@@ -1772,7 +1772,7 @@ func TestView_CapabilityUnsupported_DistinctFromOtherThreeStates(t *testing.T) {
 // simplification, keeps the whole suite green without this test, and silently
 // makes one failed fetch permanent. The poller is what calls this.
 func TestView_SuccessfulFeedAfterError_ClearsErrorState(t *testing.T) {
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
@@ -1844,7 +1844,7 @@ func TestView_Loading_DoesNotClaimCaughtUp(t *testing.T) {
 // Capability wins because it describes the configuration, whereas an error
 // describes an attempt that configuration should never have made.
 func TestView_CapabilityUnsupported_OutranksError(t *testing.T) {
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
@@ -2369,7 +2369,7 @@ func TestCanTriage_Blocks_UAndD_WhenNoRows(t *testing.T) {
 // listview.HandleFetchResult left behind (listview never clears m.items on
 // its error path).
 func TestCanTriage_Blocks_UAndD_WhenErrored(t *testing.T) {
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")
@@ -2867,7 +2867,7 @@ func TestOpenInBrowser_NoRows_DoesNotCallOpenURL(t *testing.T) {
 // listview.HandleFetchResult left behind — even though selectedItem() itself
 // has no opinion about m.list.Err() and would happily return the stale row.
 func TestOpenInBrowser_Blocks_WhenErrored(t *testing.T) {
-	adapter := github.NewAdapterWithNotifications(nil, nil)
+	adapter := github.NewAdapterWithNotifications(nil, nil, nil)
 	_, listErr := adapter.List(provider.NotifOpts{})
 	if listErr == nil {
 		t.Fatal("precondition: github.Adapter.List with no NotificationsClient must return an error")

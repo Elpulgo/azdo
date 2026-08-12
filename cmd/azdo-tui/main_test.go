@@ -43,8 +43,10 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 		sawNewAdapterWithNotifications bool
 		sawBareNewAdapter              bool
 		sawNewNotificationsClient      bool
+		sawNewDoneStore                bool
 		notifAdapterArgCount           int
 		notifAdapterSecondArgIsNil     bool
+		notifAdapterThirdArgIsNil      bool
 	)
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -64,15 +66,22 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 		case "NewAdapterWithNotifications":
 			sawNewAdapterWithNotifications = true
 			notifAdapterArgCount = len(call.Args)
-			if len(call.Args) == 2 {
+			if len(call.Args) >= 2 {
 				if id, ok := call.Args[1].(*ast.Ident); ok && id.Name == "nil" {
 					notifAdapterSecondArgIsNil = true
+				}
+			}
+			if len(call.Args) >= 3 {
+				if id, ok := call.Args[2].(*ast.Ident); ok && id.Name == "nil" {
+					notifAdapterThirdArgIsNil = true
 				}
 			}
 		case "NewAdapter":
 			sawBareNewAdapter = true
 		case "NewNotificationsClient":
 			sawNewNotificationsClient = true
+		case "NewDoneStore":
+			sawNewDoneStore = true
 		}
 		return true
 	})
@@ -95,14 +104,27 @@ func TestRunTUI_UsesGitHubAdapterWithNotifications(t *testing.T) {
 	// fixing a live bug — NewNotificationsClient always returns non-nil with no
 	// error, GetGitHubToken() has already errored out upstream, and GitHubConfig
 	// carries no base-URL/GHE field. The value is that it stays unreachable.
-	if notifAdapterArgCount != 2 {
-		t.Errorf("github.NewAdapterWithNotifications called with %d args, want 2 (MultiClient, NotificationsClient)", notifAdapterArgCount)
+	if notifAdapterArgCount != 3 {
+		t.Errorf("github.NewAdapterWithNotifications called with %d args, want 3 (MultiClient, NotificationsClient, DoneStore)", notifAdapterArgCount)
 	}
 	if notifAdapterSecondArgIsNil {
 		t.Error("github.NewAdapterWithNotifications's second argument must not be nil — a nil NotificationsClient makes every notifications List call fail with \"no notifications client configured\" while the tab still shows up under the capability check")
 	}
 	if !sawNewNotificationsClient {
 		t.Error("expected runTUI to construct the user-scoped client via github.NewNotificationsClient, found no such call")
+	}
+
+	// The third argument gets the same nil-literal treatment as the second,
+	// for the same reason: the constructor tolerates a nil DoneStore by design
+	// (tests pass nil constantly), so nothing at compile time stops runTUI
+	// from passing nil here — and a nil store silently degrades to the
+	// pre-store behaviour where every marked-done GitHub row resurrects on
+	// the next launch, the exact bug the store was added to fix.
+	if notifAdapterThirdArgIsNil {
+		t.Error("github.NewAdapterWithNotifications's third argument must not be nil — a nil DoneStore silently reintroduces the mark-done resurrection bug (rows marked done reappear on next launch)")
+	}
+	if !sawNewDoneStore {
+		t.Error("expected runTUI to construct the persisted done store via github.NewDoneStore, found no such call")
 	}
 }
 
