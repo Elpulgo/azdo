@@ -352,7 +352,23 @@ func runTUI() error {
 			return fmt.Errorf("failed to create GitHub client: %w", err)
 		}
 		ghNC := github.NewNotificationsClient(token)
-		backends = append(backends, github.NewAdapterWithNotifications(ghMC, ghNC))
+
+		// The done store persists mark-done tombstones locally because
+		// GitHub's REST API can write done state but never read it back
+		// (github.DoneEntry's doc comment) — without it, every `d`-marked
+		// row resurrects on the next launch. Unlike azureNotifStore it needs
+		// no shutdown Flush and no variable outliving this block: its writes
+		// are synchronous (github.DoneStore's doc comment), so there is
+		// never a pending debounced write to lose on exit.
+		ghDonePath, err := github.DoneStorePath()
+		if err != nil {
+			return fmt.Errorf("resolve github notifications state path: %w", err)
+		}
+		ghDoneStore, err := github.NewDoneStore(ghDonePath)
+		if err != nil {
+			return fmt.Errorf("load github notifications state: %w", err)
+		}
+		backends = append(backends, github.NewAdapterWithNotifications(ghMC, ghNC, ghDoneStore))
 	}
 
 	// Defense-in-depth: config.Validate() already requires ≥1 backend, but guard

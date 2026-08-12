@@ -24,9 +24,15 @@ import (
 // thread ids are opaque strings on the wire, not numbers).
 //
 // Read is the negation of the wire Unread flag. Done is always false: GitHub
-// exposes no "done" bit on a listed thread — marking a thread done removes it
-// from the inbox via DELETE, so any thread this mapper ever sees is by
-// definition not done.
+// exposes no "done" bit on a listed thread, so this mapper has nothing to
+// populate the field from. Note that "no done bit" does NOT mean a listed
+// thread is never done — NotificationsClient.List fetches all=true, and that
+// response keeps returning threads marked done via DELETE, indistinguishable
+// from live ones (this mapper's original assumption to the contrary is what
+// let every marked-done row resurrect on the next full fetch). Marked-done
+// threads are instead dropped from the feed one layer up, by the Adapter's
+// DoneStore.Filter (notifications_donestore.go), which tracks them locally
+// because the wire cannot.
 //
 // NotificationThread.LastReadAt is not read by this mapper: Read is derived
 // solely from Unread above, and there is currently no local read/done state

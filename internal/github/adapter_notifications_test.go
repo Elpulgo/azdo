@@ -135,7 +135,7 @@ func TestAdapter_List_MapsThreadsAndResolvesScopeDisplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMultiClient: %v", err)
 	}
-	a := github.NewAdapterWithNotifications(mc, nc)
+	a := github.NewAdapterWithNotifications(mc, nc, nil)
 
 	got, err := a.List(provider.NotifOpts{})
 	if err != nil {
@@ -197,7 +197,7 @@ func TestAdapter_List_NilMultiClient_StillMapsWithoutPanic(t *testing.T) {
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
 
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	got, err := a.List(provider.NotifOpts{})
 	if err != nil {
@@ -235,7 +235,7 @@ func TestAdapter_List_ForwardsParticipatingOnlyAndSince(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	since := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	if _, err := a.List(provider.NotifOpts{ParticipatingOnly: true, Since: since}); err != nil {
@@ -294,7 +294,7 @@ func TestAdapter_List_MaxDoesNotTruncateAtThisLayer(t *testing.T) {
 
 			nc := github.NewNotificationsClient("tok")
 			nc.SetBaseURL(srv.URL)
-			a := github.NewAdapterWithNotifications(nil, nc)
+			a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 			got, err := a.List(provider.NotifOpts{Max: tt.max})
 			if err != nil {
@@ -326,7 +326,7 @@ func TestAdapter_List_EmptyInboxReturnsNonNilEmptySlice(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	got, err := a.List(provider.NotifOpts{Max: 1})
 	if err != nil {
@@ -366,7 +366,7 @@ func TestAdapter_List_PropagatesUnsolicited304Error(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	got, err := a.List(provider.NotifOpts{})
 	if err == nil {
@@ -410,7 +410,7 @@ func TestAdapter_List_403_MissingScope_RecoversScopeHeaders(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	got, err := a.List(provider.NotifOpts{})
 	if err == nil {
@@ -453,7 +453,7 @@ func TestAdapter_MarkRead_ForwardsID(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	id := provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "42"}
 	if err := a.MarkRead(id); err != nil {
@@ -478,7 +478,7 @@ func TestAdapter_MarkDone_ForwardsID(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	id := provider.Identity{Kind: provider.KindGitHub, Scope: "o/r", ID: "42"}
 	if err := a.MarkDone(id); err != nil {
@@ -502,7 +502,7 @@ func TestAdapter_MarkRead_MismatchedKind_ReturnsErrorAndIssuesNoRequest(t *testi
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	// An Azure identity handed to the GitHub adapter — a caller bug to catch,
 	// not a wrong-backend request to silently route.
@@ -529,7 +529,7 @@ func TestAdapter_MarkDone_MismatchedKind_ReturnsErrorAndIssuesNoRequest(t *testi
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	id := provider.Identity{Kind: provider.KindAzure, Scope: "o/r", ID: "42"}
 	err := a.MarkDone(id)
@@ -579,7 +579,7 @@ func TestAdapter_Mark_ZeroKind_ErrorNamesTheEmptyKind(t *testing.T) {
 
 			nc := github.NewNotificationsClient("tok")
 			nc.SetBaseURL(srv.URL)
-			a := github.NewAdapterWithNotifications(nil, nc)
+			a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 			// Kind deliberately left at its zero value.
 			err := tt.call(a, provider.Identity{ID: "42"})
@@ -656,7 +656,7 @@ func TestAdapter_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	listDone := make(chan error, 1)
 	go func() {
@@ -694,6 +694,158 @@ func TestAdapter_MarkRead_DoesNotBlockOnInFlightList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// DoneStore integration — the end-to-end shape of the resurrection bug this
+// store fixes. GitHub's GET /notifications?all=true keeps returning done
+// threads with no field saying so, so without the store a mark-done row
+// reappears on the very next fetch (and on the next app launch). The httptest
+// handler below plays that role faithfully: it serves the SAME two-thread body
+// before and after the DELETE, exactly like the real API.
+//
+// The store helpers (newTestDoneStore etc.) live in
+// notifications_donestore_test.go — same package, shared here.
+// ---------------------------------------------------------------------------
+
+// newDoneStoreServer returns a server that always serves twoThreadsBody on GET
+// (done state never visible, per the real API) and answers DELETE
+// /notifications/threads/{id} with markStatus, counting the deletes it saw.
+func newDoneStoreServer(t *testing.T, markStatus int, deletes *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(twoThreadsBody))
+		case http.MethodDelete:
+			*deletes++
+			w.WriteHeader(markStatus)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestAdapter_MarkDone_WithDoneStore_RowStaysHiddenOnNextList(t *testing.T) {
+	var deletes int
+	srv := newDoneStoreServer(t, http.StatusNoContent, &deletes)
+	defer srv.Close()
+
+	nc := github.NewNotificationsClient("tok")
+	nc.SetBaseURL(srv.URL)
+	store, _ := newTestDoneStore(t)
+	a := github.NewAdapterWithNotifications(nil, nc, store)
+
+	got, err := a.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pre-mark List() len = %d, want 2", len(got))
+	}
+
+	if err := a.MarkDone(provider.Identity{Kind: provider.KindGitHub, Scope: "configured/repo", ID: "1"}); err != nil {
+		t.Fatalf("MarkDone() error = %v", err)
+	}
+	if deletes != 1 {
+		t.Fatalf("server saw %d DELETEs, want 1", deletes)
+	}
+
+	// The server still returns both threads — the API never reports done
+	// state — but the tombstone must keep row 1 out of the result.
+	got, err = a.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("post-mark List() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Identity.ID != "2" {
+		ids := make([]string, len(got))
+		for i, n := range got {
+			ids[i] = n.Identity.ID
+		}
+		t.Fatalf("post-mark List() ids = %v, want [2] — the marked-done row resurrected within the same session", ids)
+	}
+}
+
+// TestAdapter_MarkDone_WithDoneStore_SurvivesRestart is the user-visible bug
+// scenario end to end: mark a row done, relaunch the app (fresh
+// NotificationsClient, fresh Adapter, DoneStore reloaded from the same file),
+// fetch again — the row must stay gone even though the server still returns
+// it.
+func TestAdapter_MarkDone_WithDoneStore_SurvivesRestart(t *testing.T) {
+	var deletes int
+	srv := newDoneStoreServer(t, http.StatusNoContent, &deletes)
+	defer srv.Close()
+
+	store, path := newTestDoneStore(t)
+
+	// Session 1: fetch, mark row 1 done.
+	nc1 := github.NewNotificationsClient("tok")
+	nc1.SetBaseURL(srv.URL)
+	a1 := github.NewAdapterWithNotifications(nil, nc1, store)
+	if _, err := a1.List(provider.NotifOpts{}); err != nil {
+		t.Fatalf("session 1 List() error = %v", err)
+	}
+	if err := a1.MarkDone(provider.Identity{Kind: provider.KindGitHub, Scope: "configured/repo", ID: "1"}); err != nil {
+		t.Fatalf("session 1 MarkDone() error = %v", err)
+	}
+	if err := store.LastWriteError(); err != nil {
+		t.Fatalf("session 1 LastWriteError() = %v — nothing persisted means the restart below cannot pass", err)
+	}
+
+	// Session 2: everything rebuilt from scratch except the on-disk file.
+	reloaded, err := github.NewDoneStore(path)
+	if err != nil {
+		t.Fatalf("NewDoneStore(reload): %v", err)
+	}
+	nc2 := github.NewNotificationsClient("tok")
+	nc2.SetBaseURL(srv.URL)
+	a2 := github.NewAdapterWithNotifications(nil, nc2, reloaded)
+
+	got, err := a2.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("session 2 List() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Identity.ID != "2" {
+		ids := make([]string, len(got))
+		for i, n := range got {
+			ids[i] = n.Identity.ID
+		}
+		t.Fatalf("session 2 List() ids = %v, want [2] — the marked-done row resurrected across a restart, which is the original bug", ids)
+	}
+}
+
+// TestAdapter_MarkDone_ServerFailure_WritesNoTombstone pins the server-first
+// ordering in Adapter.MarkDone: when the DELETE fails, no tombstone may be
+// written — a locally hidden row that GitHub still counts as live inbox state
+// would be silently swallowed with no way to notice.
+func TestAdapter_MarkDone_ServerFailure_WritesNoTombstone(t *testing.T) {
+	var deletes int
+	srv := newDoneStoreServer(t, http.StatusInternalServerError, &deletes)
+	defer srv.Close()
+
+	nc := github.NewNotificationsClient("tok")
+	nc.SetBaseURL(srv.URL)
+	store, _ := newTestDoneStore(t)
+	a := github.NewAdapterWithNotifications(nil, nc, store)
+
+	if _, err := a.List(provider.NotifOpts{}); err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if err := a.MarkDone(provider.Identity{Kind: provider.KindGitHub, Scope: "configured/repo", ID: "1"}); err == nil {
+		t.Fatal("MarkDone() error = nil for a 500 from the server, want the error propagated")
+	}
+	if deletes != 1 {
+		t.Fatalf("server saw %d DELETEs, want 1", deletes)
+	}
+
+	got, err := a.List(provider.NotifOpts{})
+	if err != nil {
+		t.Fatalf("post-failure List() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("post-failure List() len = %d, want 2 — a failed server mark must not hide the row locally", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // PollInterval forwards nc's cadence hint.
 // ---------------------------------------------------------------------------
 
@@ -707,7 +859,7 @@ func TestAdapter_PollInterval_ForwardsClientValue(t *testing.T) {
 
 	nc := github.NewNotificationsClient("tok")
 	nc.SetBaseURL(srv.URL)
-	a := github.NewAdapterWithNotifications(nil, nc)
+	a := github.NewAdapterWithNotifications(nil, nc, nil)
 
 	if _, err := a.List(provider.NotifOpts{}); err != nil {
 		t.Fatalf("List() error = %v", err)
