@@ -344,6 +344,12 @@ implements `provider.Provider`:
   `sync.WaitGroup`, merges/sorts, and enriches with scope metadata. Multi-scope
   failures use `PartialError` — if 1 of 3 scopes fails, the UI shows the 2 that
   succeeded plus a warning. No all-or-nothing failures.
+  Azure's `ListPipelineRuns` additionally merges in `ListActivePipelineRuns`
+  (server-side `statusFilter=notStarted`/`inProgress`) per project, so a build
+  that's been queued or running long enough for its `QueueTime` to fall
+  outside the plain recent-runs `$top` window still surfaces — best-effort,
+  a failure fetching active runs doesn't invalidate the recent-runs fetch
+  that already succeeded.
 - **`Adapter`** (`azdevops/adapter.go`, `github/adapter.go`) — wraps the
   `MultiClient`, maps wire types → neutral types (see the `mapping*.go` and
   `mapper_enums.go` files), and stamps `Identity` on every returned entity.

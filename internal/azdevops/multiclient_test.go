@@ -192,6 +192,142 @@ func TestMultiClient_ListPipelineRuns_MergedAndSorted(t *testing.T) {
 	}
 }
 
+// newPipelineRunServerWithStatusFilter responds differently depending on the
+// statusFilter query parameter, so a test can simulate a build that only
+// shows up in the active (notStarted/inProgress) query and has aged out of
+// the plain recent-runs response.
+func newPipelineRunServerWithStatusFilter(t *testing.T, recent, queued []PipelineRun) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var resp PipelineRunsResponse
+		switch r.URL.Query().Get("statusFilter") {
+		case "notStarted":
+			resp = PipelineRunsResponse{Value: queued}
+		case "inProgress":
+			resp = PipelineRunsResponse{Value: nil}
+		default:
+			resp = PipelineRunsResponse{Value: recent}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+}
+
+// TestMultiClient_ListPipelineRuns_SurfacesStaleQueuedRun pins the fix for a
+// build that has been sitting queued long enough that its QueueTime falls
+// outside the plain recent-runs response (top's queueTimeDescending window),
+// even though Azure DevOps still reports it as queued right now.
+// ListPipelineRuns must merge in Client.ListActivePipelineRuns's results so
+// it isn't hidden.
+func TestMultiClient_ListPipelineRuns_SurfacesStaleQueuedRun(t *testing.T) {
+	now := time.Now()
+	recent := []PipelineRun{
+		{ID: 1, QueueTime: now, Status: "completed", Result: "succeeded", Project: Project{Name: "alpha"}},
+	}
+	staleQueued := []PipelineRun{
+		{ID: 99, QueueTime: now.Add(-2 * time.Hour), Status: "notStarted", Project: Project{Name: "alpha"}},
+	}
+
+	server := newPipelineRunServerWithStatusFilter(t, recent, staleQueued)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+
+	runs, err := mc.ListPipelineRuns(10)
+	if err != nil {
+		t.Fatalf("ListPipelineRuns failed: %v", err)
+	}
+
+	var found bool
+	for _, r := range runs {
+		if r.ID == 99 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected stale queued run (ID=99) to be merged in via ListActivePipelineRuns, got runs=%v", runs)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 runs (1 recent + 1 merged active), got %d", len(runs))
+	}
+}
+
+// TestMergeActiveRuns_DedupesByID pins that a run present in both the
+// recent-runs and active-runs responses (e.g. an inProgress build that's
+// recent enough to appear in both) is only kept once.
+func TestMergeActiveRuns_DedupesByID(t *testing.T) {
+	recent := []PipelineRun{{ID: 1}, {ID: 2}}
+	active := []PipelineRun{{ID: 2}, {ID: 3}}
+
+	merged := mergeActiveRuns(recent, active)
+
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 runs after dedup, got %d: %+v", len(merged), merged)
+	}
+	ids := map[int]bool{}
+	for _, r := range merged {
+		ids[r.ID] = true
+	}
+	if !ids[1] || !ids[2] || !ids[3] {
+		t.Errorf("expected IDs {1,2,3}, got %+v", merged)
+	}
+}
+
+// TestMergeActiveRuns_EmptyActive pins that an empty (or nil) active slice
+// leaves recent untouched, e.g. when a project has no queued/running builds.
+func TestMergeActiveRuns_EmptyActive(t *testing.T) {
+	recent := []PipelineRun{{ID: 1}}
+
+	merged := mergeActiveRuns(recent, nil)
+
+	if len(merged) != 1 || merged[0].ID != 1 {
+		t.Errorf("expected recent unchanged, got %+v", merged)
+	}
+}
+
+// newPipelineRunServerFailingActiveQueries succeeds for the plain
+// recent-runs query but fails any request carrying a statusFilter, so a test
+// can simulate Client.ListActivePipelineRuns erroring without affecting
+// Client.ListPipelineRuns.
+func newPipelineRunServerFailingActiveQueries(t *testing.T, recent []PipelineRun) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("statusFilter") != "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message":"internal error"}`))
+			return
+		}
+		resp := PipelineRunsResponse{Value: recent}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+}
+
+// TestMultiClient_ListPipelineRuns_ActiveFetchFailureIsBestEffort pins that a
+// failure in Client.ListActivePipelineRuns (e.g. a transient 500) must not
+// invalidate an otherwise-successful ListPipelineRuns call: the recent-runs
+// fetch already succeeded and its results must still be returned as-is,
+// without surfacing the active-fetch error.
+func TestMultiClient_ListPipelineRuns_ActiveFetchFailureIsBestEffort(t *testing.T) {
+	now := time.Now()
+	recent := []PipelineRun{
+		{ID: 1, QueueTime: now, Project: Project{Name: "alpha"}},
+	}
+
+	server := newPipelineRunServerFailingActiveQueries(t, recent)
+	defer server.Close()
+
+	mc := newMultiClientWithServers(t, map[string]*httptest.Server{"alpha": server})
+
+	runs, err := mc.ListPipelineRuns(10)
+	if err != nil {
+		t.Fatalf("ListPipelineRuns failed: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != 1 {
+		t.Fatalf("expected the recent run to survive an active-fetch failure, got %+v", runs)
+	}
+}
+
 func TestMultiClient_ListPipelineRuns_PartialFailure(t *testing.T) {
 	now := time.Now()
 	alphaRuns := []PipelineRun{
