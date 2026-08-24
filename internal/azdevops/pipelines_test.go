@@ -186,6 +186,83 @@ func TestListPipelineRuns_HTTPError(t *testing.T) {
 	}
 }
 
+// TestListActivePipelineRuns_QueriesBothStatusesAndConcatenates pins that
+// ListActivePipelineRuns issues two separate requests (statusFilter accepts
+// only a single value) — one for "notStarted", one for "inProgress" — and
+// concatenates their results, since this is what lets a build that's been
+// queued long enough to fall outside ListPipelineRuns's $top window still
+// surface via the merge in MultiClient.ListPipelineRuns.
+func TestListActivePipelineRuns_QueriesBothStatusesAndConcatenates(t *testing.T) {
+	var gotStatusFilters []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		statusFilter := r.URL.Query().Get("statusFilter")
+		gotStatusFilters = append(gotStatusFilters, statusFilter)
+
+		expectedPath := "/build/builds"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+		}
+
+		var body string
+		switch statusFilter {
+		case "notStarted":
+			body = `{"count": 1, "value": [{"id": 1, "status": "notStarted"}]}`
+		case "inProgress":
+			body = `{"count": 1, "value": [{"id": 2, "status": "inProgress"}]}`
+		default:
+			t.Errorf("unexpected statusFilter %q", statusFilter)
+			body = `{"count": 0, "value": []}`
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	runs, err := client.ListActivePipelineRuns()
+	if err != nil {
+		t.Fatalf("ListActivePipelineRuns() error = %v", err)
+	}
+
+	if len(gotStatusFilters) != 2 {
+		t.Fatalf("expected 2 requests, got %d (%v)", len(gotStatusFilters), gotStatusFilters)
+	}
+
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(runs))
+	}
+	ids := map[int]bool{runs[0].ID: true, runs[1].ID: true}
+	if !ids[1] || !ids[2] {
+		t.Errorf("expected runs with IDs 1 and 2, got %+v", runs)
+	}
+}
+
+func TestListActivePipelineRuns_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message": "Unauthorized"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient("test-org", "test-project", "test-pat")
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	client.baseURL = server.URL
+
+	_, err = client.ListActivePipelineRuns()
+	if err == nil {
+		t.Error("Expected error for 401 response, got nil")
+	}
+}
+
 // TestListMyFailedPipelineRuns_QueryParameters pins that
 // ListMyFailedPipelineRuns narrows server-side via the List Builds 7.1
 // query parameters this method exists to add (task 7 of the phase-2

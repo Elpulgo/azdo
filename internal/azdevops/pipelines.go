@@ -27,6 +27,45 @@ func (c *Client) ListPipelineRuns(top int) ([]PipelineRun, error) {
 	return response.Value, nil
 }
 
+// ListActivePipelineRuns retrieves builds that are currently queued or
+// running, narrowed **server-side** via the List Builds 7.1 `statusFilter`
+// query parameter. It exists because ListPipelineRuns's window is bounded by
+// `$top` and ordered by queueTimeDescending: a build stuck queued for a long
+// time (agent capacity, pool limits) can be pushed out of that window by
+// newer builds that queue, run and finish in the meantime, even though it is
+// still sitting queued right now. Merging this method's results into
+// ListPipelineRuns's guarantees active builds are never hidden by that
+// recency cutoff.
+//
+// statusFilter accepts only a single value per Azure DevOps's API, so
+// "notStarted" (queued) and "inProgress" (running) are fetched as two
+// separate requests and concatenated. Each is capped at
+// activePipelineRunsTop: an org-wide trigger storm is exactly the scenario
+// this method exists to surface, so an unbounded fetch here would trade one
+// failure mode (hidden backlog) for another (a huge, slow response).
+func (c *Client) ListActivePipelineRuns() ([]PipelineRun, error) {
+	const activePipelineRunsTop = 200
+	var all []PipelineRun
+	for _, status := range []string{"notStarted", "inProgress"} {
+		path := fmt.Sprintf("/build/builds?api-version=7.1&statusFilter=%s&$top=%d&queryOrder=queueTimeDescending",
+			status, activePipelineRunsTop)
+
+		body, err := c.get(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list active pipeline runs (%s): %w", status, err)
+		}
+
+		var response PipelineRunsResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, fmt.Errorf("failed to parse Azure DevOps API response for active pipeline runs: %w. "+
+				"This may indicate an API structure change. Please check for updates or report this issue", err)
+		}
+
+		all = append(all, response.Value...)
+	}
+	return all, nil
+}
+
 // ListMyFailedPipelineRuns retrieves completed, failed pipeline runs
 // requested for userID whose FinishTime falls within the last lookbackDays
 // days, narrowed **server-side** via the List Builds 7.1 query parameters

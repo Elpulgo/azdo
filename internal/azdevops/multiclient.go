@@ -81,7 +81,20 @@ func (mc *MultiClient) ListPipelineRuns(top int) ([]PipelineRun, error) {
 		go func(p string, c *Client) {
 			defer wg.Done()
 			runs, err := c.ListPipelineRuns(top)
-			ch <- result{project, runs, err}
+			if err != nil {
+				ch <- result{p, nil, err}
+				return
+			}
+			// Active (queued/running) builds are merged in separately so a
+			// build stuck queued for a long time can never be pushed out of
+			// the recency window covered by top (see
+			// Client.ListActivePipelineRuns). Best-effort: a failure here
+			// doesn't invalidate the recent-runs fetch that already
+			// succeeded.
+			if active, activeErr := c.ListActivePipelineRuns(); activeErr == nil {
+				runs = mergeActiveRuns(runs, active)
+			}
+			ch <- result{p, runs, nil}
 		}(project, client)
 	}
 
@@ -118,6 +131,24 @@ func (mc *MultiClient) ListPipelineRuns(top int) ([]PipelineRun, error) {
 	}
 
 	return allRuns, nil
+}
+
+// mergeActiveRuns appends active runs not already present in recent (by ID)
+// so a build returned by both the recency-windowed and the active queries
+// isn't duplicated.
+func mergeActiveRuns(recent, active []PipelineRun) []PipelineRun {
+	seen := make(map[int]struct{}, len(recent))
+	for _, r := range recent {
+		seen[r.ID] = struct{}{}
+	}
+	for _, a := range active {
+		if _, ok := seen[a.ID]; ok {
+			continue
+		}
+		seen[a.ID] = struct{}{}
+		recent = append(recent, a)
+	}
+	return recent
 }
 
 // ListMyFailedPipelineRuns fetches completed, failed pipeline runs requested
