@@ -92,25 +92,6 @@ jobs:
 
           cat test-report.md
 
-      - name: Post or update PR comment
-        if: always() && steps.test.outcome != 'skipped'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          MARKER="<!-- ci-test-report -->"
-
-          # Check for existing report comment to update in place
-          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" | head -1)
-
-          if [ -n "$COMMENT_ID" ]; then
-            gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" \
-              -X PATCH -F "body=@test-report.md"
-          else
-            gh pr comment "${PR_NUMBER}" --body-file test-report.md
-          fi
-
       - name: Fail if tests failed
         if: always() && steps.test.outputs.exit_code != '0'
         run: exit 1
