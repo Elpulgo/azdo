@@ -437,6 +437,7 @@ func TestStripHTMLTags(t *testing.T) {
 		{"<p>Line 1</p><p>Line 2</p>", "Line 1\nLine 2"},
 		{"Hello<br>World", "Hello\nWorld"},
 		{"Hello<br/>World", "Hello\nWorld"},
+		{"<i>Italic</i> and <em>Em</em>", "Italic and Em"},
 	}
 
 	for _, tt := range tests {

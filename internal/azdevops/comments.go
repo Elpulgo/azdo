@@ -3,6 +3,7 @@ package azdevops
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,6 +15,20 @@ const commentsAPIVersion = "7.1-preview.4"
 
 // commentsTopLimit caps how many comments are fetched in a single request.
 const commentsTopLimit = 200
+
+// markdownBold and markdownItalic convert the subset of Markdown emphasis
+// syntax GitHub users are used to typing into the HTML Azure DevOps expects
+// (bold consumed first so "**x**" isn't left as italic "*<b>x</b>*").
+var (
+	markdownBold   = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	markdownItalic = regexp.MustCompile(`\*(.+?)\*`)
+)
+
+func markdownToHTML(s string) string {
+	s = markdownBold.ReplaceAllString(s, "<b>$1</b>")
+	s = markdownItalic.ReplaceAllString(s, "<i>$1</i>")
+	return s
+}
 
 // WorkItemComment is a single comment from a work item's Discussion section.
 type WorkItemComment struct {
@@ -74,7 +89,16 @@ func (c *Client) AddWorkItemComment(id int, text string) (*WorkItemComment, erro
 
 	path := fmt.Sprintf("/wit/workItems/%d/comments?api-version=%s", id, commentsAPIVersion)
 
-	payload := fmt.Sprintf(`{"text": %s}`, escapeJSONString(text))
+	// Azure DevOps renders comment text as HTML, where a raw "\n" is
+	// collapsed to whitespace and Markdown emphasis is inert. Convert
+	// newlines to <br> and **bold**/*italic* to their HTML equivalents so
+	// text entered in the TUI survives on the ADO web UI (mirrors the
+	// reverse conversion in stripHTMLTags).
+	html := markdownToHTML(text)
+	html = strings.ReplaceAll(html, "\r\n", "<br>")
+	html = strings.ReplaceAll(html, "\n", "<br>")
+
+	payload := fmt.Sprintf(`{"text": %s}`, escapeJSONString(html))
 	body, err := c.post(path, strings.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to add work item comment: %w", err)

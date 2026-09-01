@@ -577,8 +577,24 @@ func wiEffectiveDescription(wi provider.WorkItem) string {
 	return wi.Description
 }
 
+// boldHTMLTags and italicHTMLTags match the emphasis tags markdownToHTML
+// (internal/azdevops/comments.go) produces, so they render as actual
+// terminal styling instead of being silently stripped below.
+var (
+	boldHTMLTags   = regexp.MustCompile(`(?i)<(?:b|strong)>(.*?)</(?:b|strong)>`)
+	italicHTMLTags = regexp.MustCompile(`(?i)<(?:i|em)>(.*?)</(?:i|em)>`)
+)
+
 // stripHTMLTags removes HTML tags from a string and converts to plain text
 func stripHTMLTags(s string) string {
+	// Render emphasis tags as terminal styling before stripping tags.
+	s = boldHTMLTags.ReplaceAllStringFunc(s, func(m string) string {
+		return lipgloss.NewStyle().Bold(true).Render(boldHTMLTags.FindStringSubmatch(m)[1])
+	})
+	s = italicHTMLTags.ReplaceAllStringFunc(s, func(m string) string {
+		return lipgloss.NewStyle().Italic(true).Render(italicHTMLTags.FindStringSubmatch(m)[1])
+	})
+
 	// Convert block elements to newlines before stripping
 	blockTags := regexp.MustCompile(`(?i)</(p|div|br|li|tr)>`)
 	s = blockTags.ReplaceAllString(s, "\n")

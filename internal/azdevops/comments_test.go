@@ -143,6 +143,72 @@ func TestClient_AddWorkItemComment(t *testing.T) {
 	}
 }
 
+func TestClient_AddWorkItemComment_ConvertsNewlinesToBr(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
+
+		w.Write([]byte(`{
+			"id": 100,
+			"text": "line1<br>line2<br>line3",
+			"createdBy": { "displayName": "Jane Doe" },
+			"createdDate": "2019-01-21T20:12:14.683Z"
+		}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+
+	if _, err := client.AddWorkItemComment(299, "line1\nline2\r\nline3"); err != nil {
+		t.Fatalf("AddWorkItemComment() error = %v", err)
+	}
+
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(capturedBody), &payload); err != nil {
+		t.Fatalf("request body is not valid JSON: %v (body=%s)", err, capturedBody)
+	}
+	if want := "line1<br>line2<br>line3"; payload.Text != want {
+		t.Errorf("payload.Text = %q, want %q", payload.Text, want)
+	}
+}
+
+func TestClient_AddWorkItemComment_ConvertsMarkdownEmphasis(t *testing.T) {
+	var capturedBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
+
+		w.Write([]byte(`{
+			"id": 100,
+			"text": "converted",
+			"createdBy": { "displayName": "Jane Doe" },
+			"createdDate": "2019-01-21T20:12:14.683Z"
+		}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+
+	if _, err := client.AddWorkItemComment(299, "**bold** and *italic*"); err != nil {
+		t.Fatalf("AddWorkItemComment() error = %v", err)
+	}
+
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(capturedBody), &payload); err != nil {
+		t.Fatalf("request body is not valid JSON: %v (body=%s)", err, capturedBody)
+	}
+	if want := "<b>bold</b> and <i>italic</i>"; payload.Text != want {
+		t.Errorf("payload.Text = %q, want %q", payload.Text, want)
+	}
+}
+
 func TestClient_AddWorkItemComment_RejectsEmpty(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

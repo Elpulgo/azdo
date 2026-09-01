@@ -135,7 +135,7 @@ func (f CommentForm) View() string {
 
 	helpText := lipgloss.NewStyle().
 		Foreground(f.styles.Theme.GetForegroundMuted()).
-		Render("Ctrl+S: send • Esc: cancel")
+		Render("Ctrl+S: send • Esc: cancel • **bold** *italic*")
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
