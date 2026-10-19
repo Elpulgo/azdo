@@ -677,6 +677,7 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "w", Description: "Change state"},
 		{Key: "c", Description: "comment"},
+		{Key: "l", Description: "tags"},
 		{Key: "o", Description: "open in browser"},
 		{Key: "↑↓", Description: "scroll"},
 		{Key: "esc", Description: "back"},
