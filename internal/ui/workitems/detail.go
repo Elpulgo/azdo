@@ -111,6 +111,12 @@ func (m *DetailModel) Init() tea.Cmd {
 
 // Update handles messages for the detail view
 func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
+	// A tag request result must always land, even if the state picker was
+	// opened while it ran; otherwise tagPending would never clear.
+	if msg, ok := msg.(tagUpdatedMsg); ok {
+		return m, m.handleTagUpdated(msg)
+	}
+
 	// Route input to state picker when visible
 	if m.statePicker.IsVisible() {
 		var cmd tea.Cmd
@@ -118,8 +124,9 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		return m, cmd
 	}
 
-	// The tag editor stays open while its requests run, so its own messages
-	// and the request results are handled before input is routed to it.
+	// The tag editor stays open while its requests run, so only key input is
+	// routed to it; its own messages and every other result (comments, state,
+	// spinner ticks) fall through to the handlers below.
 	switch msg := msg.(type) {
 	case components.TagAddMsg:
 		return m, m.submitTagAdd(msg.Tag)
@@ -128,14 +135,12 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 	case components.TagEditorClosedMsg:
 		m.resizeViewport()
 		return m, nil
-	case tagUpdatedMsg:
-		return m, m.handleTagUpdated(msg)
-	}
-
-	if m.tagEditor.IsVisible() {
-		var cmd tea.Cmd
-		m.tagEditor, cmd = m.tagEditor.Update(msg)
-		return m, cmd
+	case tea.KeyMsg:
+		if m.tagEditor.IsVisible() {
+			var cmd tea.Cmd
+			m.tagEditor, cmd = m.tagEditor.Update(msg)
+			return m, cmd
+		}
 	}
 
 	// Route input to the comment form while it is open. The form hides itself
@@ -273,6 +278,14 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		case "pgdown":
 			m.viewport.HalfViewDown()
 		}
+	}
+
+	// Messages no handler above consumed (e.g. the input's cursor blink)
+	// still reach an open tag editor.
+	if m.tagEditor.IsVisible() {
+		var cmd tea.Cmd
+		m.tagEditor, cmd = m.tagEditor.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil

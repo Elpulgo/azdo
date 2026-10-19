@@ -185,3 +185,44 @@ func TestDetailModel_TagBackendErrorSetsErrorStatusAndKeepsTypedValue(t *testing
 		t.Errorf("Expected Tags line unchanged after a failed add, got %q", got)
 	}
 }
+
+func TestDetailModel_CommentsLoadedWhileTagEditorOpenFillDiscussion(t *testing.T) {
+	srv := &adoTagServer{tags: "alpha"}
+	m := newTagDetail(t, srv)
+	m.Init() // comments start loading; the fetch result is fed in below
+
+	m = typeKeys(m, "l")
+	m, _ = m.Update(commentsLoadedMsg{comments: sampleComments()})
+
+	view := m.viewport.View()
+	if strings.Contains(view, "Loading comments") || !strings.Contains(view, "Newest discussion point") {
+		t.Errorf("Expected loaded comments in Discussion while the tag editor is open, got:\n%s", view)
+	}
+}
+
+func TestDetailModel_TagResultArrivingWhileStatePickerOpenIsApplied(t *testing.T) {
+	srv := &adoTagServer{tags: "alpha"}
+	m := newTagDetail(t, srv)
+
+	m = typeKeys(m, "l")
+	m = typeKeys(m, "beta")
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd = m.Update(cmd()) // TagAddMsg starts the request
+	result := cmd()
+
+	// Close the editor and open the state picker before the result lands.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, _ = m.Update(statesLoadedMsg{states: []provider.WorkItemTypeState{{Name: "Active"}, {Name: "Closed"}}})
+	if !m.statePicker.IsVisible() {
+		t.Fatal("precondition failed: state picker should be visible")
+	}
+
+	m, _ = m.Update(result)
+
+	if got := m.GetStatusMessage(); got != "Tag added" {
+		t.Errorf("Expected status %q, got %q", "Tag added", got)
+	}
+	if got := renderedTagsLine(m); !strings.Contains(got, "alpha, beta") {
+		t.Errorf("Expected Tags line to contain %q, got %q", "alpha, beta", got)
+	}
+}
