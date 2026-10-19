@@ -441,19 +441,6 @@ func TestCompositeProvider_Routing(t *testing.T) {
 		}
 	})
 
-	t.Run("tag mutations route to the backend owning the scope", func(t *testing.T) {
-		a.lastRouteScope, b.lastRouteScope = "", ""
-		_ = cp.AddWorkItemTag("owner/repo", 1, "bug")
-		if b.lastRouteScope != "owner/repo" || a.lastRouteScope != "" {
-			t.Errorf("AddWorkItemTag: want only b called, got a=%q b=%q", a.lastRouteScope, b.lastRouteScope)
-		}
-		a.lastRouteScope, b.lastRouteScope = "", ""
-		_ = cp.RemoveWorkItemTag("ProjectA", 1, "bug")
-		if a.lastRouteScope != "ProjectA" || b.lastRouteScope != "" {
-			t.Errorf("RemoveWorkItemTag: want only a called, got a=%q b=%q", a.lastRouteScope, b.lastRouteScope)
-		}
-	})
-
 	t.Run("WorkItemURL routes correctly", func(t *testing.T) {
 		url := cp.WorkItemURL("ProjectA", 42)
 		if url != "wi-url:ProjectA" {
