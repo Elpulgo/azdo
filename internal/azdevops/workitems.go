@@ -451,3 +451,70 @@ func (c *Client) UpdateWorkItemState(id int, state string) error {
 
 	return nil
 }
+
+// AddWorkItemTag adds tag to the work item's System.Tags, keeping every
+// existing tag. The current tags are read fresh first because a PATCH of
+// System.Tags replaces the whole field. If the tag is already present
+// (compared case-insensitively) no PATCH is sent.
+func (c *Client) AddWorkItemTag(id int, tag string) error {
+	tags, err := c.getWorkItemTags(id)
+	if err != nil {
+		return err
+	}
+	for _, t := range tags {
+		if strings.EqualFold(t, tag) {
+			return nil
+		}
+	}
+	return c.replaceWorkItemTags(id, append(tags, tag))
+}
+
+// RemoveWorkItemTag removes tag (compared case-insensitively) from the work
+// item's System.Tags, keeping every other tag. If the tag is not present no
+// PATCH is sent.
+func (c *Client) RemoveWorkItemTag(id int, tag string) error {
+	tags, err := c.getWorkItemTags(id)
+	if err != nil {
+		return err
+	}
+	kept := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if !strings.EqualFold(t, tag) {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) == len(tags) {
+		return nil
+	}
+	return c.replaceWorkItemTags(id, kept)
+}
+
+// getWorkItemTags fetches the current System.Tags of a single work item.
+func (c *Client) getWorkItemTags(id int) ([]string, error) {
+	path := fmt.Sprintf("/wit/workitems/%d?fields=System.Tags&api-version=7.1", id)
+
+	body, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get work item tags: %w", err)
+	}
+
+	var wi WorkItem
+	if err := json.Unmarshal(body, &wi); err != nil {
+		return nil, fmt.Errorf("failed to parse work item tags response: %w", err)
+	}
+	return wi.TagList(), nil
+}
+
+// replaceWorkItemTags overwrites System.Tags with tags joined by "; ".
+func (c *Client) replaceWorkItemTags(id int, tags []string) error {
+	path := fmt.Sprintf("/wit/workitems/%d?api-version=7.1", id)
+
+	value := strings.Join(tags, "; ")
+	payload := fmt.Sprintf(`[{"op":"replace","path":"/fields/System.Tags","value":%s}]`, escapeJSONString(value))
+	_, err := c.doRequestWithContentType("PATCH", path, strings.NewReader(payload), "application/json-patch+json")
+	if err != nil {
+		return fmt.Errorf("failed to update work item tags: %w", err)
+	}
+
+	return nil
+}

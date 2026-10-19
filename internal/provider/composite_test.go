@@ -103,6 +103,14 @@ func (f *fakeBackend) UpdateWorkItemState(scope string, _ int, _ string) error {
 	f.lastRouteScope = scope
 	return nil
 }
+func (f *fakeBackend) AddWorkItemTag(scope string, _ int, _ string) error {
+	f.lastRouteScope = scope
+	return nil
+}
+func (f *fakeBackend) RemoveWorkItemTag(scope string, _ int, _ string) error {
+	f.lastRouteScope = scope
+	return nil
+}
 func (f *fakeBackend) GetWorkItemComments(scope string, _ int) ([]provider.WorkItemComment, error) {
 	f.lastRouteScope = scope
 	return nil, nil
@@ -464,6 +472,21 @@ func TestCompositeProvider_UnknownScope(t *testing.T) {
 		}
 	})
 
+	t.Run("tag mutations return error naming the scope", func(t *testing.T) {
+		for name, fn := range map[string]func(string, int, string) error{
+			"AddWorkItemTag":    cp.AddWorkItemTag,
+			"RemoveWorkItemTag": cp.RemoveWorkItemTag,
+		} {
+			err := fn("UnknownScope", 1, "bug")
+			if err == nil || !strings.Contains(err.Error(), "UnknownScope") {
+				t.Errorf("%s: want error naming the unknown scope, got %v", name, err)
+			}
+		}
+		if a.lastRouteScope != "" {
+			t.Errorf("backend should not be called for unknown scope, got %q", a.lastRouteScope)
+		}
+	})
+
 	t.Run("URL method returns empty string", func(t *testing.T) {
 		url := cp.WorkItemURL("UnknownScope", 1)
 		if url != "" {
@@ -689,6 +712,8 @@ func TestCompositeProvider_RoutingAllMethods(t *testing.T) {
 		{"UpdateThreadStatus", func() { _ = cp.UpdateThreadStatus("X", "r", 1, 1, "Fixed") }},
 		{"GetWorkItemTypeStates", func() { _, _ = cp.GetWorkItemTypeStates("X", "Bug") }},
 		{"UpdateWorkItemState", func() { _ = cp.UpdateWorkItemState("X", 1, "Active") }},
+		{"AddWorkItemTag", func() { _ = cp.AddWorkItemTag("X", 1, "tag") }},
+		{"RemoveWorkItemTag", func() { _ = cp.RemoveWorkItemTag("X", 1, "tag") }},
 		{"GetWorkItemComments", func() { _, _ = cp.GetWorkItemComments("X", 1) }},
 		{"AddWorkItemComment", func() { _, _ = cp.AddWorkItemComment("X", 1, "t") }},
 		{"GetBuildTimeline", func() { _, _ = cp.GetBuildTimeline("X", 1) }},

@@ -426,6 +426,32 @@ func (a *Adapter) UpdateWorkItemState(scope string, id int, state string) error 
 	return c.UpdateWorkItemState(id, state)
 }
 
+// AddWorkItemTag adds tag to the given work item, keeping its other tags.
+// scope routes to the correct project sub-client.
+func (a *Adapter) AddWorkItemTag(scope string, id int, tag string) error {
+	if a.mc == nil {
+		return fmt.Errorf("no client configured")
+	}
+	c := a.mc.ClientFor(scope)
+	if c == nil {
+		return fmt.Errorf("no client for scope %q", scope)
+	}
+	return c.AddWorkItemTag(id, tag)
+}
+
+// RemoveWorkItemTag removes tag from the given work item, keeping its other
+// tags. scope routes to the correct project sub-client.
+func (a *Adapter) RemoveWorkItemTag(scope string, id int, tag string) error {
+	if a.mc == nil {
+		return fmt.Errorf("no client configured")
+	}
+	c := a.mc.ClientFor(scope)
+	if c == nil {
+		return fmt.Errorf("no client for scope %q", scope)
+	}
+	return c.RemoveWorkItemTag(id, tag)
+}
+
 // GetWorkItemComments returns discussion comments for the given work item,
 // ordered newest first. scope routes to the correct project sub-client.
 func (a *Adapter) GetWorkItemComments(scope string, id int) ([]provider.WorkItemComment, error) {

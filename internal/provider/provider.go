@@ -90,6 +90,17 @@ type Provider interface {
 	// scope is the project name used to route to the correct sub-client.
 	UpdateWorkItemState(scope string, id int, state string) error
 
+	// AddWorkItemTag adds tag to the given work item, keeping its other tags.
+	// The backend creates the tag/label if it does not exist yet. tag is
+	// expected to be normalized with NormalizeTag first.
+	// scope is the project name used to route to the correct sub-client.
+	AddWorkItemTag(scope string, id int, tag string) error
+
+	// RemoveWorkItemTag removes tag from the given work item, keeping its
+	// other tags. Removing a tag the item does not have is not an error.
+	// scope is the project name used to route to the correct sub-client.
+	RemoveWorkItemTag(scope string, id int, tag string) error
+
 	// GetWorkItemComments returns the discussion comments for the given work item,
 	// ordered newest first.
 	// scope is the project name used to route to the correct sub-client.

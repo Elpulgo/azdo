@@ -424,6 +424,34 @@ func (a *Adapter) UpdateWorkItemState(scope string, id int, state string) error 
 	return c.UpdateWorkItemState(id, state)
 }
 
+// AddWorkItemTag adds tag as a label on the given issue, keeping its other
+// labels. GitHub creates the label on the repository if it is missing.
+// scope routes to the correct per-repo Client.
+func (a *Adapter) AddWorkItemTag(scope string, id int, tag string) error {
+	if a.mc == nil {
+		return fmt.Errorf("no client configured")
+	}
+	c := a.mc.ClientFor(scope)
+	if c == nil {
+		return fmt.Errorf("no client for scope %q", scope)
+	}
+	return c.AddWorkItemTag(id, tag)
+}
+
+// RemoveWorkItemTag removes the label tag from the given issue, keeping its
+// other labels. The label stays on the repository.
+// scope routes to the correct per-repo Client.
+func (a *Adapter) RemoveWorkItemTag(scope string, id int, tag string) error {
+	if a.mc == nil {
+		return fmt.Errorf("no client configured")
+	}
+	c := a.mc.ClientFor(scope)
+	if c == nil {
+		return fmt.Errorf("no client for scope %q", scope)
+	}
+	return c.RemoveWorkItemTag(id, tag)
+}
+
 // GetWorkItemComments returns the comments for the given issue, in the order
 // returned by GitHub (chronological, oldest first).
 // scope routes to the correct per-repo Client.

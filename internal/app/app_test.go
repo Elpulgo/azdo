@@ -2325,6 +2325,47 @@ func TestModel_GlobalShortcutsDisabledWhenTagPickerOpen(t *testing.T) {
 	}
 }
 
+func TestModel_GlobalShortcutsDisabledWhenTagEditorOpen(t *testing.T) {
+	cases := []struct {
+		name string
+		key  rune
+	}{
+		{"q_does_not_quit", 'q'},
+		{"t_does_not_open_theme_picker", 't'},
+		{"digit_1_does_not_switch_tab", '1'},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := openTagPickerOnWorkItemsTab(t)
+			// Close the tag filter picker, then open the first item's detail
+			// and its tag editor.
+			for _, k := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyEnter}, {Type: tea.KeyRunes, Runes: []rune{'l'}}} {
+				updated, _ := m.Update(k)
+				m = updated.(Model)
+			}
+			if !m.workItemsView.IsTagEditorVisible() {
+				t.Fatal("precondition failed: tag editor should be visible")
+			}
+
+			// The global q/t/digit branches return without forwarding the key,
+			// so the key landing in the editor also proves none of them ran.
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+			m = updated.(Model)
+
+			if m.themePicker.IsVisible() {
+				t.Error("theme picker opened while tag editor was active")
+			}
+			if m.activeTab != TabWorkItems {
+				t.Errorf("active tab changed while tag editor was active, got %d", m.activeTab)
+			}
+			if got := m.workItemsView.TagEditorValue(); got != string(tc.key) {
+				t.Errorf("expected key %q to be typed into the tag editor, got %q", tc.key, got)
+			}
+		})
+	}
+}
+
 // --- Notifications tab registration ---------
 
 // notificationsPaneMarker discriminates "the notifications pane rendered" from

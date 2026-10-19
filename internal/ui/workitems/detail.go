@@ -48,6 +48,13 @@ type commentPostedMsg struct {
 	err     error
 }
 
+// tagUpdatedMsg is sent when a tag add or remove completes
+type tagUpdatedMsg struct {
+	tag     string
+	removed bool
+	err     error
+}
+
 // DetailModel represents the work item detail view
 type DetailModel struct {
 	client        provider.Provider
@@ -68,6 +75,9 @@ type DetailModel struct {
 	commentForm     components.CommentForm
 	posting         bool   // a comment POST is in flight
 	pendingComment  string // draft text retained across an in-flight post
+
+	tagEditor  components.TagEditor
+	tagPending bool // a tag add/remove is in flight
 }
 
 // NewDetailModel creates a new work item detail model with default styles
@@ -85,6 +95,7 @@ func NewDetailModelWithStyles(client provider.Provider, wi provider.WorkItem, s 
 		statePicker: components.NewStatePicker(s),
 		spinner:     spinner,
 		commentForm: components.NewCommentForm(s),
+		tagEditor:   components.NewTagEditor(s),
 	}
 }
 
@@ -100,11 +111,36 @@ func (m *DetailModel) Init() tea.Cmd {
 
 // Update handles messages for the detail view
 func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
+	// A tag request result must always land, even if the state picker was
+	// opened while it ran; otherwise tagPending would never clear.
+	if msg, ok := msg.(tagUpdatedMsg); ok {
+		return m, m.handleTagUpdated(msg)
+	}
+
 	// Route input to state picker when visible
 	if m.statePicker.IsVisible() {
 		var cmd tea.Cmd
 		m.statePicker, cmd = m.statePicker.Update(msg)
 		return m, cmd
+	}
+
+	// The tag editor stays open while its requests run, so only key input is
+	// routed to it; its own messages and every other result (comments, state,
+	// spinner ticks) fall through to the handlers below.
+	switch msg := msg.(type) {
+	case components.TagAddMsg:
+		return m, m.submitTagAdd(msg.Tag)
+	case components.TagRemoveMsg:
+		return m, m.submitTagRemove(msg.Tag)
+	case components.TagEditorClosedMsg:
+		m.resizeViewport()
+		return m, nil
+	case tea.KeyMsg:
+		if m.tagEditor.IsVisible() {
+			var cmd tea.Cmd
+			m.tagEditor, cmd = m.tagEditor.Update(msg)
+			return m, cmd
+		}
 	}
 
 	// Route input to the comment form while it is open. The form hides itself
@@ -228,6 +264,11 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 			m.commentForm.Show()
 			m.resizeViewport()
 			return m, m.commentForm.Focus()
+		case "l":
+			m.tagEditor.Show(tagList(m.workItem.Tags))
+			m.tagEditor.SetWidth(m.width)
+			m.resizeViewport()
+			return m, m.tagEditor.Focus()
 		case "up", "k":
 			m.viewport.LineUp(1)
 		case "down", "j":
@@ -239,7 +280,113 @@ func (m *DetailModel) Update(msg tea.Msg) (*DetailModel, tea.Cmd) {
 		}
 	}
 
+	// Messages no handler above consumed (e.g. the input's cursor blink)
+	// still reach an open tag editor.
+	if m.tagEditor.IsVisible() {
+		var cmd tea.Cmd
+		m.tagEditor, cmd = m.tagEditor.Update(msg)
+		return m, cmd
+	}
+
 	return m, nil
+}
+
+// submitTagAdd validates raw against the item's backend rules and, when valid,
+// starts the add request. Invalid input is reported inline in the editor and
+// never reaches the provider.
+func (m *DetailModel) submitTagAdd(raw string) tea.Cmd {
+	if m.tagPending {
+		return nil
+	}
+	tag, err := provider.NormalizeTag(raw, m.workItem.Identity.Kind)
+	if err != nil {
+		m.tagEditor.SetError(err.Error())
+		m.resizeViewport()
+		return nil
+	}
+	m.tagEditor.SetError("")
+	m.resizeViewport()
+	m.tagPending = true
+	m.statusMessage = "Adding tag..."
+	client := m.client
+	wi := m.workItem
+	return func() tea.Msg {
+		if client == nil {
+			return tagUpdatedMsg{tag: tag, err: fmt.Errorf("no client available")}
+		}
+		err := client.AddWorkItemTag(wi.Identity.Scope, workItemNumericID(wi), tag)
+		return tagUpdatedMsg{tag: tag, err: err}
+	}
+}
+
+// submitTagRemove starts the request removing an existing tag.
+func (m *DetailModel) submitTagRemove(tag string) tea.Cmd {
+	if m.tagPending {
+		return nil
+	}
+	m.tagEditor.SetError("")
+	m.resizeViewport()
+	m.tagPending = true
+	m.statusMessage = "Removing tag..."
+	client := m.client
+	wi := m.workItem
+	return func() tea.Msg {
+		if client == nil {
+			return tagUpdatedMsg{tag: tag, removed: true, err: fmt.Errorf("no client available")}
+		}
+		err := client.RemoveWorkItemTag(wi.Identity.Scope, workItemNumericID(wi), tag)
+		return tagUpdatedMsg{tag: tag, removed: true, err: err}
+	}
+}
+
+// handleTagUpdated applies a finished tag request: on success the local tags,
+// the detail and the editor list are updated and the list is told to refresh;
+// on error the status shows it and the typed input is left untouched.
+func (m *DetailModel) handleTagUpdated(msg tagUpdatedMsg) tea.Cmd {
+	m.tagPending = false
+	if msg.err != nil {
+		m.statusMessage = fmt.Sprintf("Error: %v", msg.err)
+		return nil
+	}
+
+	tags := tagList(m.workItem.Tags)
+	if msg.removed {
+		tags = removeTag(tags, msg.tag)
+		m.statusMessage = "Tag removed"
+	} else {
+		if !containsTag(tags, msg.tag) {
+			tags = append(tags, msg.tag)
+		}
+		m.tagEditor.ClearInput()
+		m.statusMessage = "Tag added"
+	}
+	m.workItem.Tags = strings.Join(tags, "; ")
+	m.tagEditor.SetTags(tags)
+	m.resizeViewport()
+	m.updateViewportContent()
+	return func() tea.Msg { return WorkItemStateChangedMsg{} }
+}
+
+// containsTag reports whether tags holds tag, compared case-insensitively
+// like both backends do.
+func containsTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if strings.EqualFold(t, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeTag returns tags without any entry equal to tag (case-insensitive).
+func removeTag(tags []string, tag string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if !strings.EqualFold(t, tag) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // openInBrowser returns a command that opens the work item URL in the
@@ -362,6 +509,12 @@ func (m *DetailModel) View() string {
 		sb.WriteString(m.commentForm.View())
 	}
 
+	// Inline tag editor, rendered below the viewport when open
+	if m.tagEditor.IsVisible() {
+		sb.WriteString("\n")
+		sb.WriteString(m.tagEditor.View())
+	}
+
 	contentStyle := lipgloss.NewStyle().
 		Width(m.width)
 
@@ -479,6 +632,7 @@ func (m *DetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.commentForm.SetWidth(width)
+	m.tagEditor.SetWidth(width)
 
 	if !m.ready {
 		m.viewport = viewport.New(width, 1)
@@ -491,11 +645,14 @@ func (m *DetailModel) SetSize(width, height int) {
 
 // reservedLines returns the number of non-viewport rows the detail view renders:
 // the fixed header (title + type/state + separator = 3), plus the inline comment
-// form (a blank spacer + the form itself) when it is open.
+// form or tag editor (a blank spacer + the form itself) when one is open.
 func (m *DetailModel) reservedLines() int {
 	lines := 3
 	if m.commentForm.IsVisible() {
 		lines += 1 + m.commentForm.Height()
+	}
+	if m.tagEditor.IsVisible() {
+		lines += 1 + m.tagEditor.Height()
 	}
 	return lines
 }
@@ -520,6 +677,7 @@ func (m *DetailModel) GetContextItems() []components.ContextItem {
 	return []components.ContextItem{
 		{Key: "w", Description: "Change state"},
 		{Key: "c", Description: "comment"},
+		{Key: "l", Description: "tags"},
 		{Key: "o", Description: "open in browser"},
 		{Key: "↑↓", Description: "scroll"},
 		{Key: "esc", Description: "back"},
@@ -647,4 +805,3 @@ func hyperlink(text, url string) string {
 	}
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
-

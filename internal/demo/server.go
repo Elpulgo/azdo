@@ -179,13 +179,31 @@ func handleWIQL(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleWorkItems(w http.ResponseWriter, r *http.Request) {
-	// PATCH for state update — just return success
+	// PATCH for state and tag updates — just return success
 	if r.Method == http.MethodPatch {
 		writeJSON(w, map[string]any{"id": 1, "rev": 2})
 		return
 	}
 
 	items := mockWorkItemsFor(r.PathValue("project"))
+
+	// Single-item GET (/wit/workitems/{id}), used by AddWorkItemTag and
+	// RemoveWorkItemTag to read the current System.Tags before patching.
+	if _, idStr, ok := strings.Cut(r.URL.Path, "/wit/workitems/"); ok && idStr != "" {
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		for _, item := range items {
+			if item.ID == id {
+				writeJSON(w, item)
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
 
 	// The batch GET is always id-driven (WIQL first, then fetch by ids);
 	// honour the ids parameter so a narrowed WIQL result stays narrowed.

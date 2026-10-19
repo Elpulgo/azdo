@@ -156,6 +156,7 @@ Mix freely: configure Azure, GitHub, or both, and both halves merge into the sam
 - View the Discussion (comments) below the description, newest first
 - Add comments from the detail view (`c` key, multi-line form)
 - Change work item state directly from the detail view (dynamically fetches available states)
+- Add or remove tags (Azure DevOps) / labels (GitHub) from the detail view (`l` key). A new tag is created by the backend if it doesn't exist yet
 - Filter to show only your assigned items
 - Filter by tag (`T` key)
 - Filter by state (`s` key)
@@ -802,6 +803,7 @@ To create a token:
 |-----|--------|
 | `w` | Change work item state |
 | `c` | Add a comment (opens form; `Ctrl+S` to send, `Esc` to cancel) |
+| `l` | Edit tags/labels (`Enter` adds the typed tag; with the input empty, `↑`/`↓` select a tag and `Delete`/`Ctrl+D` removes it; `Esc` closes) |
 | `o` | Open work item in browser |
 
 ### Pipeline Detail View

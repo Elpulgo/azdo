@@ -277,11 +277,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// When in detail view, intercept esc to check for modals first
 	if m.GetViewMode() == ViewDetail {
 		if kmsg, ok := msg.(tea.KeyMsg); ok && kmsg.String() == "esc" {
-			// If the detail view has a modal/form open (state picker or comment
-			// form), route esc directly to the detail model to close it, bypassing
+			// If the detail view has a modal/form open (state picker, comment
+			// form or tag editor), route esc directly to the detail model to close it, bypassing
 			// the listview which would otherwise close the entire detail view.
 			if adapter, ok := m.list.Detail().(*detailAdapter); ok {
-				if adapter.model.statePicker.IsVisible() || adapter.model.commentForm.IsVisible() {
+				if adapter.model.statePicker.IsVisible() || adapter.model.commentForm.IsVisible() || adapter.model.tagEditor.IsVisible() {
 					var cmd tea.Cmd
 					adapter.model, cmd = adapter.model.Update(msg)
 					return m, cmd
@@ -346,6 +346,27 @@ func (m Model) IsCommentFormVisible() bool {
 		return adapter.model.commentForm.IsVisible()
 	}
 	return false
+}
+
+// IsTagEditorVisible reports whether the work item detail view currently has
+// its tag editor open. Used by the app to suppress global shortcuts so
+// keystrokes reach the editor's input.
+func (m Model) IsTagEditorVisible() bool {
+	if m.GetViewMode() != ViewDetail {
+		return false
+	}
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		return adapter.model.tagEditor.IsVisible()
+	}
+	return false
+}
+
+// TagEditorValue returns the detail tag editor's current input (for testing).
+func (m Model) TagEditorValue() string {
+	if adapter, ok := m.list.Detail().(*detailAdapter); ok {
+		return adapter.model.tagEditor.Value()
+	}
+	return ""
 }
 
 // DetailRef returns the cross-backend identity of the work item whose detail

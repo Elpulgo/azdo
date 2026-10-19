@@ -2,7 +2,9 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -244,4 +246,38 @@ func (c *Client) AddWorkItemComment(number int, text string) (IssueComment, erro
 		return IssueComment{}, fmt.Errorf("github: add work item comment: %w", err)
 	}
 	return created, nil
+}
+
+// addLabelsBody is the JSON body for POST /repos/{owner}/{repo}/issues/{number}/labels.
+type addLabelsBody struct {
+	Labels []string `json:"labels"`
+}
+
+// AddWorkItemTag adds label to an issue, keeping its other labels. GitHub
+// creates the label on the repository (without a description) when it does
+// not exist yet, and adding a label already on the issue is a no-op.
+func (c *Client) AddWorkItemTag(number int, label string) error {
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels", c.owner, c.repo, number)
+	payload := addLabelsBody{Labels: []string{label}}
+	if err := c.doJSON("POST", path, payload, nil); err != nil {
+		return fmt.Errorf("github: add work item tag: %w", err)
+	}
+	return nil
+}
+
+// RemoveWorkItemTag removes label from an issue, keeping its other labels.
+// The label itself stays on the repository. A 404 (label not on the issue)
+// is treated as success, since the issue already ends up without the label.
+func (c *Client) RemoveWorkItemTag(number int, label string) error {
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s",
+		c.owner, c.repo, number, url.PathEscape(label))
+	err := c.doJSON("DELETE", path, nil, nil)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("github: remove work item tag: %w", err)
+	}
+	return nil
 }

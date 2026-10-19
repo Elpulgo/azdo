@@ -1291,7 +1291,8 @@ func (m Model) isActiveViewCapturingInput() bool {
 	case TabWorkItems:
 		return m.workItemsView.IsTagPickerVisible() ||
 			m.workItemsView.IsStatePickerVisible() ||
-			m.workItemsView.IsCommentFormVisible()
+			m.workItemsView.IsCommentFormVisible() ||
+			m.workItemsView.IsTagEditorVisible()
 	case TabPipelines:
 		return m.pipelinesView.IsStatusPickerVisible()
 	case TabMetrics:
