@@ -430,6 +430,24 @@ func (cp *CompositeProvider) UpdateWorkItemState(scope string, id int, state str
 	return b.UpdateWorkItemState(scope, id, state)
 }
 
+// AddWorkItemTag delegates to the backend registered for scope.
+func (cp *CompositeProvider) AddWorkItemTag(scope string, id int, tag string) error {
+	b := cp.backendFor(scope)
+	if b == nil {
+		return routeErr(scope)
+	}
+	return b.AddWorkItemTag(scope, id, tag)
+}
+
+// RemoveWorkItemTag delegates to the backend registered for scope.
+func (cp *CompositeProvider) RemoveWorkItemTag(scope string, id int, tag string) error {
+	b := cp.backendFor(scope)
+	if b == nil {
+		return routeErr(scope)
+	}
+	return b.RemoveWorkItemTag(scope, id, tag)
+}
+
 // GetWorkItemComments delegates to the backend registered for scope.
 func (cp *CompositeProvider) GetWorkItemComments(scope string, id int) ([]WorkItemComment, error) {
 	b := cp.backendFor(scope)

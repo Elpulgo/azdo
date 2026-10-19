@@ -65,6 +65,8 @@ func (s stubProvider) GetWorkItemTypeStates(scope, workItemType string) ([]provi
 	return nil, nil
 }
 func (s stubProvider) UpdateWorkItemState(scope string, id int, state string) error { return nil }
+func (s stubProvider) AddWorkItemTag(scope string, id int, tag string) error        { return nil }
+func (s stubProvider) RemoveWorkItemTag(scope string, id int, tag string) error     { return nil }
 func (s stubProvider) GetWorkItemComments(scope string, id int) ([]provider.WorkItemComment, error) {
 	return nil, nil
 }
