@@ -6,6 +6,7 @@ Point it at Azure DevOps projects, GitHub repositories, or both at once: lists f
 
 ![Tests](https://img.shields.io/github/actions/workflow/status/Elpulgo/azdo/ci.yml?label=tests)
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
+[![Downloads](https://img.shields.io/github/downloads/Elpulgo/azdo/total?color=995A05)](https://github.com/Elpulgo/azdo/releases)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 ![GitHub Release](https://img.shields.io/github/v/release/Elpulgo/azdo)
 
